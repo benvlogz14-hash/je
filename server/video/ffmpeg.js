@@ -12,7 +12,33 @@ function bin(name) {
   // Packaged builds ship ffmpeg in resources/bin when it was placed in build/bin before packaging.
   const res = process.resourcesPath ? path.join(process.resourcesPath, 'bin', process.platform === 'win32' ? `${name}.exe` : name) : null;
   if (res && fs.existsSync(res)) return res;
-  return name;
+  return findInstalled(name) || name;
+}
+
+/**
+ * Windows doesn't refresh PATH for programs that were already running when FFmpeg was installed,
+ * so look in the places winget, Chocolatey, Scoop and manual installs put it.
+ */
+const found = {};
+function findInstalled(name) {
+  if (name in found) return found[name];
+  found[name] = null;
+  if (process.platform !== 'win32') {
+    for (const d of ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin']) { const p = path.join(d, name); if (fs.existsSync(p)) return (found[name] = p); }
+    return null;
+  }
+  const exe = `${name}.exe`;
+  const la = process.env.LOCALAPPDATA || path.join(require('os').homedir(), 'AppData', 'Local');
+  const dirs = (process.env.PATH || process.env.Path || '').split(path.delimiter).filter(Boolean);
+  dirs.push(path.join(la, 'Microsoft', 'WinGet', 'Links'), 'C:\\ffmpeg\\bin', path.join(process.env.ProgramFiles || 'C:\\Program Files', 'ffmpeg', 'bin'),
+    'C:\\ProgramData\\chocolatey\\bin', path.join(require('os').homedir(), 'scoop', 'shims'));
+  // winget's Gyan.FFmpeg package: ...\WinGet\Packages\Gyan.FFmpeg_*\ffmpeg-*\bin
+  try {
+    const pk = path.join(la, 'Microsoft', 'WinGet', 'Packages');
+    for (const a of fs.readdirSync(pk).filter((x) => /ffmpeg/i.test(x))) for (const b of fs.readdirSync(path.join(pk, a))) dirs.push(path.join(pk, a, b, 'bin'));
+  } catch { /* winget not used */ }
+  for (const d of dirs) { const p = path.join(d, exe); if (fs.existsSync(p)) return (found[name] = p); }
+  return null;
 }
 
 async function detect() {

@@ -13,6 +13,7 @@ const COLLECTIONS = [
   'users', 'clients', 'contacts', 'conversations', 'messages', 'jobs', 'assets', 'clips',
   'approvals', 'posts', 'prospects', 'invoices', 'expenses', 'usage', 'timelogs', 'projects',
   'workers', 'alerts', 'portalComments', 'processed',
+  'agentThreads', 'agentMessages', 'agentApprovals',
 ];
 
 class Store {

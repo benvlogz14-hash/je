@@ -133,6 +133,13 @@ function App() {
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
   }, []);
+  // The shell never scrolls. If focusing a field ever nudges it sideways (which hid the nav rail on
+  // Settings → Connections), snap it straight back so navigation always stays reachable.
+  useEffect(() => {
+    const fix = (e) => { const el = e.target === document ? document.scrollingElement : e.target; if (el && (el === document.scrollingElement || el.id === 'app' || el.classList?.contains('app') || el.classList?.contains('body') || el.classList?.contains('main')) && (el.scrollLeft || el.scrollTop)) { el.scrollLeft = 0; el.scrollTop = 0; } };
+    document.addEventListener('scroll', fix, true);
+    return () => document.removeEventListener('scroll', fix, true);
+  }, []);
   useEvent('connection', (c) => store.set({ online: c.online }));
   useEvent('alert', (a) => { play(a.level === 'error' ? 'error' : 'receive'); toast(a.text, { kind: a.level === 'error' ? 'error' : a.level === 'warn' ? 'warn' : 'info', title: a.title, ms: 7000 }); });
   useEvent('notify', (n) => { play('receive'); if (window.euclidean?.notify && document.hidden) window.euclidean.notify(n.title, n.body); });

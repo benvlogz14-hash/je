@@ -20,24 +20,25 @@ const alerted = new Map();
 
 function check() {
   const items = [];
+  // 'setup' = optional service not connected yet. It is shown in System → Health but never counted as a problem.
   const add = (key, label, level, text, fix) => items.push({ key, label, level, text, fix });
   const caps = ctx.capabilities;
   add('ffmpeg', 'FFmpeg', caps.ffmpeg && caps.ffprobe ? 'ok' : 'error', caps.ffmpeg ? `Version ${caps.ffmpegVersion} · encoders: ${(caps.encoders || []).join(', ')}` : 'Not found: rendering and intake are unavailable', 'Install FFmpeg (winget install Gyan.FFmpeg) or set its path in Settings → System');
   if (caps.ffmpeg && !caps.libass) add('libass', 'Caption burn-in', 'warn', 'This FFmpeg build has no libass; captions will be missing from renders', 'Use a full FFmpeg build (gyan.dev "full" or BtbN GPL)');
-  add('ytdlp', 'Link downloads (yt-dlp)', caps.ytdlp ? 'ok' : 'warn', caps.ytdlp ? `yt-dlp ${caps.ytdlpVersion}` : 'Not installed: YouTube/Drive/Twitch links cannot be downloaded', 'winget install yt-dlp.yt-dlp');
+  add('ytdlp', 'Link downloads (yt-dlp)', caps.ytdlp ? 'ok' : 'setup', caps.ytdlp ? `yt-dlp ${caps.ytdlpVersion}` : 'Not installed: YouTube/Drive/Twitch links cannot be downloaded', 'winget install yt-dlp.yt-dlp');
   for (const [k, p] of Object.entries(ai.PROVIDERS)) {
     const st = ai.agentStatus().providers[k];
-    if (!st.connected) add(`ai.${k}`, `${p.label} (${p.vendor})`, 'warn', 'Not connected', 'Add an API key in Settings → Connections');
+    if (!st.connected) add(`ai.${k}`, `${p.label} (${p.vendor})`, 'setup', 'Not connected', 'Add an API key in Settings → Connections');
     else if (st.health && !st.health.ok) add(`ai.${k}`, `${p.label} (${p.vendor})`, 'error', st.health.error, 'Check or replace the API key');
     else if (st.overBudget) add(`ai.${k}`, `${p.label} (${p.vendor})`, 'warn', `Monthly budget reached ($${st.spendUsd} of $${st.budgetUsd}); using fallbacks`, 'Raise the budget in Settings → AI');
     else add(`ai.${k}`, `${p.label} (${p.vendor})`, 'ok', `Connected · $${st.spendUsd} spent this month`);
   }
   const transcriptionOk = ai.connected('openai') || caps.whisper;
-  add('transcription', 'Transcription', transcriptionOk ? 'ok' : 'warn', transcriptionOk ? (caps.whisper ? 'Local whisper.cpp' : 'OpenAI Whisper') : 'No engine: clips render without captions', 'Connect OpenAI or point Settings → AI at a whisper.cpp binary and model');
-  add('sms', 'SMS (Twilio)', !twilio.configured() ? 'warn' : twilio.state.ok === false ? 'error' : 'ok', !twilio.configured() ? 'Not connected' : twilio.state.ok === false ? twilio.state.lastError : `Polling every ${ctx.setting('messaging.smsPollSeconds', 20)}s${twilio.state.lastPoll ? ` · last ${twilio.state.lastPoll.slice(11, 19)}` : ''}`, 'Settings → Connections → Twilio');
-  add('email', 'Email', !email.configured() ? 'warn' : email.state.ok === false ? 'error' : 'ok', !email.configured() ? 'Not connected' : email.state.ok === false ? email.state.lastError : `IMAP polling${email.state.lastPoll ? ` · last ${email.state.lastPoll.slice(11, 19)}` : ''}`, 'Settings → Connections → Email (use an app password)');
+  add('transcription', 'Transcription', transcriptionOk ? 'ok' : 'setup', transcriptionOk ? (caps.whisper ? 'Local whisper.cpp' : 'OpenAI Whisper') : 'No engine: clips render without captions', 'Connect OpenAI or point Settings → AI at a whisper.cpp binary and model');
+  add('sms', 'SMS (Twilio)', !twilio.configured() ? 'setup' : twilio.state.ok === false ? 'error' : 'ok', !twilio.configured() ? 'Not connected' : twilio.state.ok === false ? twilio.state.lastError : `Polling every ${ctx.setting('messaging.smsPollSeconds', 20)}s${twilio.state.lastPoll ? ` · last ${twilio.state.lastPoll.slice(11, 19)}` : ''}`, 'Settings → Connections → Twilio');
+  add('email', 'Email', !email.configured() ? 'setup' : email.state.ok === false ? 'error' : 'ok', !email.configured() ? 'Not connected' : email.state.ok === false ? email.state.lastError : `IMAP polling${email.state.lastPoll ? ` · last ${email.state.lastPoll.slice(11, 19)}` : ''}`, 'Settings → Connections → Email (use an app password)');
   const pubProvider = ctx.setting('publishing.provider', 'manual');
-  add('publishing', 'Publishing', pubProvider === 'ayrshare' && !publishing.ayrConfigured() ? 'error' : pubProvider === 'manual' ? 'warn' : 'ok', pubProvider === 'manual' ? 'Manual Pack: videos and captions are packaged for hand posting' : publishing.ayrConfigured() ? 'Ayrshare connected' : 'Ayrshare selected but no API key', 'Connect Ayrshare in Settings → Connections to crosspost automatically');
+  add('publishing', 'Publishing', pubProvider === 'ayrshare' && !publishing.ayrConfigured() ? 'error' : pubProvider === 'manual' ? 'setup' : 'ok', pubProvider === 'manual' ? 'Manual Pack: videos and captions are packaged for hand posting' : publishing.ayrConfigured() ? 'Ayrshare connected' : 'Ayrshare selected but no API key', 'Connect Ayrshare in Settings → Connections to crosspost automatically');
   for (const c of ctx.store.all('clients', (x) => x.status === 'active')) {
     if (secrets.has(`client.${c.id}.youtube.token`)) {
       const t = secrets.get(`client.${c.id}.youtube.token`);
@@ -59,8 +60,8 @@ function check() {
   if (hs.waiting) add('computer-use', 'Computer-use agent (Astra)', hs.online ? 'ok' : 'warn', `${hs.waiting} Premiere job(s) waiting${hs.online ? '' : '; no agent has checked in for 2 minutes'}`, 'Start Astra and point it at the agent API (Settings → Agents)');
   const r = resources.last;
   if (r?.disk) add('disk', 'Disk space', r.disk.freeGb < 10 ? 'error' : r.disk.freeGb < 40 ? 'warn' : 'ok', `${r.disk.freeGb} GB free of ${r.disk.totalGb} GB`, 'Archive old renders or move the data folder');
-  if (ctx.setting('environment', 'test') !== 'production') add('environment', 'Environment', 'warn', 'TEST: outbound messages go to the sandbox recipient and nothing is posted publicly', 'Switch to Production in Settings → General when ready');
-  const summary = { ok: items.filter((i) => i.level === 'ok').length, warn: items.filter((i) => i.level === 'warn').length, error: items.filter((i) => i.level === 'error').length };
+  if (ctx.setting('environment', 'test') !== 'production') add('environment', 'Environment', 'setup', 'TEST: outbound messages go to the sandbox recipient and nothing is posted publicly', 'Switch to Production in Settings → General when ready');
+  const summary = { ok: items.filter((i) => i.level === 'ok').length, warn: items.filter((i) => i.level === 'warn').length, error: items.filter((i) => i.level === 'error').length, setup: items.filter((i) => i.level === 'setup').length };
   lastReport = { at: new Date().toISOString(), items, summary };
   for (const i of items.filter((x) => x.level === 'error')) {
     const prev = alerted.get(i.key);

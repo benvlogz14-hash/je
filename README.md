@@ -12,17 +12,20 @@ Euclidean Media's internal operating system. It's one desktop app that runs clie
 
 ## Run it (Windows)
 
-1. Install **Node.js 20 or newer** (nodejs.org) and **FFmpeg** (`winget install Gyan.FFmpeg`). Optional: `winget install yt-dlp.yt-dlp` for YouTube, Twitch and Drive links.
-2. In this folder:
-   ```
-   npm install
-   npm start
-   ```
-3. Build the installer (creates `dist\Euclidean Setup 1.0.0.exe` and a portable `.exe`):
-   ```
-   npm run dist
-   ```
-   To ship FFmpeg inside the installer, put `ffmpeg.exe` and `ffprobe.exe` in `build\bin\` before running `npm run dist`.
+**Double-click `Start Euclidean.bat`.** That's it. The first time, it installs Node.js and FFmpeg if they're missing, sets up the app (a few minutes) and puts a **Euclidean** shortcut on your desktop. After that, use the desktop shortcut.
+
+To make a proper installer (`dist\Euclidean Setup 1.0.0.exe` plus a portable `.exe`), double-click **`Build Installer.bat`**. To ship FFmpeg inside the installer, put `ffmpeg.exe` and `ffprobe.exe` in `build\bin\` first.
+
+Optional: `winget install yt-dlp.yt-dlp` for YouTube, Twitch and Drive links.
+
+<details><summary>Command line (developers)</summary>
+
+```
+npm install
+npm start          (note: "start", not "star")
+npm run dist
+```
+</details>
 
 Check that the pipeline works on your machine with no API keys: `npm run selftest` (it generates test footage with speech, finds clips, renders, approves, publishes to a Manual Pack and exports from Studio).
 

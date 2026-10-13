@@ -67,6 +67,14 @@ module.exports = {
     autoLiteWhenPremiereOpen: false,
     runHeavyJobsLocally: true,
   },
+  // Agent Connections: peer-to-peer messaging between Grok, Claude, GPT/Codex, Cursor, opencode and custom agents.
+  // Per-agent setup lives in agentNet.agents.<id> and is written by Settings → Agent Connections.
+  agentNet: {
+    paused: false,           // pauses every automatic agent-to-agent delivery
+    maxAutoTurns: 12,        // a thread pauses itself after this many agent replies in a row without a person
+    replyTimeoutSec: 300,
+    agents: {},
+  },
   server: { port: 4870, lan: false },
   notifications: { desktop: true, smsFounderOnCritical: false, founderPhone: '' },
   schedule: { dailyDigestHour: 8 },

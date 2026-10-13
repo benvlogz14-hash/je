@@ -217,4 +217,4 @@ function agentStatus() {
   };
 }
 
-module.exports = { PROVIDERS, ask, test, transcribeOpenAI, connected, anyConnected, agentStatus, recordUsage, clientContext, AIError, monthSpend };
+module.exports = { PROVIDERS, ask, test, transcribeOpenAI, connected, anyConnected, agentStatus, recordUsage, clientContext, AIError, monthSpend, callProvider, overBudget, defaultModelFor };

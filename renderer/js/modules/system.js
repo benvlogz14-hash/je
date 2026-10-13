@@ -82,11 +82,11 @@ function JobDetail({ id, onClose }) {
 function Health() {
   const { data, reload } = useApi('/api/health', ['health']);
   if (!data) return html`<${Loading} />`;
-  const order = { error: 0, warn: 1, ok: 2 };
+  const order = { error: 0, warn: 1, setup: 2, ok: 3 };
   return html`<div class="col" style="gap:14px">
-    <div class="row"><span class="badge moss">${data.summary.ok} OK</span><span class="badge gold">${data.summary.warn} warnings</span><span class="badge coral">${data.summary.error} errors</span><span class="faint" style="font-size:var(--fs-sm)">Checked ${ago(data.at)} ago · every minute</span><div class="spacer" /><${Button} kind="ghost" size="sm" icon="refresh" onClick=${reload}>Check now</${Button}></div>
+    <div class="row"><span class="badge moss">${data.summary.ok} OK</span><span class="badge gold">${data.summary.warn} warnings</span><span class="badge coral">${data.summary.error} errors</span>${data.summary.setup ? html`<span class="badge slate" title="Optional services you can connect later">${data.summary.setup} optional, not set up</span>` : null}<span class="faint" style="font-size:var(--fs-sm)">Checked ${ago(data.at)} ago · every minute</span><div class="spacer" /><${Button} kind="ghost" size="sm" icon="refresh" onClick=${reload}>Check now</${Button}></div>
     <div class="panel"><div class="list">${data.items.slice().sort((a, b) => order[a.level] - order[b.level]).map((i) => html`<div class="list-row" style="align-items:flex-start">
-      <span class=${'led ' + (i.level === 'error' ? 'err' : i.level === 'warn' ? 'warn' : 'ok')} style="margin-top:6px" /><div class="grow"><b>${i.label}</b><div class="muted" style="font-size:var(--fs-sm)">${i.text}</div>${i.level !== 'ok' && i.fix ? html`<div class="faint" style="font-size:var(--fs-xs);margin-top:2px">Fix: ${i.fix}</div>` : null}</div></div>`)}</div></div></div>`;
+      <span class=${'led ' + (i.level === 'error' ? 'err' : i.level === 'warn' ? 'warn' : i.level === 'setup' ? '' : 'ok')} style="margin-top:6px" /><div class="grow"><b>${i.label}</b><div class="muted" style="font-size:var(--fs-sm)">${i.text}</div>${i.level !== 'ok' && i.fix ? html`<div class="faint" style="font-size:var(--fs-xs);margin-top:2px">${i.level === 'setup' ? 'To set up' : 'Fix'}: ${i.fix}</div>` : null}</div></div>`)}</div></div></div>`;
 }
 
 function Resources() {

@@ -1,0 +1,2 @@
+# Batch files must keep Windows line endings in every download (including GitHub zips).
+*.bat -text

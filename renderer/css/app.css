@@ -133,7 +133,7 @@ a:hover { text-decoration: underline; }
 kbd { font: 500 10.5px/1 var(--font-mono); padding: 3px 5px; border-radius: 5px; background: var(--surface-3); border: 1px solid var(--line); color: var(--ink-2); }
 
 /* ------------------------------------------------------------ shell */
-.app { height: 100%; display: grid; grid-template-rows: var(--titlebar) 1fr auto; }
+.app { height: 100%; display: grid; grid-template-rows: var(--titlebar) minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
 .titlebar { display: flex; align-items: center; gap: 10px; padding: 0 12px; background: var(--surface); border-bottom: 1px solid var(--line); -webkit-app-region: drag; position: relative; z-index: 5; }
 .titlebar > * { -webkit-app-region: no-drag; }
 .titlebar .drag { -webkit-app-region: drag; flex: 1; align-self: stretch; }
@@ -144,7 +144,7 @@ kbd { font: 500 10.5px/1 var(--font-mono); padding: 3px 5px; border-radius: 5px;
 .search-trigger { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px 0 10px; width: min(420px, 36vw); border-radius: var(--r-sm); background: var(--surface-3); border: 1px solid transparent; color: var(--ink-3); cursor: pointer; transition: background var(--t-fast), border-color var(--t-fast); }
 .search-trigger:hover { border-color: var(--line-strong); background: var(--surface-2); }
 .search-trigger .grow { text-align: left; }
-.body { display: grid; grid-template-columns: var(--rail) 1fr; min-height: 0; }
+.body { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); min-height: 0; min-width: 0; overflow: hidden; }
 .rail { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; background: var(--surface); border-right: 1px solid var(--line); }
 .rail-btn { position: relative; width: 42px; height: 42px; display: grid; place-items: center; border-radius: var(--r-md); color: var(--ink-2); background: none; border: 0; cursor: pointer; transition: background var(--t-fast), color var(--t-fast), transform var(--t-fast) var(--ease); }
 .rail-btn:hover { background: var(--tone-soft, var(--surface-3)); color: var(--tone-ink, var(--ink)); }

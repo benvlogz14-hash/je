@@ -9,7 +9,8 @@ const paths = require('./core/paths');
 const events = require('./core/events');
 const audit = require('./core/audit');
 const secrets = require('./core/secrets');
-const { Router, send, serveFile, receiveUpload } = require('./core/http');
+const { Router, send, serveFile, receiveUpload, parseBody } = require('./core/http');
+const studioProxy = require('./video/proxy');
 const { HttpError, now, id: makeId, monthKey } = require('./core/util');
 const queue = require('./jobs/queue');
 const ai = require('./integrations/ai');
@@ -544,7 +545,13 @@ function emptyProject(b) {
   return { app: 'velo', version: 1, media: [], sequences: [{ id: 's1', name: 'Sequence 1', width: W, height: H, fps: b.fps || 30, videoTracks: [track(0, 'V1'), track(0, 'V2'), track(0, 'V3')], audioTracks: [track(1, 'A1'), track(1, 'A2')] }], openTabs: ['s1'], activeSequence: 's1', nextClipId: '1' };
 }
 r.get('/api/projects/:id', (req, b, p) => must(ctx.store.get('projects', p.id)));
-r.put('/api/projects/:id', (req, b, p) => { must(ctx.store.get('projects', p.id)); return ctx.store.update('projects', p.id, { data: b.data, name: b.name || undefined }); });
+r.put('/api/projects/:id', (req, b, p) => {
+  const pr = must(ctx.store.get('projects', p.id));
+  // Keep preview-proxy fields the engine filled in after the editor last loaded the project.
+  const known = Object.fromEntries((pr.data?.media || []).map((m) => [m.id, m]));
+  for (const m of b.data?.media || []) { const k = known[m.id]; if (k && k.proxy && !m.proxy) { m.proxy = k.proxy; m.proxyPending = false; } }
+  return ctx.store.update('projects', p.id, { data: b.data, name: b.name || undefined });
+});
 r.del('/api/projects/:id', (req, b, p) => ({ ok: ctx.store.remove('projects', p.id) }));
 r.post('/api/projects/:id/export', (req, b, p) => { const pr = must(ctx.store.get('projects', p.id)); return queue.enqueue('studio.export', { projectId: pr.id }, { clientId: pr.clientId, actor: actorOf(req), title: `Export ${pr.name}` }); });
 r.get('/api/projects/:id/velo', (req, res, p) => { const pr = must(ctx.store.get('projects', p.id)); const f = path.join(paths.tmp('velo'), `${pr.id}.velo`); fs.writeFileSync(f, JSON.stringify(pr.data, null, 1)); return serveFile(req, res, f, { download: `${pr.name.replace(/[^\w\- ]/g, '')}.velo` }); }, { stream: true });
@@ -558,32 +565,44 @@ r.post('/api/projects/:id/import-velo', (req, b, p) => { must(ctx.store.get('pro
 r.post('/api/projects/:id/media', async (req, b, p) => {
   const pr = must(ctx.store.get('projects', p.id));
   let files = [];
+  // Uploads (browser) arrive as multipart; the desktop app sends the files' own paths so nothing is copied.
   if ((req.headers['content-type'] || '').startsWith('multipart/')) files = (await receiveUpload(req, pr.clientId ? paths.clientDir(pr.clientId, 'studio-media') : paths.tmp('studio-media'))).files.map((f) => f.path);
-  else files = (b?.paths || []).filter((x) => fs.existsSync(x));
-  const added = [];
+  else files = ((await parseBody(req))?.paths || []).map(String);
+  const added = []; const problems = [];
   for (const f of files) {
-    const info = await ff.probe(f);
+    if (!fs.existsSync(f)) { problems.push(`${path.basename(f)}: file not found`); continue; }
     const ext = path.extname(f).toLowerCase();
-    const kind = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'].includes(ext) ? 2 : ext === '.svg' ? 3 : info.hasVideo ? 0 : 1;
-    added.push({ id: makeId('m'), path: f, name: path.basename(f), kind, duration: kind >= 2 ? 5 : info.duration, width: info.width, height: info.height, fps: info.fps, hasVideo: info.hasVideo && kind !== 1, hasAudio: info.hasAudio, srcIn: 0, srcOut: -1 });
+    const isImage = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tif', '.tiff'].includes(ext);
+    let info;
+    try { info = await ff.probe(f); } catch (e) { problems.push(`${path.basename(f)}: not a video, audio or image file FFmpeg can read`); continue; }
+    if (!info.hasVideo && !info.hasAudio && !isImage && ext !== '.svg') { problems.push(`${path.basename(f)}: no video or audio inside`); continue; }
+    const kind = isImage ? 2 : ext === '.svg' ? 3 : info.hasVideo ? 0 : 1;
+    const m = { id: makeId('m'), path: f, name: path.basename(f), kind, duration: kind >= 2 ? 5 : info.duration, width: info.width, height: info.height, fps: info.fps, hasVideo: info.hasVideo && kind !== 1, hasAudio: info.hasAudio && kind < 2, vcodec: info.vcodec, srcIn: 0, srcOut: -1 };
+    if (kind === 0 && studioProxy.needsProxy(f, info)) { m.proxy = null; m.proxyPending = true; studioProxy.make(pr.id, m); }
+    added.push(m);
   }
-  const data = pr.data; data.media.push(...added);
+  if (!added.length && problems.length) throw new HttpError(400, `Nothing imported. ${problems.join(' · ')}`);
+  // Re-read the project: an autosave may have replaced its data while files were being probed.
+  const cur = ctx.store.get('projects', pr.id);
+  const data = cur.data; data.media = [...(data.media || []), ...added];
   ctx.store.update('projects', pr.id, { data });
-  return added;
+  return problems.length ? { media: added, problems } : added;
 }, { raw: true });
 /** Media preview for Studio: only files referenced by a project or an asset can be served. */
 r.get('/api/media', (req, res) => {
   const f = String(req.query.path || '');
-  const allowed = ctx.store.all('projects').some((p) => (p.data?.media || []).some((m) => m.path === f)) || ctx.store.find('assets', (a) => a.path === f);
+  const allowed = ctx.store.all('projects').some((p) => (p.data?.media || []).some((m) => m.path === f || m.proxy === f)) || ctx.store.find('assets', (a) => a.path === f);
   if (!allowed) return send(res, 403, { error: 'File is not part of any project' });
   return serveFile(req, res, f);
 }, { stream: true });
 r.get('/api/media/thumb', async (req, res) => {
-  const f = String(req.query.path || ''); const t = Number(req.query.t || 1);
+  const f = String(req.query.path || ''); const still = /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(f); const t = still ? 0 : Number(req.query.t || 1);
   const allowed = ctx.store.all('projects').some((p) => (p.data?.media || []).some((m) => m.path === f));
   if (!allowed) return send(res, 403, {});
   const out = path.join(paths.tmp('thumbs'), crypto.createHash('md5').update(f + t).digest('hex') + '.jpg');
-  if (!fs.existsSync(out)) { try { await ff.thumbnail(f, out, t, 240); } catch { return send(res, 404, {}); } }
+  if (!fs.existsSync(out)) { try { await ff.thumbnail(f, out, t, 240); } catch { /* retry from the first frame below */ } }
+  if (!fs.existsSync(out)) { try { await ff.thumbnail(f, out, 0, 240); } catch { /* unreadable */ } }
+  if (!fs.existsSync(out)) return send(res, 404, {});
   return serveFile(req, res, out, { cache: true });
 }, { stream: true });
 

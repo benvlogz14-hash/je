@@ -1,6 +1,6 @@
 // Studio: Euclidean's built-in editor. Same project model as Velo (projects open in either),
 // Premiere-style layout: project bin + effects, program monitor, effect controls, multi-track timeline.
-import { html, useState, useEffect, useRef, useMemo, useCallback, useStore, useApi, navigate, Button, Seg, Toggle, Empty, Loading, Modal, Field, act, toast, openMenu, confirmDialog, promptDialog } from '../lib/ui.js';
+import { html, useState, useEffect, useRef, useMemo, useCallback, useStore, useApi, navigate, Button, Seg, Toggle, Empty, Loading, Modal, Field, act, toast, openMenu, confirmDialog, promptDialog, useEvent } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { play as sfx } from '../lib/sound.js';
@@ -28,6 +28,10 @@ const TRACK_H = { 0: 48, 1: 40 };
 // right before the committing edit() so undo snapshots stay correct.
 const live = new Map();
 const redraw = () => window.dispatchEvent(new Event('studio-redraw'));
+// Copied clips (Ctrl+C / right-click → Copy), kept for the session so you can paste into another project too.
+let clipboard = null;
+/** URL the monitor plays: the smooth preview copy when one exists (phone HEVC, ProRes, 4K), else the file itself. */
+const playUrl = (m, still) => api.url(`/api/media?path=${encodeURIComponent((!still && m.proxy) || m.path)}`);
 function liveSet(obj, key, val, id) { if (!live.has(id)) live.set(id, { obj, key, orig: clone(obj[key]) }); obj[key] = val; redraw(); }
 function revertLive() { for (const { obj, key, orig } of live.values()) obj[key] = orig; live.clear(); }
 const HEAD_W = 132;
@@ -103,6 +107,47 @@ function Editor({ id }) {
   const save = async (quiet) => { if (!data) return; clearTimeout(saveTimer.current); try { await api.put(`/api/projects/${id}`, { data }); setDirty(false); if (!quiet) { sfx('success'); toast('Project saved', { kind: 'ok' }); } } catch (e) { sfx('error'); toast(e.message, { kind: 'error', title: 'Not saved' }); } };
   useEffect(() => { if (!dirty) return; clearTimeout(saveTimer.current); saveTimer.current = setTimeout(() => save(true), 1500); return () => clearTimeout(saveTimer.current); }, [data, dirty]);
 
+  // ---- importing (bin button, drag from the desktop onto the bin, the timeline or anywhere in the editor)
+  const [importing, setImporting] = useState(false);
+  const acceptImported = (r) => {
+    const added = Array.isArray(r) ? r : r?.media || [];
+    if (r?.problems?.length) toast(r.problems.join(' · '), { kind: 'warn', title: 'Some files were skipped' });
+    if (added.length) { setDataRaw((d) => ({ ...d, media: [...d.media, ...added] })); sfx('success'); }
+    if (added.some((m) => m.proxyPending)) toast('Making a smooth preview copy of this footage (phone/HEVC, ProRes or 4K). It plays here when ready; exports always use the original.', { kind: 'info', ms: 7000 });
+    return added;
+  };
+  const importPaths = async (list) => {
+    setImporting(true);
+    try { return acceptImported(await api.post(`/api/projects/${id}/media`, { paths: list })); }
+    catch (e) { sfx('error'); toast(e.message, { kind: 'error', title: 'Import failed' }); return []; } finally { setImporting(false); }
+  };
+  const importFiles = async (files) => {
+    files = [...files]; if (!files.length) return [];
+    // Desktop app: use the files where they are (instant, even for huge videos). Browser: upload a copy.
+    const local = window.euclidean?.pathForFile ? files.map((f) => window.euclidean.pathForFile(f)).filter(Boolean) : [];
+    if (local.length === files.length) return importPaths(local);
+    setImporting(true);
+    try { return acceptImported(await api.upload(`/api/projects/${id}/media`, files, {}, null)); }
+    catch (e) { sfx('error'); toast(e.message, { kind: 'error', title: 'Import failed' }); return []; } finally { setImporting(false); }
+  };
+  /** Files dropped from the desktop straight onto a timeline track. */
+  const dropFilesOnTrack = async (files, lane, at) => {
+    const added = await importFiles(files);
+    let pos = at;
+    for (const m of added) { addMedia(m, lane.type === 0 ? lane.i : 0, pos, lane.type === 1 ? lane.i : 0); pos += m.kind >= 2 ? 5 : Math.max(0.1, m.duration || 0); }
+  };
+  useEvent('studio.proxy', (p) => {
+    if (p.projectId !== id) return;
+    setDataRaw((d) => (d ? { ...d, media: d.media.map((m) => (m.id === p.mediaId ? { ...m, proxy: p.proxy || m.proxy, proxyPending: false, proxyError: p.error || null } : m)) } : d));
+    if (p.error) toast(p.error, { kind: 'warn' });
+  }, [id]);
+  useEffect(() => {
+    const over = (e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); };
+    const drop = (e) => { if (e.defaultPrevented || !e.dataTransfer?.files?.length) return; e.preventDefault(); importFiles(e.dataTransfer.files); };
+    window.addEventListener('dragover', over); window.addEventListener('drop', drop);
+    return () => { window.removeEventListener('dragover', over); window.removeEventListener('drop', drop); };
+  }, [id]);
+
   const nextId = (d) => { const n = Number(d.nextClipId || 1); d.nextClipId = String(n + 1); return String(n); };
   const findClip = (s, cid) => { for (const tr of [...s.videoTracks, ...s.audioTracks]) { const c = tr.clips.find((x) => x.id === cid); if (c) return { c, tr }; } return null; };
   const linked = (s, c) => (c.linkId && c.linkId !== '0' ? [...s.videoTracks, ...s.audioTracks].flatMap((tr) => tr.clips).filter((x) => x.linkId === c.linkId) : [c]);
@@ -129,14 +174,14 @@ function Editor({ id }) {
     }
     setSel([]);
   });
-  const addMedia = (m, trackIdx = 0, at = null) => edit((d, s) => {
+  const addMedia = (m, trackIdx = 0, at = null, audioIdx = 0) => edit((d, s) => {
     const isAudio = m.kind === 1; const len = m.kind >= 2 ? 5 : Math.max(0.1, (m.srcOut > 0 ? m.srcOut : m.duration) - (m.srcIn || 0));
-    const vt = s.videoTracks[trackIdx] || s.videoTracks[0]; const at_ = at ?? Math.max(0, ...(isAudio ? s.audioTracks[0].clips : vt.clips).map((c) => c.start + c.duration), 0);
+    const vt = s.videoTracks[trackIdx] || s.videoTracks[0]; const at_ = at ?? Math.max(0, ...(isAudio ? (s.audioTracks[audioIdx] || s.audioTracks[0]).clips : vt.clips).map((c) => c.start + c.duration), 0);
     const link = m.hasVideo && m.hasAudio && m.kind === 0 ? nextId(d) : '0';
     const W = s.width, H = s.height; const fit = m.width ? Math.max(W / m.width, H / m.height) : 1;
     const mk = (type) => ({ id: nextId(d), type, mediaId: m.id, name: m.name, start: at_, duration: len, in: m.srcIn || 0, speed: 1, preservePitch: false, linkId: link, enabled: true, posX: anim(0), posY: anim(0), scaleX: anim(type === 1 ? 1 : fit), scaleY: anim(type === 1 ? 1 : fit), rotation: anim(0), opacity: anim(1), volume: anim(1), uniformScale: true, effects: [], transIn: { type: 0, duration: 1 }, transOut: { type: 0, duration: 1 } });
     if (!isAudio) overwrite(vt, mk(m.kind === 2 || m.kind === 3 ? 2 : 0));
-    if (m.hasAudio && m.kind !== 2) overwrite(s.audioTracks[0], mk(1));
+    if (m.hasAudio && m.kind !== 2) overwrite(s.audioTracks[audioIdx] || s.audioTracks[0], mk(1));
     sfx('press');
   });
   const addText = () => edit((d, s) => {
@@ -193,11 +238,11 @@ function Editor({ id }) {
       <${Button} kind="primary" size="sm" icon="upload" onClick=${exportNow}>Export</${Button}>
     </div>
     <div style="display:grid;grid-template-columns:260px minmax(0, 1fr) 300px;min-height:0">
-      <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} projectId=${id} setData=${setDataRaw} onAdd=${addMedia} selected=${selected} edit=${edit} />
+      <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} />
       <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} edit=${edit} />
       <${EffectControls} selected=${selected} seq=${seq} edit=${edit} media=${media} />
     </div>
-    <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} />
+    <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} />
   </div>`;
 }
 
@@ -217,18 +262,13 @@ function overwrite(track, c) {
 }
 
 // ------------------------------------------------------------ left: project bin + effects
-function LeftPanel({ tab, setTab, data, projectId, setData, onAdd, selected, edit }) {
+function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, importPaths, importing }) {
   const fileRef = useRef(null);
-  const [busy, setBusy] = useState(false);
-  const importFiles = async (files) => {
-    setBusy(true);
-    try { const added = await api.upload(`/api/projects/${projectId}/media`, files, {}, null); setData((d) => ({ ...d, media: [...d.media, ...added] })); sfx('success'); }
-    catch (e) { sfx('error'); toast(e.message, { kind: 'error' }); } finally { setBusy(false); }
-  };
+  const busy = importing;
   const importDisk = async () => {
     if (!window.euclidean?.pickFiles) return fileRef.current.click();
-    const r = await api.post('/api/system/pick', { multi: true });
-    if (r.paths?.length) { const added = await act(() => api.post(`/api/projects/${projectId}/media`, { paths: r.paths })); setData((d) => ({ ...d, media: [...d.media, ...added] })); }
+    const r = await api.post('/api/system/pick', { multi: true, filters: [{ name: 'Video, audio and images', extensions: ['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', 'mts', 'm2ts', 'mxf', 'wmv', 'flv', '3gp', 'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff', 'svg'] }, { name: 'All files', extensions: ['*'] }] });
+    if (r.paths?.length) await importPaths(r.paths);
   };
   const applyEffect = (fx) => {
     if (!selected || selected.c.type === 1) return toast('Select a video, image or title clip first', { kind: 'warn' });
@@ -243,11 +283,11 @@ function LeftPanel({ tab, setTab, data, projectId, setData, onAdd, selected, edi
   return html`<div style="display:flex;flex-direction:column;min-height:0;background:var(--ed-panel);border-right:1px solid var(--line)">
     <div class="row" style="padding:8px 10px;border-bottom:1px solid var(--line)"><${Seg} value=${tab} onChange=${setTab} options=${[{ value: 'media', label: 'Project' }, { value: 'effects', label: 'Effects' }]} /><div class="spacer" />${tab === 'media' ? html`<${Button} size="sm" kind="soft" icon="plus" busy=${busy} title="Import media" onClick=${importDisk} />` : null}</div>
     <input type="file" ref=${fileRef} multiple accept="video/*,audio/*,image/*" hidden onChange=${(e) => { importFiles([...e.target.files]); e.target.value = ''; }} />
-    <div style="flex:1;overflow:auto;padding:8px" onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => { e.preventDefault(); if (e.dataTransfer.files.length) importFiles([...e.dataTransfer.files]); }}>
+    <div style="flex:1;overflow:auto;padding:8px" onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); importFiles([...e.dataTransfer.files]); } }}>
       ${tab === 'media' ? (data.media.length ? data.media.map((m) => html`
         <div class="review-item" draggable="true" onDragStart=${(e) => e.dataTransfer.setData('text/x-media', m.id)} onDblClick=${() => onAdd(m)} title="Double-click to add at the end of V1, or drag onto a track">
-          <div class="th" style=${{ width: '58px', aspectRatio: '16/9', backgroundImage: m.kind !== 1 ? `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(m.path)}&t=1`)})` : 'none', display: 'grid', placeItems: 'center' }}>${m.kind === 1 ? html`<${Icon} name="volume" size=${16} />` : null}</div>
-          <div class="grow" style="min-width:0"><div class="ellipsis" style="font-size:var(--fs-sm);font-weight:500">${m.name}</div><div class="faint tnum" style="font-size:var(--fs-xs)">${m.kind >= 2 ? 'Image' : dur(m.duration)}${m.width ? ` · ${m.width}×${m.height}` : ''}</div></div></div>`)
+          <div class="th" style=${{ width: '58px', aspectRatio: '16/9', backgroundImage: m.kind !== 1 ? `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(m.path)}&t=${m.kind >= 2 ? 0 : 1}`)})` : 'none', display: 'grid', placeItems: 'center' }}>${m.kind === 1 ? html`<${Icon} name="volume" size=${16} />` : null}</div>
+          <div class="grow" style="min-width:0"><div class="ellipsis" style="font-size:var(--fs-sm);font-weight:500">${m.name}</div><div class="faint tnum" style="font-size:var(--fs-xs)">${m.kind >= 2 ? 'Image' : dur(m.duration)}${m.width ? ` · ${m.width}×${m.height}` : ''}${m.proxyPending ? ' · preparing preview…' : m.proxyError ? ' · preview unavailable' : ''}</div></div></div>`)
         : html`<div class="empty" style="padding:30px 10px"><p style="font-size:var(--fs-sm)">Import or drop video, audio and images here.</p></div>`)
       : html`${['Blur', 'Color', 'Transform', 'Stylize'].map((cat) => html`<div class="eyebrow" style="padding:8px 6px 4px">${cat}</div>${EFFECTS.filter((f) => f.cat === cat).map((f) => html`<div class="review-item" onDblClick=${() => applyEffect(f)} onClick=${() => applyEffect(f)} title="Apply to the selected clip"><${Icon} name="wand" size=${15} /><span style="font-size:var(--fs-sm)">${f.name}</span></div>`)}`)}
         <div class="eyebrow" style="padding:12px 6px 4px">Transitions</div>${TRANSITIONS.map((tt) => html`<div class="review-item" style="cursor:default"><${Icon} name="layers" size=${15} /><span class="grow" style="font-size:var(--fs-sm)">${tt.name}</span><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transIn')}>In</${Button}><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transOut')}>Out</${Button}></div>`)}`}
@@ -278,10 +318,12 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
 
   const getEl = (c) => {
     let el = els.current.get(c.id); const m = media[c.mediaId]; if (!m) return null;
+    const still = c.type === 2 || m.kind === 2 || m.kind === 3; const src = playUrl(m, still);
+    if (el && el.__src !== src) { if (el instanceof HTMLMediaElement) { el.pause(); el.removeAttribute('src'); el.load(); } el = null; }
     if (!el) {
-      if (c.type === 2 || m.kind === 2 || m.kind === 3) { el = new Image(); el.src = api.url(`/api/media?path=${encodeURIComponent(m.path)}`); }
-      else { el = document.createElement(c.type === 1 ? 'audio' : 'video'); el.preload = 'auto'; el.playsInline = true; el.muted = c.type !== 1; el.src = api.url(`/api/media?path=${encodeURIComponent(m.path)}`); el.addEventListener('seeked', () => draw()); el.addEventListener('loadeddata', () => draw()); }
-      els.current.set(c.id, el);
+      if (still) { el = new Image(); el.src = src; el.onload = () => draw(); }
+      else { el = document.createElement(c.type === 1 ? 'audio' : 'video'); el.preload = 'auto'; el.playsInline = true; el.muted = c.type !== 1; el.src = src; el.addEventListener('seeked', () => draw()); el.addEventListener('loadeddata', () => draw()); }
+      el.__src = src; els.current.set(c.id, el);
     }
     return el;
   };
@@ -468,7 +510,7 @@ function EffectControls({ selected, seq, edit, media }) {
 }
 
 // ------------------------------------------------------------ timeline
-function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom, duration, edit, findClip, linked, onAdd }) {
+function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom, duration, edit, findClip, linked, onAdd, onDropFiles }) {
   const scroller = useRef(null);
   const [drag, setDrag] = useState(null);
   const [, force] = useState(0);
@@ -559,9 +601,10 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
   const toggleTrack = (lane, key) => edit((d, s) => { (lane.type === 1 ? s.audioTracks : s.videoTracks)[lane.i][key] = !(lane.type === 1 ? s.audioTracks : s.videoTracks)[lane.i][key]; });
   const addTrack = (type) => edit((d, s) => { const list = type === 1 ? s.audioTracks : s.videoTracks; list.push({ type, name: `${type === 1 ? 'A' : 'V'}${list.length + 1}`, muted: false, locked: false, volume: { base: 1 }, clips: [] }); });
   const onDropMedia = (e, lane) => {
-    const mid = e.dataTransfer.getData('text/x-media'); if (!mid) return; e.preventDefault();
     const r = scroller.current.getBoundingClientRect(); const at = doSnap(sOf(e.clientX - r.left + scroller.current.scrollLeft - HEAD_W), e.altKey);
-    onAdd(media[mid], lane.type === 0 ? lane.i : 0, at);
+    if (e.dataTransfer.files?.length) { e.preventDefault(); if (lane.tr.locked) return toast('That track is locked', { kind: 'warn' }); onDropFiles(e.dataTransfer.files, lane, at); return; }
+    const mid = e.dataTransfer.getData('text/x-media'); if (!mid || !media[mid]) return; e.preventDefault();
+    onAdd(media[mid], lane.type === 0 ? lane.i : 0, at, lane.type === 1 ? lane.i : 0);
   };
 
   return html`<div style="display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--ed-panel);border-top:1px solid var(--line)">
