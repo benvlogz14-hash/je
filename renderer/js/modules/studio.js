@@ -99,6 +99,51 @@ const PRESETS = [{ label: 'Shorts / Reels / TikTok', w: 1080, h: 1920 }, { label
 
 const base = (p, d = 0) => (p && typeof p === 'object' ? (p.base ?? d) : (p ?? d));
 const anim = (v) => ({ base: v });
+// ---- keyframes (Velo format: { base, keys: [[clipLocalSeconds, value], ...] }, smoothstep easing between keys)
+const qt = (t) => Math.round(t * 1000) / 1000;
+const sortedKeys = (p) => (p && typeof p === 'object' && Array.isArray(p.keys) ? p.keys.slice().sort((a, b) => a[0] - b[0]) : []);
+const isAnimated = (p) => sortedKeys(p).length > 0;
+/** Value of a (possibly keyframed) parameter at clip-local time t. */
+function valAt(p, t, d = 0) {
+  if (p == null) return d;
+  if (typeof p !== 'object') return p;
+  const k = sortedKeys(p);
+  if (!k.length) return p.base ?? d;
+  if (t <= k[0][0]) return k[0][1];
+  for (let i = 1; i < k.length; i++) if (t < k[i][0]) { const [t0, v0] = k[i - 1], [t1, v1] = k[i]; const span = t1 - t0; if (span <= 1e-9) return v1; const f = (t - t0) / span; return v0 + (v1 - v0) * f * f * (3 - 2 * f); }
+  return k[k.length - 1][1];
+}
+/** Set the value at t: moves/creates a keyframe when animated, otherwise changes the plain value. */
+function withValueAt(p, t, v, d = 0) {
+  const o = p && typeof p === 'object' ? clone(p) : { base: p ?? d };
+  if (o.keys?.length) { o.keys = o.keys.filter((k) => Math.abs(k[0] - qt(t)) > 1e-6); o.keys.push([qt(t), v]); o.keys.sort((a, b) => a[0] - b[0]); }
+  else o.base = v;
+  return o;
+}
+/** Stopwatch: start animating (first key at t) or stop (keep the value at t, drop all keys). */
+function toggleAnimation(p, t, d = 0) {
+  const o = p && typeof p === 'object' ? clone(p) : { base: p ?? d };
+  if (o.keys?.length) { o.base = valAt(o, t, d); delete o.keys; } else o.keys = [[qt(t), o.base ?? d]];
+  return o;
+}
+/** Add a keyframe at t (with the current value), or remove the one that's there. */
+function toggleKeyAt(p, t, d = 0) {
+  const o = p && typeof p === 'object' ? clone(p) : { base: p ?? d };
+  const k = sortedKeys(o); const i = k.findIndex((x) => Math.abs(x[0] - qt(t)) < 1e-6);
+  if (i >= 0) { k.splice(i, 1); if (!k.length) { o.base = valAt(p, t, d); delete o.keys; } else o.keys = k; }
+  else { o.keys = [...k, [qt(t), valAt(o, t, d)]].sort((a, b) => a[0] - b[0]); }
+  return o;
+}
+const hasKeyAt = (p, t) => sortedKeys(p).some((k) => Math.abs(k[0] - qt(t)) < 1e-6);
+/** Every animatable parameter of a clip, as [object, key] pairs. */
+function animParams(c) {
+  const out = ['posX', 'posY', 'scaleX', 'scaleY', 'rotation', 'opacity', 'volume'].filter((k) => c[k] && typeof c[k] === 'object').map((k) => [c, k]);
+  for (const e of c.effects || []) for (const k of Object.keys(e.params || {})) out.push([e.params, k]);
+  return out;
+}
+/** Move every keyframe of a clip by dt seconds (used by split and trimming the start). */
+function shiftKeys(c, dt) { for (const [o, k] of animParams(c)) if (o[k]?.keys?.length) o[k] = { ...o[k], keys: o[k].keys.map(([t, v]) => [qt(t + dt), v]) }; }
+const keyTimesOf = (c) => [...new Set(animParams(c).flatMap(([o, k]) => sortedKeys(o[k]).map((x) => x[0])))].sort((a, b) => a - b);
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const TRACK_H = { 0: 48, 1: 40 };
 // Live scrubbing mutates the clip in place for instant preview; the original value is restored
@@ -210,10 +255,10 @@ function Editor({ id }) {
     catch (e) { sfx('error'); toast(e.message, { kind: 'error', title: 'Import failed' }); return []; } finally { setImporting(false); }
   };
   /** Files dropped from the desktop straight onto a timeline track. */
-  const dropFilesOnTrack = async (files, lane, at) => {
+  const dropFilesOnTrack = async (files, lane, at, replace = false, dir = 'down') => {
     const added = await importFiles(files);
     let pos = at;
-    for (const m of added) { addMedia(m, lane.type === 0 ? lane.i : 0, pos, lane.type === 1 ? lane.i : 0); pos += m.kind >= 2 ? 5 : Math.max(0.1, m.duration || 0); }
+    for (const m of added) { addMedia(m, lane.type === 0 ? lane.i : 0, pos, lane.type === 1 ? lane.i : 0, replace, dir); pos += m.kind >= 2 ? 5 : Math.max(0.1, m.duration || 0); }
   };
   useEvent('studio.proxy', (p) => {
     if (p.projectId !== id) return;
@@ -237,7 +282,7 @@ function Editor({ id }) {
     const linkMap = {};
     for (const { c, tr } of targets) {
       const right = clone(c); right.id = nextId(d);
-      const off = t - c.start; right.start = t; right.duration = c.duration - off; right.in = (c.in || 0) + off * (c.speed || 1); right.transIn = { type: 0, duration: 1 };
+      const off = t - c.start; right.start = t; right.duration = c.duration - off; right.in = (c.in || 0) + off * (c.speed || 1); right.transIn = { type: 0, duration: 1 }; shiftKeys(right, -off);
       c.duration = off; c.transOut = { type: 0, duration: 1 };
       if (c.linkId && c.linkId !== '0') { linkMap[c.linkId] = linkMap[c.linkId] || nextId(d); right.linkId = linkMap[c.linkId]; }
       tr.clips.push(right); tr.clips.sort((a, b) => a.start - b.start);
@@ -276,7 +321,7 @@ function Editor({ id }) {
       for (const it of clipboard.items) {
         const c = clone(it.c); c.id = nextId(d); c.start = at + it.off;
         if (c.linkId && c.linkId !== '0') { links[c.linkId] = links[c.linkId] || nextId(d); c.linkId = links[c.linkId]; }
-        overwrite(ensureTrack(s, it.ref.kind, Math.max(0, it.ref.i)), c); ids.push(c.id);
+        ensureTrack(s, it.ref.kind, Math.max(0, it.ref.i)); place(s, it.ref.kind, Math.max(0, it.ref.i), c); ids.push(c.id);
       }
     });
     setTimeout(() => setSel(ids), 0);
@@ -312,7 +357,7 @@ function Editor({ id }) {
       const a = { ...clone(vid), id: nextId(d), type: 1, mediaId: item.id, name: item.name, linkId: '0', effects: [], volume: anim(1), transIn: { type: 0, duration: 0.5 }, transOut: { type: 0, duration: 0.5 } };
       let ti = s.audioTracks.findIndex((tr) => !tr.locked && !tr.clips.some((y) => y.start < a.start + a.duration - 1e-6 && y.start + y.duration > a.start + 1e-6));
       if (ti < 0) ti = s.audioTracks.length;
-      overwrite(ensureTrack(s, 'a', ti), a);
+      ensureTrack(s, 'a', ti); place(s, 'a', ti, a);
     });
   };
   const reveal = (c) => { const m = media[c.mediaId]; if (m) act(() => api.post('/api/system/open', { path: m.path, reveal: true })); };
@@ -347,6 +392,7 @@ function Editor({ id }) {
       grp.some((x) => x.effects?.length) ? { label: 'Remove effects', icon: 'wand', onClick: () => forGroup(ids, (x) => { x.effects = []; }) } : null,
       { label: 'Effects…', icon: 'wand', onClick: () => setLeftTab('effects') },
       'sep',
+      c.type === 3 ? { label: 'Edit title…', icon: 'type', hint: 'Double-click', onClick: () => setTitleEdit({ clipId: c.id }) } : null,
       { label: 'Rename…', icon: 'edit', onClick: () => renameClip(c) },
       m && window.euclidean ? { label: 'Reveal in Explorer', icon: 'folder', onClick: () => reveal(c) } : null,
       'sep',
@@ -354,26 +400,33 @@ function Editor({ id }) {
       { label: 'Ripple delete', icon: 'trash', hint: 'Alt+Del', danger: true, onClick: () => { setSel(ids); setTimeout(() => remove(true), 0); } },
     ]);
   };
-  const addMedia = (m, trackIdx = 0, at = null, audioIdx = 0) => edit((d, s) => {
+  const addMedia = (m, trackIdx = 0, at = null, audioIdx = 0, replace = false, dir = 'down') => edit((d, s) => {
     const isAudio = m.kind === 1; const len = m.kind >= 2 ? 5 : Math.max(0.1, (m.srcOut > 0 ? m.srcOut : m.duration) - (m.srcIn || 0));
     const vt = s.videoTracks[trackIdx] || s.videoTracks[0]; const at_ = at ?? Math.max(0, ...(isAudio ? (s.audioTracks[audioIdx] || s.audioTracks[0]).clips : vt.clips).map((c) => c.start + c.duration), 0);
     const link = m.hasVideo && m.hasAudio && m.kind === 0 ? nextId(d) : '0';
     const W = s.width, H = s.height; const fit = m.width ? Math.max(W / m.width, H / m.height) : 1;
     const mk = (type) => ({ id: nextId(d), type, mediaId: m.id, name: m.name, start: at_, duration: len, in: m.srcIn || 0, speed: 1, preservePitch: false, linkId: link, enabled: true, posX: anim(0), posY: anim(0), scaleX: anim(type === 1 ? 1 : fit), scaleY: anim(type === 1 ? 1 : fit), rotation: anim(0), opacity: anim(1), volume: anim(1), uniformScale: true, effects: [], transIn: { type: 0, duration: 1 }, transOut: { type: 0, duration: 1 } });
-    if (!isAudio) overwrite(vt, mk(m.kind === 2 || m.kind === 3 ? 2 : 0));
-    if (m.hasAudio && m.kind !== 2) overwrite(s.audioTracks[audioIdx] || s.audioTracks[0], mk(1));
+    const vi = s.videoTracks.indexOf(vt);
+    if (!isAudio) place(s, 'v', vi, mk(m.kind === 2 || m.kind === 3 ? 2 : 0), { replace, dir });
+    if (m.hasAudio && m.kind !== 2) place(s, 'a', s.audioTracks[audioIdx] ? audioIdx : 0, mk(1), { replace, dir });
     sfx('press');
   });
-  const addText = () => edit((d, s) => {
-    const tr = s.videoTracks[s.videoTracks.length - 1];
-    overwrite(tr, { id: nextId(d), type: 3, mediaId: '', name: 'Title', start: t, duration: 3, in: 0, speed: 1, preservePitch: false, linkId: '0', enabled: true, posX: anim(0), posY: anim(Math.round(s.height * 0.3)), scaleX: anim(1), scaleY: anim(1), rotation: anim(0), opacity: anim(1), volume: anim(1), uniformScale: true, effects: [], transIn: { type: 2, duration: 0.25 }, transOut: { type: 2, duration: 0.25 }, text: { text: 'NEW TITLE', family: 'Montserrat', pixelSize: 96, bold: true, italic: false, color: '#ffffffff', outlineColor: '#ff111111', outlineWidth: 4 } });
-    sfx('press');
-  });
+  const [titleEdit, setTitleEdit] = useState(null); // null | {} (new) | { clipId }
+  const addText = () => setTitleEdit({});
+  const saveTitle = ({ text, posY, duration, fade }) => {
+    const tid = titleEdit?.clipId;
+    edit((d, s) => {
+      if (tid) { const f = findClip(s, tid); if (!f) return; const c = f.c; c.text = text; c.name = text.text.slice(0, 40); c.duration = duration; c.posY = isAnimated(c.posY) ? c.posY : anim(posY); c.transIn = { type: fade ? 2 : 0, duration: fade || 0.25 }; c.transOut = { type: fade ? 2 : 0, duration: fade || 0.25 }; return; }
+      place(s, 'v', s.videoTracks.length - 1, { id: nextId(d), type: 3, mediaId: '', name: text.text.slice(0, 40), start: t, duration, in: 0, speed: 1, preservePitch: false, linkId: '0', enabled: true, posX: anim(0), posY: anim(posY), scaleX: anim(1), scaleY: anim(1), rotation: anim(0), opacity: anim(1), volume: anim(1), uniformScale: true, effects: [], transIn: { type: fade ? 2 : 0, duration: fade || 0.25 }, transOut: { type: fade ? 2 : 0, duration: fade || 0.25 }, text });
+    });
+    setTitleEdit(null); sfx('success');
+  };
 
   // keyboard
   useEffect(() => {
     const k = (e) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+      if (document.querySelector('.modal')) return; // dialogs (title designer, export) get the keyboard
       const mod = e.ctrlKey || e.metaKey; const key = e.key.toLowerCase();
       if (mod && key === 'z' && !e.shiftKey) { e.preventDefault(); doUndo(); }
       else if (mod && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); doRedo(); }
@@ -427,11 +480,48 @@ function Editor({ id }) {
     <div style="display:grid;grid-template-columns:260px minmax(0, 1fr) 300px;min-height:0">
       <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} />
       <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} edit=${edit} />
-      <${EffectControls} selected=${selected} seq=${seq} edit=${edit} media=${media} />
+      <${EffectControls} selected=${selected} seq=${seq} edit=${edit} media=${media} t=${t} setT=${setT} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
     </div>
-    <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onClipMenu=${clipMenu} />
+    <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onClipMenu=${clipMenu} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
     ${exporting ? html`<${ExportDialog} id=${id} onClose=${() => setExporting(false)} />` : null}
+    ${titleEdit ? html`<${TitleDesigner} seq=${seq} clip=${titleEdit.clipId ? findClip(seq, titleEdit.clipId)?.c : null} onClose=${() => setTitleEdit(null)} onSave=${saveTitle} />` : null}
   </div>`;
+}
+
+/**
+ * Put a clip on a track without destroying anything: clips it lands on are pushed down one
+ * layer (V2 → V1, A1 → A2), cascading, and a new track is added when the bottom is reached.
+ * Hold Shift while dropping to push them up a layer instead, or Ctrl to overwrite
+ * (Velo/Premiere behaviour: what's underneath is trimmed).
+ * kind: 'v' | 'a'. Returns the number of clips that were moved.
+ */
+function place(s, kind, ti, c, { replace = false, keep = new Set(), dir = 'down' } = {}) {
+  const list = kind === 'v' ? s.videoTracks : s.audioTracks;
+  ti = Math.max(0, Math.min(list.length - 1, ti));
+  if (replace) { overwrite(list[ti], c); return 0; }
+  const tr = list[ti];
+  const hit = (x) => x.id !== c.id && !keep.has(x.id) && x.start < c.start + c.duration - 1e-6 && x.start + x.duration > c.start + 1e-6;
+  const bumped = tr.clips.filter(hit);
+  tr.clips = [...tr.clips.filter((x) => !bumped.includes(x) && x.id !== c.id), c].sort((a, b) => a.start - b.start);
+  let pushed = 0;
+  for (const x of bumped) { pushed += 1 + pushAside(s, kind, list.indexOf(tr), x, keep, dir); }
+  return pushed;
+}
+/**
+ * The next layer down (or up) as it appears on screen: video tracks are drawn V1 at the bottom,
+ * audio tracks A1 at the top. A new track is added when there's no layer left in that direction.
+ */
+function pushAside(s, kind, fromTi, x, keep, dir) {
+  const list = kind === 'v' ? s.videoTracks : s.audioTracks;
+  const step = (kind === 'v') === (dir === 'down') ? -1 : 1;
+  let ti = fromTi + step;
+  while (ti >= 0 && ti < list.length && list[ti].locked) ti += step;
+  if (ti < 0 || ti >= list.length) {
+    const fresh = { type: kind === 'v' ? 0 : 1, name: '', muted: false, locked: false, volume: { base: 1 }, clips: [] };
+    if (ti < 0) { list.unshift(fresh); ti = 0; } else { list.push(fresh); ti = list.length - 1; }
+    list.forEach((t, i) => { if (!t.name || /^[VA]\d+$/.test(t.name)) t.name = `${kind === 'v' ? 'V' : 'A'}${i + 1}`; });
+  }
+  return place(s, kind, ti, x, { keep, dir });
 }
 
 /** Velo's overwrite-insert: whatever the new clip covers on its track is trimmed or removed. */
@@ -544,7 +634,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       const el = getEl(c); if (!el || !(el instanceof HTMLMediaElement)) { if (el) live.add(c.id); continue; }
       live.add(c.id);
       const want = (c.in || 0) + (time - c.start) * (c.speed || 1);
-      if (c.type === 1) { const tr = a.find((x) => x.c.id === c.id)?.tr; el.volume = Math.min(1, base(c.volume, 1) * base(tr?.volume, 1)); }
+      if (c.type === 1) { const tr = a.find((x) => x.c.id === c.id)?.tr; el.volume = Math.max(0, Math.min(1, valAt(c.volume, time - c.start, 1) * base(tr?.volume, 1))); }
       el.playbackRate = Math.min(4, Math.max(0.25, c.speed || 1));
       if (isPlaying) { if (Math.abs(el.currentTime - want) > 0.3) el.currentTime = want; if (el.paused) el.play().catch(() => {}); }
       else { if (!el.paused) el.pause(); if (Math.abs(el.currentTime - want) > 0.02) el.currentTime = want; }
@@ -560,17 +650,17 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     const time = tRef.current; const { v } = activeAt(time);
     for (const { c } of v) {
       const local = time - c.start;
-      let alpha = base(c.opacity, 1);
+      let alpha = valAt(c.opacity, local, 1);
       const ti = c.transIn?.type ? c.transIn.duration : 0, to = c.transOut?.type ? c.transOut.duration : 0;
       // Titles only fade (as in export); picture clips get the full transition below.
       if (c.type === 3) { if (ti && local < ti) alpha *= local / ti; if (to && local > c.duration - to) alpha *= Math.max(0, (c.duration - local) / to); }
       g.save(); g.globalAlpha = Math.max(0, Math.min(1, alpha));
-      g.translate(W / 2 + base(c.posX) * quality, H / 2 + base(c.posY) * quality);
-      g.rotate((base(c.rotation) * Math.PI) / 180);
-      const sx = base(c.scaleX, 1), sy = c.uniformScale === false ? base(c.scaleY, 1) : sx;
+      g.translate(W / 2 + valAt(c.posX, local) * quality, H / 2 + valAt(c.posY, local) * quality);
+      g.rotate((valAt(c.rotation, local) * Math.PI) / 180);
+      const sx = valAt(c.scaleX, local, 1), sy = c.uniformScale === false ? valAt(c.scaleY, local, 1) : sx;
       const filters = []; let flipH = 1, flipV = 1, crop = null, vig = 0;
       for (const e of c.effects || []) {
-        if (e.enabled === false) continue; const p = Object.fromEntries(Object.entries(e.params || {}).map(([k, x]) => [k, base(x)]));
+        if (e.enabled === false) continue; const p = Object.fromEntries(Object.entries(e.params || {}).map(([k, x]) => [k, valAt(x, local)]));
         if (e.effectId === 'gaussian_blur') filters.push(`blur(${(p.radius / 2) * quality}px)`);
         if (e.effectId === 'color_correction' || e.effectId === 'color_grade') { filters.push(`brightness(${1 + (p.brightness || 0) / 200 + (p.exposure || 0) * 0.25})`, `contrast(${1 + (p.contrast || 0) / 100})`, `saturate(${(p.saturation ?? 100) / 100})`); if (p.hue) filters.push(`hue-rotate(${p.hue}deg)`); if (p.temperature) filters.push(`sepia(${Math.max(0, p.temperature) / 400})`); }
         if (e.effectId === 'black_white') filters.push(`grayscale(${(p.mix ?? 100) / 100})`);
@@ -580,7 +670,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
         if (e.effectId === 'vignette') vig = p.amount / 100;
       }
       g.filter = filters.join(' ') || 'none';
-      if (c.type === 3) drawText(g, c.text || {}, sx * quality);
+      if (c.type === 3) drawText(g, c.text || {}, sx * quality, local);
       else {
         const el = getEl(c); const m = media[c.mediaId];
         if (el && ((el instanceof HTMLVideoElement && el.readyState >= 2) || (el instanceof HTMLImageElement && el.complete && el.naturalWidth))) {
@@ -615,9 +705,9 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     // selection outline on the monitor
     if (selected && v.some((x) => x.c.id === selected.c.id) && selected.c.type !== 1) {
       g.save(); g.strokeStyle = 'rgba(102,189,180,0.95)'; g.lineWidth = 2; g.setLineDash([6, 4]);
-      const c = selected.c; const m = media[c.mediaId]; const s = base(c.scaleX, 1);
+      const c = selected.c; const m = media[c.mediaId]; const lt = time - c.start; const s = valAt(c.scaleX, lt, 1);
       const w = (c.type === 3 ? (c.text?.pixelSize || 96) * Math.max(4, (c.text?.text || '').length * 0.6) : (m?.width || seq.width)) * s * quality, hh = (c.type === 3 ? (c.text?.pixelSize || 96) * 1.3 : (m?.height || seq.height)) * s * quality;
-      g.translate(W / 2 + base(c.posX) * quality, H / 2 + base(c.posY) * quality); g.rotate((base(c.rotation) * Math.PI) / 180); g.strokeRect(-w / 2, -hh / 2, w, hh); g.restore();
+      g.translate(W / 2 + valAt(c.posX, lt) * quality, H / 2 + valAt(c.posY, lt) * quality); g.rotate((valAt(c.rotation, lt) * Math.PI) / 180); g.strokeRect(-w / 2, -hh / 2, w, hh); g.restore();
     }
   };
   // playback loop
@@ -671,68 +761,182 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     </div></div>`;
 }
 
-function drawText(g, st, scale) {
+const TITLE_FONTS = [['Montserrat', 'Montserrat (bundled)'], ['Anton', 'Anton (bundled)'], ['Arial', 'Arial'], ['Impact', 'Impact'], ['Georgia', 'Georgia'], ['Verdana', 'Verdana'], ['Trebuchet MS', 'Trebuchet MS'], ['Segoe UI', 'Segoe UI'], ['Comic Sans MS', 'Comic Sans MS']];
+const easeOut = (f) => 1 - (1 - f) ** 3;
+const rgbaOf = (s, d) => { const h = String(s || d).replace('#', ''); if (h.length === 8) return `rgba(${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${parseInt(h.slice(6, 8), 16)},${parseInt(h.slice(0, 2), 16) / 255})`; return '#' + h; };
+/** Draw a title centred on the current origin. local = seconds into the clip (for pop / slide-up). */
+function drawText(g, st, scale, local = 10) {
   const size = (st.pixelSize || 96) * scale;
+  const text = st.uppercase ? String(st.text || '').toUpperCase() : String(st.text || '');
   g.font = `${st.italic ? 'italic ' : ''}${st.bold === false ? 500 : 800} ${size}px ${JSON.stringify(st.family || 'Montserrat')}, Montserrat, "Segoe UI", sans-serif`;
   g.textAlign = 'center'; g.textBaseline = 'middle';
-  const col = (s, d) => { const h = String(s || d).replace('#', ''); if (h.length === 8) return `rgba(${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${parseInt(h.slice(6, 8), 16)},${parseInt(h.slice(0, 2), 16) / 255})`; return '#' + h; };
-  const lines = String(st.text || '').split('\n');
+  try { g.letterSpacing = `${(st.letterSpacing || 0) * scale}px`; } catch { /* older engines */ }
+  if (st.animIn === 'pop') { const k = 0.6 + 0.4 * easeOut(Math.min(1, Math.max(0, local) / 0.25)); g.scale(k, k); }
+  if (st.animIn === 'slide') g.translate(0, 70 * scale * (1 - easeOut(Math.min(1, Math.max(0, local) / 0.35))));
+  const lines = text.split('\n'); const lh = size * 1.15;
+  if (st.box) {
+    const pad = (st.boxPad ?? 18) * scale; const w = Math.max(...lines.map((l) => g.measureText(l).width));
+    g.fillStyle = rgbaOf(st.boxColor, 'cc000000');
+    g.fillRect(-w / 2 - pad, -(lines.length * lh) / 2 - pad * 0.6, w + pad * 2, lines.length * lh + pad * 1.2);
+  }
   lines.forEach((line, i) => {
-    const y = (i - (lines.length - 1) / 2) * size * 1.15;
-    if (st.outlineWidth) { g.lineJoin = 'round'; g.lineWidth = st.outlineWidth * 2 * scale; g.strokeStyle = col(st.outlineColor, 'ff000000'); g.strokeText(line, 0, y); }
-    g.fillStyle = col(st.color, 'ffffffff'); g.fillText(line, 0, y);
+    const y = (i - (lines.length - 1) / 2) * lh;
+    if (st.shadow) { g.shadowColor = rgbaOf(st.shadowColor, 'b3000000'); g.shadowOffsetX = g.shadowOffsetY = st.shadow * scale; g.shadowBlur = st.shadow * scale; }
+    if (st.outlineWidth && !st.box) { g.lineJoin = 'round'; g.lineWidth = st.outlineWidth * 2 * scale; g.strokeStyle = rgbaOf(st.outlineColor, 'ff000000'); g.strokeText(line, 0, y); }
+    g.fillStyle = rgbaOf(st.color, 'ffffffff'); g.fillText(line, 0, y);
+    g.shadowColor = 'transparent';
   });
 }
 
-// ------------------------------------------------------------ effect controls
-function NumField({ label, value, onChange, step = 1, min, max, unit = '', digits = 0 }) {
-  const down = useRef(null);
-  const start = (e) => { down.current = { x: e.clientX, v: value, last: null }; e.currentTarget.setPointerCapture(e.pointerId); };
-  const move = (e) => { if (!down.current) return; const dx = e.clientX - down.current.x; let v = down.current.v + dx * step * (e.shiftKey ? 10 : 1); if (min != null) v = Math.max(min, v); if (max != null) v = Math.min(max, v); v = Number(v.toFixed(digits + 1)); down.current.last = v; onChange(v, true); };
-  const up = () => { const d = down.current; down.current = null; if (d && d.last != null) onChange(d.last, false); };
-  return html`<div class="row" style="justify-content:space-between;gap:8px;padding:3px 0">
-    <span style="cursor:ew-resize;font-size:var(--fs-sm);color:var(--ink-2)" title="Drag to scrub (Shift = 10×)" onPointerDown=${start} onPointerMove=${move} onPointerUp=${up}>${label}</span>
-    <div class="row" style="gap:4px"><input class="input sm tnum" style="width:78px;text-align:right" type="number" step=${step} value=${Number(value).toFixed(digits)} onChange=${(e) => onChange(Number(e.target.value), false)} aria-label=${label} /><span class="faint" style="width:14px;font-size:var(--fs-xs)">${unit}</span></div></div>`;
+// ------------------------------------------------------------ title designer (T)
+const TITLE_PRESETS = [
+  { name: 'Hook', st: { family: 'Anton', pixelSize: 150, bold: true, uppercase: true, color: '#ffffffff', outlineColor: '#ff000000', outlineWidth: 8, shadow: 0, box: false, animIn: 'pop' }, pos: 'top' },
+  { name: 'Title', st: { family: 'Montserrat', pixelSize: 96, bold: true, color: '#ffffffff', outlineColor: '#ff111111', outlineWidth: 4, shadow: 4, box: false, animIn: 'fade' }, pos: 'center' },
+  { name: 'Lower third', st: { family: 'Montserrat', pixelSize: 54, bold: true, color: '#ffffffff', outlineWidth: 0, shadow: 0, box: true, boxColor: '#e6111a22', boxPad: 22, animIn: 'slide' }, pos: 'lower' },
+  { name: 'Caption', st: { family: 'Montserrat', pixelSize: 64, bold: true, uppercase: true, color: '#ffffffff', outlineColor: '#ff000000', outlineWidth: 6, shadow: 0, box: false, animIn: 'none' }, pos: 'bottom' },
+  { name: 'Subscribe', st: { family: 'Montserrat', pixelSize: 58, bold: true, uppercase: true, color: '#ff111111', outlineWidth: 0, shadow: 0, box: true, boxColor: '#ffffd23f', boxPad: 24, animIn: 'pop' }, pos: 'bottom' },
+  { name: 'Quote', st: { family: 'Georgia', pixelSize: 68, bold: false, italic: true, color: '#ffffffff', outlineWidth: 0, shadow: 6, box: false, animIn: 'fade' }, pos: 'center' },
+];
+const POS_Y = { top: -0.32, center: 0, lower: 0.26, bottom: 0.36 };
+const hex6 = (c, d) => '#' + String(c || d).replace('#', '').slice(-6);
+const withAlpha = (rgb, a) => '#' + Math.round(a * 255).toString(16).padStart(2, '0') + rgb.replace('#', '');
+
+function TitleDesigner({ seq, clip, onClose, onSave }) {
+  const start = clip?.text ? { ...TITLE_PRESETS[1].st, ...clip.text } : { ...TITLE_PRESETS[1].st, text: 'NEW TITLE' };
+  const [st, setSt] = useState(start);
+  const [posY, setPosY] = useState(clip ? valAt(clip.posY, 0) : Math.round(seq.height * POS_Y.center));
+  const [dur, setDur] = useState(clip?.duration || 3);
+  const [fade, setFade] = useState(clip ? (clip.transIn?.type ? clip.transIn.duration : 0) : 0.25);
+  const cv = useRef(null); const t0 = useRef(performance.now());
+  const set = (patch) => { t0.current = performance.now(); setSt((x) => ({ ...x, ...patch })); };
+  // live preview, replaying the entrance animation every 2.5 s
+  useEffect(() => {
+    let raf;
+    const tick = () => {
+      const c = cv.current; if (!c) return;
+      const W = c.width, H = c.height, k = W / seq.width; const g = c.getContext('2d');
+      const grad = g.createLinearGradient(0, 0, W, H); grad.addColorStop(0, '#2c3540'); grad.addColorStop(1, '#5a6b7a'); g.fillStyle = grad; g.fillRect(0, 0, W, H);
+      const local = ((performance.now() - t0.current) / 1000) % 2.5;
+      const a = st.animIn === 'fade' || fade ? Math.min(1, fade ? local / Math.max(0.05, fade) : local / 0.25) : 1;
+      g.save(); g.globalAlpha = st.animIn === 'none' && !fade ? 1 : a; g.translate(W / 2, H / 2 + posY * k); drawText(g, st, k, local); g.restore();
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick); return () => cancelAnimationFrame(raf);
+  }, [st, posY, fade]);
+  const save = () => onSave({ text: { ...st, text: st.text || 'TITLE' }, posY, duration: Math.max(0.2, dur), fade: st.animIn === 'fade' ? Math.max(fade, 0.2) : fade });
+  const chip = (on, label, fn, title) => html`<button type="button" class=${'chip' + (on ? ' on' : '')} title=${title} onClick=${fn}>${label}</button>`;
+  const prevW = 220; const prevH = Math.round((prevW * seq.height) / seq.width);
+  return html`<${Modal} wide title=${clip ? 'Edit title' : 'New title'} icon="type" onClose=${onClose} footer=${html`<span class="faint grow" style="font-size:var(--fs-xs)">Enter saves · Shift+Enter adds a line</span><${Button} kind="ghost" onClick=${onClose}>Cancel</${Button}><${Button} kind="primary" icon=${clip ? 'check' : 'plus'} onClick=${save}>${clip ? 'Save title' : 'Add to timeline'}</${Button}>`}>
+    <div style="display:grid;grid-template-columns:${prevW}px minmax(0, 1fr);gap:18px;align-items:start">
+      <div class="col" style="gap:8px;position:sticky;top:0"><canvas ref=${cv} width=${prevW * 2} height=${prevH * 2} style=${{ width: prevW + 'px', height: prevH + 'px', borderRadius: '10px', boxShadow: 'var(--shadow-1)' }} /><div class="faint" style="font-size:var(--fs-xs)">Live preview at ${seq.width}×${seq.height}</div></div>
+      <div class="col" style="gap:12px">
+        <div class="field"><span class="label">Style</span><div class="chips">${TITLE_PRESETS.map((pr) => chip(false, pr.name, () => { set({ ...pr.st }); setPosY(Math.round(seq.height * POS_Y[pr.pos])); if (pr.st.animIn === 'fade') setFade(0.3); }))}</div></div>
+        <${Field} label="Text" id="td-text"><textarea id="td-text" class="textarea" rows="2" value=${st.text} autofocus onInput=${(e) => set({ text: e.target.value })} onKeyDown=${(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); } }} /></${Field}>
+        <div class="form-grid" style="grid-template-columns:repeat(auto-fit, minmax(170px, 1fr))">
+          <${Field} label="Font" id="td-font"><select id="td-font" class="select" value=${st.family} onChange=${(e) => set({ family: e.target.value })}>${TITLE_FONTS.map(([f, l]) => html`<option value=${f}>${l}</option>`)}</select></${Field}>
+          <div class="field"><span class="label">Look</span><div class="chips">${chip(st.bold !== false, 'Bold', () => set({ bold: st.bold === false }))}${chip(st.italic, 'Italic', () => set({ italic: !st.italic }))}${chip(st.uppercase, 'ALL CAPS', () => set({ uppercase: !st.uppercase }))}</div></div>
+        </div>
+        <${ParamField} label="Size" p=${st.pixelSize} animatable=${false} min=${8} max=${600} smin=${16} smax=${300} unit="px" onLive=${(v) => set({ pixelSize: Math.round(v.base) })} onCommit=${(v) => set({ pixelSize: Math.round(v.base) })} />
+        <${ParamField} label="Letter spacing" p=${st.letterSpacing || 0} animatable=${false} min=${-20} max=${80} smin=${-10} smax=${40} unit="px" onLive=${(v) => set({ letterSpacing: Math.round(v.base) })} onCommit=${(v) => set({ letterSpacing: Math.round(v.base) })} />
+        <div class="row wrap" style="gap:14px">
+          <label class="row" style="gap:6px;font-size:var(--fs-sm)">Text <input type="color" value=${hex6(st.color, 'ffffff')} onInput=${(e) => set({ color: withAlpha(e.target.value, 1) })} aria-label="Text colour" /></label>
+          <label class="row" style="gap:6px;font-size:var(--fs-sm)">Outline <input type="color" value=${hex6(st.outlineColor, '000000')} onInput=${(e) => set({ outlineColor: withAlpha(e.target.value, 1) })} aria-label="Outline colour" /></label>
+          <label class="row" style="gap:6px;font-size:var(--fs-sm)">Shadow <input type="color" value=${hex6(st.shadowColor, '000000')} onInput=${(e) => set({ shadowColor: withAlpha(e.target.value, 0.7) })} aria-label="Shadow colour" /></label>
+        </div>
+        <${ParamField} label="Outline" p=${st.outlineWidth || 0} animatable=${false} min=${0} max=${40} smin=${0} smax=${20} unit="px" onLive=${(v) => set({ outlineWidth: Math.round(v.base) })} onCommit=${(v) => set({ outlineWidth: Math.round(v.base) })} />
+        <${ParamField} label="Shadow" p=${st.shadow || 0} animatable=${false} min=${0} max=${30} smin=${0} smax=${20} unit="px" onLive=${(v) => set({ shadow: Math.round(v.base) })} onCommit=${(v) => set({ shadow: Math.round(v.base) })} />
+        <div class="row wrap" style="gap:10px"><div class="check-row"><${Toggle} on=${!!st.box} label="Background box" onChange=${(v) => set({ box: v })} /><span>Background box</span></div>
+          ${st.box ? html`<label class="row" style="gap:6px;font-size:var(--fs-sm)">Colour <input type="color" value=${hex6(st.boxColor, '000000')} onInput=${(e) => set({ boxColor: withAlpha(e.target.value, 0.9) })} aria-label="Box colour" /></label>` : null}</div>
+        ${st.box ? html`<${ParamField} label="Box padding" p=${st.boxPad ?? 18} animatable=${false} min=${0} max=${120} smin=${0} smax=${60} unit="px" onLive=${(v) => set({ boxPad: Math.round(v.base) })} onCommit=${(v) => set({ boxPad: Math.round(v.base) })} />` : null}
+        <div class="field"><span class="label">Position</span><div class="chips">${Object.entries({ top: 'Top', center: 'Centre', lower: 'Lower third', bottom: 'Bottom' }).map(([k, l]) => chip(Math.abs(posY - Math.round(seq.height * POS_Y[k])) < 2, l, () => setPosY(Math.round(seq.height * POS_Y[k]))))}</div></div>
+        <${ParamField} label="Height on screen" p=${posY} animatable=${false} min=${-seq.height} max=${seq.height} smin=${-seq.height / 2} smax=${seq.height / 2} unit="px" onLive=${(v) => setPosY(Math.round(v.base))} onCommit=${(v) => setPosY(Math.round(v.base))} />
+        <div class="field"><span class="label">Entrance</span><div class="chips">${[['none', 'None'], ['fade', 'Fade in'], ['pop', 'Pop'], ['slide', 'Slide up']].map(([k, l]) => chip((st.animIn || 'none') === k, l, () => { set({ animIn: k }); if (k === 'fade' && !fade) setFade(0.3); }))}</div></div>
+        <div class="form-grid" style="grid-template-columns:repeat(auto-fit, minmax(170px, 1fr))">
+          <${ParamField} label="On screen for" p=${dur} animatable=${false} min=${0.2} max=${600} smin=${0.5} smax=${15} step=${0.1} digits=${1} unit="s" onLive=${(v) => setDur(v.base)} onCommit=${(v) => setDur(v.base)} />
+          <${ParamField} label="Fade in/out" p=${fade} animatable=${false} min=${0} max=${5} smin=${0} smax=${2} step=${0.05} digits=${2} unit="s" onLive=${(v) => setFade(v.base)} onCommit=${(v) => setFade(v.base)} />
+        </div>
+      </div>
+    </div></${Modal}>`;
 }
 
-function EffectControls({ selected, seq, edit, media }) {
-  if (!selected) return html`<div style="background:var(--ed-panel);border-left:1px solid var(--line);padding:14px"><div class="eyebrow">Effect controls</div><p class="faint" style="font-size:var(--fs-sm);margin-top:10px">Select a clip on the timeline to adjust position, scale, opacity, speed, effects and transitions. Drag any label to scrub its value.</p>
-    <div class="divider" /><div class="eyebrow">Shortcuts</div><div class="col" style="gap:4px;margin-top:8px;font-size:var(--fs-sm)" class="muted">${[['Space', 'Play / pause'], ['J K L', 'Shuttle'], ['S', 'Split selected'], ['Shift S', 'Split all tracks'], ['Del', 'Delete'], ['Alt Del', 'Ripple delete'], ['V / C / T', 'Select / razor / title'], ['Ctrl Z', 'Undo'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl D', 'Duplicate'], ['Ctrl R', 'Speed / duration'], ['Shift E', 'Enable / disable'], ['Right-click', 'All clip tools'], ['+ / −', 'Zoom timeline']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="faint">${d}</span></div>`)}</div></div>`;
+
+// ------------------------------------------------------------ effect controls
+/**
+ * One adjustable setting: a slider for quick changes, a box for an exact number, and (when
+ * animatable) a stopwatch to start keyframing, ◆ to add/remove a key at the playhead and ◀ ▶ to jump between keys.
+ * p is the stored value (plain number or Velo { base, keys }); the field shows its value at clip time lt.
+ */
+function ParamField({ label, p, d = 0, mult = 1, lt = 0, inClip = true, min, max, smin, smax, step = 1, digits = 0, unit = '', animatable = true, dflt, onLive, onCommit, onJump }) {
+  const value = valAt(p, lt, d) * mult;
+  const [draft, setDraft] = useState(null);
+  const lo = smin ?? min ?? -1000, hi = smax ?? max ?? 1000;
+  const clampV = (v) => Math.min(max ?? Infinity, Math.max(min ?? -Infinity, v));
+  const make = (v) => withValueAt(p, lt, clampV(v) / mult, d);
+  const keyed = animatable && isAnimated(p); const onKey = keyed && hasKeyAt(p, lt);
+  const keys = sortedKeys(p).map((k) => k[0]);
+  const prev = keys.filter((k) => k < lt - 1e-6).pop(), next = keys.find((k) => k > lt + 1e-6);
+  const commitDraft = () => { if (draft == null) return; const v = Number(String(draft).replace(',', '.')); setDraft(null); if (Number.isFinite(v)) onCommit(make(v)); };
+  const ib = (on) => ({ width: '22px', height: '22px', border: 0, borderRadius: '5px', display: 'grid', placeItems: 'center', cursor: 'pointer', background: on ? 'var(--gold-soft)' : 'transparent', color: on ? 'var(--gold-ink)' : 'var(--ink-3)', padding: 0 });
+  return html`<div class="col" style="gap:2px;padding:4px 0">
+    <div class="row" style="gap:4px">
+      ${animatable ? html`<button type="button" style=${ib(keyed)} title=${keyed ? 'Stop animating (keeps the current value)' : 'Animate: start keyframing this setting'} disabled=${!inClip && !keyed} onClick=${() => onCommit(toggleAnimation(p, lt, d))} aria-pressed=${keyed}><${Icon} name="clock" size=${13} /></button>` : null}
+      <span class="grow" style="font-size:var(--fs-sm);color:var(--ink-2)" title=${dflt != null ? 'Double-click to reset' : ''} onDblClick=${() => dflt != null && onCommit(make(dflt))}>${label}</span>
+      ${keyed ? html`<button type="button" style=${ib(false)} title="Previous keyframe" disabled=${prev == null} onClick=${() => onJump(prev)}>‹</button>
+        <button type="button" style=${{ ...ib(onKey), fontSize: '12px' }} title=${onKey ? 'Remove keyframe here' : 'Add keyframe at the playhead'} disabled=${!inClip} onClick=${() => onCommit(toggleKeyAt(p, lt, d))}>${onKey ? '◆' : '◇'}</button>
+        <button type="button" style=${ib(false)} title="Next keyframe" disabled=${next == null} onClick=${() => onJump(next)}>›</button>` : null}
+      <input class="input sm tnum" style="width:70px;text-align:right" inputmode="decimal" value=${draft ?? Number(value).toFixed(digits)} onFocus=${(e) => e.target.select()} onInput=${(e) => setDraft(e.target.value)} onBlur=${commitDraft} onKeyDown=${(e) => { if (e.key === 'Enter') { e.preventDefault(); commitDraft(); e.target.blur(); } else if (e.key === 'Escape') { setDraft(null); e.target.blur(); } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault(); }} aria-label=${label} />
+      <span class="faint" style="width:16px;font-size:var(--fs-xs)">${unit}</span>
+    </div>
+    <input type="range" class="range" style="width:100%" min=${lo} max=${hi} step=${step} value=${Math.min(hi, Math.max(lo, value))} disabled=${keyed && !inClip}
+      onInput=${(e) => onLive(make(Number(e.target.value)))} onChange=${(e) => onCommit(make(Number(e.target.value)))} aria-label=${`${label} slider`} />
+  </div>`;
+}
+
+function EffectControls({ selected, seq, edit, media, t, setT, onEditTitle }) {
+  if (!selected) return html`<div style="background:var(--ed-panel);border-left:1px solid var(--line);padding:14px"><div class="eyebrow">Effect controls</div><p class="faint" style="font-size:var(--fs-sm);margin-top:10px">Select a clip on the timeline to adjust and animate position, scale, rotation, opacity, volume, speed, effects and transitions.</p>
+    <div class="divider" /><div class="eyebrow">Shortcuts</div><div class="col" style="gap:4px;margin-top:8px;font-size:var(--fs-sm)" class="muted">${[['Space', 'Play / pause'], ['J K L', 'Shuttle'], ['S', 'Split selected'], ['Shift S', 'Split all tracks'], ['Del', 'Delete'], ['Alt Del', 'Ripple delete'], ['V / C / T', 'Select / razor / title'], ['Ctrl Z', 'Undo'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl D', 'Duplicate'], ['Ctrl R', 'Speed / duration'], ['Shift E', 'Enable / disable'], ['Right-click', 'All clip tools'], ['Drop on a clip', 'Pushes it down a layer'], ['Shift + drop', 'Pushes it up instead'], ['Ctrl + drop', 'Replaces it'], ['+ / −', 'Zoom timeline']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="faint">${d}</span></div>`)}</div></div>`;
   const c = selected.c;
-  // Live-preview while scrubbing (mutate in place); commit an undo step on release.
+  // Live-preview while dragging a slider (mutate in place); commit one undo step on release.
   const [, force] = useState(0);
   useEffect(() => { const f = () => force((n) => n + 1); window.addEventListener('studio-redraw', f); return () => window.removeEventListener('studio-redraw', f); }, []);
   const setRaw = (fn) => { revertLive(); edit((d, s) => { for (const tr of [...s.videoTracks, ...s.audioTracks]) { const x = tr.clips.find((y) => y.id === c.id); if (x) fn(x, tr); } }); };
-  const setP = (k, v, isLive) => { if (isLive) return liveSet(c, k, anim(v), c.id + k); setRaw((x) => { x[k] = anim(v); }); };
+  const lt = Math.max(0, Math.min(c.duration, t - c.start)); const inClip = t >= c.start - 1e-6 && t <= c.start + c.duration + 1e-6;
+  const jump = (kt) => { if (kt != null) setT(c.start + kt); };
+  // a clip setting: live while sliding, saved on release
+  const F = (key, props) => html`<${ParamField} p=${c[key]} lt=${lt} inClip=${inClip} onJump=${jump} onLive=${(v) => liveSet(c, key, v, c.id + key)} onCommit=${(v) => setRaw((x) => { x[key] = v; })} ...${props} />`;
+  const scaleField = html`<${ParamField} label="Scale" p=${c.scaleX} d=${1} mult=${100} lt=${lt} inClip=${inClip} onJump=${jump} min=${1} max=${2000} smin=${1} smax=${400} step=${0.5} digits=${1} unit="%" dflt=${100}
+    onLive=${(v) => { liveSet(c, 'scaleX', v, c.id + 'sx'); liveSet(c, 'scaleY', clone(v), c.id + 'sy'); }} onCommit=${(v) => setRaw((x) => { x.scaleX = v; x.scaleY = clone(v); })} />`;
   return html`<div style="background:var(--ed-panel);border-left:1px solid var(--line);overflow:auto;padding:12px 14px">
     <div class="row"><span class="eyebrow grow">Effect controls</span><span class="badge outline">${['Video', 'Audio', 'Image', 'Title', 'Nested'][c.type]}</span></div>
-    <div class="ellipsis" style="font-weight:600;margin:6px 0 10px">${c.name || media[c.mediaId]?.name || 'Clip'}</div>
-    ${c.type === 3 ? html`<div class="col" style="gap:8px;margin-bottom:10px"><textarea class="textarea" rows="2" id="ec-text" value=${c.text?.text || ''} onChange=${(e) => setRaw((x) => { x.text.text = e.target.value; x.name = e.target.value.slice(0, 40); })} aria-label="Title text" />
-      <div class="row"><input class="input sm" style="flex:1" value=${c.text?.family || 'Montserrat'} onChange=${(e) => setRaw((x) => { x.text.family = e.target.value; })} aria-label="Font family" />
-        <input type="color" value=${'#' + String(c.text?.color || 'ffffffff').slice(-6)} onChange=${(e) => setRaw((x) => { x.text.color = '#ff' + e.target.value.slice(1); })} aria-label="Text color" />
-        <input type="color" value=${'#' + String(c.text?.outlineColor || 'ff000000').slice(-6)} onChange=${(e) => setRaw((x) => { x.text.outlineColor = '#ff' + e.target.value.slice(1); })} aria-label="Outline color" /></div>
-      <${NumField} label="Size" value=${c.text?.pixelSize || 96} min=${8} max=${600} onChange=${(v, isLive) => { if (isLive) liveSet(c.text, 'pixelSize', v, c.id + 'tsize'); else setRaw((x) => { x.text.pixelSize = Math.round(v); }); }} />
-      <${NumField} label="Outline" value=${c.text?.outlineWidth || 0} min=${0} max=${40} onChange=${(v, isLive) => { if (isLive) liveSet(c.text, 'outlineWidth', v, c.id + 'tow'); else setRaw((x) => { x.text.outlineWidth = Math.round(v); }); }} /></div>` : null}
+    <div class="ellipsis" style="font-weight:600;margin:6px 0 4px">${c.name || media[c.mediaId]?.name || 'Clip'}</div>
+    <div class="faint" style="font-size:var(--fs-xs);margin-bottom:8px">${inClip ? html`Playhead ${lt.toFixed(2)}s into this clip. Click <${Icon} name="clock" size=${11} /> to animate a setting, then move the playhead and change the value to add keyframes.` : 'Move the playhead over this clip to set keyframes.'}</div>
+    ${c.type === 3 ? html`<div class="col" style="gap:8px;margin-bottom:10px">
+      <${Button} size="sm" kind="lav" icon="type" onClick=${() => onEditTitle?.(c.id)}>Edit title, style & animation…</${Button}>
+      <textarea class="textarea" rows="2" id="ec-text" value=${c.text?.text || ''} onInput=${(e) => liveSet(c.text, 'text', e.target.value, c.id + 'txt')} onBlur=${(e) => { const v = e.target.value; setRaw((x) => { x.text.text = v; x.name = v.slice(0, 40); }); }} onKeyDown=${(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.target.blur(); } }} aria-label="Title text" title="Enter applies · Shift+Enter adds a line" />
+      <select class="select sm" value=${c.text?.family || 'Montserrat'} onChange=${(e) => setRaw((x) => { x.text.family = e.target.value; })} aria-label="Font">${TITLE_FONTS.map(([f, l]) => html`<option value=${f}>${l}</option>`)}</select>
+      <${ParamField} label="Text size" p=${c.text?.pixelSize || 96} animatable=${false} min=${8} max=${600} smin=${12} smax=${300} unit="px" onLive=${(v) => liveSet(c.text, 'pixelSize', Math.round(v.base), c.id + 'tsize')} onCommit=${(v) => setRaw((x) => { x.text.pixelSize = Math.round(v.base); })} />
+      <${ParamField} label="Outline" p=${c.text?.outlineWidth || 0} animatable=${false} min=${0} max=${40} unit="px" onLive=${(v) => liveSet(c.text, 'outlineWidth', Math.round(v.base), c.id + 'tow')} onCommit=${(v) => setRaw((x) => { x.text.outlineWidth = Math.round(v.base); })} /></div>` : null}
     ${c.type !== 1 ? html`<div class="eyebrow" style="margin-top:6px">Motion</div>
-      <${NumField} label="Position X" value=${base(c.posX)} onChange=${(v, l) => setP('posX', v, l)} unit="px" />
-      <${NumField} label="Position Y" value=${base(c.posY)} onChange=${(v, l) => setP('posY', v, l)} unit="px" />
-      <${NumField} label="Scale" value=${base(c.scaleX, 1) * 100} step=${0.5} min=${1} max=${2000} onChange=${(v, l) => { if (l) { liveSet(c, 'scaleX', anim(v / 100), c.id + 'sx'); liveSet(c, 'scaleY', anim(v / 100), c.id + 'sy'); } else setRaw((x) => { x.scaleX = anim(v / 100); x.scaleY = anim(v / 100); }); }} unit="%" />
-      <${NumField} label="Rotation" value=${base(c.rotation)} step=${0.5} onChange=${(v, l) => setP('rotation', v, l)} unit="°" />
-      <${NumField} label="Opacity" value=${base(c.opacity, 1) * 100} min=${0} max=${100} onChange=${(v, l) => setP('opacity', v / 100, l)} unit="%" />` : null}
+      ${F('posX', { label: 'Position X', min: -20000, max: 20000, smin: -seq.width, smax: seq.width, unit: 'px', dflt: 0 })}
+      ${F('posY', { label: 'Position Y', min: -20000, max: 20000, smin: -seq.height, smax: seq.height, unit: 'px', dflt: 0 })}
+      ${scaleField}
+      ${F('rotation', { label: 'Rotation', min: -3600, max: 3600, smin: -180, smax: 180, step: 0.5, digits: 1, unit: '°', dflt: 0 })}
+      ${F('opacity', { label: 'Opacity', d: 1, mult: 100, min: 0, max: 100, smin: 0, smax: 100, unit: '%', dflt: 100 })}` : null}
     ${c.type === 0 || c.type === 1 ? html`<div class="eyebrow" style="margin-top:10px">Time</div>
-      <${NumField} label="Speed" value=${(c.speed || 1) * 100} step=${1} min=${10} max=${1000} unit="%" onChange=${(v, l) => { if (!l) setRaw((x) => { const old = x.speed || 1; x.speed = v / 100; x.duration = x.duration * old / x.speed; }); }} />` : null}
-    ${c.type === 1 ? html`<div class="eyebrow" style="margin-top:10px">Audio</div><${NumField} label="Volume" value=${base(c.volume, 1) * 100} min=${0} max=${400} unit="%" onChange=${(v, l) => setP('volume', v / 100, l)} />` : null}
+      <${ParamField} label="Speed" p=${(c.speed || 1)} mult=${100} animatable=${false} min=${10} max=${1000} smin=${10} smax=${400} unit="%" dflt=${100} onLive=${() => {}} onCommit=${(v) => setRaw((x) => { const old = x.speed || 1; x.speed = Math.max(0.1, v.base); x.duration = (x.duration * old) / x.speed; const k = old / x.speed; for (const [o, kk] of animParams(x)) if (o[kk]?.keys?.length) o[kk] = { ...o[kk], keys: o[kk].keys.map(([tt, v]) => [qt(tt * k), v]) }; })} />` : null}
+    ${c.type === 1 ? html`<div class="eyebrow" style="margin-top:10px">Audio</div>${F('volume', { label: 'Volume', d: 1, mult: 100, min: 0, max: 400, smin: 0, smax: 200, unit: '%', dflt: 100 })}` : null}
     ${(c.effects || []).map((e, i) => { const def = EFFECTS.find((f) => f.id === e.effectId); return html`<div class="divider" /><div class="row"><${Toggle} on=${e.enabled !== false} label="Enable effect" onChange=${(on) => setRaw((x) => { x.effects[i].enabled = on; })} /><b class="grow" style="font-size:var(--fs-sm)">${def?.name || e.effectId}</b><${Button} size="sm" kind="ghost" icon="trash" title="Remove effect" onClick=${() => setRaw((x) => { x.effects.splice(i, 1); })} /></div>
-      ${(def?.params || []).map(([k, label, mn, mx, dflt, stp]) => html`<${NumField} label=${label} value=${base(e.params?.[k], dflt)} min=${mn} max=${mx} step=${stp || (mx - mn > 50 ? 1 : 0.05)} digits=${stp && stp < 1 ? 2 : 0} onChange=${(v, l) => { if (l) liveSet(e.params, k, anim(v), c.id + 'fx' + i + k); else setRaw((x) => { x.effects[i].params[k] = anim(v); }); }} />`)}`; })}
+      ${(def?.params || []).map(([k, label, mn, mx, dflt, stp]) => html`<${ParamField} label=${label} p=${e.params?.[k]} d=${dflt} lt=${lt} inClip=${inClip} onJump=${jump} min=${mn} max=${mx} step=${stp || (mx - mn > 50 ? 1 : 0.05)} digits=${stp && stp < 1 ? 2 : 0} dflt=${dflt}
+        onLive=${(v) => liveSet(e.params, k, v, c.id + 'fx' + i + k)} onCommit=${(v) => setRaw((x) => { x.effects[i].params[k] = v; })} />`)}`; })}
     <div class="divider" /><div class="eyebrow">Transitions</div>
     ${['transIn', 'transOut'].map((edge) => html`<div class="row" style="padding:4px 0"><span class="muted" style="width:34px;font-size:var(--fs-sm)">${edge === 'transIn' ? 'In' : 'Out'}</span>
       <select class="select sm" style="flex:1" value=${c[edge]?.type || 0} onChange=${(e) => setRaw((x) => { x[edge] = { type: Number(e.target.value), duration: x[edge]?.duration || 0.5 }; })} aria-label=${edge}><option value="0">None</option>${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<optgroup label=${cat}>${TRANSITIONS.filter((tt) => tt.cat === cat).map((tt) => html`<option value=${tt.type}>${tt.name}</option>`)}</optgroup>`)}</select>
-      <input class="input sm tnum" style="width:62px" type="number" step="0.05" min="0.04" value=${c[edge]?.duration || 0.5} onChange=${(e) => setRaw((x) => { x[edge] = { ...(x[edge] || { type: 0 }), duration: Math.max(0.04, Number(e.target.value)) }; })} aria-label="Duration" /></div>`)}
+      <input class="input sm tnum" style="width:62px" inputmode="decimal" value=${c[edge]?.duration || 0.5} onChange=${(e) => { const v = Number(e.target.value); if (v > 0) setRaw((x) => { x[edge] = { ...(x[edge] || { type: 0 }), duration: Math.max(0.04, v) }; }); }} aria-label="Duration" /><span class="faint" style="font-size:var(--fs-xs)">s</span></div>`)}
   </div>`;
 }
 
 // ------------------------------------------------------------ timeline
-function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom, duration, edit, findClip, linked, onAdd, onDropFiles, onClipMenu }) {
+function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom, duration, edit, findClip, linked, onAdd, onDropFiles, onClipMenu, onEditTitle }) {
   const scroller = useRef(null);
   const [drag, setDrag] = useState(null);
   const [, force] = useState(0);
@@ -782,11 +986,13 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
       const o = drag.orig[drag.clipId]; let dt = ds;
       if (drag.mode === 'move') { const ns = doSnap(o.start + ds, e.altKey, new Set([o.start, o.start + o.duration])); const ne = doSnap(o.start + o.duration + ds, e.altKey, new Set([o.start, o.start + o.duration])); dt = Math.abs(ns - (o.start + ds)) <= Math.abs(ne - (o.start + o.duration + ds)) ? ns - o.start : ne - o.start - o.duration; dt = Math.max(-Math.min(...Object.values(drag.orig).map((x) => x.start)), dt); }
       const dTrack = drag.mode === 'move' ? Math.round((e.clientY - drag.startY) / TRACK_H[drag.lane.type]) : 0;
-      setDrag({ ...drag, dt, dTrack, moved: true, alt: e.altKey });
+      setDrag({ ...drag, dt, dTrack, moved: true, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey });
     };
-    const up = () => {
+    const up = (ev) => {
       const d = drag; setDrag(null);
       if (!d.moved) return;
+      const replace = !!(ev?.ctrlKey || ev?.metaKey) && d.mode === 'move'; const dir = ev?.shiftKey ? 'up' : 'down';
+      let pushed = 0; const keep = new Set(d.group);
       edit((dd, s) => {
         for (const id of d.group) {
           const f = findClip(s, id); if (!f) continue; const o = d.orig[id]; const c = f.c;
@@ -794,11 +1000,11 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
             c.start = Math.max(0, Math.round((o.start + d.dt) * fps) / fps);
             const list = c.type === 1 ? s.audioTracks : s.videoTracks; let ti = list.indexOf(f.tr);
             if (id === d.clipId || sel.includes(id)) { const dir = c.type === 1 ? d.dTrack : -d.dTrack; ti = Math.max(0, Math.min(list.length - 1, ti + dir)); }
-            f.tr.clips = f.tr.clips.filter((x) => x.id !== id); overwrite(list[ti], c);
+            f.tr.clips = f.tr.clips.filter((x) => x.id !== id); pushed += place(s, c.type === 1 ? 'a' : 'v', ti, c, { replace, keep, dir });
           } else if (d.mode === 'trimL') {
             const maxIn = (o.in || 0) / (o.speed || 1);
             const ns = doSnap(Math.min(o.start + o.duration - 1 / fps, Math.max(o.start - maxIn, o.start + d.dt)), d.alt);
-            const delta = ns - o.start; c.start = ns; c.duration = o.duration - delta; c.in = Math.max(0, (o.in || 0) + delta * (o.speed || 1));
+            const delta = ns - o.start; c.start = ns; c.duration = o.duration - delta; c.in = Math.max(0, (o.in || 0) + delta * (o.speed || 1)); shiftKeys(c, -delta);
           } else {
             const m = media[o.mediaId]; const maxDur = m && m.kind < 2 ? ((m.duration - (o.in || 0)) / (o.speed || 1)) : 3600;
             const ne = doSnap(o.start + Math.max(1 / fps, Math.min(maxDur, o.duration + d.dt)), d.alt);
@@ -807,6 +1013,7 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
         }
       });
       sfx('press');
+      if (pushed) toast(`${pushed} clip${pushed > 1 ? 's' : ''} moved ${dir} a layer. Hold Shift to push up, Ctrl to replace.`, { kind: 'info', ms: 3200 });
     };
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
     return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
@@ -820,18 +1027,29 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
     return { start: o.start, duration: Math.max(0.05, o.duration + drag.dt), dy: 0 };
   };
 
+  // While dragging a clip over others, say what will happen on release.
+  const dragHint = (() => {
+    if (!drag || !drag.moved || drag.mode !== 'move') return '';
+    const o = drag.orig[drag.clipId]; const f = findClip(seq, drag.clipId); if (!f || !o) return '';
+    const list = o.type === 1 ? seq.audioTracks : seq.videoTracks;
+    const ti = Math.max(0, Math.min(list.length - 1, list.indexOf(f.tr) + (o.type === 1 ? drag.dTrack : -drag.dTrack)));
+    const st = o.start + drag.dt, en = st + o.duration;
+    const n = list[ti].clips.filter((x) => !drag.group.includes(x.id) && x.start < en - 1e-6 && x.start + x.duration > st + 1e-6).length;
+    if (!n) return '';
+    return drag.ctrl ? `Release to replace ${n} clip${n > 1 ? 's' : ''} (Ctrl)` : `Release to push ${n} clip${n > 1 ? 's' : ''} ${drag.shift ? 'up' : 'down'} a layer · Shift = up · Ctrl = replace`;
+  })();
   const toggleTrack = (lane, key) => edit((d, s) => { (lane.type === 1 ? s.audioTracks : s.videoTracks)[lane.i][key] = !(lane.type === 1 ? s.audioTracks : s.videoTracks)[lane.i][key]; });
   const addTrack = (type) => edit((d, s) => { const list = type === 1 ? s.audioTracks : s.videoTracks; list.push({ type, name: `${type === 1 ? 'A' : 'V'}${list.length + 1}`, muted: false, locked: false, volume: { base: 1 }, clips: [] }); });
   const onDropMedia = (e, lane) => {
     const r = scroller.current.getBoundingClientRect(); const at = doSnap(sOf(e.clientX - r.left + scroller.current.scrollLeft - HEAD_W), e.altKey);
-    if (e.dataTransfer.files?.length) { e.preventDefault(); if (lane.tr.locked) return toast('That track is locked', { kind: 'warn' }); onDropFiles(e.dataTransfer.files, lane, at); return; }
+    if (e.dataTransfer.files?.length) { e.preventDefault(); if (lane.tr.locked) return toast('That track is locked', { kind: 'warn' }); onDropFiles(e.dataTransfer.files, lane, at, e.ctrlKey || e.metaKey, e.shiftKey ? 'up' : 'down'); return; }
     const mid = e.dataTransfer.getData('text/x-media'); if (!mid || !media[mid]) return; e.preventDefault();
-    onAdd(media[mid], lane.type === 0 ? lane.i : 0, at, lane.type === 1 ? lane.i : 0);
+    onAdd(media[mid], lane.type === 0 ? lane.i : 0, at, lane.type === 1 ? lane.i : 0, e.ctrlKey || e.metaKey, e.shiftKey ? 'up' : 'down');
   };
 
   return html`<div style="display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--ed-panel);border-top:1px solid var(--line)">
     <div class="row" style="padding:6px 12px;border-bottom:1px solid var(--line);gap:10px">
-      <span class="eyebrow">Timeline</span><span class="mono tnum" style="color:var(--teal-ink)">${tc(t, fps)}</span><span class="faint" style="font-size:var(--fs-xs)">${sel.length ? `${sel.length} selected` : ''}</span>
+      <span class="eyebrow">Timeline</span><span class="mono tnum" style="color:var(--teal-ink)">${tc(t, fps)}</span><span class="faint" style="font-size:var(--fs-xs)">${sel.length ? `${sel.length} selected` : ''}</span>${dragHint ? html`<span class="badge ${drag?.ctrl ? 'coral' : drag?.shift ? 'lav' : 'sky'}">${dragHint}</span>` : null}
       <div class="spacer" /><${Button} kind="ghost" size="sm" icon="plus" onClick=${() => addTrack(0)}>Video track</${Button}><${Button} kind="ghost" size="sm" icon="plus" onClick=${() => addTrack(1)}>Audio track</${Button}>
       <${Icon} name="zoomOut" size=${15} style="color:var(--ink-3)" /><input type="range" class="range" style="width:140px" min="4" max="400" value=${zoom} onInput=${(e) => setZoom(Number(e.target.value))} aria-label="Timeline zoom" /><${Icon} name="zoomIn" size=${15} style="color:var(--ink-3)" />
     </div>
@@ -849,9 +1067,10 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
           </div>
           <div style=${{ position: 'relative', flex: 1, background: lane.tr.locked ? 'repeating-linear-gradient(135deg, transparent 0 6px, var(--surface-3) 6px 7px)' : 'transparent', opacity: lane.tr.muted ? 0.5 : 1 }} onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => onDropMedia(e, lane)} onPointerDown=${() => setSel([])}>
             ${lane.tr.clips.map((c) => { const v = view(c); const isSel = sel.includes(c.id); const colors = c.type === 1 ? ['--clip-a', '--clip-a-line'] : c.type === 3 ? ['--clip-t', '--clip-t-line'] : ['--clip-v', '--clip-v-line'];
-              return html`<div key=${c.id} title=${c.name} onContextMenu=${(e) => onClipMenu(e, c)} onPointerDown=${(e) => { if (e.button === 2) return; onClipDown(e, c, lane); }} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(4, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
+              return html`<div key=${c.id} title=${c.name} onContextMenu=${(e) => onClipMenu(e, c)} onDblClick=${() => { if (c.type === 3) onEditTitle(c.id); }} onPointerDown=${(e) => { if (e.button === 2) return; onClipDown(e, c, lane); }} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(4, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
                 ${c.type === 0 && media[c.mediaId] && xOf(v.duration) > 50 ? html`<div style=${{ position: 'absolute', inset: 0, backgroundImage: `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(media[c.mediaId].path)}&t=${Math.round(c.in || 0) + 1}`)})`, backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x', opacity: 0.45 }} />` : null}
                 <div class="ellipsis" style="position:relative;font-size:11px;font-weight:600;padding:3px 7px;color:var(--ink)">${c.type === 3 ? (c.text?.text || 'Title') : c.name}${c.effects?.length ? ' ·fx' : ''}${(c.speed || 1) !== 1 ? ` · ${Math.round((c.speed || 1) * 100)}%` : ''}</div>
+                ${keyTimesOf(c).map((kt) => html`<span title=${`Keyframe at ${kt.toFixed(2)}s`} style=${{ position: 'absolute', left: Math.max(0, xOf(kt) - 4) + 'px', bottom: '3px', width: '7px', height: '7px', background: 'var(--gold)', border: '1px solid var(--gold-ink)', transform: 'rotate(45deg)', pointerEvents: 'none' }} />`)}
                 ${c.transIn?.type ? html`<div style=${{ position: 'absolute', left: 0, top: 0, bottom: 0, width: xOf(c.transIn.duration) + 'px', background: 'linear-gradient(90deg, rgba(0,0,0,0.25), transparent)' }} />` : null}
                 ${c.transOut?.type ? html`<div style=${{ position: 'absolute', right: 0, top: 0, bottom: 0, width: xOf(c.transOut.duration) + 'px', background: 'linear-gradient(270deg, rgba(0,0,0,0.25), transparent)' }} />` : null}
               </div>`; })}
