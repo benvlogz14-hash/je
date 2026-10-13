@@ -319,4 +319,84 @@ function metrics(videos = []) {
   };
 }
 
-module.exports = { classify, searchYouTube, searchWithAI, fetchStats, mergeVideos, monthly, metrics, video, parseCount, parseAgo, parseYouTubeSearch, parseYouTubeChannel, parseYouTubeShorts };
+// ------------------------------------------------------------ Social Blade-style report
+// Estimated creator revenue per 1,000 views (USD). Rough industry ranges; shown as estimates only.
+const RPM = { video: [0.5, 4], live: [0.5, 4], short: [0.02, 0.08], tiktok: [0.02, 0.04] };
+const day = (iso) => String(iso).slice(0, 10);
+const addDays = (d, n) => isoDay(new Date(d + 'T12:00:00Z').getTime() + n * DAY);
+
+/** Straight-line fit y = a + b·x over [x, y] points (x in days). */
+function trend(points) {
+  if (points.length < 2) return null;
+  const n = points.length, sx = sum(points.map((p) => p[0])), sy = sum(points.map((p) => p[1]));
+  const sxx = sum(points.map((p) => p[0] * p[0])), sxy = sum(points.map((p) => p[0] * p[1]));
+  const den = n * sxx - sx * sx; if (!den) return null;
+  const b = (n * sxy - sx * sy) / den; return { a: (sy - b * sx) / n, b };
+}
+
+function gradeOf({ followers, avgViews, followersPerDay, uploads30d }) {
+  if (!followers && !avgViews) return { grade: '—', score: null, parts: [] };
+  const reach = followers ? Math.min(1, (avgViews || 0) / followers / 0.25) : 0.5;            // views per follower (25%+ is excellent)
+  const growth = followers ? Math.min(1, Math.max(0, ((followersPerDay || 0) * 30) / followers / 0.05)) : 0.5; // 5%+ a month is excellent
+  const pace = uploads30d == null ? 0.5 : Math.min(1, uploads30d / 20);                        // 20+ uploads a month is excellent
+  const size = followers ? Math.min(1, Math.log10(Math.max(10, followers)) / 7) : 0;           // 10M+ followers tops out
+  const score = Math.round((reach * 0.35 + growth * 0.3 + pace * 0.15 + size * 0.2) * 100);
+  const grade = score >= 90 ? 'A+' : score >= 80 ? 'A' : score >= 72 ? 'A-' : score >= 64 ? 'B+' : score >= 56 ? 'B' : score >= 48 ? 'B-' : score >= 40 ? 'C+' : score >= 32 ? 'C' : score >= 24 ? 'C-' : 'D';
+  return { grade, score, parts: [['Views per follower', Math.round(reach * 100)], ['Follower growth', Math.round(growth * 100)], ['Upload pace', Math.round(pace * 100)], ['Audience size', Math.round(size * 100)]] };
+}
+
+/**
+ * Everything Analytics shows for one creator, computed from what Euclidean has collected:
+ * daily and monthly gains, projections, grade, earnings estimates, posting days and fastest-growing uploads.
+ */
+function report(c) {
+  const videos = c.videos || []; const hist = (c.history || []).filter((h) => h.at);
+  // one row per day: the last snapshot of each day
+  const byDay = new Map(); for (const h of hist) byDay.set(day(h.at), h);
+  const days = [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const rpm = (kind) => (c.platform === 'tiktok' ? RPM.tiktok : RPM[kind] || RPM.video);
+  const shortShare = videos.length ? videos.filter((v) => v.kind === 'short').length / videos.length : 0;
+  const blended = [rpm('video')[0] * (1 - shortShare) + rpm('short')[0] * shortShare, rpm('video')[1] * (1 - shortShare) + rpm('short')[1] * shortShare];
+  const daily = days.map(([d, h], i) => {
+    const prev = i ? days[i - 1][1] : null;
+    const fd = prev && h.followers != null && prev.followers != null ? h.followers - prev.followers : null;
+    const vd = prev && h.totalViews != null && prev.totalViews != null ? Math.max(0, h.totalViews - prev.totalViews) : null;
+    return { date: d, followers: h.followers ?? null, followersDelta: fd, views: h.totalViews ?? null, viewsDelta: vd, uploads: h.uploads ?? null,
+      earningsLow: vd != null ? Math.round((vd / 1000) * blended[0] * 100) / 100 : null, earningsHigh: vd != null ? Math.round((vd / 1000) * blended[1] * 100) / 100 : null };
+  }).reverse();
+  // rates from the last 30 days of snapshots
+  const recent = hist.filter((h) => Date.now() - new Date(h.at).getTime() <= 30 * DAY && h.followers != null);
+  const t0 = recent.length ? new Date(recent[0].at).getTime() : 0;
+  const ft = trend(recent.map((h) => [(new Date(h.at).getTime() - t0) / DAY, h.followers]));
+  const vrec = hist.filter((h) => Date.now() - new Date(h.at).getTime() <= 30 * DAY && h.totalViews != null);
+  const vt = trend(vrec.map((h) => [(new Date(h.at).getTime() - (vrec.length ? new Date(vrec[0].at).getTime() : 0)) / DAY, h.totalViews]));
+  const followersPerDay = ft ? Math.round(ft.b) : null; const viewsPerDay = vt ? Math.max(0, Math.round(vt.b)) : null;
+  const now = c.followers ?? null;
+  const projections = followersPerDay != null && now != null ? [['30 days', 30], ['90 days', 90], ['6 months', 182], ['1 year', 365], ['2 years', 730]].map(([label, n]) => ({ label, date: addDays(isoDay(Date.now()), n), followers: Math.max(0, Math.round(now + followersPerDay * n)), views: viewsPerDay != null && (vrec.length || c.metrics?.totalViews != null) ? Math.round((vrec.length ? vrec[vrec.length - 1].totalViews : c.metrics.totalViews) + viewsPerDay * n) : null })) : [];
+  const milestones = [1e3, 1e4, 5e4, 1e5, 5e5, 1e6, 5e6, 1e7, 5e7, 1e8];
+  const nextMilestone = now != null ? milestones.find((m) => m > now) : null;
+  const milestone = nextMilestone && followersPerDay > 0 ? { followers: nextMilestone, days: Math.ceil((nextMilestone - now) / followersPerDay), date: addDays(isoDay(Date.now()), Math.ceil((nextMilestone - now) / followersPerDay)) } : nextMilestone ? { followers: nextMilestone, days: null, date: null } : null;
+  // monthly: uploads by month plus follower gains, with an earnings estimate for each month's uploads
+  const months = monthly(videos, hist).map((m) => {
+    const vids = videos.filter((v) => (v.date || '').startsWith(m.month) && v.views != null);
+    const lo = sum(vids.map((v) => (v.views / 1000) * rpm(v.kind)[0])), hi = sum(vids.map((v) => (v.views / 1000) * rpm(v.kind)[1]));
+    return { ...m, earningsLow: vids.length ? Math.round(lo) : null, earningsHigh: vids.length ? Math.round(hi) : null };
+  });
+  // posting pattern and fastest-growing uploads (views per day since posting)
+  const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((name, i) => ({ day: name, uploads: videos.filter((v) => v.date && new Date(v.date + 'T12:00:00Z').getUTCDay() === i).length }));
+  const velocity = videos.filter((v) => v.date && v.views != null).map((v) => ({ ...v, ageDays: Math.max(1, Math.round((Date.now() - new Date(v.date + 'T12:00:00Z').getTime()) / DAY)) })).map((v) => ({ id: v.id, title: v.title, kind: v.kind, date: v.date, views: v.views, viewsPerDay: Math.round(v.views / v.ageDays), url: v.url })).sort((a, b) => b.viewsPerDay - a.viewsPerDay).slice(0, 15);
+  const m30 = monthly(videos.filter((v) => v.date && v.date >= isoDay(Date.now() - 30 * DAY)), []);
+  const views30 = sum(videos.filter((v) => v.date && v.date >= isoDay(Date.now() - 30 * DAY)).map((v) => v.views || 0));
+  const earn30 = [sum(videos.filter((v) => v.date && v.date >= isoDay(Date.now() - 30 * DAY)).map((v) => ((v.views || 0) / 1000) * rpm(v.kind)[0])), sum(videos.filter((v) => v.date && v.date >= isoDay(Date.now() - 30 * DAY)).map((v) => ((v.views || 0) / 1000) * rpm(v.kind)[1]))].map(Math.round);
+  const f30 = hist.filter((h) => h.followers != null && Date.now() - new Date(h.at).getTime() <= 30 * DAY);
+  const g = gradeOf({ followers: now, avgViews: c.metrics?.avgViews, followersPerDay, uploads30d: c.metrics?.uploads30d });
+  return {
+    summary: { followers: now, followersGained30d: f30.length > 1 ? f30[f30.length - 1].followers - f30[0].followers : null, followersPerDay, viewsPerDay,
+      uploadsTracked: videos.length, uploads30d: c.metrics?.uploads30d ?? null, viewsOnUploads30d: views30 || null, avgViews: c.metrics?.avgViews ?? null, medianViews: c.metrics?.medianViews ?? null,
+      estEarnings30d: views30 ? { low: earn30[0], high: earn30[1] } : null, grade: g.grade, gradeScore: g.score, gradeParts: g.parts, trackingSince: hist[0]?.at || null, snapshots: hist.length, months30: m30.length },
+    daily, months, projections, milestone, weekdays, fastest: velocity,
+    notes: ['Follower history starts when Euclidean began tracking this creator; it updates every 6 hours while the app runs.', 'Earnings are rough estimates from typical revenue per 1,000 views (long-form $0.50–$4, Shorts $0.02–$0.08), not real payouts.', 'Views by upload month are each upload\'s views so far.'],
+  };
+}
+
+module.exports = { report, gradeOf, classify, searchYouTube, searchWithAI, fetchStats, mergeVideos, monthly, metrics, video, parseCount, parseAgo, parseYouTubeSearch, parseYouTubeChannel, parseYouTubeShorts };

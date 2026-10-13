@@ -492,7 +492,10 @@ r.post('/api/analytics/sync', () => queue.enqueue('analytics.sync', {}, { dedupe
 const creatorsSvc = require('./integrations/creators');
 const PLATFORMS_C = ['youtube', 'tiktok', 'instagram', 'x', 'facebook', 'twitch', 'other'];
 // The list leaves out each creator's upload list (it can be thousands long) but includes the monthly breakdown.
-r.get('/api/creators', () => ctx.store.all('creators').slice().sort((a, b) => (b.followers || 0) - (a.followers || 0)).map(({ videos, ...c }) => ({ ...c, months: creatorsSvc.monthly(videos || [], c.history || []).map(({ top, ...m }) => m) })));
+r.get('/api/creators', () => {
+  const list = ctx.store.all('creators').slice().sort((a, b) => (b.followers || 0) - (a.followers || 0));
+  return list.map(({ videos, ...c }, i) => { const rep = creatorsSvc.report({ ...c, videos }); return { ...c, rank: c.followers != null ? i + 1 : null, stats: rep.summary, months: creatorsSvc.monthly(videos || [], c.history || []).map(({ top, ...m }) => m) }; });
+});
 r.get('/api/creators/search', async (req) => {
   const q = String(req.query.q || '').trim();
   if (q.length < 2) throw new HttpError(400, 'Type at least 2 characters');
@@ -513,13 +516,17 @@ r.get('/api/creators/search', async (req) => {
 });
 r.get('/api/creators/:id', (req, b, p) => { const c = must(ctx.store.get('creators', p.id)); return { ...c, months: creatorsSvc.monthly(c.videos || [], c.history || []) }; });
 /** CSV for spreadsheets: ?of=months (default) or ?of=uploads */
+/** Social Blade-style report: daily and monthly gains, projections, grade, earnings estimates. ?format=csv&of=daily for spreadsheets. */
+r.get('/api/creators/:id/report', (req, b, p) => { const c = must(ctx.store.get('creators', p.id)); return { creator: { id: c.id, name: c.name, platform: c.platform, handle: c.handle, url: c.url }, ...creatorsSvc.report(c) }; });
 r.get('/api/creators/:id/export.csv', (req, res, p) => {
   const c = ctx.store.get('creators', p.id); if (!c) return send(res, 404, { error: 'Not found' });
   const q = (v) => (v == null ? '' : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
   let rows;
-  if (req.query.of === 'uploads') rows = [['date', 'date_estimated', 'type', 'title', 'views', 'likes', 'comments', 'shares', 'length_seconds', 'url'], ...(c.videos || []).map((v) => [v.date, v.dateApprox ? 'yes' : 'no', v.kind, v.title, v.views, v.likes, v.comments, v.shares, v.durationSec, v.url])];
+  if (req.query.of === 'daily') { const rep = creatorsSvc.report(c); rows = [['date', 'followers', 'followers_change', 'views_tracked_uploads', 'views_change', 'uploads_tracked', 'est_earnings_low_usd', 'est_earnings_high_usd'], ...rep.daily.map((d) => [d.date, d.followers, d.followersDelta, d.views, d.viewsDelta, d.uploads, d.earningsLow, d.earningsHigh])]; }
+  else if (req.query.of === 'projections') { const rep = creatorsSvc.report(c); rows = [['in', 'date', 'followers', 'views'], ...rep.projections.map((x) => [x.label, x.date, x.followers, x.views])]; }
+  else if (req.query.of === 'uploads') rows = [['date', 'date_estimated', 'type', 'title', 'views', 'likes', 'comments', 'shares', 'length_seconds', 'url'], ...(c.videos || []).map((v) => [v.date, v.dateApprox ? 'yes' : 'no', v.kind, v.title, v.views, v.likes, v.comments, v.shares, v.durationSec, v.url])];
   else rows = [['month', 'uploads', 'long_form', 'shorts', 'live', 'views_to_date', 'avg_views', 'median_views', 'likes', 'comments', 'shares', 'engagement_pct', 'avg_length_seconds', 'followers_end_of_month', 'followers_change', 'top_upload', 'top_upload_views'], ...creatorsSvc.monthly(c.videos || [], c.history || []).map((m) => [m.month, m.uploads, m.videos, m.shorts, m.lives, m.views, m.avgViews, m.medianViews, m.likes, m.comments, m.shares, m.engagementPct, m.avgDurationSec, m.followers, m.followersDelta, m.top?.title, m.top?.views])];
-  const name = `${String(c.name).replace(/[^\w\- ]+/g, '').trim() || 'creator'} - ${req.query.of === 'uploads' ? 'uploads' : 'by month'}.csv`;
+  const name = `${String(c.name).replace(/[^\w\- ]+/g, '').trim() || 'creator'} - ${{ uploads: 'uploads', daily: 'daily', projections: 'projections' }[req.query.of] || 'by month'}.csv`;
   return send(res, 200, '\ufeff' + rows.map((r) => r.map(q).join(',')).join('\r\n'), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}"` });
 }, { stream: true });
 r.post('/api/creators', (req, b) => {

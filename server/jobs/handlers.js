@@ -352,7 +352,7 @@ queue.register('creator.sync', {
       followers, followersSource: st.followers != null ? 'auto' : x.followersSource, videos, metrics: m, syncedAt: now(), syncError: null, verified: true, partial: !!st.partial,
       fullHistoryAt: full ? now() : x.fullHistoryAt || null,
       // one follower snapshot per day is enough for monthly numbers
-      history: [...(x.history || []).filter((hh) => String(hh.at).slice(0, 10) !== now().slice(0, 10)), { at: now(), followers, avgViews: m.avgViews, medianViews: m.medianViews, uploads: videos.length }].slice(-800),
+      history: [...(x.history || []).filter((hh) => String(hh.at).slice(0, 10) !== now().slice(0, 10)), { at: now(), followers, avgViews: m.avgViews, medianViews: m.medianViews, uploads: videos.length, totalViews: m.totalViews }].slice(-800),
     }));
     events.publish('creators', {});
     return { followers, uploads: videos.length, new: videos.length - (c.videos || []).length };

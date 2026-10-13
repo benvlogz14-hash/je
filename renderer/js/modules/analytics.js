@@ -117,6 +117,21 @@ function creatorMenu(e, c, reload) {
   ]);
 }
 
+const GRADE_TONE = (g) => (/^A/.test(g || '') ? 'moss' : /^B/.test(g || '') ? 'teal' : /^C/.test(g || '') ? 'gold' : g === 'D' ? 'coral' : '');
+function GradeBadge({ g, big }) { return g && g !== '—' ? html`<span class=${'badge ' + GRADE_TONE(g)} style=${big ? { height: '34px', fontSize: '18px', padding: '0 12px' } : {}}>${g}</span>` : html`<span class="faint">—</span>`; }
+const money0 = (v) => (v == null ? '—' : `$${Math.round(v).toLocaleString()}`);
+const range$ = (lo, hi) => (lo == null ? '—' : `${money0(lo)} – ${money0(hi)}`);
+
+/** Side by side, Social Blade style. */
+function Compare({ creators, onClose }) {
+  const rows = [['Platform', (c) => platLabel(c.platform)], ['Grade', (c) => html`<${GradeBadge} g=${c.stats?.grade} />`], ['Followers', (c) => short(c.followers)], ['Followers, last 30 days', (c) => signed(c.stats?.followersGained30d)],
+    ['Followers per day', (c) => (c.stats?.followersPerDay != null ? signed(c.stats.followersPerDay) : '—')], ['Views per day (tracked uploads)', (c) => short(c.stats?.viewsPerDay)], ['Avg views (last 30 uploads)', (c) => short(c.metrics?.avgViews)], ['Median views', (c) => short(c.metrics?.medianViews)],
+    ['Uploads, last 30 days', (c) => c.metrics?.uploads30d ?? '—'], ['Long-form / Shorts / Live', (c) => `${c.metrics?.longForm ?? 0} / ${c.metrics?.shorts ?? 0} / ${c.metrics?.lives ?? 0}`], ['Est. earnings, last 30 days', (c) => (c.stats?.estEarnings30d ? range$(c.stats.estEarnings30d.low, c.stats.estEarnings30d.high) : '—')],
+    ['Follower trend', (c) => { const h = (c.history || []).map((x) => x.followers).filter((v) => v != null); return h.length > 1 ? html`<${Sparkline} values=${h} width=${110} height=${28} color="var(--moss)" />` : '—'; }]];
+  return html`<${Modal} wide title="Compare creators" icon="layers" onClose=${onClose}><div class="table-wrap"><table class="table"><thead><tr><th></th>${creators.map((c) => html`<th><div class="row" style="gap:8px"><${Avatar} name=${c.name} size="sm" /><b class="ellipsis" style="max-width:150px">${c.name}</b></div></th>`)}</tr></thead>
+    <tbody>${rows.map(([label, f]) => html`<tr><td class="faint" style="white-space:nowrap">${label}</td>${creators.map((c) => html`<td class="tnum">${f(c)}</td>`)}</tr>`)}</tbody></table></div></${Modal}>`;
+}
+
 // ---- month helpers
 const monthLabel = (m, long) => { const [y, mo] = m.split('-').map(Number); return new Date(y, mo - 1, 15).toLocaleDateString(undefined, { month: long ? 'long' : 'short', year: 'numeric' }); };
 const mins = (sec) => (sec == null ? '—' : sec >= 3600 ? `${Math.floor(sec / 3600)}h ${Math.round((sec % 3600) / 60)}m` : `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`);
@@ -137,11 +152,12 @@ function CreatorTable({ creators, onOpen, reload }) {
   const allMonths = [...new Set(creators.flatMap((c) => (c.months || []).map((m) => m.month)))].sort().reverse();
   const [month, setMonth] = useState('all');
   const [sort, setSort] = useState({ key: 'followers', dir: 'desc' });
+  const [picked, setPicked] = useState([]); const [comparing, setComparing] = useState(false);
   const rowOf = (c) => {
     const m = month === 'all' ? null : (c.months || []).find((x) => x.month === month) || {};
     const g = growth(c);
     return month === 'all'
-      ? { c, name: c.name, followers: c.followers, growth: g?.pct ?? null, avgViews: c.metrics?.avgViews, medianViews: c.metrics?.medianViews, uploads30d: c.metrics?.uploads30d, uploads: c.metrics?.uploadsTracked ?? null, totalViews: c.metrics?.totalViews }
+      ? { c, name: c.name, followers: c.followers, rank: c.rank, grade: c.stats?.gradeScore ?? null, gained30: c.stats?.followersGained30d ?? null, perDay: c.stats?.followersPerDay ?? null, growth: g?.pct ?? null, avgViews: c.metrics?.avgViews, medianViews: c.metrics?.medianViews, uploads30d: c.metrics?.uploads30d, uploads: c.metrics?.uploadsTracked ?? null, totalViews: c.metrics?.totalViews }
       : { c, name: c.name, followers: m.followers ?? null, followersDelta: m.followersDelta ?? null, uploads: m.uploads ?? 0, shorts: m.shorts ?? 0, views: m.views ?? null, avgViews: m.avgViews ?? null, medianViews: m.medianViews ?? null, engagementPct: m.engagementPct ?? null };
   };
   const rows = sortRows(creators.map(rowOf), sort);
@@ -151,31 +167,37 @@ function CreatorTable({ creators, onOpen, reload }) {
       <span class="faint" style="font-size:var(--fs-sm)">Show</span>
       <select class="select sm" style="width:auto" value=${month} onChange=${(e) => { setMonth(e.target.value); setSort({ key: e.target.value === 'all' ? 'followers' : 'views', dir: 'desc' }); }} aria-label="Month">
         <option value="all">All time</option>${allMonths.map((m) => html`<option value=${m}>${monthLabel(m, true)}</option>`)}</select>
-      <span class="faint" style="font-size:var(--fs-sm)">· click a column to sort</span>
+      <span class="faint" style="font-size:var(--fs-sm)">· click a column to sort · tick up to 4 to compare</span><span class="grow" />
+      <${Button} size="sm" kind="soft" icon="layers" disabled=${picked.length < 2} onClick=${() => setComparing(true)}>Compare${picked.length ? ` (${picked.length})` : ''}</${Button}>
     </div>
-    <div class="table-wrap"><table class="table"><thead><tr>${H('name', 'Creator', false)}
-      ${month === 'all' ? html`${H('followers', 'Followers')}${H('growth', 'Growth')}<th>Trend</th>${H('avgViews', 'Avg views (last 30)')}${H('medianViews', 'Median')}${H('uploads30d', 'Uploads / 30d')}${H('uploads', 'Uploads tracked')}`
+    <div class="table-wrap"><table class="table"><thead><tr><th style="width:28px"><span class="faint" title="Tick creators to compare">⇆</span></th>${H('name', 'Creator', false)}
+      ${month === 'all' ? html`${H('grade', 'Grade')}${H('rank', 'Rank')}${H('followers', 'Followers')}${H('gained30', '30 days +/-')}${H('perDay', 'Per day')}<th>Trend</th>${H('avgViews', 'Avg views (last 30)')}${H('medianViews', 'Median')}${H('uploads30d', 'Uploads / 30d')}`
         : html`${H('uploads', 'Uploads')}${H('shorts', 'Shorts')}${H('views', 'Views')}${H('avgViews', 'Avg views')}${H('medianViews', 'Median')}${H('engagementPct', 'Engagement')}${H('followersDelta', 'Followers +/-')}`}
       <th>Updated</th><th></th></tr></thead><tbody>
       ${rows.map((r) => { const c = r.c; const g = growth(c); const hist = (c.history || []).map((x) => x.followers).filter((v) => v != null); return html`<tr class="click" onClick=${() => onOpen(c.id)}>
+        <td onClick=${(e) => e.stopPropagation()}><input type="checkbox" checked=${picked.includes(c.id)} onChange=${() => setPicked(picked.includes(c.id) ? picked.filter((x) => x !== c.id) : [...picked, c.id].slice(-4))} aria-label=${`Compare ${c.name}`} /></td>
         <td><div class="row" style="gap:10px"><${Avatar} name=${c.name} size="sm" /><div style="min-width:0"><div class="row" style="gap:6px"><b class="ellipsis" style="max-width:220px">${c.name}</b><span class=${'badge ' + (PLAT_TONE[c.platform] || '')}>${platLabel(c.platform)}</span></div><div class="faint" style="font-size:var(--fs-xs)">${c.handle || ''}</div></div></div></td>
         ${month === 'all' ? html`
+          <td class="num"><${GradeBadge} g=${c.stats?.grade} /></td><td class="num">${r.rank ? `#${r.rank}` : '—'}</td>
           <td class="num"><b>${short(c.followers)}</b></td>
-          <td class="num">${g ? html`<span style=${{ color: g.delta >= 0 ? 'var(--moss-ink)' : 'var(--coral-ink)' }}>${g.delta >= 0 ? '+' : ''}${g.pct.toFixed(1)}%</span>` : '—'}</td>
+          <td class="num" style=${{ color: r.gained30 > 0 ? 'var(--moss-ink)' : r.gained30 < 0 ? 'var(--coral-ink)' : '' }}>${signed(r.gained30)}${g ? html`<div class="faint" style="font-size:var(--fs-xs)">${g.delta >= 0 ? '+' : ''}${g.pct.toFixed(1)}% tracked</div>` : null}</td>
+          <td class="num">${r.perDay != null ? `${signed(r.perDay)}/day` : '—'}</td>
           <td>${hist.length > 1 ? html`<${Sparkline} values=${hist} width=${90} height=${26} color=${g && g.delta < 0 ? 'var(--coral)' : 'var(--moss)'} />` : html`<span class="faint" style="font-size:var(--fs-xs)">—</span>`}</td>
-          <td class="num">${short(r.avgViews)}</td><td class="num">${short(r.medianViews)}</td><td class="num">${r.uploads30d ?? '—'}</td><td class="num">${r.uploads ?? '—'}</td>`
+          <td class="num">${short(r.avgViews)}</td><td class="num">${short(r.medianViews)}</td><td class="num">${r.uploads30d ?? '—'}</td>`
         : html`<td class="num">${r.uploads}</td><td class="num">${r.shorts}</td><td class="num">${short(r.views)}</td><td class="num">${short(r.avgViews)}</td><td class="num">${short(r.medianViews)}</td><td class="num">${r.engagementPct != null ? `${r.engagementPct}%` : '—'}</td>
           <td class="num" style=${{ color: r.followersDelta > 0 ? 'var(--moss-ink)' : r.followersDelta < 0 ? 'var(--coral-ink)' : '' }}>${signed(r.followersDelta)}</td>`}
         <td>${c.syncError ? html`<span class="badge gold" title=${c.syncError}>Needs attention</span>` : c.syncedAt ? html`<span class="faint">${ago(c.syncedAt)} ago</span>` : ['youtube', 'tiktok'].includes(c.platform) && c.url ? html`<span class="faint">Collecting…</span>` : html`<span class="faint" title="This platform needs a login for automatic stats; update the number from the ⋯ menu">By hand</span>`}</td>
         <td onClick=${(e) => e.stopPropagation()}><${Button} kind="ghost" size="sm" icon="more" title="More" onClick=${(e) => creatorMenu(e, c, reload)} /></td></tr>`; })}
     </tbody></table></div>
-    ${month !== 'all' ? html`<div class="faint" style="font-size:var(--fs-xs);padding:8px 16px">Views are each upload's views so far, grouped by the month it was posted. Followers +/- needs Euclidean to have checked the creator during that month.</div>` : null}`;
+    ${month !== 'all' ? html`<div class="faint" style="font-size:var(--fs-xs);padding:8px 16px">Views are each upload's views so far, grouped by the month it was posted. Followers +/- needs Euclidean to have checked the creator during that month.</div>` : null}
+    ${comparing ? html`<${Compare} creators=${creators.filter((c) => picked.includes(c.id))} onClose=${() => setComparing(false)} />` : null}`;
 }
 
 function CreatorDrawer({ c: brief, onClose, reload }) {
   const { data: c, reload: reloadOne } = useApi(brief ? `/api/creators/${brief.id}` : null, ['creators'], [brief?.id]);
+  const { data: rep } = useApi(brief ? `/api/creators/${brief.id}/report` : null, ['creators'], [brief?.id]);
   const [notes, setNotes] = useState(brief?.notes || '');
-  const [view, setView] = useState('months');
+  const [view, setView] = useState('overview');
   const [sort, setSort] = useState({ key: 'month', dir: 'desc' });
   const [vsort, setVsort] = useState({ key: 'date', dir: 'desc' });
   const [kind, setKind] = useState('all');
@@ -199,16 +221,17 @@ function CreatorDrawer({ c: brief, onClose, reload }) {
         ['Long-form / Shorts / Live', `${m.longForm ?? 0} / ${m.shorts ?? 0} / ${m.lives ?? 0}`], ['Uploads / 30d', m.uploads30d ?? '—'], ['First upload tracked', m.firstUpload || '—'], ['Latest upload', m.lastUpload || '—']].map(([l, v]) => html`<div class="panel pad"><div class="faint" style="font-size:var(--fs-xs)">${l}</div><div style="font-size:var(--fs-lg);font-weight:650" class="tnum">${v}</div></div>`)}</div>
       ${c.about || c.keywords?.length ? html`<div class="panel pad col" style="gap:6px">${c.about ? html`<div class="muted" style="white-space:pre-wrap;font-size:var(--fs-sm);max-height:90px;overflow:auto">${c.about}</div>` : null}${c.keywords?.length ? html`<div class="row wrap" style="gap:4px">${c.keywords.map((k) => html`<span class="badge">${k}</span>`)}</div>` : null}</div>` : null}
       <div class="row wrap" style="gap:8px">
-        <${Tabs} value=${view} onChange=${setView} tabs=${[{ value: 'months', label: 'By month' }, { value: 'uploads', label: `All uploads (${num(c.videos?.length || 0)})` }, { value: 'followers', label: 'Followers' }]} />
+        <${Tabs} value=${view} onChange=${setView} tabs=${[{ value: 'overview', label: 'Overview' }, { value: 'daily', label: 'Daily' }, { value: 'months', label: 'By month' }, { value: 'uploads', label: `All uploads (${num(c.videos?.length || 0)})` }, { value: 'projections', label: 'Projections' }]} />
         <div class="grow" />
         ${['youtube', 'tiktok'].includes(c.platform) && c.url ? html`<${Button} size="sm" kind="lav" icon="download" onClick=${full} title="Go back through every upload on the channel">${c.fullHistoryAt ? 'Refresh full history' : 'Collect full history'}</${Button}>` : null}
-        <a class="btn sm ghost" href=${csv(view === 'uploads' ? 'uploads' : 'months')} download>Download CSV</a>
+        <a class="btn sm ghost" href=${csv({ uploads: 'uploads', daily: 'daily', projections: 'projections' }[view] || 'months')} download>Download CSV</a>
+        <a class="btn sm ghost" href=${api.url(`/api/creators/${brief.id}/report`)} target="_blank" title="Everything on this page as JSON, for other tools and agents">JSON</a>
       </div>
-      ${view === 'months' ? (months.length ? html`<div class="panel"><div class="table-wrap"><table class="table"><thead><tr>${H('month', 'Month', false)}${H('uploads', 'Uploads')}${H('videos', 'Long')}${H('shorts', 'Shorts')}${H('lives', 'Live')}${H('views', 'Views')}${H('avgViews', 'Avg')}${H('medianViews', 'Median')}${H('likes', 'Likes')}${H('comments', 'Comments')}${H('engagementPct', 'Eng.')}${H('avgDurationSec', 'Avg length')}${H('followers', 'Followers')}${H('followersDelta', '+/-')}<th>Top upload</th></tr></thead><tbody>
-          ${sortRows(months, sort).map((r) => html`<tr><td style="white-space:nowrap"><b>${monthLabel(r.month)}</b>${r.datesApprox ? html`<span class="faint" title=${`${r.datesApprox} upload date(s) estimated from "x weeks ago"`}> ~</span>` : null}</td>
+      ${view === 'months' ? (months.length ? html`<div class="panel"><div class="table-wrap"><table class="table"><thead><tr>${H('month', 'Month', false)}${H('uploads', 'Uploads')}${H('videos', 'Long')}${H('shorts', 'Shorts')}${H('lives', 'Live')}${H('views', 'Views')}${H('avgViews', 'Avg')}${H('medianViews', 'Median')}${H('likes', 'Likes')}${H('comments', 'Comments')}${H('engagementPct', 'Eng.')}${H('avgDurationSec', 'Avg length')}${H('followers', 'Followers')}${H('followersDelta', '+/-')}${H('earningsHigh', 'Est. earnings')}<th>Top upload</th></tr></thead><tbody>
+          ${sortRows(rep?.months || months, sort).map((r) => html`<tr><td style="white-space:nowrap"><b>${monthLabel(r.month)}</b>${r.datesApprox ? html`<span class="faint" title=${`${r.datesApprox} upload date(s) estimated from "x weeks ago"`}> ~</span>` : null}</td>
             <td class="num">${r.uploads}</td><td class="num">${r.videos}</td><td class="num">${r.shorts}</td><td class="num">${r.lives}</td><td class="num">${short(r.views)}</td><td class="num">${short(r.avgViews)}</td><td class="num">${short(r.medianViews)}</td>
             <td class="num">${short(r.likes)}</td><td class="num">${short(r.comments)}</td><td class="num">${r.engagementPct != null ? `${r.engagementPct}%` : '—'}</td><td class="num">${mins(r.avgDurationSec)}</td>
-            <td class="num">${short(r.followers)}</td><td class="num" style=${{ color: r.followersDelta > 0 ? 'var(--moss-ink)' : r.followersDelta < 0 ? 'var(--coral-ink)' : '' }}>${signed(r.followersDelta)}</td>
+            <td class="num">${short(r.followers)}</td><td class="num" style=${{ color: r.followersDelta > 0 ? 'var(--moss-ink)' : r.followersDelta < 0 ? 'var(--coral-ink)' : '' }}>${signed(r.followersDelta)}</td><td class="num" style="white-space:nowrap">${range$(r.earningsLow, r.earningsHigh)}</td>
             <td class="ellipsis" style="max-width:260px">${r.top ? html`<a href="#" onClick=${(e) => { e.preventDefault(); openUrl(r.top.url); }}>${r.top.title || r.top.id}</a> <span class="faint">${short(r.top.views)}</span>` : '—'}</td></tr>`)}
         </tbody></table></div><div class="faint" style="font-size:var(--fs-xs);padding:8px 16px">Grouped by the month each upload was posted. Views, likes and comments are totals so far for those uploads. ~ means some dates are estimated.</div></div>`
         : html`<div class="panel pad faint">${['youtube', 'tiktok'].includes(c.platform) ? 'Months appear once their uploads have been collected. Click Update or Collect full history.' : 'This platform needs a login for automatic stats. Follower numbers you enter by hand still appear in the Followers tab.'}</div>`) : null}
@@ -220,9 +243,63 @@ function CreatorDrawer({ c: brief, onClose, reload }) {
         <div class="table-wrap" style="max-height:60vh;overflow:auto"><table class="table"><thead><tr>${V('date', 'Posted', false)}${V('title', 'Title', false)}<th>Type</th>${V('views', 'Views')}${V('likes', 'Likes')}${V('comments', 'Comments')}${V('shares', 'Shares')}${V('durationSec', 'Length')}</tr></thead><tbody>
           ${sortRows(videos, vsort).slice(0, 500).map((v) => html`<tr class="click" onClick=${() => openUrl(v.url)}><td style="white-space:nowrap" class="tnum">${v.date || '—'}${v.dateApprox && v.date ? html`<span class="faint" title="Estimated"> ~</span>` : null}</td><td class="ellipsis" style="max-width:340px">${v.title || v.id}</td><td><span class="badge">${KIND[v.kind] || v.kind}</span></td><td class="num">${num(v.views)}</td><td class="num">${num(v.likes)}</td><td class="num">${num(v.comments)}</td><td class="num">${num(v.shares)}</td><td class="num">${mins(v.durationSec)}</td></tr>`)}
         </tbody></table></div>${videos.length > 500 ? html`<div class="faint" style="font-size:var(--fs-xs);padding:8px 16px">Showing 500 of ${num(videos.length)}. Download CSV for all of them.</div>` : null}</div>` : null}
+      ${view === 'overview' ? html`<${Overview} rep=${rep} c=${c} />` : null}
+      ${view === 'daily' ? html`<${DailyTable} rep=${rep} />` : null}
+      ${view === 'projections' ? html`<${Projections} rep=${rep} c=${c} />` : null}
       ${view === 'followers' ? html`<div class="panel">${hist.length > 1 ? html`<div class="panel-body"><${BarChart} height=${170} data=${hist.slice(-60).map((h) => ({ label: new Date(h.at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }), value: h.followers }))} format=${short} color="var(--moss)" /></div>` : html`<div class="panel-body faint">The follower trend builds up as Euclidean checks this creator (every 6 hours while the app runs).</div>`}</div>` : null}
       <${Field} label="Notes" id="cr-notes"><textarea id="cr-notes" class="textarea" rows="3" value=${notes} onInput=${(e) => setNotes(e.target.value)} onBlur=${() => notes !== (brief.notes || '') && api.patch(`/api/creators/${brief.id}`, { notes }).then(() => { reload(); reloadOne(); })} placeholder="What stands out: formats, hooks, posting times…" /></${Field}>
     </div>`}</${Drawer}>`;
+}
+
+function Overview({ rep, c }) {
+  if (!rep) return html`<${Loading} rows=${3} />`;
+  const s = rep.summary; const hist = (c.history || []).filter((h) => h.followers != null);
+  const card = (label, value, sub, tone) => html`<div class="panel pad"><div class="faint" style="font-size:var(--fs-xs)">${label}</div><div class="tnum" style=${{ fontSize: 'var(--fs-xl)', fontWeight: 650, color: tone ? `var(--${tone}-ink)` : '' }}>${value}</div>${sub ? html`<div class="faint" style="font-size:var(--fs-xs)">${sub}</div>` : null}</div>`;
+  const wmax = Math.max(1, ...rep.weekdays.map((w) => w.uploads));
+  return html`<div class="col" style="gap:14px">
+    <div class="panel pad row wrap" style="gap:18px;align-items:center">
+      <div class="col" style="gap:4px;align-items:center"><${GradeBadge} g=${s.grade} big /><span class="faint" style="font-size:var(--fs-xs)">${s.gradeScore != null ? `${s.gradeScore}/100` : 'grade'}</span></div>
+      <div class="grow col" style="gap:6px;min-width:220px">${(s.gradeParts || []).map(([l, v]) => html`<div class="row" style="gap:8px;font-size:var(--fs-sm)"><span style="width:140px" class="muted">${l}</span><div class="progress grow"><i style=${{ width: `${v}%` }} /></div><span class="tnum faint" style="width:34px;text-align:right">${v}</span></div>`)}</div>
+    </div>
+    <div class="grid c4">
+      ${card('Followers', short(s.followers), c.rank ? `#${c.rank} of your tracked creators` : null)}
+      ${card('Followers, last 30 days', signed(s.followersGained30d), s.followersGained30d == null ? 'needs a few days of tracking' : null, s.followersGained30d > 0 ? 'moss' : s.followersGained30d < 0 ? 'coral' : null)}
+      ${card('Followers per day', s.followersPerDay != null ? signed(s.followersPerDay) : '—', 'trend over the last 30 days')}
+      ${card('Views per day', short(s.viewsPerDay), 'on tracked uploads')}
+      ${card('Uploads, last 30 days', s.uploads30d ?? '—', `${num(s.uploadsTracked)} tracked in total`)}
+      ${card('Views on uploads from the last 30 days', short(s.viewsOnUploads30d))}
+      ${card('Est. earnings, last 30 days', s.estEarnings30d ? range$(s.estEarnings30d.low, s.estEarnings30d.high) : '—', 'rough estimate')}
+      ${card('Tracking since', s.trackingSince ? new Date(s.trackingSince).toLocaleDateString() : '—', `${s.snapshots} snapshot${s.snapshots === 1 ? '' : 's'}`)}
+    </div>
+    ${hist.length > 1 ? html`<div class="panel"><div class="panel-head"><h4>Followers</h4></div><div class="panel-body"><${BarChart} height=${160} data=${[...new Map(hist.map((h) => [String(h.at).slice(0, 10), h])).values()].slice(-45).map((h) => ({ label: new Date(h.at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }), value: h.followers }))} format=${short} color="var(--moss)" /></div></div>` : null}
+    <div class="grid c2">
+      <div class="panel"><div class="panel-head"><h4>Posting days</h4></div><div class="panel-body col" style="gap:6px">${rep.weekdays.map((w) => html`<div class="row" style="gap:8px;font-size:var(--fs-sm)"><span style="width:34px">${w.day}</span><div class="progress grow"><i style=${{ width: `${(w.uploads / wmax) * 100}%`, background: 'var(--sky)' }} /></div><span class="tnum faint" style="width:30px;text-align:right">${w.uploads}</span></div>`)}</div></div>
+      <div class="panel"><div class="panel-head"><h4>Fastest-growing uploads</h4></div><div class="list">${rep.fastest.slice(0, 8).map((v) => html`<div class="list-row click" onClick=${() => openUrl(v.url)}><span class="ellipsis grow" style="font-size:var(--fs-sm)">${v.title || v.id}</span><span class="tnum" style="font-size:var(--fs-sm)">${short(v.viewsPerDay)}/day</span></div>`)}${!rep.fastest.length ? html`<div class="list-row faint">Appears once uploads are collected.</div>` : null}</div></div>
+    </div>
+    <div class="faint" style="font-size:var(--fs-xs)">${rep.notes.join(' ')}</div>
+  </div>`;
+}
+
+function DailyTable({ rep }) {
+  const [sort, setSort] = useState({ key: 'date', dir: 'desc' });
+  if (!rep) return html`<${Loading} rows=${3} />`;
+  if (!rep.daily.length) return html`<div class="panel pad faint">Daily numbers build up as Euclidean checks this creator (every 6 hours while the app runs).</div>`;
+  const H = (k, label, n = true) => html`<${Th} k=${k} sort=${sort} setSort=${setSort} num=${n}>${label}</${Th}>`;
+  const tone = (v) => ({ color: v > 0 ? 'var(--moss-ink)' : v < 0 ? 'var(--coral-ink)' : '' });
+  return html`<div class="panel"><div class="table-wrap" style="max-height:60vh;overflow:auto"><table class="table"><thead><tr>${H('date', 'Date', false)}${H('followersDelta', 'Followers +/-')}${H('followers', 'Followers')}${H('viewsDelta', 'Views +/-')}${H('views', 'Views (tracked uploads)')}${H('uploads', 'Uploads')}${H('earningsHigh', 'Est. earnings')}</tr></thead><tbody>
+    ${sortRows(rep.daily, sort).map((d) => html`<tr><td class="tnum" style="white-space:nowrap">${new Date(d.date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</td><td class="num" style=${tone(d.followersDelta)}>${signed(d.followersDelta)}</td><td class="num">${num(d.followers)}</td><td class="num" style=${tone(d.viewsDelta)}>${signed(d.viewsDelta)}</td><td class="num">${num(d.views)}</td><td class="num">${d.uploads ?? '—'}</td><td class="num" style="white-space:nowrap">${d.earningsLow != null ? `$${d.earningsLow.toFixed(2)} – $${d.earningsHigh.toFixed(2)}` : '—'}</td></tr>`)}
+  </tbody></table></div></div>`;
+}
+
+function Projections({ rep, c }) {
+  if (!rep) return html`<${Loading} rows=${3} />`;
+  const m = rep.milestone;
+  return html`<div class="col" style="gap:12px">
+    ${m ? html`<div class="notice teal"><${Icon} name="target" size=${16} />${m.days != null ? html`At the current pace, ${c.name} reaches <b>${short(m.followers)}</b> followers in about <b>${num(m.days)} days</b> (${new Date(m.date + 'T12:00:00').toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}).` : html`Next milestone: ${short(m.followers)} followers. A projection appears once followers are growing.`}</div>` : null}
+    ${rep.projections.length ? html`<div class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>In</th><th>Date</th><th class="num">Followers</th><th class="num">Views (tracked uploads)</th></tr></thead><tbody>${rep.projections.map((x) => html`<tr><td><b>${x.label}</b></td><td class="faint">${new Date(x.date + 'T12:00:00').toLocaleDateString()}</td><td class="num">${num(x.followers)}</td><td class="num">${num(x.views)}</td></tr>`)}</tbody></table></div></div>`
+      : html`<div class="panel pad faint">Projections need at least two follower checks over a few days.</div>`}
+    <div class="faint" style="font-size:var(--fs-xs)">Straight-line projection from the last 30 days of follower checks. Real growth is rarely this steady.</div>
+  </div>`;
 }
 
 function AddCreator({ onClose, onDone }) {
