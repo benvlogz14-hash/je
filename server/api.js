@@ -620,6 +620,29 @@ function emptyProject(b) {
   return { app: 'velo', version: 1, media: [], sequences: [{ id: 's1', name: 'Sequence 1', width: W, height: H, fps: b.fps || 30, videoTracks: [track(0, 'V1'), track(0, 'V2'), track(0, 'V3')], audioTracks: [track(1, 'A1'), track(1, 'A2')] }], openTabs: ['s1'], activeSequence: 's1', nextClipId: '1' };
 }
 r.get('/api/projects/:id', (req, b, p) => must(ctx.store.get('projects', p.id)));
+// ---- AI editing (Studio's AI box, agents, and anything with an agent token)
+const editOps = require('./video/edit-ops');
+r.get('/api/projects/:id/summary', (req, b, p) => ({ text: editOps.summarize(must(ctx.store.get('projects', p.id))) }));
+r.post('/api/projects/:id/ai-edit', async (req, b, p) => {
+  let pr = must(ctx.store.get('projects', p.id));
+  const instruction = String(b.instruction || '').trim(); if (!instruction) throw new HttpError(400, 'Tell the AI what to change.');
+  if (b.data?.sequences) pr = ctx.store.update('projects', pr.id, { data: b.data }); // edit what's on screen, unsaved changes included
+  const r = await editOps.aiEdit({ project: pr, instruction, actor: actorOf(req), provider: b.provider || undefined });
+  return { done: r.done, errors: r.errors, say: r.say, provider: r.provider, changed: r.changed, data: ctx.store.get('projects', pr.id).data };
+});
+r.post('/api/projects/:id/ops', (req, b, p) => {
+  let pr = must(ctx.store.get('projects', p.id));
+  if (b.data?.sequences) pr = ctx.store.update('projects', pr.id, { data: b.data });
+  const r = editOps.commit(pr, b.ops || [], { actor: actorOf(req), via: 'api' });
+  return { done: r.done, errors: r.errors, changed: r.changed, data: ctx.store.get('projects', pr.id).data };
+});
+r.post('/api/projects/:id/ai-undo', (req, b, p) => ({ ...editOps.undo(must(ctx.store.get('projects', p.id)), actorOf(req)), data: ctx.store.get('projects', p.id).data }));
+r.get('/api/projects/:id/ai-history', (req, b, p) => (must(ctx.store.get('projects', p.id)).aiHistory || []).map(({ before, ...h }) => h).reverse());
+// Agents (Astra, external agents with a token) can edit Studio projects with the same operations.
+r.get('/api/agent/projects', () => ctx.store.all('projects').map((x) => ({ id: x.id, name: x.name, clientId: x.clientId, updatedAt: x.updatedAt })), { roles: AGENT });
+r.get('/api/agent/projects/:id/summary', (req, b, p) => ({ text: editOps.summarize(must(ctx.store.get('projects', p.id))), operations: editOps.OPS_DOC }), { roles: AGENT });
+r.post('/api/agent/projects/:id/ops', (req, b, p) => { const r = editOps.commit(must(ctx.store.get('projects', p.id)), b.ops || [], { actor: `agent:${req.user.name}`, via: `agent:${req.user.agentId || req.user.name}` }); return { done: r.done, errors: r.errors, changed: r.changed }; }, { roles: AGENT });
+r.post('/api/agent/projects/:id/edit', async (req, b, p) => { const r = await editOps.aiEdit({ project: must(ctx.store.get('projects', p.id)), instruction: String(b.instruction || ''), actor: `agent:${req.user.name}`, agent: req.user.agentId || req.user.name }); return { done: r.done, errors: r.errors, say: r.say }; }, { roles: AGENT });
 r.put('/api/projects/:id', (req, b, p) => {
   const pr = must(ctx.store.get('projects', p.id));
   // Keep preview-proxy fields the engine filled in after the editor last loaded the project.

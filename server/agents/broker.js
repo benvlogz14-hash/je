@@ -212,15 +212,28 @@ async function answer(agentId, m, t, signal) {
   const adapter = registry.adapter(agentId);
   const peers = t.participants.filter((a) => a !== agentId).map((a) => ({ id: a, name: registry.name(a) }));
   const history = ctx.store.all('agentMessages', (x) => x.threadId === t.id && x.createdAt <= m.createdAt && x.type !== 'join').slice(-30);
+  // Studio projects in this workspace (client threads only ever see that client's projects).
+  const editOps = require('../video/edit-ops');
+  const wsProjects = ctx.store.all('projects', (pr) => (t.workspaceId === 'internal' ? !pr.clientId : pr.clientId === t.workspaceId)).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 12);
+  const said = history.map((x) => x.body).join(' ').toLowerCase();
+  const projInfo = wsProjects.map((pr) => ({ id: pr.id, name: pr.name, summary: wsProjects.length === 1 || said.includes(String(pr.name || '').toLowerCase()) || said.includes(pr.id) ? editOps.summarize(pr) : null }));
   const system = [protocol.systemPrompt({ self: { id: agentId, name: def.name }, peers, workspaceLabel: workspaceLabel(t.workspaceId) }), registry.conf(agentId).note || '',
-    t.workspaceId !== 'internal' ? require('../integrations/ai').clientContext(t.workspaceId) : ''].filter(Boolean).join('\n\n');
+    t.workspaceId !== 'internal' ? require('../integrations/ai').clientContext(t.workspaceId) : '', protocol.studioPrompt(projInfo, editOps.OPS_DOC)].filter(Boolean).join('\n\n');
   const prompt = `Conversation "${t.title}" so far:\n\n${protocol.transcript(history, registry.name)}\n\n---\nRespond to the latest message from ${registry.name(m.from)} (${protocol.TYPES[m.type]}).`;
   const raw = await adapter.deliver({ system, prompt, message: m, thread: { id: t.id, title: t.title, workspaceId: t.workspaceId }, clientId: t.workspaceId === 'internal' ? null : t.workspaceId, signal });
   if (raw == null) return null; // mailbox agents fetch the message themselves
-  const { text, outgoing } = protocol.parseReply(raw);
+  const { text, outgoing, edits } = protocol.parseReply(raw);
   ctx.store.update('agentThreads', t.id, (x) => ({ autoTurns: (x.autoTurns || 0) + 1 }));
   let reply = null;
   if (text) reply = send({ threadId: t.id, from: agentId, to: m.from.startsWith('human:') || m.from === 'system' ? ['*'] : [m.from], type: 'reply', body: text, inReplyTo: m.id });
+  // Studio edits: applied to projects in this workspace only, logged, undoable from Studio.
+  for (const ed of edits) {
+    const ref = String(ed.project || '').toLowerCase();
+    const pr = wsProjects.find((x) => x.id === ed.project || String(x.name || '').toLowerCase() === ref) || (wsProjects.length === 1 && !ref ? wsProjects[0] : null);
+    if (!pr) { record({ threadId: t.id, workspaceId: t.workspaceId, from: 'system', to: [agentId], type: 'system', body: `${def.name} tried to edit "${ed.project}", which isn't a Studio project in this workspace.` }); continue; }
+    const r = editOps.commit(ctx.store.get('projects', pr.id), ed.ops || [], { actor: `agent:${agentId}`, via: `agent:${agentId}`, instruction: text.slice(0, 200) });
+    record({ threadId: t.id, workspaceId: t.workspaceId, from: 'system', to: ['*'], type: 'system', body: `${def.name} edited Studio project "${pr.name}":\n${r.done.map((x) => `• ${x}`).join('\n') || '• nothing changed'}${r.errors.length ? `\nSkipped:\n${r.errors.map((x) => `• ${x}`).join('\n')}` : ''}\n(Undo from Studio → AI.)` });
+  }
   for (const o of outgoing) {
     try { send({ ...o, threadId: t.id, workspaceId: t.workspaceId, from: agentId, inReplyTo: o.inReplyTo || m.id }); }
     catch (e) { record({ threadId: t.id, workspaceId: t.workspaceId, from: 'system', to: [agentId], type: 'system', body: `A message from ${def.name} wasn't sent: ${e.message}` }); }

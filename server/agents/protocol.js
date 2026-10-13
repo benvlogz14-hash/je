@@ -95,15 +95,27 @@ function systemPrompt({ self, peers, workspaceLabel }) {
   ].join('\n');
 }
 
-/** Pull the optional agent-messages block out of a reply. Returns { text, outgoing[] }. */
+/** Pull the optional agent-messages and studio-edits blocks out of a reply. Returns { text, outgoing[], edits[] }. */
 function parseReply(raw) {
-  const text = String(raw || '');
-  const rx = /```agent-messages\s*([\s\S]*?)```/i;
-  const m = rx.exec(text);
-  if (!m) return { text: text.trim(), outgoing: [] };
-  let items = [];
-  try { const j = JSON.parse(m[1].trim()); items = Array.isArray(j) ? j : [j]; } catch { items = []; }
-  return { text: text.replace(rx, '').trim(), outgoing: items.filter((x) => x && typeof x === 'object').slice(0, 8) };
+  let text = String(raw || '');
+  const grab = (name) => {
+    const rx = new RegExp('```' + name + '\\s*([\\s\\S]*?)```', 'i'); const m = rx.exec(text);
+    if (!m) return [];
+    text = text.replace(rx, '');
+    try { const j = JSON.parse(m[1].trim()); return (Array.isArray(j) ? j : [j]).filter((x) => x && typeof x === 'object'); } catch { return []; }
+  };
+  const outgoing = grab('agent-messages').slice(0, 8);
+  const edits = grab('studio-edits').slice(0, 4);
+  return { text: text.trim(), outgoing, edits };
+}
+
+/** Extra instructions when the conversation's workspace has Studio projects the agents may edit. */
+function studioPrompt(projects, opsDoc) {
+  if (!projects.length) return '';
+  return ['You can edit this workspace\'s Studio video projects. To make changes, add a fenced block:',
+    '```studio-edits', '{"project": "<project id or name>", "ops": [ ... ]}', '```',
+    'Each block\'s ops follow this format:', opsDoc.replace(/^Respond with JSON[^\n]*\n/, ''),
+    'Projects:', ...projects.map((p) => (p.summary ? p.summary : `- "${p.name}" (id ${p.id}). Mention it by name to see its timeline.`))].join('\n');
 }
 
 /** Render a thread as a transcript for an agent that has no memory of its own. */
@@ -115,4 +127,4 @@ function transcript(messages, nameOf) {
   }).join('\n\n');
 }
 
-module.exports = { TYPES, EXTERNAL_ACTIONS, normalize, systemPrompt, parseReply, transcript };
+module.exports = { TYPES, EXTERNAL_ACTIONS, normalize, systemPrompt, parseReply, transcript, studioPrompt };

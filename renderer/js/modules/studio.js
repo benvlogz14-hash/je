@@ -206,6 +206,7 @@ function Editor({ id }) {
   const [snap, setSnap] = useState(true);
   const [zoom, setZoom] = useState(60); // px per second
   const [dirty, setDirty] = useState(false);
+  const dirtyRef = useRef(false); dirtyRef.current = dirty;
   const [leftTab, setLeftTab] = useState('media');
   const undo = useRef([]); const redo = useRef([]);
   const saveTimer = useRef(null);
@@ -412,6 +413,20 @@ function Editor({ id }) {
     sfx('press');
   });
   const [titleEdit, setTitleEdit] = useState(null); // null | {} (new) | { clipId }
+  /** Replace the project with a version the engine produced (AI / agent edit), keeping Ctrl+Z working. */
+  const adoptServerData = (next) => { setDataRaw((prev) => { undo.current.push(JSON.stringify(prev)); redo.current = []; return next; }); setDirty(false); };
+  const aiEdit = async (instruction) => {
+    clearTimeout(saveTimer.current);
+    const r = await api.post(`/api/projects/${id}/ai-edit`, { instruction, data });
+    if (r.changed) adoptServerData(r.data);
+    return r;
+  };
+  const aiUndo = async () => { const r = await act(() => api.post(`/api/projects/${id}/ai-undo`), { ok: 'Undid the last AI edit' }); adoptServerData(r.data); };
+  useEvent('studio.updated', (x) => {
+    if (x.projectId !== id || x.via?.startsWith('ai:') || x.via === 'undo') return; // our own AI edits are already applied
+    if (dirtyRef.current) { toast(`${x.via?.startsWith('agent:') ? 'An agent' : 'Someone'} changed this project. Save or undo your changes, then reopen it to see theirs.`, { kind: 'warn', ms: 8000 }); return; }
+    api.get(`/api/projects/${id}`).then((p) => { adoptServerData(p.data); toast(x.done?.slice(0, 3).join(' · ') || 'Project updated', { kind: 'info', title: x.via?.startsWith('agent:') ? `Edited by ${x.via.slice(6)}` : 'Project updated' }); });
+  }, [id]);
   const addText = () => setTitleEdit({});
   const saveTitle = ({ text, posY, duration, fade }) => {
     const tid = titleEdit?.clipId;
@@ -478,8 +493,8 @@ function Editor({ id }) {
       <${Button} kind="primary" size="sm" icon="upload" onClick=${exportNow}>Export</${Button}>
     </div>
     <div style="display:grid;grid-template-columns:260px minmax(0, 1fr) 300px;min-height:0">
-      <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} />
-      <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} edit=${edit} />
+      <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${id} />
+      <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} edit=${edit} setSel=${setSel} />
       <${EffectControls} selected=${selected} seq=${seq} edit=${edit} media=${media} t=${t} setT=${setT} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
     </div>
     <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onClipMenu=${clipMenu} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
@@ -539,6 +554,38 @@ function overwrite(track, c) {
   track.clips = out.filter((x) => x.duration > 0.01);
 }
 
+// ------------------------------------------------------------ AI edit: describe a change, the connected AI makes it
+const AI_EXAMPLES = ['Add a hook title "WAIT FOR IT" for the first 2 seconds', 'Slowly zoom in on the first clip from 100% to 120%', 'Cut the first 2 seconds', 'Add cross dissolves between the clips', 'Make the whole edit black and white', 'Add a subscribe banner for the last 3 seconds'];
+function AIPanel({ aiEdit, aiUndo, projectId, selected }) {
+  const boot = useStore((st) => st.boot);
+  const connected = Object.values(boot?.connections?.ai || {}).some(Boolean);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [log, setLog] = useState([]);
+  const send = async () => {
+    const instruction = text.trim() + (selected ? ` (the selected clip is c${selected.c.id})` : '');
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    try {
+      const r = await aiEdit(instruction);
+      setLog((l) => [{ q: text.trim(), ...r }, ...l].slice(0, 20)); setText('');
+      sfx(r.changed ? 'success' : 'error');
+    } catch (e) { sfx('error'); setLog((l) => [{ q: text.trim(), errors: [e.message], done: [] }, ...l]); } finally { setBusy(false); }
+  };
+  return html`<div class="col" style="gap:10px;padding:2px">
+    ${!connected ? html`<div class="notice gold" style="font-size:var(--fs-xs)"><${Icon} name="info" size=${14} />Connect Claude, GPT or Grok in Settings → Connections (or Agent Connections) to edit with AI.</div>` : null}
+    <div class="faint" style="font-size:var(--fs-xs)">Describe the change. The AI edits the timeline with the same tools you use; every change can be undone.</div>
+    <textarea class="textarea" rows="4" placeholder="e.g. Add a lower third saying “Jordan · host” at 3 seconds and zoom in slowly on the first clip" value=${text} onInput=${(e) => setText(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} aria-label="Describe the edit" />
+    <div class="row"><${Button} kind="primary" size="sm" icon="sparkle" busy=${busy} disabled=${!connected || !text.trim()} onClick=${send}>Edit with AI</${Button}><${Button} kind="ghost" size="sm" icon="undo" onClick=${aiUndo}>Undo AI edit</${Button}></div>
+    <div class="chips">${AI_EXAMPLES.map((x) => html`<button class="chip" style="height:auto;padding:4px 9px;text-align:left" onClick=${() => setText(x)}>${x}</button>`)}</div>
+    ${log.map((r) => html`<div class="panel pad col" style="gap:4px;font-size:var(--fs-xs)"><b style="font-size:var(--fs-sm)">${r.q}</b>
+      ${r.say ? html`<div class="muted">${r.say}</div>` : null}
+      ${(r.done || []).map((d) => html`<div style="color:var(--moss-ink)">✓ ${d}</div>`)}
+      ${(r.errors || []).map((d) => html`<div style="color:var(--coral-ink)">• ${d}</div>`)}
+      ${!r.done?.length && !r.errors?.length ? html`<div class="faint">No changes were needed.</div>` : null}</div>`)}
+  </div>`;
+}
+
 // ------------------------------------------------------------ export: choose where the video is saved
 function ExportDialog({ id, onClose }) {
   const [d, setD] = useState(null);
@@ -556,7 +603,7 @@ function ExportDialog({ id, onClose }) {
 }
 
 // ------------------------------------------------------------ left: project bin + effects
-function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, importPaths, importing }) {
+function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, importPaths, importing, aiEdit, aiUndo, projectId }) {
   const fileRef = useRef(null);
   const busy = importing;
   const importDisk = async () => {
@@ -575,10 +622,10 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
     sfx('success');
   };
   return html`<div style="display:flex;flex-direction:column;min-height:0;background:var(--ed-panel);border-right:1px solid var(--line)">
-    <div class="row" style="padding:8px 10px;border-bottom:1px solid var(--line)"><${Seg} value=${tab} onChange=${setTab} options=${[{ value: 'media', label: 'Project' }, { value: 'effects', label: 'Effects' }]} /><div class="spacer" />${tab === 'media' ? html`<${Button} size="sm" kind="soft" icon="plus" busy=${busy} title="Import media" onClick=${importDisk} />` : null}</div>
+    <div class="row" style="padding:8px 10px;border-bottom:1px solid var(--line)"><${Seg} value=${tab} onChange=${setTab} options=${[{ value: 'media', label: 'Project' }, { value: 'effects', label: 'Effects' }, { value: 'ai', label: 'AI' }]} /><div class="spacer" />${tab === 'media' ? html`<${Button} size="sm" kind="soft" icon="plus" busy=${busy} title="Import media" onClick=${importDisk} />` : null}</div>
     <input type="file" ref=${fileRef} multiple accept="video/*,audio/*,image/*" hidden onChange=${(e) => { importFiles([...e.target.files]); e.target.value = ''; }} />
     <div style="flex:1;overflow:auto;padding:8px" onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); importFiles([...e.dataTransfer.files]); } }}>
-      ${tab === 'media' ? (data.media.length ? data.media.map((m) => html`
+      ${tab === 'ai' ? html`<${AIPanel} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${projectId} selected=${selected} />` : tab === 'media' ? (data.media.length ? data.media.map((m) => html`
         <div class="review-item" draggable="true" onDragStart=${(e) => e.dataTransfer.setData('text/x-media', m.id)} onDblClick=${() => onAdd(m)} title="Double-click to add at the end of V1, or drag onto a track">
           <div class="th" style=${{ width: '58px', aspectRatio: '16/9', backgroundImage: m.kind !== 1 ? `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(m.path)}&t=${m.kind >= 2 ? 0 : 1}`)})` : 'none', display: 'grid', placeItems: 'center' }}>${m.kind === 1 ? html`<${Icon} name="volume" size=${16} />` : null}</div>
           <div class="grow" style="min-width:0"><div class="ellipsis" style="font-size:var(--fs-sm);font-weight:500">${m.name}</div><div class="faint tnum" style="font-size:var(--fs-xs)">${m.kind >= 2 ? 'Image' : dur(m.duration)}${m.width ? ` · ${m.width}×${m.height}` : ''}${m.proxyPending ? ' · preparing preview…' : m.proxyError ? ' · preview unavailable' : ''}</div></div></div>`)
@@ -589,8 +636,9 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
 }
 
 // ------------------------------------------------------------ program monitor (canvas compositor)
-function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected, edit }) {
+function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected, edit, setSel }) {
   const canvas = useRef(null);
+  const hits = useRef([]); // what's drawn where (canvas pixels), topmost last: for clicking and dragging on the monitor
   const els = useRef(new Map());   // clipId -> HTMLVideoElement | HTMLImageElement | HTMLAudioElement
   const clock = useRef({ wall: 0, t0: 0 });
   const tRef = useRef(t); tRef.current = t;
@@ -647,9 +695,11 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     const W = Math.round(seq.width * quality), H = Math.round(seq.height * quality);
     if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
     const g = cv.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
-    const time = tRef.current; const { v } = activeAt(time);
+    const time = tRef.current; const { v } = activeAt(time); hits.current = [];
     for (const { c } of v) {
       const local = time - c.start;
+      { const m0 = media[c.mediaId]; const sx0 = valAt(c.scaleX, local, 1), sy0 = c.uniformScale === false ? valAt(c.scaleY, local, 1) : sx0; const tb = c.type === 3 ? titleBox(c.text || {}, sx0 * quality) : null;
+        hits.current.push({ id: c.id, cx: W / 2 + valAt(c.posX, local) * quality, cy: H / 2 + valAt(c.posY, local) * quality, w: tb ? tb.w : (m0?.width || seq.width) * Math.abs(sx0) * quality, h: tb ? tb.h : (m0?.height || seq.height) * Math.abs(sy0) * quality, rot: (valAt(c.rotation, local) * Math.PI) / 180 }); }
       let alpha = valAt(c.opacity, local, 1);
       const ti = c.transIn?.type ? c.transIn.duration : 0, to = c.transOut?.type ? c.transOut.duration : 0;
       // Titles only fade (as in export); picture clips get the full transition below.
@@ -702,13 +752,16 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       }
       g.restore();
     }
-    // selection outline on the monitor
-    if (selected && v.some((x) => x.c.id === selected.c.id) && selected.c.type !== 1) {
-      g.save(); g.strokeStyle = 'rgba(102,189,180,0.95)'; g.lineWidth = 2; g.setLineDash([6, 4]);
-      const c = selected.c; const m = media[c.mediaId]; const lt = time - c.start; const s = valAt(c.scaleX, lt, 1);
-      const w = (c.type === 3 ? (c.text?.pixelSize || 96) * Math.max(4, (c.text?.text || '').length * 0.6) : (m?.width || seq.width)) * s * quality, hh = (c.type === 3 ? (c.text?.pixelSize || 96) * 1.3 : (m?.height || seq.height)) * s * quality;
-      g.translate(W / 2 + valAt(c.posX, lt) * quality, H / 2 + valAt(c.posY, lt) * quality); g.rotate((valAt(c.rotation, lt) * Math.PI) / 180); g.strokeRect(-w / 2, -hh / 2, w, hh); g.restore();
+    // selection outline with a resize handle on each corner
+    const hs = selected && hits.current.find((x) => x.id === selected.c.id);
+    if (hs) {
+      g.save(); g.translate(hs.cx, hs.cy); g.rotate(hs.rot);
+      g.strokeStyle = 'rgba(102,189,180,0.95)'; g.lineWidth = 2; g.setLineDash([6, 4]); g.strokeRect(-hs.w / 2, -hs.h / 2, hs.w, hs.h); g.setLineDash([]);
+      g.fillStyle = '#ffffff'; g.strokeStyle = 'rgba(35,102,95,1)'; const k = 9;
+      for (const [x, y] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { g.fillRect(x * hs.w / 2 - k / 2, y * hs.h / 2 - k / 2, k, k); g.strokeRect(x * hs.w / 2 - k / 2, y * hs.h / 2 - k / 2, k, k); }
+      g.restore();
     }
+    if (snapGuide.current) { g.save(); g.strokeStyle = 'rgba(208,113,95,0.9)'; g.lineWidth = 1; if (snapGuide.current.x) { g.beginPath(); g.moveTo(W / 2, 0); g.lineTo(W / 2, H); g.stroke(); } if (snapGuide.current.y) { g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke(); } g.restore(); }
   };
   // playback loop
   useEffect(() => {
@@ -727,28 +780,54 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
   useEffect(() => { const f = () => draw(); window.addEventListener('studio-redraw', f); return () => window.removeEventListener('studio-redraw', f); }, [seq, quality, selected]);
   useEffect(() => () => { for (const el of els.current.values()) if (el instanceof HTMLMediaElement) { el.pause(); el.removeAttribute('src'); el.load(); } }, []);
 
-  // drag the selected clip directly on the monitor (like Velo)
-  const drag = useRef(null);
+  // Click anything visible on the monitor to select it; drag to move it, drag a corner to resize.
+  // Moves snap to the centre lines (hold Alt for free movement). Keyframed settings get a keyframe at the playhead.
+  const drag = useRef(null); const snapGuide = useRef(null);
+  const toCanvas = (e) => { const r = canvas.current.getBoundingClientRect(); const k = canvas.current.width / r.width; return { x: (e.clientX - r.left) * k, y: (e.clientY - r.top) * k, k }; };
+  const local = (h, x, y) => { const dx = x - h.cx, dy = y - h.cy, c = Math.cos(-h.rot), s2 = Math.sin(-h.rot); return { x: dx * c - dy * s2, y: dx * s2 + dy * c }; };
   const onDown = (e) => {
-    if (!selected || selected.c.type === 1) return;
-    const r = canvas.current.getBoundingClientRect(); const k = seq.width / r.width;
-    drag.current = { x: e.clientX, y: e.clientY, px: base(selected.c.posX), py: base(selected.c.posY), k, started: false };
+    const p = toCanvas(e); const grab = 12 * p.k;
+    // corner handle of the selected clip first, then the topmost clip under the pointer
+    const hsel = selected && hits.current.find((x) => x.id === selected.c.id);
+    let mode = 'move', hit = null;
+    if (hsel) { const l = local(hsel, p.x, p.y); if (Math.abs(Math.abs(l.x) - hsel.w / 2) < grab && Math.abs(Math.abs(l.y) - hsel.h / 2) < grab) { mode = 'scale'; hit = hsel; } }
+    if (!hit) for (let i = hits.current.length - 1; i >= 0; i--) { const h = hits.current[i]; const l = local(h, p.x, p.y); if (Math.abs(l.x) <= h.w / 2 && Math.abs(l.y) <= h.h / 2) { hit = h; break; } }
+    if (!hit) { setSel([]); return; }
+    const f = [...seq.videoTracks].flatMap((tr) => tr.clips).find((x) => x.id === hit.id); if (!f) return;
+    if (!selected || selected.c.id !== f.id) setSel([f.id]);
+    const lt = Math.max(0, Math.min(f.duration, tRef.current - f.start));
+    drag.current = { mode, clip: f, lt, x0: p.x, y0: p.y, k: seq.width / canvas.current.width, cx: hit.cx, cy: hit.cy, px: valAt(f.posX, lt), py: valAt(f.posY, lt), s0: valAt(f.scaleX, lt, 1), started: false };
     e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onMove = (e) => {
     const d = drag.current; if (!d) return;
-    const dx = (e.clientX - d.x) * d.k, dy = (e.clientY - d.y) * d.k;
-    if (!d.started) { if (Math.hypot(dx, dy) < 3) return; d.started = true; }
-    d.nx = Math.round(d.px + dx); d.ny = Math.round(d.py + dy);
-    liveSet(selected.c, 'posX', anim(d.nx), selected.c.id + 'mx'); liveSet(selected.c, 'posY', anim(d.ny), selected.c.id + 'my');
+    const p = toCanvas(e); const dx = (p.x - d.x0) * d.k, dy = (p.y - d.y0) * d.k;
+    if (!d.started) { if (Math.hypot(dx, dy) < 3 * d.k) return; d.started = true; }
+    const c = d.clip;
+    if (d.mode === 'move') {
+      let nx = Math.round(d.px + dx), ny = Math.round(d.py + dy); const snap = !e.altKey ? 14 * d.k * 2 : 0;
+      snapGuide.current = { x: snap && Math.abs(nx) < snap, y: snap && Math.abs(ny) < snap }; if (snapGuide.current.x) nx = 0; if (snapGuide.current.y) ny = 0;
+      d.nx = nx; d.ny = ny;
+      liveSet(c, 'posX', withValueAt(c.posX, d.lt, nx), c.id + 'mx'); liveSet(c, 'posY', withValueAt(c.posY, d.lt, ny), c.id + 'my');
+    } else {
+      const r0 = Math.hypot(d.x0 - d.cx, d.y0 - d.cy) || 1, r1 = Math.hypot(p.x - d.cx, p.y - d.cy);
+      d.ns = Math.max(0.01, Math.round(d.s0 * (r1 / r0) * 1000) / 1000);
+      liveSet(c, 'scaleX', withValueAt(c.scaleX, d.lt, d.ns, 1), c.id + 'msx'); liveSet(c, 'scaleY', withValueAt(c.scaleY, d.lt, d.ns, 1), c.id + 'msy');
+    }
   };
-  const onUp = () => { const d = drag.current; drag.current = null; if (!d?.started) return; revertLive(); edit((dd, s) => { for (const tr of s.videoTracks) { const c = tr.clips.find((x) => x.id === selected.c.id); if (c) { c.posX = anim(d.nx); c.posY = anim(d.ny); } } }); };
+  const onUp = () => {
+    const d = drag.current; drag.current = null; snapGuide.current = null; if (!d?.started) { draw(); return; }
+    revertLive();
+    edit((dd, s) => { for (const tr of s.videoTracks) { const c = tr.clips.find((x) => x.id === d.clip.id); if (!c) continue;
+      if (d.mode === 'move') { c.posX = withValueAt(c.posX, d.lt, d.nx); c.posY = withValueAt(c.posY, d.lt, d.ny); }
+      else { c.scaleX = withValueAt(c.scaleX, d.lt, d.ns, 1); c.scaleY = withValueAt(c.scaleY, d.lt, d.ns, 1); } } });
+  };
 
   return html`<div style="display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden">
     <div class="row" style="padding:6px 12px;gap:8px"><span class="eyebrow grow">Program</span>
       <select class="select sm" style="width:90px" value=${quality} onChange=${(e) => setQuality(Number(e.target.value))} aria-label="Preview quality"><option value="1">Full</option><option value="0.5">1/2</option><option value="0.25">1/4</option></select></div>
     <div ref=${box} style="flex:1;min-height:0;min-width:0;position:relative;overflow:hidden">
-      <canvas ref=${canvas} style=${{ position: 'absolute', left: fit.x + 'px', top: fit.y + 'px', width: fit.w + 'px', height: fit.h + 'px', background: '#000', borderRadius: '8px', boxShadow: 'var(--shadow-2)', cursor: selected && selected.c.type !== 1 ? 'move' : 'default' }} onPointerDown=${onDown} onPointerMove=${onMove} onPointerUp=${onUp} />
+      <canvas ref=${canvas} style=${{ position: 'absolute', left: fit.x + 'px', top: fit.y + 'px', width: fit.w + 'px', height: fit.h + 'px', background: '#000', borderRadius: '8px', boxShadow: 'var(--shadow-2)', cursor: 'pointer' }} onPointerDown=${onDown} onPointerMove=${onMove} onPointerUp=${onUp} />
     </div>
     <div class="row" style="padding:6px 12px 10px;justify-content:center;gap:6px">
       <span class="mono tnum" style="width:100px;color:var(--teal-ink)">${tc(t, seq.fps)}</span>
@@ -764,6 +843,18 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
 const TITLE_FONTS = [['Montserrat', 'Montserrat (bundled)'], ['Anton', 'Anton (bundled)'], ['Arial', 'Arial'], ['Impact', 'Impact'], ['Georgia', 'Georgia'], ['Verdana', 'Verdana'], ['Trebuchet MS', 'Trebuchet MS'], ['Segoe UI', 'Segoe UI'], ['Comic Sans MS', 'Comic Sans MS']];
 const easeOut = (f) => 1 - (1 - f) ** 3;
 const rgbaOf = (s, d) => { const h = String(s || d).replace('#', ''); if (h.length === 8) return `rgba(${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${parseInt(h.slice(6, 8), 16)},${parseInt(h.slice(0, 2), 16) / 255})`; return '#' + h; };
+/** Size of a title's box in canvas pixels (for selecting and dragging it on the monitor). */
+let measureCtx = null;
+function titleBox(st, scale) {
+  measureCtx = measureCtx || document.createElement('canvas').getContext('2d');
+  const size = (st.pixelSize || 96) * scale; const g = measureCtx;
+  g.font = `${st.italic ? 'italic ' : ''}${st.bold === false ? 500 : 800} ${size}px ${JSON.stringify(st.family || 'Montserrat')}, Montserrat, sans-serif`;
+  try { g.letterSpacing = `${(st.letterSpacing || 0) * scale}px`; } catch { /* older engines */ }
+  const lines = (st.uppercase ? String(st.text || '').toUpperCase() : String(st.text || '')).split('\n');
+  const pad = st.box ? (st.boxPad ?? 18) * scale : (st.outlineWidth || 0) * scale;
+  return { w: Math.max(size, ...lines.map((l) => g.measureText(l).width)) + pad * 2, h: lines.length * size * 1.15 + pad * 1.2 };
+}
+
 /** Draw a title centred on the current origin. local = seconds into the clip (for pop / slide-up). */
 function drawText(g, st, scale, local = 10) {
   const size = (st.pixelSize || 96) * scale;
