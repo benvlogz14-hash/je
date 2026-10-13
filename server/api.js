@@ -488,6 +488,68 @@ r.post('/api/expenses', (req, b) => ctx.store.insert('expenses', { label: b.labe
 r.del('/api/expenses/:id', (req, b, p) => ({ ok: ctx.store.remove('expenses', p.id) }), { roles: OWNER });
 r.post('/api/timelogs', (req, b) => ctx.store.insert('timelogs', { userId: actorOf(req), clientId: b.clientId || null, minutes: Number(b.minutes) || 0, note: b.note || '', date: b.date || now().slice(0, 10) }));
 r.post('/api/analytics/sync', () => queue.enqueue('analytics.sync', {}, { dedupeKey: `analytics:manual:${Math.floor(Date.now() / 60000)}` }));
+// ------------------------------------------------------------ tracked creators (Analytics → Creators)
+const creatorsSvc = require('./integrations/creators');
+const PLATFORMS_C = ['youtube', 'tiktok', 'instagram', 'x', 'facebook', 'twitch', 'other'];
+r.get('/api/creators', () => ctx.store.all('creators').slice().sort((a, b) => (b.followers || 0) - (a.followers || 0)));
+r.get('/api/creators/search', async (req) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) throw new HttpError(400, 'Type at least 2 characters');
+  const lc = q.toLowerCase();
+  const tracked = ctx.store.all('creators');
+  const isTracked = (x) => tracked.find((c) => (x.url && c.url === x.url) || (x.channelId && c.channelId === x.channelId) || (x.handle && c.handle && c.handle.toLowerCase() === x.handle.toLowerCase() && c.platform === x.platform));
+  const results = []; const errors = [];
+  const direct = creatorsSvc.classify(q);
+  if (direct) results.push({ ...direct, name: direct.handle || q, verified: false, direct: true });
+  // Clients and prospects you already have
+  for (const c of ctx.store.all('clients', (x) => x.name.toLowerCase().includes(lc))) results.push({ platform: 'client', name: c.name, clientId: c.id, source: 'Your client', verified: true });
+  for (const p of ctx.store.all('prospects', (x) => `${x.name} ${x.handle}`.toLowerCase().includes(lc))) results.push({ platform: (p.platforms || [])[0] || 'other', name: p.name, handle: p.handle || '', prospectId: p.id, source: 'Prospect', verified: true });
+  if (!direct || direct.maybeOther) {
+    try { results.push(...(await creatorsSvc.searchYouTube(q)).slice(0, 10)); } catch (e) { errors.push(`YouTube: ${e.message}`); }
+  }
+  if (req.query.ai === '1') { try { results.push(...await creatorsSvc.searchWithAI(q)); } catch (e) { errors.push(e.message); } }
+  return { results: results.map((x) => ({ ...x, trackedId: isTracked(x)?.id || null })), errors };
+});
+r.post('/api/creators', (req, b) => {
+  const platform = PLATFORMS_C.includes(b.platform) ? b.platform : 'other';
+  if (!b.name && !b.handle && !b.url) throw new HttpError(400, 'Give the creator a name, handle or profile link');
+  const h = String(b.handle || '').replace(/^@/, '');
+  const fromHandle = h ? { youtube: `https://www.youtube.com/@${h}`, tiktok: `https://www.tiktok.com/@${h}`, instagram: `https://www.instagram.com/${h}/`, x: `https://x.com/${h}` }[platform] : null;
+  const url = (b.url && /^https?:\/\//.test(b.url) ? b.url : null) || fromHandle || null;
+  const dup = ctx.store.find('creators', (c) => (url && c.url === url) || (b.channelId && c.channelId === b.channelId));
+  if (dup) return dup;
+  const c = ctx.store.insert('creators', {
+    platform, name: String(b.name || b.handle || url).slice(0, 80), handle: String(b.handle || '').slice(0, 60), url, channelId: b.channelId || null, avatar: b.avatar || null,
+    about: String(b.about || '').slice(0, 300), followers: typeof b.followers === 'number' ? b.followers : null, followersSource: typeof b.followers === 'number' ? 'search' : null,
+    clientId: b.clientId || null, prospectId: b.prospectId || null, tags: [], notes: '', verified: !!b.verified, videos: [], metrics: {}, history: typeof b.followers === 'number' ? [{ at: now(), followers: b.followers, avgViews: null }] : [], addedBy: actorOf(req),
+  });
+  audit.log(actorOf(req), 'creator.tracked', { creatorId: c.id, name: c.name, platform });
+  if (url && ['youtube', 'tiktok'].includes(platform)) queue.enqueue('creator.sync', { creatorId: c.id }, { dedupeKey: `creator:${c.id}` });
+  events.publish('creators', {});
+  return c;
+});
+r.patch('/api/creators/:id', (req, b, p) => {
+  must(ctx.store.get('creators', p.id)); const patch = {};
+  for (const k of ['name', 'handle', 'url', 'notes', 'tags', 'about']) if (b[k] !== undefined) patch[k] = b[k];
+  if (b.name !== undefined) patch.nameLocked = true;
+  if (b.followers !== undefined) { patch.followers = b.followers === '' || b.followers == null ? null : Math.max(0, Math.round(Number(b.followers))); patch.followersSource = 'manual'; }
+  const c = ctx.store.update('creators', p.id, patch);
+  if (b.followers !== undefined) ctx.store.update('creators', p.id, (x) => ({ history: [...(x.history || []), { at: now(), followers: patch.followers, avgViews: x.metrics?.avgViews ?? null }].slice(-180) }));
+  events.publish('creators', {});
+  return c;
+});
+r.post('/api/creators/:id/sync', (req, b, p) => queue.enqueue('creator.sync', { creatorId: must(ctx.store.get('creators', p.id)).id }, { dedupeKey: `creator:${p.id}`, actor: actorOf(req) }));
+r.post('/api/creators/sync-all', (req) => ctx.store.all('creators').map((c) => queue.enqueue('creator.sync', { creatorId: c.id }, { dedupeKey: `creator:${c.id}`, actor: actorOf(req) }).id));
+r.del('/api/creators/:id', (req, b, p) => { const c = must(ctx.store.get('creators', p.id)); ctx.store.remove('creators', c.id); audit.log(actorOf(req), 'creator.untracked', { creatorId: c.id, name: c.name }); events.publish('creators', {}); return { ok: true }; });
+r.post('/api/creators/:id/prospect', (req, b, p) => {
+  const c = must(ctx.store.get('creators', p.id));
+  if (c.prospectId && ctx.store.get('prospects', c.prospectId)) return ctx.store.get('prospects', c.prospectId);
+  const pr = ctx.store.insert('prospects', { name: c.name, type: 'creator', handle: c.handle || '', platforms: [c.platform], why: c.about || '', angle: '', publicContact: '', stage: 'new', verified: !!c.verified, source: 'analytics', followers: c.followers || null });
+  ctx.store.update('creators', c.id, { prospectId: pr.id }); events.publish('prospects', {}); events.publish('creators', {});
+  audit.log(actorOf(req), 'prospect.created', { prospectId: pr.id, from: 'creator' });
+  return pr;
+});
+
 r.get('/api/analytics', () => {
   const posts = ctx.store.all('posts', (p) => p.status === 'published');
   const sum = (p) => Object.values(p.stats || {}).reduce((t, s) => ({ views: t.views + (s.views || 0), likes: t.likes + (s.likes || 0), comments: t.comments + (s.comments || 0), shares: t.shares + (s.shares || 0) }), { views: 0, likes: 0, comments: 0, shares: 0 });

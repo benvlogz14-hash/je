@@ -33,6 +33,12 @@ if errorlevel 1 (
   winget install -e --id Gyan.FFmpeg --accept-package-agreements --accept-source-agreements --silent
 )
 
+where yt-dlp >nul 2>nul
+if errorlevel 1 (
+  echo   Installing yt-dlp for YouTube/TikTok links and creator stats ^(one time only^)...
+  winget install -e --id yt-dlp.yt-dlp --accept-package-agreements --accept-source-agreements --silent >nul 2>nul
+)
+
 if not exist "node_modules\electron\dist\electron.exe" (
   echo   Setting up Euclidean ^(one time only, takes a few minutes^)...
   call npm install --no-audit --no-fund

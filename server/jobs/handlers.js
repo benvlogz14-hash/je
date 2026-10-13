@@ -53,7 +53,7 @@ queue.register('ingest.url', {
   async run(job, h) {
     const { url, clientId } = job.payload;
     const dir = paths.clientDir(clientId, 'footage');
-    const ytdlp = ctx.setting('tools.ytdlpPath', '') || 'yt-dlp';
+    const ytdlp = ff.ytdlpBin();
     let file = null;
     if (/\.(mp4|mov|m4v|webm|mkv)(\?|$)/i.test(url)) {
       h.progress(0.05, 'Downloading file');
@@ -315,9 +315,36 @@ queue.register('analytics.sync', {
         }
       }
     }
+    // Tracked creators (Analytics → Creators) refresh on the same schedule.
+    for (const c of ctx.store.all('creators')) if (!c.syncedAt || Date.now() - new Date(c.syncedAt).getTime() > 5 * 3600e3) queue.enqueue('creator.sync', { creatorId: c.id }, { dedupeKey: `creator:${c.id}` });
     h.progress(1, `${updated} posts updated`);
     if (!updated && errors.length) throw new Error(errors.slice(0, 3).join(' · '));
     return { updated, errors };
+  },
+});
+
+// ------------------------------------------------------------ tracked creators (Analytics → Creators)
+queue.register('creator.sync', {
+  title: (p) => `Update creator stats${ctx.store.get('creators', p.creatorId) ? `: ${ctx.store.get('creators', p.creatorId).name}` : ''}`,
+  maxAttempts: 2,
+  async run(job, h) {
+    const creators = require('../integrations/creators');
+    const c = ctx.store.get('creators', job.payload.creatorId);
+    if (!c) return { skipped: true };
+    h.progress(0.2, 'Fetching public stats');
+    let st;
+    try { st = await creators.fetchStats(c); }
+    catch (e) { ctx.store.update('creators', c.id, { syncError: e.message, syncedAt: now() }); events.publish('creators', {}); throw permanent(e.message); }
+    const videos = (st.videos || []).slice(0, 30);
+    const m = creators.metrics(videos);
+    const followers = st.followers ?? c.followers ?? null;
+    ctx.store.update('creators', c.id, (x) => ({
+      name: x.nameLocked ? x.name : st.name || x.name, handle: x.handle || st.handle || '', avatar: st.avatar || x.avatar || null, about: x.about || st.about || '',
+      followers, followersSource: st.followers != null ? 'auto' : x.followersSource, videos, metrics: m, syncedAt: now(), syncError: null, verified: true,
+      history: [...(x.history || []), { at: now(), followers, avgViews: m.avgViews, medianViews: m.medianViews }].slice(-180),
+    }));
+    events.publish('creators', {});
+    return { followers, videos: videos.length };
   },
 });
 

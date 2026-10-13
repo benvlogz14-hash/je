@@ -15,6 +15,9 @@ function bin(name) {
   return findInstalled(name) || name;
 }
 
+/** yt-dlp: a path set in Settings, else wherever it was installed (winget, pip, Scoop…), else PATH. */
+function ytdlpBin() { return ctx.setting('tools.ytdlpPath', '') || findInstalled('yt-dlp') || 'yt-dlp'; }
+
 /**
  * Windows doesn't refresh PATH for programs that were already running when FFmpeg was installed,
  * so look in the places winget, Chocolatey, Scoop and manual installs put it.
@@ -52,7 +55,7 @@ async function detect() {
     caps.encoders = ['libx264', 'h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_videotoolbox'].filter((x) => e.out.includes(` ${x} `));
   } catch { /* ffmpeg missing */ }
   try { await run(bin('ffprobe'), ['-version'], { timeoutMs: 10000 }); caps.ffprobe = true; } catch { /* missing */ }
-  try { const y = await run(ctx.setting('tools.ytdlpPath', '') || 'yt-dlp', ['--version'], { timeoutMs: 10000 }); caps.ytdlp = true; caps.ytdlpVersion = y.out.trim(); } catch { /* missing */ }
+  try { const y = await run(ytdlpBin(), ['--version'], { timeoutMs: 10000 }); caps.ytdlp = true; caps.ytdlpVersion = y.out.trim(); } catch { /* missing */ }
   const wp = ctx.setting('ai.transcription.localWhisperPath', '');
   caps.whisper = !!(wp && fs.existsSync(wp) && ctx.setting('ai.transcription.localWhisperModel', ''));
   // Hardware encoders are listed even when no GPU is present; verify with a one-frame encode.
@@ -190,4 +193,4 @@ async function speechWindows(file) {
   return { silences: starts.map((s, i) => [s, ends[i] ?? s]) };
 }
 
-module.exports = { bin, detect, probe, extractAudio, extractWav, thumbnail, filmstrip, waveform, pickEncoder, encoderArgs, ffmpegWithProgress, qualityCheck, speechWindows, priorityValue };
+module.exports = { bin, ytdlpBin, detect, probe, extractAudio, extractWav, thumbnail, filmstrip, waveform, pickEncoder, encoderArgs, ffmpegWithProgress, qualityCheck, speechWindows, priorityValue };
