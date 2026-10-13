@@ -32,6 +32,13 @@ function kexpr(p, d, T = 't', { mul = 1, add = 0 } = {}) {
   }
   return `if(lt(${T},${num(ks[0][0])}),${v(ks[0][1])},${e})`;
 }
+/** Value at clip-local time t, same smoothstep easing as the preview and Velo. */
+function keyAt(p, t, d) {
+  const k = keysOf(p); if (!k.length) return base(p, d);
+  if (t <= k[0][0]) return k[0][1];
+  for (let i = 1; i < k.length; i++) if (t < k[i][0]) { const [t0, v0] = k[i - 1], [t1, v1] = k[i]; const span = t1 - t0; if (span <= 1e-9) return v1; const f = (t - t0) / span; return v0 + (v1 - v0) * f * f * (3 - 2 * f); }
+  return k[k.length - 1][1];
+}
 const maxAbs = (p, d) => Math.max(Math.abs(base(p, d)), ...keysOf(p).map((k) => Math.abs(k[1])));
 const hasKeys = (p) => p && typeof p === 'object' && Array.isArray(p.keys) && p.keys.length > 0;
 const num = (v) => (Math.round(v * 1000) / 1000).toString();
@@ -184,19 +191,38 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       'Style: B,Montserrat,96,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,3,0,0,5,0,0,0,1', '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'];
     const t2 = (t) => { const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = Math.floor(t % 60), cs = Math.floor((t * 100) % 100); return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`; };
     const argb = (s, d) => { const h = String(s || d).replace('#', ''); return h.length === 8 ? { a: 255 - parseInt(h.slice(0, 2), 16), rgb: '#' + h.slice(2) } : { a: 0, rgb: '#' + h }; };
+    const easeOut = (f) => 1 - (1 - f) ** 3;
     for (const { c, layer } of texts) {
       const st = c.text || {}; const col = argb(st.color, 'ffffffff'); const oc = argb(st.outlineColor, 'ff000000');
-      const sc = base(c.scaleX, 1); const op = base(c.opacity, 1);
-      const alpha = Math.round(255 - (255 - col.a) * op).toString(16).padStart(2, '0');
-      const fad = (transDur(c.transIn) || transDur(c.transOut)) ? `\\fad(${Math.round(transDur(c.transIn) * 1000)},${Math.round(transDur(c.transOut) * 1000)})` : '';
-      const px = Math.round(W / 2 + base(c.posX, 0)), py = Math.round(H / 2 + base(c.posY, 0));
-      const place = st.animIn === 'slide' ? `\\move(${px},${py + Math.round(70 * sc)},${px},${py},0,350)` : `\\pos(${px},${py})`;
-      const pop = st.animIn === 'pop' ? '\\fscx60\\fscy60\\t(0,250,\\fscx100\\fscy100)' : '';
       const box = st.box ? argb(st.boxColor, 'cc000000') : null;
       const shad = st.shadow ? argb(st.shadowColor, 'b3000000') : null;
-      const look = box ? `\\3c${colTag(box.rgb)}\\3a&H${box.a.toString(16).padStart(2, '0').toUpperCase()}&\\bord${Math.round((st.boxPad ?? 18) * sc)}` : `\\3c${colTag(oc.rgb)}\\bord${st.outlineWidth || 0}`;
-      const tags = `{\\an5${place}\\fn${(st.family || 'Montserrat').replace(/[{}\\,]/g, '')}\\fs${Math.round((st.pixelSize || 96) * sc)}\\fsp${Math.round((st.letterSpacing || 0) * sc)}\\b${st.bold === false ? 0 : 1}\\i${st.italic ? 1 : 0}\\c${colTag(col.rgb)}\\alpha&H${alpha.toUpperCase()}&${look}${shad ? `\\shad${Math.round(st.shadow * sc)}\\4c${colTag(shad.rgb)}\\4a&H${shad.a.toString(16).padStart(2, '0').toUpperCase()}&` : '\\shad0'}\\frz${-base(c.rotation, 0)}${pop}${fad}}`;
-      lines.push(`Dialogue: ${layer},${t2(c.start)},${t2(c.start + c.duration)},${st.box ? 'B' : 'T'},,0,0,0,,${tags}${(st.uppercase ? String(st.text || '').toUpperCase() : String(st.text || '')).replace(/[{}\\]/g, '').replace(/\n/g, '\\N')}`);
+      const body = (st.uppercase ? String(st.text || '').toUpperCase() : String(st.text || '')).replace(/[{}\\]/g, '').replace(/\n/g, '\\N');
+      /** One subtitle event: either the whole title (ASS animates fades/pop/slide), or one frame of a keyframed title. */
+      const event = ({ from, to, px, py, sc, op, rot, place, pop = '', fad = '' }) => {
+        const alpha = Math.round(255 - (255 - col.a) * Math.max(0, Math.min(1, op))).toString(16).padStart(2, '0');
+        const look = box ? `\\3c${colTag(box.rgb)}\\3a&H${box.a.toString(16).padStart(2, '0').toUpperCase()}&\\bord${Math.round((st.boxPad ?? 18) * sc)}` : `\\3c${colTag(oc.rgb)}\\bord${Math.round((st.outlineWidth || 0) * sc)}`;
+        const tags = `{\\an5${place || `\\pos(${Math.round(px)},${Math.round(py)})`}\\fn${(st.family || 'Montserrat').replace(/[{}\\,]/g, '')}\\fs${Math.max(1, Math.round((st.pixelSize || 96) * sc))}\\fsp${Math.round((st.letterSpacing || 0) * sc)}\\b${st.bold === false ? 0 : 1}\\i${st.italic ? 1 : 0}\\c${colTag(col.rgb)}\\alpha&H${alpha.toUpperCase()}&${look}${shad ? `\\shad${Math.round(st.shadow * sc)}\\4c${colTag(shad.rgb)}\\4a&H${shad.a.toString(16).padStart(2, '0').toUpperCase()}&` : '\\shad0'}\\frz${-rot}${pop}${fad}}`;
+        lines.push(`Dialogue: ${layer},${t2(from)},${t2(to)},${st.box ? 'B' : 'T'},,0,0,0,,${tags}${body}`);
+      };
+      const keyed = ['posX', 'posY', 'scaleX', 'rotation', 'opacity'].some((k) => hasKeys(c[k]));
+      if (!keyed) {
+        const sc = base(c.scaleX, 1); const px = Math.round(W / 2 + base(c.posX, 0)), py = Math.round(H / 2 + base(c.posY, 0));
+        event({ from: c.start, to: c.start + c.duration, px, py, sc, op: base(c.opacity, 1), rot: base(c.rotation, 0),
+          place: st.animIn === 'slide' ? `\\move(${px},${py + Math.round(70 * sc)},${px},${py},0,350)` : null,
+          pop: st.animIn === 'pop' ? '\\fscx60\\fscy60\\t(0,250,\\fscx100\\fscy100)' : '',
+          fad: (transDur(c.transIn) || transDur(c.transOut)) ? `\\fad(${Math.round(transDur(c.transIn) * 1000)},${Math.round(transDur(c.transOut) * 1000)})` : '' });
+        continue;
+      }
+      // Keyframed title: written frame by frame with the same easing as the preview (subtitles can't ease on their own).
+      const n = Math.max(1, Math.round(c.duration * fps)); const ti = transDur(c.transIn), to = transDur(c.transOut);
+      for (let fr = 0; fr < n; fr++) {
+        const lt = fr / fps;
+        let sc = keyAt(c.scaleX, lt, 1), op = keyAt(c.opacity, lt, 1); let py = H / 2 + keyAt(c.posY, lt, 0);
+        if (ti && lt < ti) op *= lt / ti; if (to && lt > c.duration - to) op *= Math.max(0, (c.duration - lt) / to);
+        if (st.animIn === 'pop') sc *= 0.6 + 0.4 * easeOut(Math.min(1, lt / 0.25));
+        if (st.animIn === 'slide') py += 70 * sc * (1 - easeOut(Math.min(1, lt / 0.35)));
+        event({ from: c.start + lt, to: c.start + (fr + 1) / fps, px: W / 2 + keyAt(c.posX, lt, 0), py, sc, op, rot: Math.round(keyAt(c.rotation, lt, 0) * 10) / 10 });
+      }
     }
     fs.writeFileSync(assFile, lines.join('\n') + '\n');
     f.push(`[${last}]subtitles=filename='${path.relative(paths.root, assFile).split(path.sep).join('/')}':fontsdir='fonts'[vt]`);

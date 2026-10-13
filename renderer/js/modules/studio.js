@@ -101,6 +101,8 @@ const base = (p, d = 0) => (p && typeof p === 'object' ? (p.base ?? d) : (p ?? d
 const anim = (v) => ({ base: v });
 // ---- keyframes (Velo format: { base, keys: [[clipLocalSeconds, value], ...] }, smoothstep easing between keys)
 const qt = (t) => Math.round(t * 1000) / 1000;
+// A key within one frame of the playhead counts as "on" it, so clicking a frame off updates it instead of adding a near-duplicate.
+const KEY_TOL = 0.034;
 const sortedKeys = (p) => (p && typeof p === 'object' && Array.isArray(p.keys) ? p.keys.slice().sort((a, b) => a[0] - b[0]) : []);
 const isAnimated = (p) => sortedKeys(p).length > 0;
 /** Value of a (possibly keyframed) parameter at clip-local time t. */
@@ -116,7 +118,7 @@ function valAt(p, t, d = 0) {
 /** Set the value at t: moves/creates a keyframe when animated, otherwise changes the plain value. */
 function withValueAt(p, t, v, d = 0) {
   const o = p && typeof p === 'object' ? clone(p) : { base: p ?? d };
-  if (o.keys?.length) { o.keys = o.keys.filter((k) => Math.abs(k[0] - qt(t)) > 1e-6); o.keys.push([qt(t), v]); o.keys.sort((a, b) => a[0] - b[0]); }
+  if (o.keys?.length) { const near = o.keys.filter((k) => Math.abs(k[0] - t) <= KEY_TOL).sort((a, b) => Math.abs(a[0] - t) - Math.abs(b[0] - t))[0]; const at = near ? near[0] : qt(t); o.keys = o.keys.filter((k) => Math.abs(k[0] - t) > KEY_TOL); o.keys.push([at, v]); o.keys.sort((a, b) => a[0] - b[0]); }
   else o.base = v;
   return o;
 }
@@ -129,12 +131,12 @@ function toggleAnimation(p, t, d = 0) {
 /** Add a keyframe at t (with the current value), or remove the one that's there. */
 function toggleKeyAt(p, t, d = 0) {
   const o = p && typeof p === 'object' ? clone(p) : { base: p ?? d };
-  const k = sortedKeys(o); const i = k.findIndex((x) => Math.abs(x[0] - qt(t)) < 1e-6);
+  const k = sortedKeys(o); const i = k.findIndex((x) => Math.abs(x[0] - t) <= KEY_TOL);
   if (i >= 0) { k.splice(i, 1); if (!k.length) { o.base = valAt(p, t, d); delete o.keys; } else o.keys = k; }
   else { o.keys = [...k, [qt(t), valAt(o, t, d)]].sort((a, b) => a[0] - b[0]); }
   return o;
 }
-const hasKeyAt = (p, t) => sortedKeys(p).some((k) => Math.abs(k[0] - qt(t)) < 1e-6);
+const hasKeyAt = (p, t) => sortedKeys(p).some((k) => Math.abs(k[0] - t) <= KEY_TOL);
 /** Every animatable parameter of a clip, as [object, key] pairs. */
 function animParams(c) {
   const out = ['posX', 'posY', 'scaleX', 'scaleY', 'rotation', 'opacity', 'volume'].filter((k) => c[k] && typeof c[k] === 'object').map((k) => [c, k]);
@@ -200,7 +202,10 @@ function Editor({ id }) {
   const [proj, setProj] = useState(null);
   const [data, setDataRaw] = useState(null);
   const [sel, setSel] = useState([]); // clip ids (strings)
-  const [t, setT] = useState(0);
+  const [t, setTRaw] = useState(0);
+  const fpsRef = useRef(30);
+  /** The playhead always sits exactly on a frame, so keyframes, splits and edits line up with what's shown. */
+  const setT = useCallback((v) => setTRaw((prev) => { const x = typeof v === 'function' ? v(prev) : v; const f = fpsRef.current || 30; return Math.max(0, Math.round(x * f) / f); }), []);
   const [playing, setPlaying] = useState(false);
   const [tool, setTool] = useState('select');
   const [snap, setSnap] = useState(true);
@@ -213,6 +218,7 @@ function Editor({ id }) {
 
   useEffect(() => { api.get(`/api/projects/${id}`).then((p) => { setProj(p); setDataRaw(p.data); }).catch((e) => toast(e.message, { kind: 'error' })); }, [id]);
   const seq = data ? (data.sequences.find((s) => s.id === data.activeSequence) || data.sequences[0]) : null;
+  if (seq) fpsRef.current = seq.fps || 30;
   const media = useMemo(() => Object.fromEntries((data?.media || []).map((m) => [m.id, m])), [data]);
   const duration = seq ? Math.max(1, ...[...seq.videoTracks, ...seq.audioTracks].flatMap((tr) => tr.clips.map((c) => c.start + c.duration))) : 1;
 
@@ -965,7 +971,7 @@ function ParamField({ label, p, d = 0, mult = 1, lt = 0, inClip = true, min, max
   const make = (v) => withValueAt(p, lt, clampV(v) / mult, d);
   const keyed = animatable && isAnimated(p); const onKey = keyed && hasKeyAt(p, lt);
   const keys = sortedKeys(p).map((k) => k[0]);
-  const prev = keys.filter((k) => k < lt - 1e-6).pop(), next = keys.find((k) => k > lt + 1e-6);
+  const prev = keys.filter((k) => k < lt - KEY_TOL).pop(), next = keys.find((k) => k > lt + KEY_TOL);
   const commitDraft = () => { if (draft == null) return; const v = Number(String(draft).replace(',', '.')); setDraft(null); if (Number.isFinite(v)) onCommit(make(v)); };
   const ib = (on) => ({ width: '22px', height: '22px', border: 0, borderRadius: '5px', display: 'grid', placeItems: 'center', cursor: 'pointer', background: on ? 'var(--gold-soft)' : 'transparent', color: on ? 'var(--gold-ink)' : 'var(--ink-3)', padding: 0 });
   return html`<div class="col" style="gap:2px;padding:4px 0">
@@ -1036,7 +1042,8 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
   const width = Math.max(800, (duration + 30) * zoom);
   const xOf = (s) => s * zoom; const sOf = (x) => Math.max(0, x / zoom);
   const fps = seq.fps || 30;
-  const snapPoints = () => [t, 0, ...[...seq.videoTracks, ...seq.audioTracks].flatMap((tr) => tr.clips.flatMap((c) => [c.start, c.start + c.duration]))];
+  // Snap to clip edges, the playhead, and the keyframes of selected clips.
+  const snapPoints = () => [t, 0, ...[...seq.videoTracks, ...seq.audioTracks].flatMap((tr) => tr.clips.flatMap((c) => [c.start, c.start + c.duration, ...(sel.includes(c.id) ? keyTimesOf(c).map((k) => c.start + k) : [])]))];
   const doSnap = (s, alt, exclude = new Set()) => {
     if (!snap || alt) return Math.round(s * fps) / fps;
     let best = s, bd = 8 / zoom;
@@ -1049,7 +1056,8 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
   const ticks = []; for (let s = 0; s <= duration + 30; s += step) ticks.push(s);
 
   const onRuler = (e) => {
-    const r = scroller.current.getBoundingClientRect(); const move = (ev) => setT(Math.round(sOf(ev.clientX - r.left + scroller.current.scrollLeft - HEAD_W) * fps) / fps);
+    // the playhead snaps to clip edges and the selected clip's keyframes (hold Alt to scrub freely)
+    const r = scroller.current.getBoundingClientRect(); const skip = new Set([t]); const move = (ev) => setT(doSnap(sOf(ev.clientX - r.left + scroller.current.scrollLeft - HEAD_W), ev.altKey, skip));
     move(e); const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
   };
