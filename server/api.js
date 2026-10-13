@@ -1,0 +1,590 @@
+'use strict';
+/** REST API for the desktop UI, computer-use agents, remote workers and the client portal. */
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
+const ctx = require('./core/ctx');
+const paths = require('./core/paths');
+const events = require('./core/events');
+const audit = require('./core/audit');
+const secrets = require('./core/secrets');
+const { Router, send, serveFile, receiveUpload } = require('./core/http');
+const { HttpError, now, id: makeId, monthKey } = require('./core/util');
+const queue = require('./jobs/queue');
+const ai = require('./integrations/ai');
+const twilio = require('./integrations/twilio');
+const email = require('./integrations/email');
+const publishing = require('./integrations/publishing');
+const pipeline = require('./automation/pipeline');
+const messaging = require('./automation/messaging');
+const resources = require('./automation/resources');
+const health = require('./automation/health');
+const finance = require('./automation/finance');
+const handoff = require('./automation/handoff');
+const commands = require('./commands');
+const exporters = require('./video/exporters');
+const ff = require('./video/ffmpeg');
+const captions = require('./video/captions');
+
+const r = new Router();
+const OWNER = ['owner'];
+const STAFF = ['owner', 'contractor'];
+const AGENT = ['owner', 'agent'];
+const WORKER = ['owner', 'worker'];
+
+const must = (v, msg = 'Not found', code = 404) => { if (!v) throw new HttpError(code, msg); return v; };
+const actorOf = (req) => req.user?.id || 'unknown';
+
+// Secrets the UI may set. Values are write-only: the API never returns them.
+const SECRET_KEYS = new Set([
+  'global.anthropic.apiKey', 'global.openai.apiKey', 'global.xai.apiKey',
+  ...Object.values(twilio.K), ...Object.values(email.K),
+  'global.ayrshare.apiKey', 'global.google.clientId', 'global.google.clientSecret',
+]);
+
+// ------------------------------------------------------------ bootstrap & settings
+function publicSettings() {
+  const s = JSON.parse(JSON.stringify(ctx.store.settings));
+  for (const k of Object.keys(s)) if (k.startsWith('_')) delete s[k];
+  return s;
+}
+function connections() {
+  return {
+    ai: Object.fromEntries(Object.keys(ai.PROVIDERS).map((k) => [k, ai.connected(k)])),
+    twilio: twilio.configured(), email: email.configured(), ayrshare: publishing.ayrConfigured(), google: publishing.ytConfigured(),
+    secrets: secrets.status([...SECRET_KEYS]),
+  };
+}
+
+r.get('/api/bootstrap', (req) => ({
+  user: { id: req.user.id, name: req.user.name, role: req.user.role },
+  version: ctx.version, settings: publicSettings(), capabilities: ctx.capabilities, connections: connections(),
+  queue: queue.stats(), resources: resources.last, health: health.last ? health.last.summary : null, paused: queue.paused,
+  commands: commands.catalog(), platforms: publishing.PLATFORMS, captionPresets: Object.keys(captions.PRESETS), captionDefaults: captions.DEFAULT_STYLE,
+  dataDir: paths.root, electron: !!ctx.electron, lan: ctx.lanAddress || null,
+  emailPresets: email.PRESETS,
+}), { roles: ['owner', 'contractor'] });
+
+r.get('/api/settings', () => publicSettings(), { roles: OWNER });
+r.patch('/api/settings', (req, body) => {
+  const clean = { ...body }; for (const k of Object.keys(clean)) if (k.startsWith('_')) delete clean[k];
+  if (clean.environment && !['test', 'production'].includes(clean.environment)) throw new HttpError(400, 'Invalid environment');
+  ctx.store.setSettings(clean);
+  if (clean.resources?.mode) resources.setMode(clean.resources.mode, actorOf(req));
+  audit.log(actorOf(req), 'settings.updated', { keys: Object.keys(clean) });
+  events.publish('settings', {});
+  return publicSettings();
+}, { roles: OWNER });
+
+r.get('/api/secrets/status', () => connections(), { roles: OWNER });
+r.post('/api/secrets', (req, body) => {
+  const changed = [];
+  for (const [k, v] of Object.entries(body || {})) {
+    if (!SECRET_KEYS.has(k)) throw new HttpError(400, `Unknown credential ${k}`);
+    secrets.set(k, typeof v === 'string' ? v.trim() : v); changed.push(k);
+  }
+  audit.log(actorOf(req), 'credentials.updated', { keys: changed });
+  events.publish('connections', connections());
+  return connections();
+}, { roles: OWNER });
+
+r.post('/api/connections/test/:name', async (req, b, p) => {
+  const n = p.name;
+  if (ai.PROVIDERS[n]) return ai.test(n);
+  if (n === 'twilio') return twilio.test();
+  if (n === 'email') return email.test();
+  if (n === 'ayrshare') return publishing.ayrTest();
+  throw new HttpError(404, 'Unknown connection');
+}, { roles: OWNER });
+
+// ------------------------------------------------------------ users / tokens
+r.get('/api/users', () => ctx.store.all('users').map(({ token, ...u }) => ({ ...u, tokenHint: token.slice(-4) })), { roles: OWNER });
+r.post('/api/users', (req, b) => {
+  if (!['owner', 'contractor', 'agent', 'worker'].includes(b.role)) throw new HttpError(400, 'Role must be owner, contractor, agent or worker');
+  const token = 'eu_' + crypto.randomBytes(24).toString('base64url');
+  const u = ctx.store.insert('users', { id: makeId('u_'), name: String(b.name || 'User').slice(0, 60), role: b.role, token });
+  audit.log(actorOf(req), 'user.created', { userId: u.id, role: u.role });
+  return { ...u };
+}, { roles: OWNER });
+r.del('/api/users/:id', (req, b, p) => {
+  const u = must(ctx.store.get('users', p.id));
+  if (u.role === 'owner' && ctx.store.all('users', (x) => x.role === 'owner').length <= 1) throw new HttpError(400, 'Keep at least one owner');
+  ctx.store.remove('users', p.id); audit.log(actorOf(req), 'user.revoked', { userId: p.id });
+  return { ok: true };
+}, { roles: OWNER });
+
+// ------------------------------------------------------------ command center
+r.get('/api/commands', () => commands.catalog());
+r.post('/api/command', async (req, b) => {
+  const text = String(b.text || '').trim();
+  if (!text) throw new HttpError(400, 'Empty command');
+  const conv = b.conversationId ? ctx.store.get('conversations', b.conversationId) : messaging.commandConversation();
+  const isCommandThread = !conv || conv.kind === 'command';
+  const thread = isCommandThread ? messaging.commandConversation() : conv;
+  if (isCommandThread) messaging.addMessage(thread, { direction: 'out', channel: 'command', body: text, status: 'sent', createdBy: actorOf(req) });
+  events.publish('typing', { conversationId: thread.id, on: true });
+  let res;
+  try { res = await commands.execute(text, { actor: actorOf(req), conversationId: thread.id, clientId: b.clientId || conv?.clientId || null }); }
+  finally { events.publish('typing', { conversationId: thread.id, on: false }); }
+  if (isCommandThread || !res.silent) {
+    messaging.addMessage(thread, { direction: isCommandThread ? 'in' : 'internal', channel: isCommandThread ? 'system' : 'note', body: res.text, status: isCommandThread ? 'received' : 'note', card: res.card || null, navigate: res.navigate || null, error: !!res.error, agent: res.agent || null });
+  }
+  if (isCommandThread) ctx.store.update('conversations', thread.id, { unread: 0 });
+  return res;
+});
+
+// ------------------------------------------------------------ conversations & messages
+r.get('/api/conversations', (req) => {
+  messaging.commandConversation();
+  return ctx.store.all('conversations', (c) => !c.archived || req.query.archived).map((c) => {
+    const contact = c.contactId ? ctx.store.get('contacts', c.contactId) : null;
+    return { ...c, contact: contact ? { id: contact.id, name: contact.name, role: contact.role, phones: contact.phones, emails: contact.emails, clientId: contact.clientId, optedOut: contact.optedOut } : null, pendingApprovals: ctx.store.all('messages', (m) => m.conversationId === c.id && m.status === 'pending_approval').length };
+  }).sort((a, b) => (b.pinned - a.pinned) || b.lastMessageAt.localeCompare(a.lastMessageAt));
+});
+r.get('/api/conversations/:id/messages', (req, b, p) => {
+  must(ctx.store.get('conversations', p.id));
+  const all = ctx.store.all('messages', (m) => m.conversationId === p.id);
+  const before = req.query.before; const list = before ? all.filter((m) => m.createdAt < before) : all;
+  return list.slice(-Number(req.query.limit || 150));
+});
+r.post('/api/conversations/:id/read', (req, b, p) => { const c = must(ctx.store.get('conversations', p.id)); ctx.store.update('conversations', c.id, { unread: 0 }); events.publish('conversation', ctx.store.get('conversations', c.id)); return { ok: true }; });
+r.patch('/api/conversations/:id', (req, b, p) => { must(ctx.store.get('conversations', p.id)); const patch = {}; for (const k of ['pinned', 'archived', 'title']) if (b[k] !== undefined) patch[k] = b[k]; const c = ctx.store.update('conversations', p.id, patch); events.publish('conversation', c); return c; });
+r.post('/api/conversations/:id/messages', (req, b, p) => {
+  const conv = must(ctx.store.get('conversations', p.id));
+  if (b.internal) return messaging.addMessage(conv, { direction: 'internal', channel: 'note', body: String(b.body || ''), status: 'note', createdBy: actorOf(req) });
+  return messaging.createOutbound({ conversationId: conv.id, channel: b.channel, subject: b.subject, body: String(b.body || '').trim() || (() => { throw new HttpError(400, 'Message is empty'); })(), sendAt: b.sendAt, actor: actorOf(req) });
+});
+r.post('/api/conversations/:id/ai-draft', async (req, b, p) => {
+  const conv = must(ctx.store.get('conversations', p.id)); const contact = must(ctx.store.get('contacts', conv.contactId));
+  const history = ctx.store.all('messages', (m) => m.conversationId === conv.id && m.direction !== 'internal').slice(-14).map((m) => `${m.direction === 'in' ? contact.name : 'Agency'}: ${m.body}`).join('\n');
+  const res = await ai.ask({ role: 'writing', clientId: contact.clientId, json: true, system: 'You draft replies for Euclidean Media founders: plain, warm, direct, short. Never invent prices, dates or promises.', prompt: `Thread with ${contact.name} (${contact.role}). ${b.instruction ? `Instruction: ${b.instruction}` : 'Write the best next reply.'}\n\n${history}\n\nReturn {"body":"..."}` });
+  return { body: res.json.body, agent: `${res.provider}:${res.model}` };
+});
+r.post('/api/messages/:id/approve', (req, b, p) => { messaging.approveMessage(p.id, actorOf(req), b.body); return ctx.store.get('messages', p.id); }, { roles: OWNER });
+r.post('/api/messages/:id/discard', (req, b, p) => { messaging.rejectMessage(p.id, actorOf(req)); return ctx.store.get('messages', p.id); });
+r.get('/api/search', (req) => {
+  const q = String(req.query.q || '').toLowerCase().trim(); if (q.length < 2) return [];
+  return ctx.store.all('messages', (m) => (m.body || '').toLowerCase().includes(q) || (m.subject || '').toLowerCase().includes(q)).slice(-40).reverse()
+    .map((m) => ({ id: m.id, conversationId: m.conversationId, body: m.body.slice(0, 200), at: m.createdAt, title: ctx.store.get('conversations', m.conversationId)?.title }));
+});
+
+// ------------------------------------------------------------ contacts
+r.get('/api/contacts', () => ctx.store.all('contacts'));
+r.post('/api/contacts', (req, b) => {
+  const phones = (b.phones || (b.phone ? [b.phone] : [])).map(twilio.normalize).filter(Boolean);
+  const emails = (b.emails || (b.email ? [b.email] : [])).map((e) => String(e).trim().toLowerCase()).filter(Boolean);
+  if (!b.name) throw new HttpError(400, 'Name is required');
+  const c = ctx.store.insert('contacts', { name: b.name, phones, emails, role: b.role || (b.clientId ? 'client' : 'other'), clientId: b.clientId || null, optedOut: {}, title: b.title || '', preferredChannel: b.preferredChannel || null, notes: b.notes || '' });
+  if (c.clientId) ctx.store.update('clients', c.clientId, (cl) => ({ contactIds: [...new Set([...(cl.contactIds || []), c.id])], primaryContactId: cl.primaryContactId || c.id }));
+  messaging.ensureConversation(c);
+  events.publish('contacts', c);
+  return c;
+});
+r.patch('/api/contacts/:id', (req, b, p) => {
+  const prev = must(ctx.store.get('contacts', p.id)); const patch = {};
+  for (const k of ['name', 'role', 'clientId', 'title', 'preferredChannel', 'notes', 'optedOut']) if (b[k] !== undefined) patch[k] = b[k];
+  if (b.phones) patch.phones = b.phones.map(twilio.normalize).filter(Boolean);
+  if (b.emails) patch.emails = b.emails.map((e) => String(e).trim().toLowerCase()).filter(Boolean);
+  const c = ctx.store.update('contacts', p.id, patch);
+  if (patch.clientId && patch.clientId !== prev.clientId) ctx.store.update('clients', patch.clientId, (cl) => ({ contactIds: [...new Set([...(cl.contactIds || []), c.id])], primaryContactId: cl.primaryContactId || c.id }));
+  const conv = ctx.store.find('conversations', (x) => x.contactId === c.id); if (conv) ctx.store.update('conversations', conv.id, { title: c.name, clientId: c.clientId || null });
+  events.publish('contacts', c);
+  return c;
+});
+
+// ------------------------------------------------------------ clients
+function clientView(c, full = false) {
+  const v = { ...c, quota: c.status === 'active' ? pipeline.quotaStatus(c) : null, monthly: finance.monthly(c.retainer), portalUrl: pipeline.portalUrl(c), hasAyrshareProfile: secrets.has(`client.${c.id}.ayrshare.profileKey`), youtubeConnected: secrets.has(`client.${c.id}.youtube.token`) };
+  if (!full) { delete v.portalToken; }
+  return v;
+}
+r.get('/api/clients', () => ctx.store.all('clients').map((c) => clientView(c)));
+r.post('/api/clients', (req, b) => { if (!b.name) throw new HttpError(400, 'Name is required'); return clientView(pipeline.createClient(b, actorOf(req))); }, { roles: OWNER });
+r.get('/api/clients/:id', (req, b, p) => {
+  const c = must(ctx.store.get('clients', p.id));
+  return { ...clientView(c, true), contacts: ctx.store.all('contacts', (x) => x.clientId === c.id), assets: ctx.store.all('assets', (a) => a.clientId === c.id).slice(-40).reverse(), upcomingSlots: pipeline.upcomingSlots(c, 2) };
+});
+r.patch('/api/clients/:id', (req, b, p) => {
+  const c = must(ctx.store.get('clients', p.id));
+  const patch = {};
+  for (const k of ['name', 'type', 'status', 'package', 'notes', 'primaryContactId']) if (b[k] !== undefined) patch[k] = b[k];
+  for (const k of ['retainer', 'profile', 'production', 'schedule', 'approval']) if (b[k]) patch[k] = { ...(c[k] || {}), ...b[k] };
+  if (b.style) patch.style = { ...(c.style || {}), ...pipeline.sanitizeStyle(b.style) };
+  if (b.graphics) patch.graphics = captions.resolveGraphics({ ...(c.graphics || {}), ...b.graphics });
+  if (b.sources) patch.sources = b.sources;
+  if (patch.status === 'churned' && c.status !== 'churned') patch.churnedAt = now();
+  const u = ctx.store.update('clients', c.id, patch);
+  pipeline.enforceApprovalPolicy(u);
+  audit.log(actorOf(req), 'client.updated', { clientId: c.id, keys: Object.keys(patch) });
+  events.publish('clients', { id: c.id });
+  return clientView(ctx.store.get('clients', c.id), true);
+}, { roles: OWNER });
+r.post('/api/clients/:id/memory', (req, b, p) => { must(ctx.store.get('clients', p.id)); return pipeline.remember(p.id, [{ text: b.text, style: b.style ? pipeline.sanitizeStyle(b.style) : null }], { source: 'manual', actor: actorOf(req) }); });
+r.patch('/api/clients/:id/memory/:mid', (req, b, p) => {
+  ctx.store.update('clients', p.id, (c) => ({ memory: (c.memory || []).map((m) => (m.id === p.mid ? { ...m, active: b.active ?? m.active, text: b.text ?? m.text } : m)) }));
+  return { ok: true };
+});
+r.del('/api/clients/:id/memory/:mid', (req, b, p) => { ctx.store.update('clients', p.id, (c) => ({ memory: (c.memory || []).filter((m) => m.id !== p.mid) })); audit.log(actorOf(req), 'client.memory_removed', { clientId: p.id }); return { ok: true }; });
+r.post('/api/clients/:id/credentials', (req, b, p) => {
+  must(ctx.store.get('clients', p.id));
+  if (b.ayrshareProfileKey !== undefined) secrets.set(`client.${p.id}.ayrshare.profileKey`, b.ayrshareProfileKey);
+  audit.log(actorOf(req), 'client.credentials_updated', { clientId: p.id });
+  return { ok: true };
+}, { roles: OWNER });
+r.post('/api/clients/:id/youtube/connect', async (req, b, p) => { must(ctx.store.get('clients', p.id)); const url = await publishing.ytBeginAuth(p.id); if (ctx.openExternal) ctx.openExternal(url); return { url }; }, { roles: OWNER });
+r.post('/api/clients/:id/upload', async (req, b, p) => {
+  const c = must(ctx.store.get('clients', p.id));
+  const { files, fields } = await receiveUpload(req, paths.clientDir(c.id, 'footage'));
+  const out = [];
+  for (const f of files) {
+    if (fields.kind === 'logo') { ctx.store.update('clients', c.id, (x) => ({ production: { ...x.production, logoPath: f.path } })); out.push({ logo: f.path }); continue; }
+    out.push(pipeline.addAsset({ clientId: c.id, filePath: f.path, source: 'upload', actor: actorOf(req) }));
+    if (fields.autoProcess === 'true') { const j = ctx.store.find('jobs', (x) => x.dedupeKey === `ingest:${out[out.length - 1].id}`); if (j) ctx.store.update('jobs', j.id, (x) => ({ payload: { ...x.payload, autoProcess: true } })); }
+  }
+  return out;
+}, { raw: true });
+r.post('/api/clients/:id/autopilot-now', (req, b, p) => { const c = must(ctx.store.get('clients', p.id)); return require('./automation/scheduler').feedClient(c); });
+
+// ------------------------------------------------------------ assets (footage)
+r.get('/api/assets', (req) => ctx.store.all('assets', (a) => !req.query.clientId || a.clientId === req.query.clientId).reverse());
+r.post('/api/assets', (req, b) => {
+  if (b.url) return queue.enqueue('ingest.url', { url: b.url, clientId: b.clientId, autoProcess: !!b.autoProcess }, { clientId: b.clientId, actor: actorOf(req) });
+  const a = pipeline.addAsset({ clientId: b.clientId, filePath: b.path, source: 'local file', actor: actorOf(req) });
+  if (b.autoProcess) { const j = ctx.store.find('jobs', (x) => x.dedupeKey === `ingest:${a.id}`); if (j) ctx.store.update('jobs', j.id, (x) => ({ payload: { ...x.payload, autoProcess: true } })); }
+  return a;
+});
+r.post('/api/assets/:id/process', (req, b, p) => {
+  const a = must(ctx.store.get('assets', p.id));
+  if (!a.transcript && a.info?.hasAudio) return queue.enqueue('transcribe', { assetId: a.id, thenDiscover: true }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `transcribe:${a.id}` });
+  return queue.enqueue('discover', { assetId: a.id, count: b.count }, { clientId: a.clientId, actor: actorOf(req) });
+});
+r.get('/api/assets/:id/media', (req, res, p) => serveFile(req, res, must(ctx.store.get('assets', p.id)).path), { stream: true });
+r.get('/api/assets/:id/thumb', (req, res, p) => { const a = must(ctx.store.get('assets', p.id)); return a.thumb ? serveFile(req, res, a.thumb, { cache: true }) : send(res, 404, {}); }, { stream: true });
+r.get('/api/assets/:id/filmstrip', (req, res, p) => { const a = must(ctx.store.get('assets', p.id)); return a.filmstrip ? serveFile(req, res, a.filmstrip, { cache: true }) : send(res, 404, {}); }, { stream: true });
+r.get('/api/assets/:id/waveform', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); const f = path.join(a.workDir, 'waveform.json'); return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : []; });
+r.get('/api/assets/:id/transcript', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); return require('./jobs/handlers').loadTranscript(a) || { words: [], segments: [] }; });
+r.del('/api/assets/:id', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); ctx.store.remove('assets', a.id); audit.log(actorOf(req), 'footage.removed', { clientId: a.clientId, assetId: a.id }); return { ok: true }; }, { roles: OWNER });
+
+// ------------------------------------------------------------ clips
+function clipView(c) {
+  const v = c.versions?.[c.currentVersion - 1];
+  return { ...c, client: ctx.store.get('clients', c.clientId)?.name, asset: ctx.store.get('assets', c.assetId)?.name, current: v ? { n: v.n, duration: v.duration, qc: v.qc, renderedAt: v.renderedAt, captioned: v.captioned, encoder: v.encoder } : null, post: c.postId ? ctx.store.get('posts', c.postId) : null };
+}
+r.get('/api/clips', (req) => ctx.store.all('clips', (c) => (!req.query.clientId || c.clientId === req.query.clientId) && (!req.query.status || req.query.status.split(',').includes(c.status))).slice(-Number(req.query.limit || 200)).reverse().map(clipView));
+r.get('/api/clips/:id', (req, b, p) => clipView(must(ctx.store.get('clips', p.id))));
+r.patch('/api/clips/:id', (req, b, p) => {
+  const c = must(ctx.store.get('clips', p.id)); const patch = {};
+  for (const k of ['title', 'hook', 'caption', 'hashtags', 'start', 'end', 'reframe', 'focusX', 'silenceCut', 'punchIns']) if (b[k] !== undefined) patch[k] = b[k];
+  const u = ctx.store.update('clips', c.id, patch);
+  if (c.postId && (patch.title || patch.caption || patch.hashtags)) ctx.store.update('posts', c.postId, { title: u.title, caption: u.caption, hashtags: u.hashtags });
+  events.publish('clips', { id: c.id });
+  return clipView(u);
+});
+r.post('/api/clips/:id/render', (req, b, p) => { const c = must(ctx.store.get('clips', p.id)); return pipeline.requestRender(c, { reason: 'manual' }); });
+r.post('/api/clips/:id/decide', (req, b, p) => clipView(pipeline.decideClip(p.id, b.decision, { actor: actorOf(req), note: b.note || '', stage: b.stage })));
+r.post('/api/clips/:id/version', (req, b, p) => { const c = must(ctx.store.get('clips', p.id)); const n = Number(b.n); if (!c.versions[n - 1]) throw new HttpError(400, 'No such version'); return clipView(ctx.store.update('clips', c.id, { currentVersion: n })); });
+function versionFile(c, req, kind) {
+  const n = Number(req.query.v || c.currentVersion); const v = must(c.versions?.[n - 1], 'Not rendered yet');
+  return { mp4: v.path, thumb: v.thumb, srt: v.srt, velo: v.velo, xml: v.xml }[kind];
+}
+r.get('/api/clips/:id/video', (req, res, p) => serveFile(req, res, versionFile(must(ctx.store.get('clips', p.id)), req, 'mp4')), { stream: true });
+r.get('/api/clips/:id/thumb', (req, res, p) => serveFile(req, res, versionFile(must(ctx.store.get('clips', p.id)), req, 'thumb'), { cache: true }), { stream: true });
+r.get('/api/clips/:id/download/:kind', (req, res, p) => { const c = must(ctx.store.get('clips', p.id)); const f = must(versionFile(c, req, p.kind), 'No such file'); return serveFile(req, res, f, { download: `${c.ref}-${path.basename(f)}` }); }, { stream: true });
+r.post('/api/clips/:id/premiere', (req, b, p) => { const c = must(ctx.store.get('clips', p.id)); return queue.enqueue('premiere.handoff', { clipId: c.id, reason: 'manual' }, { clientId: c.clientId, actor: actorOf(req), title: `Premiere edit: ${c.title}` }); });
+r.post('/api/clips/:id/open-velo', (req, b, p) => {
+  const c = must(ctx.store.get('clips', p.id)); const f = versionFile(c, req, 'velo');
+  const velo = ctx.setting('tools.veloPath', '');
+  if (velo && fs.existsSync(velo)) { spawn(velo, [f], { detached: true, stdio: 'ignore' }).unref(); return { ok: true, opened: 'velo' }; }
+  if (ctx.openPath) { ctx.openPath(f); return { ok: true, opened: 'default' }; }
+  throw new HttpError(400, 'Set the Velo executable path in Settings → System to open projects in Velo');
+});
+r.post('/api/clips/:id/studio', (req, b, p) => {
+  const c = must(ctx.store.get('clips', p.id)); const a = ctx.store.get('assets', c.assetId); const client = ctx.store.get('clients', c.clientId);
+  const words = require('./jobs/handlers').loadTranscript(a)?.words || [];
+  const data = exporters.toVelo({ name: c.title, source: a.path, info: a.info, range: { start: c.start, end: c.end }, words, style: client.style, hook: c.hook, focusX: c.focusX });
+  return ctx.store.insert('projects', { name: `#${c.ref} ${c.title}`, clientId: c.clientId, clipId: c.id, data, exports: [] });
+});
+
+// ------------------------------------------------------------ approvals
+r.get('/api/approvals', (req) => {
+  const status = req.query.status || 'pending';
+  return ctx.store.all('approvals', (a) => status === 'all' || a.status === status).reverse().map((a) => {
+    const ref = a.kind === 'clip' ? ctx.store.get('clips', a.refId) : a.kind === 'message' ? ctx.store.get('messages', a.refId) : null;
+    const extra = a.kind === 'message' && ref ? { contact: ctx.store.get('contacts', ref.contactId)?.name, channel: ref.channel, body: ref.body, subject: ref.subject } : {};
+    return { ...a, client: a.clientId ? ctx.store.get('clients', a.clientId)?.name : null, ref: ref ? (a.kind === 'clip' ? clipView(ref) : ref) : null, ...extra };
+  }).filter((a) => a.ref);
+});
+
+// ------------------------------------------------------------ posts
+r.get('/api/posts', (req) => ctx.store.all('posts', (p) => (!req.query.clientId || p.clientId === req.query.clientId) && (!req.query.status || req.query.status.split(',').includes(p.status))).map((p) => ({ ...p, client: ctx.store.get('clients', p.clientId)?.name, ref: ctx.store.get('clips', p.clipId)?.ref })));
+r.post('/api/posts/:id/unschedule', (req, b, p) => { pipeline.unschedule(p.id, actorOf(req)); return { ok: true }; });
+r.post('/api/posts/:id/reschedule', (req, b, p) => {
+  const post = must(ctx.store.get('posts', p.id)); if (post.status !== 'scheduled') throw new HttpError(400, 'Only scheduled posts can move');
+  const at = new Date(b.at); if (isNaN(at) || at < new Date()) throw new HttpError(400, 'Pick a future time');
+  ctx.store.update('posts', post.id, { scheduledAt: at.toISOString(), platforms: b.platforms || post.platforms });
+  const job = ctx.store.find('jobs', (j) => j.dedupeKey === `publish:${post.id}` && j.status === 'queued');
+  if (job) ctx.store.update('jobs', job.id, { runAt: new Date(at.getTime() - 15 * 60000).toISOString() });
+  audit.log(actorOf(req), 'post.rescheduled', { postId: post.id, clientId: post.clientId, at: at.toISOString() });
+  events.publish('posts', { id: post.id });
+  return ctx.store.get('posts', post.id);
+});
+r.get('/api/posts/:id/package', (req, res, p) => { const post = must(ctx.store.get('posts', p.id)); if (post.packagePath && ctx.revealFile) ctx.revealFile(post.packagePath); return send(res, 200, { path: post.packagePath || null }); }, { stream: true });
+
+// ------------------------------------------------------------ jobs / queue
+r.get('/api/jobs', (req) => ctx.store.all('jobs', (j) => (!req.query.status || req.query.status.split(',').includes(j.status)) && (!req.query.clientId || j.clientId === req.query.clientId)).slice(-Number(req.query.limit || 300)).reverse().map(queue.slim));
+r.get('/api/jobs/:id', (req, b, p) => must(ctx.store.get('jobs', p.id)));
+r.post('/api/jobs/:id/cancel', (req, b, p) => must(queue.cancel(p.id, actorOf(req))));
+r.post('/api/jobs/:id/retry', (req, b, p) => must(queue.retry(p.id)));
+r.post('/api/queue/pause', (req) => { queue.setPaused(true); ctx.store.setSettings({ _paused: true }); audit.log(actorOf(req), 'automation.paused', {}, 'warn'); return queue.stats(); });
+r.post('/api/queue/resume', (req) => { queue.setPaused(false); ctx.store.setSettings({ _paused: false }); audit.log(actorOf(req), 'automation.resumed', {}); return queue.stats(); });
+r.get('/api/queue/stats', () => queue.stats());
+
+// ------------------------------------------------------------ computer-use agents (Astra)
+function workOrder(job) {
+  const clip = ctx.store.get('clips', job.payload.clipId); const asset = clip && ctx.store.get('assets', clip.assetId); const client = clip && ctx.store.get('clients', clip.clientId);
+  if (!clip) return null;
+  const dir = paths.clientDir(client.id, 'premiere', job.id);
+  const words = require('./jobs/handlers').loadTranscript(asset)?.words || [];
+  const range = { start: clip.start, end: clip.end };
+  const xml = path.join(dir, 'sequence.xml'); const srt = path.join(dir, 'captions.srt'); const brief = path.join(dir, 'brief.txt');
+  if (!fs.existsSync(xml)) {
+    fs.writeFileSync(xml, exporters.toFcpXml({ name: `${client.name} #${clip.ref}`, source: asset.path, info: asset.info, range }));
+    fs.writeFileSync(srt, captions.buildSrt({ words, range, style: client.style }));
+    const mem = (client.memory || []).filter((m) => m.active !== false).map((m) => `- ${m.text}`).join('\n');
+    fs.writeFileSync(brief, [`CLIENT: ${client.name} (${client.type})`, `CLIP #${clip.ref}: ${clip.title}`, `HOOK (on-screen, first 3s): ${clip.hook || '(none)'}`, `SOURCE: ${asset.path}`, `RANGE: ${range.start.toFixed(2)}s – ${range.end.toFixed(2)}s`, `FORMAT: 1080×1920, 30 fps, H.264, -14 LUFS`,
+      `CAPTIONS: import captions.srt; style ${client.style.uppercase ? 'UPPERCASE' : 'sentence case'}, ${client.style.wordsPerLine} words/line, highlight ${client.style.highlight}`, `CLIENT PREFERENCES:\n${mem || '- none recorded'}`,
+      clip.feedback?.length ? `LATEST FEEDBACK: ${clip.feedback[clip.feedback.length - 1].text}` : '', `EXPORT TO: ${path.join(dir, 'output.mp4')}`].filter(Boolean).join('\n'));
+  }
+  const files = ['sequence.xml', 'captions.srt', 'brief.txt'].map((n) => ({ name: n, path: path.join(dir, n), url: `/api/agent/jobs/${job.id}/files/${n}` }));
+  return { jobId: job.id, clipId: clip.id, ref: clip.ref, client: client.name, title: clip.title, source: asset.path, range, files, outputPath: path.join(dir, 'output.mp4'), brief: fs.readFileSync(brief, 'utf8'), instructions: 'In Premiere Pro: File → Import sequence.xml, open the sequence, import captions.srt onto a caption track, apply the brief, then File → Export → Media (H.264, Match Source 1080×1920) to outputPath. Call /complete when the file is written.' };
+}
+r.get('/api/agent/next', (req) => {
+  const cap = req.query.capability || 'premiere';
+  handoff.touch(req.user.name, cap);
+  const job = ctx.store.all('jobs', (j) => j.status === 'waiting_agent' && j.type === 'premiere.handoff').sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt))[0];
+  if (!job) return { job: null };
+  ctx.store.update('jobs', job.id, { status: 'running', workerId: `agent:${req.user.name}`, startedAt: now(), attempts: job.attempts + 1, note: `Claimed by ${req.user.name}` });
+  queue.publish(ctx.store.get('jobs', job.id));
+  audit.log(`agent:${req.user.name}`, 'agent.claimed', { jobId: job.id, clientId: job.clientId });
+  return { job: workOrder(job) };
+}, { roles: AGENT });
+r.get('/api/agent/jobs/:id/files/:name', (req, res, p) => {
+  const job = must(ctx.store.get('jobs', p.id)); const clip = ctx.store.get('clips', job.payload.clipId);
+  const f = path.join(paths.clientDir(clip.clientId, 'premiere', job.id), path.basename(p.name));
+  return serveFile(req, res, f, { download: path.basename(f) });
+}, { roles: AGENT, stream: true });
+r.post('/api/agent/jobs/:id/progress', (req, b, p) => { const j = must(ctx.store.get('jobs', p.id)); handoff.touch(req.user.name, 'premiere'); j.progress = Math.max(0, Math.min(1, Number(b.progress) || 0)); j.note = String(b.note || '').slice(0, 200); queue.publish(j); return { ok: true }; }, { roles: AGENT });
+r.post('/api/agent/jobs/:id/complete', async (req, b, p) => {
+  const job = must(ctx.store.get('jobs', p.id)); const clip = must(ctx.store.get('clips', job.payload.clipId));
+  const out = b.outputPath; if (!out || !fs.existsSync(out)) throw new HttpError(400, `Output file not found: ${out}`);
+  const qc = await ff.qualityCheck(out, { expectWidth: 1080, expectHeight: 1920, minSec: 3, maxSec: 180 });
+  const dir = paths.clientDir(clip.clientId, 'renders', clip.id); const n = (clip.versions || []).length + 1;
+  const dest = path.join(dir, `v${n}-premiere.mp4`); fs.copyFileSync(out, dest);
+  const thumb = path.join(dir, `v${n}.jpg`); await ff.thumbnail(dest, thumb, 1.5, 405);
+  const wo = path.join(paths.clientDir(clip.clientId, 'premiere', job.id));
+  ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), { n, path: dest, thumb, duration: qc.info.duration, renderedAt: now(), encoder: 'Adobe Premiere Pro', qc: { passed: qc.passed, issues: qc.issues }, srt: path.join(wo, 'captions.srt'), xml: path.join(wo, 'sequence.xml'), velo: null, editedBy: req.user.name, captioned: true }], currentVersion: n }));
+  ctx.store.update('jobs', job.id, { status: 'done', progress: 1, finishedAt: now(), result: { outputPath: dest, qc: qc.passed }, note: 'Completed in Premiere' });
+  queue.publish(ctx.store.get('jobs', job.id));
+  audit.log(`agent:${req.user.name}`, 'agent.completed', { jobId: job.id, clientId: clip.clientId, clipId: clip.id });
+  pipeline.afterQc(clip.id, qc);
+  return { ok: true, qc };
+}, { roles: AGENT });
+r.post('/api/agent/jobs/:id/fail', (req, b, p) => {
+  const job = must(ctx.store.get('jobs', p.id));
+  const retry = job.attempts < job.maxAttempts;
+  ctx.store.update('jobs', job.id, { status: retry ? 'waiting_agent' : 'failed', error: String(b.error || 'Agent reported failure'), note: retry ? 'Returned to the agent queue' : 'Failed', finishedAt: retry ? null : now() });
+  if (!retry) { const clip = ctx.store.get('clips', job.payload.clipId); if (clip) { ctx.store.update('clips', clip.id, { status: 'review' }); } }
+  queue.publish(ctx.store.get('jobs', job.id));
+  audit.log(`agent:${req.user.name}`, 'agent.failed', { jobId: job.id, error: b.error }, 'warn');
+  return { ok: true };
+}, { roles: AGENT });
+// Any agent can drive Euclidean with the same command list people use.
+r.post('/api/agent/command', async (req, b) => { handoff.touch(req.user.name, 'command'); return commands.execute(String(b.text || ''), { actor: `agent:${req.user.name}`, viaAgent: true, clientId: b.clientId || null }); }, { roles: AGENT });
+r.get('/api/agent/commands', () => commands.catalog(), { roles: AGENT });
+
+// ------------------------------------------------------------ remote workers (editing desktop)
+r.post('/api/workers/register', (req, b) => {
+  const name = String(b.name || req.user.name).slice(0, 60);
+  let w = ctx.store.find('workers', (x) => x.name === name);
+  const data = { name, capabilities: b.capabilities || ['render.short'], specs: b.specs || {}, lastSeen: now(), userId: req.user.id };
+  w = w ? ctx.store.update('workers', w.id, data) : ctx.store.insert('workers', data);
+  return { workerId: w.id };
+}, { roles: WORKER });
+r.post('/api/workers/lease', (req, b) => {
+  const w = must(ctx.store.get('workers', b.workerId), 'Unknown worker'); ctx.store.update('workers', w.id, { lastSeen: now(), resources: b.resources || null });
+  const job = queue.lease(w.name, w.capabilities);
+  if (!job) return { job: null };
+  return { job: { id: job.id, type: job.type, spec: renderSpec(job) } };
+}, { roles: WORKER });
+function renderSpec(job) {
+  const clip = ctx.store.get('clips', job.payload.clipId); const asset = ctx.store.get('assets', clip.assetId); const client = ctx.store.get('clients', clip.clientId);
+  const t = require('./jobs/handlers').loadTranscript(asset);
+  return { clipId: clip.id, title: clip.title, assetId: asset.id, sourceName: path.basename(asset.path), sourceSize: fs.statSync(asset.path).size, sourceUrl: `/api/workers/jobs/${job.id}/source`, info: asset.info, range: { start: clip.start, end: clip.end }, words: t?.words || [], style: client.style, hook: clip.hook, reframe: clip.reframe, focusX: clip.focusX, facePath: clip.faceTrack && clip.faceTrack.start === clip.start && clip.faceTrack.end === clip.end && clip.faceTrack.coverage >= 0.15 ? clip.faceTrack.path : null, graphics: client.graphics, plan: { silenceCut: clip.silenceCut && !!t, punchIns: clip.punchIns }, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14) };
+}
+r.get('/api/workers/jobs/:id/source', (req, res, p) => { const job = must(ctx.store.get('jobs', p.id)); const clip = ctx.store.get('clips', job.payload.clipId); return serveFile(req, res, ctx.store.get('assets', clip.assetId).path); }, { roles: WORKER, stream: true });
+r.post('/api/workers/jobs/:id/heartbeat', (req, b, p) => ({ ok: queue.heartbeat(p.id, b.worker, b.progress, b.note) }), { roles: WORKER });
+r.post('/api/workers/jobs/:id/result', async (req, b, p) => {
+  const job = must(ctx.store.get('jobs', p.id)); const clip = must(ctx.store.get('clips', job.payload.clipId));
+  const dir = paths.clientDir(clip.clientId, 'renders', clip.id);
+  const { files, fields } = await receiveUpload(req, dir);
+  const mp4 = files.find((f) => f.name.endsWith('.mp4')); if (!mp4) throw new HttpError(400, 'No video uploaded');
+  const n = (clip.versions || []).length + 1; const dest = path.join(dir, `v${n}-${fields.worker || 'worker'}.mp4`); fs.renameSync(mp4.path, dest);
+  const srt = files.find((f) => f.name.endsWith('.srt'));
+  const qc = await ff.qualityCheck(dest, { expectWidth: 1080, expectHeight: 1920, minSec: 5, maxSec: 180 });
+  const thumb = path.join(dir, `v${n}.jpg`); await ff.thumbnail(dest, thumb, 1.5, 405);
+  const asset = ctx.store.get('assets', clip.assetId); const client = ctx.store.get('clients', clip.clientId);
+  const velo = path.join(dir, `v${n}.velo`); fs.writeFileSync(velo, JSON.stringify(exporters.toVelo({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: require('./jobs/handlers').loadTranscript(asset)?.words || [], style: client.style, hook: clip.hook, focusX: clip.focusX })));
+  const xml = path.join(dir, `v${n}.premiere.xml`); fs.writeFileSync(xml, exporters.toFcpXml({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end } }));
+  ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), { n, path: dest, thumb, duration: qc.info.duration, renderedAt: now(), encoder: fields.encoder || 'worker', qc: { passed: qc.passed, issues: qc.issues }, srt: srt?.path || null, velo, xml, renderedBy: fields.worker, changes: c.pendingChanges || null, captioned: fields.captioned === 'true' }], currentVersion: n, pendingChanges: null }));
+  ctx.store.update('jobs', job.id, { status: 'done', progress: 1, finishedAt: now(), result: { version: n, worker: fields.worker }, note: `Rendered on ${fields.worker}` });
+  queue.publish(ctx.store.get('jobs', job.id));
+  pipeline.afterQc(clip.id, qc);
+  return { ok: true };
+}, { roles: WORKER, raw: true });
+r.post('/api/workers/jobs/:id/fail', (req, b, p) => {
+  const job = must(ctx.store.get('jobs', p.id)); const retry = job.attempts < job.maxAttempts;
+  ctx.store.update('jobs', job.id, { status: retry ? 'queued' : 'failed', error: b.error, workerId: null, leaseUntil: null, runAt: new Date(Date.now() + 30000).toISOString(), note: retry ? 'Worker failed; retrying' : 'Failed on worker' });
+  queue.publish(ctx.store.get('jobs', job.id)); return { ok: true };
+}, { roles: WORKER });
+r.get('/api/workers', () => ctx.store.all('workers').map((w) => ({ ...w, online: Date.now() - new Date(w.lastSeen).getTime() < 120000 })), { roles: OWNER });
+
+// ------------------------------------------------------------ prospects (growth)
+r.get('/api/prospects', () => ctx.store.all('prospects').reverse());
+r.post('/api/prospects', (req, b) => ctx.store.insert('prospects', { name: b.name, type: b.type || 'creator', handle: b.handle || '', platforms: b.platforms || [], why: b.why || '', angle: b.angle || '', publicContact: b.publicContact || '', stage: 'new', verified: true, source: 'manual' }));
+r.patch('/api/prospects/:id', (req, b, p) => { must(ctx.store.get('prospects', p.id)); const patch = {}; for (const k of ['name', 'type', 'handle', 'stage', 'why', 'angle', 'publicContact', 'verified', 'notes', 'followers', 'location']) if (b[k] !== undefined) patch[k] = b[k]; events.publish('prospects', {}); return ctx.store.update('prospects', p.id, patch); });
+r.del('/api/prospects/:id', (req, b, p) => ({ ok: ctx.store.remove('prospects', p.id) }));
+r.post('/api/prospects/:id/audit', (req, b, p) => queue.enqueue('prospect.audit', { prospectId: must(ctx.store.get('prospects', p.id)).id }, { actor: actorOf(req) }));
+r.post('/api/prospects/:id/outreach', async (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id));
+  let contact = pr.contactId ? ctx.store.get('contacts', pr.contactId) : null;
+  const emailAddr = b.email || (/@/.test(pr.publicContact || '') ? pr.publicContact.trim() : null);
+  if (!contact) {
+    if (!emailAddr && !b.phone) throw new HttpError(400, 'Add a public business email or phone for this prospect first');
+    contact = ctx.store.insert('contacts', { name: pr.name, phones: b.phone ? [twilio.normalize(b.phone)] : [], emails: emailAddr ? [emailAddr.toLowerCase()] : [], role: 'prospect', clientId: null, optedOut: {}, source: 'prospecting' });
+    ctx.store.update('prospects', pr.id, { contactId: contact.id });
+  }
+  const res = await ai.ask({ role: 'writing', json: true, maxTokens: 900, system: `You write first-touch outreach for Euclidean Media (founders Ryan Rosario and Ben Gingold), a short-form video agency for ${pr.type === 'political' ? 'political campaigns' : 'creators'}. Personal, specific, under 140 words, one clear ask (a 15-minute call). No hype, no fake familiarity, no invented results. Include a simple opt-out line.`, prompt: `Prospect: ${pr.name} (${pr.handle || ''}). Why they need us: ${pr.why || 'n/a'}. Angle: ${pr.angle || 'n/a'}.${pr.audit ? `\nAudit notes: ${pr.audit.slice(0, 1500)}` : ''}\nReturn {"subject":"...","body":"..."}` });
+  const m = messaging.createOutbound({ contactId: contact.id, channel: contact.emails.length ? 'email' : 'sms', subject: res.json.subject, body: res.json.body, aiGenerated: true, agent: `${res.provider}:${res.model}`, category: 'prospecting', actor: actorOf(req) });
+  ctx.store.update('prospects', pr.id, { stage: pr.stage === 'new' ? 'drafted' : pr.stage });
+  return { message: m, conversationId: m.conversationId };
+});
+r.post('/api/prospects/:id/convert', (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id));
+  const c = pipeline.createClient({ name: pr.name, type: pr.type === 'political' ? 'political' : 'creator', profile: { about: pr.why || '' } }, actorOf(req));
+  if (pr.contactId) { ctx.store.update('contacts', pr.contactId, { role: 'client', clientId: c.id }); ctx.store.update('clients', c.id, { contactIds: [pr.contactId], primaryContactId: pr.contactId }); }
+  ctx.store.update('prospects', pr.id, { stage: 'won', clientId: c.id });
+  return clientView(ctx.store.get('clients', c.id));
+}, { roles: OWNER });
+
+// ------------------------------------------------------------ finance, analytics
+r.get('/api/finance', (req) => finance.summary(req.query.month || monthKey()), { roles: OWNER });
+r.get('/api/invoices', () => ctx.store.all('invoices').reverse().map((i) => ({ ...i, client: ctx.store.get('clients', i.clientId)?.name })), { roles: OWNER });
+r.post('/api/invoices/draft', (req) => finance.draftInvoices(actorOf(req)), { roles: OWNER });
+r.patch('/api/invoices/:id', (req, b, p) => { must(ctx.store.get('invoices', p.id)); const patch = {}; for (const k of ['status', 'amount', 'dueDate', 'notes']) if (b[k] !== undefined) patch[k] = b[k]; if (patch.status === 'paid') patch.paidAt = now().slice(0, 10); audit.log(actorOf(req), 'invoice.updated', { invoiceId: p.id, ...patch }); return ctx.store.update('invoices', p.id, patch); }, { roles: OWNER });
+r.get('/api/expenses', () => ctx.store.all('expenses').reverse(), { roles: OWNER });
+r.post('/api/expenses', (req, b) => ctx.store.insert('expenses', { label: b.label, amount: Number(b.amount) || 0, category: b.category || 'other', date: b.date || now().slice(0, 10), recurring: !!b.recurring, clientId: b.clientId || null }), { roles: OWNER });
+r.del('/api/expenses/:id', (req, b, p) => ({ ok: ctx.store.remove('expenses', p.id) }), { roles: OWNER });
+r.post('/api/timelogs', (req, b) => ctx.store.insert('timelogs', { userId: actorOf(req), clientId: b.clientId || null, minutes: Number(b.minutes) || 0, note: b.note || '', date: b.date || now().slice(0, 10) }));
+r.post('/api/analytics/sync', () => queue.enqueue('analytics.sync', {}, { dedupeKey: `analytics:manual:${Math.floor(Date.now() / 60000)}` }));
+r.get('/api/analytics', () => {
+  const posts = ctx.store.all('posts', (p) => p.status === 'published');
+  const sum = (p) => Object.values(p.stats || {}).reduce((t, s) => ({ views: t.views + (s.views || 0), likes: t.likes + (s.likes || 0), comments: t.comments + (s.comments || 0), shares: t.shares + (s.shares || 0) }), { views: 0, likes: 0, comments: 0, shares: 0 });
+  const byClient = {}; const byPlatform = {}; const byDay = {};
+  for (const p of posts) {
+    const s = sum(p); const c = ctx.store.get('clients', p.clientId)?.name || 'Unknown';
+    byClient[c] = byClient[c] || { posts: 0, views: 0, likes: 0 }; byClient[c].posts++; byClient[c].views += s.views; byClient[c].likes += s.likes;
+    for (const [plat, st] of Object.entries(p.stats || {})) { byPlatform[plat] = byPlatform[plat] || { views: 0, likes: 0, posts: 0 }; byPlatform[plat].views += st.views || 0; byPlatform[plat].likes += st.likes || 0; byPlatform[plat].posts++; }
+    const d = (p.publishedAt || '').slice(0, 10); byDay[d] = byDay[d] || { posts: 0, views: 0 }; byDay[d].posts++; byDay[d].views += s.views;
+  }
+  const top = posts.map((p) => ({ id: p.id, title: p.title, client: ctx.store.get('clients', p.clientId)?.name, publishedAt: p.publishedAt, ...sum(p), clipId: p.clipId })).sort((a, b) => b.views - a.views).slice(0, 12);
+  return { total: posts.length, tracked: posts.filter((p) => p.stats).length, byClient, byPlatform, byDay, top, lastSync: posts.map((p) => p.statsAt).filter(Boolean).sort().pop() || null };
+});
+
+// ------------------------------------------------------------ agents
+r.get('/api/agents', () => ({ ...ai.agentStatus(), usage: ctx.store.all('usage', (u) => u.month === monthKey()).slice(-200).reverse() }));
+r.post('/api/agents/test/:provider', (req, b, p) => ai.test(p.provider), { roles: OWNER });
+r.post('/api/agents/ask', async (req, b) => { const res = await ai.ask({ role: b.role || 'operations', prompt: String(b.prompt || ''), provider: b.provider, maxTokens: 800 }); return res; }, { roles: OWNER });
+
+// ------------------------------------------------------------ system
+r.get('/api/health', () => health.check());
+r.get('/api/resources', () => ({ current: resources.last, history: resources.history(), gate: resources.heavyGate() }));
+r.post('/api/mode', (req, b) => ({ mode: resources.setMode(b.mode, actorOf(req)) }), { roles: STAFF });
+r.get('/api/logs', (req) => audit.query({ q: req.query.q, level: req.query.level, clientId: req.query.clientId, limit: Number(req.query.limit || 300) }));
+r.post('/api/backup', () => ({ file: ctx.store.backup(paths.backups()) }), { roles: OWNER });
+r.get('/api/backups', () => fs.readdirSync(paths.backups()).filter((f) => f.endsWith('.json')).sort().reverse().map((f) => ({ name: f, size: fs.statSync(path.join(paths.backups(), f)).size })), { roles: OWNER });
+r.post('/api/restore', (req, b) => {
+  const f = path.join(paths.backups(), path.basename(String(b.name || '')));
+  if (!fs.existsSync(f)) throw new HttpError(404, 'Backup not found');
+  ctx.store.backup(paths.backups()); ctx.store.restore(f);
+  audit.log(actorOf(req), 'backup.restored', { file: b.name }, 'warn');
+  return { ok: true };
+}, { roles: OWNER });
+r.post('/api/system/redetect', async () => { Object.assign(ctx.capabilities, await ff.detect()); return ctx.capabilities; }, { roles: OWNER });
+r.post('/api/system/open', (req, b) => {
+  if (b.url && ctx.openExternal && /^https?:\/\//.test(b.url)) { ctx.openExternal(b.url); return { ok: true }; }
+  if (b.path && fs.existsSync(b.path)) { if (b.reveal && ctx.revealFile) ctx.revealFile(b.path); else if (ctx.openPath) ctx.openPath(b.path); return { ok: true }; }
+  throw new HttpError(400, ctx.electron ? 'Nothing to open' : 'Opening files is only available in the desktop app');
+}, { roles: STAFF });
+r.post('/api/system/pick', async (req, b) => { if (!ctx.pickFiles) throw new HttpError(400, 'File picker is only available in the desktop app'); return { paths: await ctx.pickFiles(b) }; });
+r.post('/api/sandbox/simulate-inbound', (req, b) => {
+  // Test environment only: lets you rehearse the inbound → triage → revision flow without a phone.
+  if (ctx.setting('environment') === 'production') throw new HttpError(400, 'Only available in the test environment');
+  const contact = must(ctx.store.get('contacts', b.contactId), 'Contact not found');
+  const channel = b.channel || (contact.phones.length ? 'sms' : 'email');
+  return messaging.receive({ channel, providerId: `sim-${Date.now()}`, from: channel === 'sms' ? contact.phones[0] : contact.emails[0], fromName: contact.name, subject: b.subject, body: String(b.body || ''), at: now() });
+}, { roles: OWNER });
+
+// ------------------------------------------------------------ Studio projects
+r.get('/api/projects', (req) => ctx.store.all('projects', (p) => !req.query.clientId || p.clientId === req.query.clientId).map(({ data, ...p }) => ({ ...p, sequences: data?.sequences?.length || 0, media: data?.media?.length || 0 })).reverse());
+r.post('/api/projects', (req, b) => ctx.store.insert('projects', { name: b.name || 'Untitled', clientId: b.clientId || null, data: b.data || emptyProject(b), exports: [] }));
+function emptyProject(b) {
+  const W = b.width || 1080, H = b.height || 1920;
+  const track = (type, name) => ({ type, name, muted: false, locked: false, volume: { base: 1 }, clips: [] });
+  return { app: 'velo', version: 1, media: [], sequences: [{ id: 's1', name: 'Sequence 1', width: W, height: H, fps: b.fps || 30, videoTracks: [track(0, 'V1'), track(0, 'V2'), track(0, 'V3')], audioTracks: [track(1, 'A1'), track(1, 'A2')] }], openTabs: ['s1'], activeSequence: 's1', nextClipId: '1' };
+}
+r.get('/api/projects/:id', (req, b, p) => must(ctx.store.get('projects', p.id)));
+r.put('/api/projects/:id', (req, b, p) => { must(ctx.store.get('projects', p.id)); return ctx.store.update('projects', p.id, { data: b.data, name: b.name || undefined }); });
+r.del('/api/projects/:id', (req, b, p) => ({ ok: ctx.store.remove('projects', p.id) }));
+r.post('/api/projects/:id/export', (req, b, p) => { const pr = must(ctx.store.get('projects', p.id)); return queue.enqueue('studio.export', { projectId: pr.id }, { clientId: pr.clientId, actor: actorOf(req), title: `Export ${pr.name}` }); });
+r.get('/api/projects/:id/velo', (req, res, p) => { const pr = must(ctx.store.get('projects', p.id)); const f = path.join(paths.tmp('velo'), `${pr.id}.velo`); fs.writeFileSync(f, JSON.stringify(pr.data, null, 1)); return serveFile(req, res, f, { download: `${pr.name.replace(/[^\w\- ]/g, '')}.velo` }); }, { stream: true });
+r.post('/api/projects/:id/open-velo', (req, b, p) => {
+  const pr = must(ctx.store.get('projects', p.id)); const f = path.join(paths.tmp('velo'), `${pr.id}.velo`); fs.writeFileSync(f, JSON.stringify(pr.data, null, 1));
+  const velo = ctx.setting('tools.veloPath', '');
+  if (velo && fs.existsSync(velo)) { spawn(velo, [f], { detached: true, stdio: 'ignore' }).unref(); return { ok: true }; }
+  throw new HttpError(400, 'Set the Velo executable path in Settings → System');
+});
+r.post('/api/projects/:id/import-velo', (req, b, p) => { must(ctx.store.get('projects', p.id)); const data = JSON.parse(fs.readFileSync(String(b.path), 'utf8')); if (data.app !== 'velo') throw new HttpError(400, 'Not a Velo project'); return ctx.store.update('projects', p.id, { data }); });
+r.post('/api/projects/:id/media', async (req, b, p) => {
+  const pr = must(ctx.store.get('projects', p.id));
+  let files = [];
+  if ((req.headers['content-type'] || '').startsWith('multipart/')) files = (await receiveUpload(req, pr.clientId ? paths.clientDir(pr.clientId, 'studio-media') : paths.tmp('studio-media'))).files.map((f) => f.path);
+  else files = (b?.paths || []).filter((x) => fs.existsSync(x));
+  const added = [];
+  for (const f of files) {
+    const info = await ff.probe(f);
+    const ext = path.extname(f).toLowerCase();
+    const kind = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'].includes(ext) ? 2 : ext === '.svg' ? 3 : info.hasVideo ? 0 : 1;
+    added.push({ id: makeId('m'), path: f, name: path.basename(f), kind, duration: kind >= 2 ? 5 : info.duration, width: info.width, height: info.height, fps: info.fps, hasVideo: info.hasVideo && kind !== 1, hasAudio: info.hasAudio, srcIn: 0, srcOut: -1 });
+  }
+  const data = pr.data; data.media.push(...added);
+  ctx.store.update('projects', pr.id, { data });
+  return added;
+}, { raw: true });
+/** Media preview for Studio: only files referenced by a project or an asset can be served. */
+r.get('/api/media', (req, res) => {
+  const f = String(req.query.path || '');
+  const allowed = ctx.store.all('projects').some((p) => (p.data?.media || []).some((m) => m.path === f)) || ctx.store.find('assets', (a) => a.path === f);
+  if (!allowed) return send(res, 403, { error: 'File is not part of any project' });
+  return serveFile(req, res, f);
+}, { stream: true });
+r.get('/api/media/thumb', async (req, res) => {
+  const f = String(req.query.path || ''); const t = Number(req.query.t || 1);
+  const allowed = ctx.store.all('projects').some((p) => (p.data?.media || []).some((m) => m.path === f));
+  if (!allowed) return send(res, 403, {});
+  const out = path.join(paths.tmp('thumbs'), crypto.createHash('md5').update(f + t).digest('hex') + '.jpg');
+  if (!fs.existsSync(out)) { try { await ff.thumbnail(f, out, t, 240); } catch { return send(res, 404, {}); } }
+  return serveFile(req, res, out, { cache: true });
+}, { stream: true });
+
+module.exports = { router: r, SECRET_KEYS };

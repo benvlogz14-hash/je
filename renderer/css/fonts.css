@@ -1,0 +1,4 @@
+/* Caption fonts, so Studio and the caption preview match what the renderer burns in. */
+@font-face { font-family: "Montserrat"; src: url("../assets/fonts/Montserrat_800ExtraBold.ttf") format("truetype"); font-weight: 700 900; font-display: swap; }
+@font-face { font-family: "Montserrat"; src: url("../assets/fonts/Montserrat_600SemiBold.ttf") format("truetype"); font-weight: 400 600; font-display: swap; }
+@font-face { font-family: "Anton"; src: url("../assets/fonts/Anton_400Regular.ttf") format("truetype"); font-display: swap; }

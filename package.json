@@ -1,0 +1,82 @@
+{
+  "name": "euclidean",
+  "productName": "Euclidean",
+  "version": "1.0.0",
+  "description": "Euclidean Media automation system: unified client messaging, AI agent orchestration, shorts production pipeline and Studio editor.",
+  "author": "Euclidean Media",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "app/main.js",
+  "scripts": {
+    "start": "electron .",
+    "engine": "node server/index.js",
+    "worker": "node worker/index.js",
+    "selftest": "node scripts/selftest.js",
+    "demo-media": "node scripts/make-demo-media.js",
+    "build-demo": "node scripts/build-demo.js",
+    "dist": "electron-builder --win nsis portable",
+    "dist:mac": "electron-builder --mac dmg",
+    "dist:linux": "electron-builder --linux AppImage"
+  },
+  "dependencies": {
+    "busboy": "^1.6.0",
+    "imapflow": "^1.0.164",
+    "mailparser": "^3.7.1",
+    "nodemailer": "^6.9.16",
+    "onnxruntime-web": "^1.20.1"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8",
+    "esbuild": "^0.24.0"
+  },
+  "build": {
+    "appId": "media.euclidean.app",
+    "productName": "Euclidean",
+    "copyright": "Euclidean Media",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "app/**/*",
+      "server/**/*",
+      "renderer/**/*",
+      "portal/**/*",
+      "worker/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "build/bin",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Euclidean"
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Office"
+    }
+  }
+}

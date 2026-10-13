@@ -1,0 +1,34 @@
+<RCC>
+  <qresource prefix="/">
+    <file alias="velo.svg">dist/velo.svg</file>
+  </qresource>
+  <qresource prefix="/icons">
+    <file alias="close.svg">resources/icons/close.svg</file>
+    <file alias="eye.svg">resources/icons/eye.svg</file>
+    <file alias="keyframe-on.svg">resources/icons/keyframe-on.svg</file>
+    <file alias="keyframe.svg">resources/icons/keyframe.svg</file>
+    <file alias="link.svg">resources/icons/link.svg</file>
+    <file alias="lock.svg">resources/icons/lock.svg</file>
+    <file alias="magnet.svg">resources/icons/magnet.svg</file>
+    <file alias="mute.svg">resources/icons/mute.svg</file>
+    <file alias="nested.svg">resources/icons/nested.svg</file>
+    <file alias="note.svg">resources/icons/note.svg</file>
+    <file alias="pause.svg">resources/icons/pause.svg</file>
+    <file alias="play.svg">resources/icons/play.svg</file>
+    <file alias="razor.svg">resources/icons/razor.svg</file>
+    <file alias="select.svg">resources/icons/select.svg</file>
+    <file alias="skip-end.svg">resources/icons/skip-end.svg</file>
+    <file alias="skip-start.svg">resources/icons/skip-start.svg</file>
+    <file alias="speaker.svg">resources/icons/speaker.svg</file>
+    <file alias="step-back.svg">resources/icons/step-back.svg</file>
+    <file alias="step-forward.svg">resources/icons/step-forward.svg</file>
+    <file alias="stopwatch-on.svg">resources/icons/stopwatch-on.svg</file>
+    <file alias="stopwatch.svg">resources/icons/stopwatch.svg</file>
+    <file alias="text.svg">resources/icons/text.svg</file>
+    <file alias="trash.svg">resources/icons/trash.svg</file>
+    <file alias="unlink.svg">resources/icons/unlink.svg</file>
+    <file alias="zoom-fit.svg">resources/icons/zoom-fit.svg</file>
+    <file alias="zoom-in.svg">resources/icons/zoom-in.svg</file>
+    <file alias="zoom-out.svg">resources/icons/zoom-out.svg</file>
+  </qresource>
+</RCC>

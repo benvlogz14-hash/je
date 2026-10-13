@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Your videos</title>
+<style>
+/* Client portal: deliberately simpler than the agency app. Review, approve, upload. */
+:root { --bg:#f4f5f7; --surface:#fff; --line:#e4e6e9; --ink:#1c2024; --ink2:#555d66; --ink3:#8a929b; --teal:#3f9a92; --teal-soft:#e1f2ef; --teal-ink:#23665f; --gold-soft:#f8f0da; --gold-ink:#7d5f17; --moss:#6b9a66; --moss-soft:#e5efe2; --coral-soft:#f9e4df; --coral-ink:#9a4334; --on:#fff; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --bg:#15181b; --surface:#1c2024; --line:#2c3238; --ink:#e9ecef; --ink2:#aab2ba; --ink3:#7c858e; --teal:#66bdb4; --teal-soft:#1e3532; --teal-ink:#9fdcd5; --gold-soft:#3a3220; --gold-ink:#ead096; --moss:#8dbb88; --moss-soft:#243323; --coral-soft:#3c2622; --coral-ink:#f2b8ac; --on:#0f1a19; color-scheme: dark; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 "Segoe UI", -apple-system, system-ui, sans-serif; padding: 0 16px 60px; }
+header { max-width: 1040px; margin: 0 auto; padding: 26px 0 18px; display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+h1 { margin: 0; font-size: 26px; letter-spacing: -0.01em; }
+h2 { font-size: 17px; margin: 28px 0 12px; }
+.sub { color: var(--ink2); }
+main { max-width: 1040px; margin: 0 auto; }
+.stats { display: flex; gap: 22px; flex-wrap: wrap; margin-left: auto; }
+.stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12px; color: var(--ink3); text-transform: uppercase; letter-spacing: 0.05em; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+.card video { width: 100%; aspect-ratio: 9/16; max-width: 100%; background: #0d0f11; display: block; object-fit: cover; }
+.body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+.title { font-weight: 600; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+button { font: inherit; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); padding: 8px 14px; cursor: pointer; transition: transform 110ms, background 110ms; }
+button:active { transform: scale(0.97); }
+button.approve { background: var(--teal); color: var(--on); border-color: transparent; flex: 1; }
+button.small { padding: 5px 10px; font-size: 13px; }
+textarea, input[type=text] { font: inherit; width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--surface); color: var(--ink); resize: vertical; }
+textarea:focus, input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(63,154,146,0.25); }
+.badge { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 99px; background: var(--teal-soft); color: var(--teal-ink); }
+.badge.gold { background: var(--gold-soft); color: var(--gold-ink); }
+.badge.moss { background: var(--moss-soft); color: var(--moss); }
+.comments { font-size: 13px; color: var(--ink2); display: flex; flex-direction: column; gap: 4px; }
+.comments .t { font-variant-numeric: tabular-nums; color: var(--teal-ink); font-weight: 600; margin-right: 6px; }
+.drop { border: 1.5px dashed var(--line); border-radius: 16px; background: var(--surface); padding: 22px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.drop.over { border-color: var(--teal); background: var(--teal-soft); }
+.bar { height: 6px; border-radius: 4px; background: var(--line); overflow: hidden; } .bar i { display: block; height: 100%; background: var(--teal); width: 0; transition: width 200ms; }
+.list { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.list div { padding: 10px 14px; border-top: 1px solid var(--line); display: flex; gap: 12px; } .list div:first-child { border-top: 0; }
+.muted { color: var(--ink3); font-size: 13px; }
+.empty { color: var(--ink2); background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; opacity: 0; transition: opacity 200ms; pointer-events: none; }
+.toast.on { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header><div><h1 id="client">Your videos</h1><div class="sub" id="agency">Loading…</div></div><div class="stats" id="stats"></div></header>
+<main>
+  <section id="review-sec"><h2>Waiting for your review</h2><div class="grid" id="review"></div></section>
+  <h2>Send us footage</h2>
+  <div class="drop" id="drop"><div style="flex:1;min-width:220px"><b>Drop videos here</b><div class="muted">Long videos, streams, raw clips. Large files are fine. We'll take it from there.</div><div id="ups"></div></div>
+    <input type="text" id="note" placeholder="Anything we should know? (optional)" style="flex:1;min-width:220px"><button id="pick">Choose files</button><input type="file" id="file" accept="video/*,audio/*" multiple hidden></div>
+  <h2>Coming up</h2><div class="list" id="upcoming"></div>
+  <h2>Library</h2><div class="grid" id="library"></div>
+</main>
+<div class="toast" id="toast"></div>
+<script>
+(function () {
+  var token = location.pathname.split('/')[2];
+  var base = '/portal/' + token + '/api';
+  var $ = function (id) { return document.getElementById(id); };
+  function toast(t) { var el = $('toast'); el.textContent = t; el.classList.add('on'); setTimeout(function () { el.classList.remove('on'); }, 2600); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function fmt(t) { t = Math.floor(t || 0); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); }
+  function post(p, body) { return fetch(base + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Something went wrong'); return j; }); }); }
+  function card(c, review) {
+    var el = document.createElement('div'); el.className = 'card';
+    el.innerHTML = '<video controls playsinline preload="metadata" poster="' + base + '/clips/' + c.id + '/thumb" src="' + base + '/clips/' + c.id + '/video"></video>' +
+      '<div class="body"><div class="title">' + esc(c.title) + '</div>' +
+      (review ? '<div class="comments">' + c.comments.map(function (m) { return '<div><span class="t">' + fmt(m.t) + '</span>' + esc(m.text) + '</div>'; }).join('') + '</div>' +
+        '<div class="row"><input type="text" placeholder="Comment at the current moment"><button class="small add">Add</button></div>' +
+        '<textarea rows="2" placeholder="Or describe what to change"></textarea>' +
+        '<div class="row"><button class="approve">Approve</button><button class="changes">Request changes</button></div>'
+        : '<div class="row"><span class="badge ' + (c.status === 'published' ? 'moss' : c.status === 'revising' ? 'gold' : '') + '">' + ({ approved: 'Approved', scheduled: 'Scheduled', published: 'Posted', revising: 'Being revised' }[c.status] || c.status) + '</span></div>') + '</div>';
+    if (review) {
+      var v = el.querySelector('video'), inp = el.querySelector('input'), ta = el.querySelector('textarea');
+      el.querySelector('.add').onclick = function () { if (!inp.value.trim()) return; post('/clips/' + c.id + '/comment', { t: v.currentTime, text: inp.value }).then(function () { toast('Comment saved at ' + fmt(v.currentTime)); inp.value = ''; load(); }).catch(function (e) { toast(e.message); }); };
+      el.querySelector('.approve').onclick = function () { post('/clips/' + c.id + '/decision', { decision: 'approve', note: ta.value }).then(function () { toast('Approved. Thank you!'); load(); }).catch(function (e) { toast(e.message); }); };
+      el.querySelector('.changes').onclick = function () { post('/clips/' + c.id + '/decision', { decision: 'changes', note: ta.value }).then(function () { toast('Got it. We’re on the changes.'); load(); }).catch(function (e) { toast(e.message); }); };
+    }
+    return el;
+  }
+  function load() {
+    fetch(base + '/data').then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error); return j; }); }).then(function (d) {
+      document.title = d.client.name + ' · videos';
+      $('client').textContent = d.client.name; $('agency').textContent = 'Shared by ' + d.agency + ' · ' + (d.client.perDay || 0) + ' shorts a day';
+      $('stats').innerHTML = '<div class="stat"><b>' + d.stats.published + '</b><span>Posted</span></div><div class="stat"><b>' + d.stats.views.toLocaleString() + '</b><span>Views</span></div><div class="stat"><b>' + d.upcoming.length + '</b><span>Scheduled</span></div>';
+      var rv = $('review'); rv.innerHTML = '';
+      if (!d.review.length) rv.innerHTML = '<div class="empty">Nothing waiting for you right now. We’ll text you when new videos are ready.</div>';
+      d.review.forEach(function (c) { rv.appendChild(card(c, true)); });
+      var lib = $('library'); lib.innerHTML = '';
+      if (!d.library.length) lib.innerHTML = '<div class="empty">Approved and posted videos will appear here.</div>';
+      d.library.slice(0, 24).forEach(function (c) { lib.appendChild(card(c, false)); });
+      $('upcoming').innerHTML = d.upcoming.length ? d.upcoming.slice(0, 12).map(function (p) { return '<div><span style="width:170px;flex:none" class="muted">' + new Date(p.at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + '</span><span>' + esc(p.title) + '</span></div>'; }).join('') : '<div class="muted">Nothing scheduled yet.</div>';
+    }).catch(function (e) { $('agency').textContent = e.message; });
+  }
+  function upload(files) {
+    Array.prototype.forEach.call(files, function (f) {
+      var row = document.createElement('div'); row.style.marginTop = '8px'; row.innerHTML = '<div class="muted">' + esc(f.name) + '</div><div class="bar"><i></i></div>'; $('ups').appendChild(row);
+      var fd = new FormData(); fd.append('note', $('note').value); fd.append('file', f, f.name);
+      var x = new XMLHttpRequest(); x.open('POST', base + '/upload');
+      x.upload.onprogress = function (e) { if (e.lengthComputable) row.querySelector('i').style.width = (e.loaded / e.total * 100) + '%'; };
+      x.onload = function () { if (x.status < 300) { toast('Received ' + f.name); row.remove(); load(); } else toast('Upload failed'); };
+      x.onerror = function () { toast('Upload failed: connection lost'); };
+      x.send(fd);
+    });
+  }
+  var drop = $('drop');
+  drop.ondragover = function (e) { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = function () { drop.classList.remove('over'); };
+  drop.ondrop = function (e) { e.preventDefault(); drop.classList.remove('over'); upload(e.dataTransfer.files); };
+  $('pick').onclick = function () { $('file').click(); };
+  $('file').onchange = function (e) { upload(e.target.files); e.target.value = ''; };
+  load(); setInterval(load, 60000);
+})();
+</script>
+</body>
+</html>

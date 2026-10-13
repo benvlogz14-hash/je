@@ -1,0 +1,157 @@
+'use strict';
+/** Transcription, AI clip discovery (with a labelled heuristic fallback) and feedback → edit plans. */
+const fs = require('fs');
+const path = require('path');
+const ctx = require('../core/ctx');
+const ai = require('../integrations/ai');
+const ff = require('./ffmpeg');
+const { run, safeJson, clamp } = require('../core/util');
+
+// ------------------------------------------------------------ Transcription
+async function transcribe(asset, { jobId, onProgress } = {}) {
+  const dir = path.dirname(asset.path);
+  const cache = path.join(asset.workDir || dir, `${asset.id}.transcript.json`);
+  if (fs.existsSync(cache)) return JSON.parse(fs.readFileSync(cache, 'utf8'));
+  const duration = asset.info?.duration || 0;
+  const localBin = ctx.setting('ai.transcription.localWhisperPath', '');
+  const localModel = ctx.setting('ai.transcription.localWhisperModel', '');
+  let result;
+  if (localBin && localModel && fs.existsSync(localBin)) {
+    const wav = path.join(asset.workDir, `${asset.id}.wav`);
+    await ff.extractWav(asset.path, wav);
+    const outBase = path.join(asset.workDir, `${asset.id}.whisper`);
+    await run(localBin, ['-m', localModel, '-f', wav, '-oj', '-ml', '1', '-sow', '-of', outBase], {
+      timeoutMs: 6 * 3600000, priority: ff.priorityValue(),
+      onStderrLine: (l) => { const m = /progress\s*=\s*(\d+)%/.exec(l); if (m && onProgress) onProgress(Number(m[1]) / 100); },
+    });
+    const j = JSON.parse(fs.readFileSync(outBase + '.json', 'utf8'));
+    const words = (j.transcription || []).map((t) => ({ w: t.text.trim(), s: t.offsets.from / 1000, e: t.offsets.to / 1000 })).filter((w) => w.w);
+    result = { engine: 'whisper.cpp (local)', text: words.map((w) => w.w).join(' '), words, segments: segmentsFromWords(words) };
+    try { fs.unlinkSync(wav); } catch { /* ignore */ }
+  } else if (ai.connected('openai')) {
+    // 48 kbps mono MP3 ≈ 21 MB/hour; split into ≤45-minute pieces to stay under the 25 MB API limit.
+    const CH = 45 * 60; const pieces = Math.max(1, Math.ceil(duration / CH));
+    const words = []; const segments = []; let text = '';
+    for (let i = 0; i < pieces; i++) {
+      const mp3 = path.join(asset.workDir, `${asset.id}.part${i}.mp3`);
+      await ff.extractAudio(asset.path, mp3, pieces > 1 ? { start: i * CH, duration: CH } : {});
+      const r = await ai.transcribeOpenAI(mp3, { clientId: asset.clientId, jobId, durationSec: Math.min(CH, duration - i * CH), model: ctx.setting('ai.transcription.model', 'whisper-1') });
+      const off = i * CH;
+      words.push(...r.words.map((w) => ({ w: w.w, s: w.s + off, e: w.e + off })));
+      segments.push(...r.segments.map((s) => ({ s: s.s + off, e: s.e + off, t: s.t })));
+      text += (text ? ' ' : '') + r.text;
+      try { fs.unlinkSync(mp3); } catch { /* ignore */ }
+      if (onProgress) onProgress((i + 1) / pieces);
+    }
+    result = { engine: 'OpenAI Whisper', text, words, segments: segments.length ? segments : segmentsFromWords(words) };
+  } else {
+    const e = new Error('No transcription engine: connect OpenAI or set a local whisper.cpp binary and model in Settings → AI');
+    e.notConnected = true; throw e;
+  }
+  fs.writeFileSync(cache, JSON.stringify(result));
+  return result;
+}
+
+function segmentsFromWords(words) {
+  const segs = []; let cur = null;
+  for (const w of words) {
+    if (!cur || w.s - cur.e > 0.8 || cur.t.length > 160 || /[.!?]$/.test(cur.t)) { if (cur) segs.push(cur); cur = { s: w.s, e: w.e, t: w.w }; }
+    else { cur.e = w.e; cur.t += ' ' + w.w; }
+  }
+  if (cur) segs.push(cur);
+  return segs;
+}
+
+// ------------------------------------------------------------ Clip discovery
+function snap(words, t, edge) {
+  if (!words.length) return t;
+  let best = t, bestD = Infinity;
+  for (const w of words) { const v = edge === 'start' ? w.s : w.e; const d = Math.abs(v - t); if (d < bestD) { bestD = d; best = v; } }
+  return bestD < 2.5 ? best : t;
+}
+function overlap(a, b) { const i = Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start)); return i / Math.min(a.end - a.start, b.end - b.start); }
+
+function normalizeClips(raw, { words, duration, minSec, maxSec, exclude = [], count }) {
+  const out = [];
+  for (const c of raw) {
+    let start = clamp(Number(c.start) || 0, 0, duration), end = clamp(Number(c.end) || 0, 0, duration);
+    if (!(end > start)) continue;
+    start = snap(words, start, 'start'); end = snap(words, end, 'end') + 0.15;
+    if (end - start < minSec) end = Math.min(duration, start + minSec);
+    if (end - start > maxSec) end = start + maxSec;
+    end = Math.min(end, duration);
+    const clip = { ...c, start: Math.round(start * 100) / 100, end: Math.round(end * 100) / 100 };
+    if (end - start < Math.min(minSec, 5)) continue;
+    if ([...out, ...exclude].some((o) => overlap(o, clip) > 0.2)) continue;
+    out.push(clip);
+  }
+  return out.sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, count);
+}
+
+const DISCOVERY_SYSTEM = `You are the clip editor for a short-form video agency. You find the strongest standalone moments in long footage for TikTok, Reels and YouTube Shorts.
+A great clip: opens on a hook in the first 2 seconds, makes one complete point, ends on a payoff or punchline, needs no outside context, and stays between the requested min and max length.
+For political clients: keep claims accurate to what was said, never splice meaning, and avoid moments that misrepresent anyone.
+Return JSON: {"clips":[{"start":sec,"end":sec,"title":"<=60 chars, curiosity-driven","hook":"<=8 word on-screen headline","caption":"1-2 sentence social caption","hashtags":["tag",...],"score":0-100,"reason":"why it works","punchIns":[{"at":seconds_from_clip_start,"dur":1.2}]}]}`;
+
+async function discoverClips(asset, transcript, { count = 6, jobId, exclude = [], analysis = null } = {}) {
+  const minSec = ctx.setting('production.minClipSec', 20), maxSec = ctx.setting('production.maxClipSec', 59);
+  const duration = asset.info?.duration || 0;
+  const words = transcript?.words || [];
+  if (transcript && ai.anyConnected()) {
+    const lines = (transcript.segments || []).map((s) => `[${s.s.toFixed(1)}-${s.e.toFixed(1)}] ${s.t}`);
+    // Large transcripts are processed in windows and the best results merged.
+    const windows = []; let cur = []; let size = 0;
+    for (const l of lines) { if (size + l.length > 90000 && cur.length) { windows.push(cur); cur = []; size = 0; } cur.push(l); size += l.length + 1; }
+    if (cur.length) windows.push(cur);
+    const all = [];
+    for (const win of windows) {
+      const r = await ai.ask({
+        role: 'analysis', json: true, clientId: asset.clientId, jobId, maxTokens: 4000, system: DISCOVERY_SYSTEM,
+        prompt: `Footage: "${asset.name}" (${Math.round(duration)}s). Find the ${Math.min(count + 2, 12)} best clips, each ${minSec}-${maxSec} seconds.${exclude.length ? ` Do not reuse these ranges: ${exclude.map((e) => `${e.start}-${e.end}`).join(', ')}.` : ''}\nUse the video signals too: energy peaks often mark the strongest reactions, and starting a clip on a scene cut looks cleaner.\n${require('./analysis').summarize(analysis)}\n\nTRANSCRIPT (timestamps in seconds):\n${win.join('\n')}`,
+      });
+      all.push(...(r.json.clips || []).map((c) => ({ ...c, agent: `${r.provider}:${r.model}` })));
+    }
+    return { method: 'ai', clips: normalizeClips(all, { words, duration, minSec, maxSec, exclude, count }) };
+  }
+  // Heuristic fallback: densest speech windows. Clearly labelled in the UI.
+  const { silences } = await ff.speechWindows(asset.path);
+  const target = Math.round((minSec + maxSec) / 2);
+  const cands = [];
+  const starts = [...new Set([0, ...silences.map(([, e]) => e), ...(analysis?.scenes || [])])].sort((a, b) => a - b);
+  for (const s of starts) {
+    if (s + minSec > duration) continue;
+    const e = Math.min(duration, s + target);
+    const silent = silences.reduce((acc, [a, b]) => acc + Math.max(0, Math.min(b, e) - Math.max(a, s)), 0);
+    const peaks = (analysis?.peaks || []).filter((t) => t >= s && t <= e).length;
+    const cuts = (analysis?.scenes || []).filter((t) => t >= s && t <= e).length;
+    const score = Math.round(100 * (1 - silent / (e - s)) + peaks * 8 + Math.min(cuts, 4) * 2);
+    cands.push({ start: s, end: e, score, title: '', hook: '', caption: '', hashtags: [], reason: `Heuristic (no AI connected): dense speech${peaks ? `, ${peaks} energy peak${peaks > 1 ? 's' : ''}` : ''}${cuts ? `, ${cuts} scene change${cuts > 1 ? 's' : ''}` : ''}` });
+  }
+  const picked = normalizeClips(cands, { words, duration, minSec, maxSec, exclude, count });
+  picked.forEach((c, i) => { c.title = `${asset.name.replace(/\.[^.]+$/, '')} · Clip ${i + 1}`; });
+  return { method: 'heuristic', clips: picked };
+}
+
+// ------------------------------------------------------------ Feedback → edit plan
+const REVISION_SYSTEM = `You turn client feedback on a short-form video into precise edit changes and durable preferences.
+Return JSON:
+{"changes":{"start":number?,"end":number?,"hook":string?,"title":string?,"caption":string?,"reframe":"crop"|"smart-blur"|"fit"?,"focusX":0-1?,"silenceCut":bool?,"punchIns":[{"at":n,"dur":n}]?,"style":{"preset"?: "clean-pop"|"boxed"|"minimal"|"news"|"karaoke-teal","uppercase"?:bool,"wordsPerLine"?:1-6,"size"?:40-140,"primary"?:"#RRGGBB","highlight"?:"#RRGGBB","position"?:"lower"|"center"|"upper","animation"?:"pop"|"none","highlightMode"?:"word"|"none","box"?:bool,"hook"?:bool}?},
+ "remember":[{"text":"durable preference in plain words","style":{...same keys as changes.style}?}],
+ "reply":"short friendly confirmation to send the client (no promises about timing)",
+ "needsHuman":bool, "reason":"why a human is needed, if so"}
+Only include fields that should change. Put a preference in "remember" only if the client expressed it as general taste ("I hate", "always", "never", "for future videos"), not for one-off fixes. Times in changes.start/end are absolute source seconds.`;
+
+async function planRevision({ clip, client, feedback, transcriptExcerpt, jobId }) {
+  const r = await ai.ask({
+    role: 'analysis', json: true, clientId: client.id, jobId, maxTokens: 1500, system: REVISION_SYSTEM,
+    prompt: `CURRENT CLIP: ${JSON.stringify({ start: clip.start, end: clip.end, hook: clip.hook, title: clip.title, caption: clip.caption, reframe: clip.reframe, focusX: clip.focusX, silenceCut: clip.silenceCut })}\nCURRENT CAPTION STYLE: ${JSON.stringify(client.style || {})}\nTRANSCRIPT AROUND CLIP: ${transcriptExcerpt || '(none)'}\n\nCLIENT FEEDBACK: """${feedback}"""`,
+  });
+  return { ...r.json, agent: `${r.provider}:${r.model}` };
+}
+
+function transcriptExcerpt(transcript, start, end, pad = 20) {
+  if (!transcript) return '';
+  return (transcript.segments || []).filter((s) => s.e > start - pad && s.s < end + pad).map((s) => `[${s.s.toFixed(1)}] ${s.t}`).join('\n').slice(0, 6000);
+}
+
+module.exports = { transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };

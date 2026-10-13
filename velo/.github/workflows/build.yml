@@ -1,0 +1,258 @@
+# Multi-platform release builds. Every bundle ships Qt + FFmpeg (libs AND the
+# ffmpeg CLI the exporter drives) pinned to the versions Velo is developed
+# against — users install nothing.
+#
+# Versions are pinned here; the app version lives in CMakeLists.txt
+# (project(Velo VERSION x.y.z)) and must match the tag for releases:
+#   - Qt:      ${QT_VERSION} via aqt (same on all platforms)
+#   - FFmpeg:  8.1 branch — BtbN shared builds (linux/windows),
+#              built from source tag ${FFMPEG_SRC_TAG} (macOS)
+#
+# Pushing a tag v<version> publishes a GitHub release with all artifacts.
+name: build
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  QT_VERSION: "6.11.1"
+  FFMPEG_SRC_TAG: "n8.1.1"
+  FFMPEG_LINUX_URL: https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz
+  FFMPEG_WIN_URL: https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip
+
+jobs:
+  linux:
+    # Oldest supported Ubuntu LTS: the AppImage links against the build
+    # host's glibc, so building here keeps it runnable on glibc >= 2.35
+    # (the AppImageHub catalog tests on 22.04 too).
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: ver
+        run: echo "v=$(sed -n 's/^project(Velo VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: qtmultimedia
+          cache: true
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build patchelf file \
+            libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0
+      - name: Fetch FFmpeg (BtbN shared, 8.1 branch)
+        run: |
+          curl -sL "$FFMPEG_LINUX_URL" | tar xJ
+          mv ffmpeg-n8.1-latest-linux64-gpl-shared-8.1 "$HOME/ff"
+          LD_LIBRARY_PATH="$HOME/ff/lib" "$HOME/ff/bin/ffmpeg" -version | head -1
+      - name: Build
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFFMPEG_ROOT="$HOME/ff"
+          ninja -C build
+      - name: Selftest (build tree)
+        run: |
+          LD_LIBRARY_PATH="$HOME/ff/lib" VELO_FFMPEG="$HOME/ff/bin/ffmpeg" \
+            QT_QPA_PLATFORM=offscreen ./build/velo --selftest
+      - name: Bundle AppImage + portable
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          VER=${{ steps.ver.outputs.v }}
+          curl -sLo linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -sLo linuxdeploy-plugin-qt https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy linuxdeploy-plugin-qt
+          # stage AppDir (velo + ffmpeg CLI + Qt), then add the offscreen QPA
+          # so the bundle can be smoke-tested headless
+          LD_LIBRARY_PATH="$HOME/ff/lib" ./linuxdeploy --appdir AppDir \
+            -e build/velo -e "$HOME/ff/bin/ffmpeg" \
+            -d dist/velo.desktop -i dist/velo.svg --plugin qt
+          cp "$QT_ROOT_DIR/plugins/platforms/libqoffscreen.so" AppDir/usr/plugins/platforms/
+          ./linuxdeploy --appdir AppDir --output appimage
+          mv Velo-x86_64.AppImage "Velo-$VER-x86_64.AppImage"
+          cp -r AppDir "velo-$VER-linux-x86_64"
+          tar cJf "velo-$VER-linux-x86_64-portable.tar.xz" "velo-$VER-linux-x86_64"
+      - name: Check glibc requirement
+        # Fail if anything in the bundle needs a newer glibc than 22.04 ships
+        run: |
+          MAX=2.35
+          NEED=$(find AppDir -type f -exec file {} + | grep ELF | cut -d: -f1 \
+            | xargs objdump -T 2>/dev/null | grep -o 'GLIBC_[0-9.]*' \
+            | sed 's/GLIBC_//' | sort -Vu | tail -1)
+          echo "highest glibc symbol version: $NEED"
+          [ "$(printf '%s\n' "$NEED" "$MAX" | sort -V | tail -1)" = "$MAX" ] || {
+            echo "bundle needs glibc $NEED > $MAX"; exit 1; }
+      - name: Smoke-test bundles
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          VER=${{ steps.ver.outputs.v }}
+          "./Velo-$VER-x86_64.AppImage" --appimage-extract-and-run --selftest
+          "./velo-$VER-linux-x86_64/AppRun" --selftest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: |
+            Velo-*-x86_64.AppImage
+            velo-*-linux-x86_64-portable.tar.xz
+
+  windows:
+    runs-on: windows-2022
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: ver
+        run: echo "v=$(sed -n 's/^project(Velo VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          modules: qtmultimedia
+          cache: true
+          # Qt 6.11 moved the Windows repo metadata into per-arch subdirs;
+          # released aqtinstall (3.3.0) only knows the old layout.
+          aqtversion: '@git+https://github.com/miurahr/aqtinstall.git@8d961e61720b3c06583517fbc68d57ec0a4e9f95'
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Install ninja
+        run: choco install -y ninja
+        shell: pwsh
+      - name: Fetch FFmpeg (BtbN shared, 8.1 branch)
+        run: |
+          curl -sLo ff.zip "$FFMPEG_WIN_URL"
+          7z x -y ff.zip > /dev/null
+          mv ffmpeg-n8.1-latest-win64-gpl-shared-8.1 /c/ff
+          /c/ff/bin/ffmpeg.exe -version | head -1
+      - name: Build
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFFMPEG_ROOT=C:/ff
+          ninja -C build
+      - name: Selftest (build tree)
+        # GUI-subsystem exe: no stdout, the exit code is the verdict
+        run: PATH="/c/ff/bin:$PATH" QT_QPA_PLATFORM=offscreen ./build/velo.exe --selftest
+      - name: Bundle
+        run: |
+          VER=${{ steps.ver.outputs.v }}
+          mkdir -p bundle/Velo
+          cp build/velo.exe /c/ff/bin/*.dll /c/ff/bin/ffmpeg.exe bundle/Velo/
+          windeployqt --release --compiler-runtime bundle/Velo/velo.exe
+          cp "$(cygpath "$QT_ROOT_DIR")/plugins/platforms/qoffscreen.dll" bundle/Velo/platforms/
+          # App-local MSVC C++ runtime: without these, machines that never
+          # installed the VC redistributable greet users with cryptic
+          # "VCRUNTIME140_1.dll was not found" popups. windeployqt
+          # --compiler-runtime is supposed to add them, but copy explicitly
+          # from the toolchain redist dir and fail loudly if they're absent.
+          cp "$(cygpath "$VCToolsRedistDir")"/x64/Microsoft.VC*.CRT/*.dll bundle/Velo/
+          for dll in vcruntime140.dll vcruntime140_1.dll msvcp140.dll; do
+            [ -f "bundle/Velo/$dll" ] || { echo "missing $dll in bundle"; exit 1; }
+          done
+          (cd bundle && 7z a "../Velo-$VER-windows-x86_64.zip" Velo > /dev/null)
+      - name: Smoke-test bundle
+        run: QT_QPA_PLATFORM=offscreen ./bundle/Velo/velo.exe --selftest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: Velo-*-windows-x86_64.zip
+
+  macos:
+    runs-on: macos-15   # arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: ver
+        run: echo "v=$(sed -n 's/^project(Velo VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+      - name: Install build deps
+        run: brew install ninja nasm x264 x265 libvpx svt-av1
+      - name: Cache FFmpeg
+        id: ffcache
+        uses: actions/cache@v4
+        with:
+          path: ~/ffprefix
+          key: ffmpeg-${{ env.FFMPEG_SRC_TAG }}-macos-arm64-gpl-1
+      - name: Build FFmpeg ${{ env.FFMPEG_SRC_TAG }} from source
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        run: |
+          curl -sL "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/$FFMPEG_SRC_TAG.tar.gz" | tar xz
+          cd "FFmpeg-$FFMPEG_SRC_TAG"
+          export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
+          ./configure --prefix="$HOME/ffprefix" --enable-shared --disable-static \
+            --enable-gpl --enable-libx264 --enable-libx265 --enable-libvpx \
+            --enable-libsvtav1 --disable-doc
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: qtmultimedia
+          cache: true
+      - name: Build
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFFMPEG_ROOT="$HOME/ffprefix"
+          ninja -C build
+      - name: Selftest (build tree)
+        run: |
+          PATH="$HOME/ffprefix/bin:$PATH" QT_QPA_PLATFORM=offscreen \
+            ./build/Velo.app/Contents/MacOS/Velo --selftest
+      - name: Bundle .app + dmg
+        run: |
+          VER=${{ steps.ver.outputs.v }}
+          cp "$HOME/ffprefix/bin/ffmpeg" build/Velo.app/Contents/MacOS/
+          "$QT_ROOT_DIR/bin/macdeployqt" build/Velo.app \
+            -executable=build/Velo.app/Contents/MacOS/ffmpeg
+          cp "$QT_ROOT_DIR/plugins/platforms/libqoffscreen.dylib" \
+             build/Velo.app/Contents/PlugIns/platforms/
+          codesign --force --deep --sign - build/Velo.app
+          mkdir dmgroot && cp -R build/Velo.app dmgroot/ && ln -s /Applications dmgroot/Applications
+          hdiutil create -volname "Velo $VER" -srcfolder dmgroot -ov -format UDZO \
+            "Velo-$VER-macos-arm64.dmg"
+      - name: Smoke-test bundle
+        # PATH deliberately excludes ffprefix: must use the bundled ffmpeg
+        run: QT_QPA_PLATFORM=offscreen ./build/Velo.app/Contents/MacOS/Velo --selftest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: Velo-*-macos-arm64.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches CMake version
+        run: |
+          VER=$(sed -n 's/^project(Velo VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt)
+          [ "v$VER" = "$GITHUB_REF_NAME" ] || {
+            echo "Tag $GITHUB_REF_NAME != CMakeLists version $VER"; exit 1; }
+          echo "VER=$VER" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          **Velo $VER** — fast, friendly non-linear video editor (C++/Qt $QT_VERSION/FFmpeg 8.1).
+
+          Everything is bundled (Qt, FFmpeg libraries **and** the \`ffmpeg\` tool) — no installs needed.
+
+          ### Downloads
+          | Platform | File | How to run |
+          |---|---|---|
+          | Linux x86_64 | \`Velo-$VER-x86_64.AppImage\` | \`chmod +x\`, then run (no FUSE? add \`--appimage-extract-and-run\`) |
+          | Linux x86_64 | \`velo-$VER-linux-x86_64-portable.tar.xz\` | extract, run \`./AppRun\` |
+          | Windows x64 | \`Velo-$VER-windows-x86_64.zip\` | extract, run \`velo.exe\` |
+          | macOS (Apple Silicon) | \`Velo-$VER-macos-arm64.dmg\` | drag Velo to Applications; first launch: right-click → Open (unsigned build) |
+          EOF
+          gh release create "$GITHUB_REF_NAME" --title "Velo $VER" \
+            --notes-file notes.md artifacts/*
