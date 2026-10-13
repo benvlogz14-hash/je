@@ -684,4 +684,7 @@ r.get('/api/media/thumb', async (req, res) => {
   return serveFile(req, res, out, { cache: true });
 }, { stream: true });
 
+// Settings → Agent Connections and the Agent Conversations panel (peer-to-peer agent messaging).
+require('./agents/routes')(r);
+
 module.exports = { router: r, SECRET_KEYS };

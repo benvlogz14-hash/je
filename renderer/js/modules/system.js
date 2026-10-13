@@ -4,6 +4,7 @@ import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { money, ago, actorName, dateTime } from '../lib/format.js';
 import { JobRow } from './cards.js';
+import { AgentConversations } from './agents.js';
 
 export function System() {
   const route = useStore((s) => s.route);
@@ -12,8 +13,8 @@ export function System() {
   const { data: q } = useApi('/api/queue/stats', ['job', 'queue']);
   return html`<div class="page">
     <div class="page-head"><div class="grow"><h1>System</h1><div class="sub">Everything Euclidean is doing, and everything it is connected to.</div></div></div>
-    <${Tabs} value=${tab} onChange=${(t) => { setTab(t); navigate(`/system?tab=${t}`); }} tabs=${[{ value: 'agents', label: 'Agents' }, { value: 'queue', label: 'Queue', badge: q?.failed24h || 0 }, { value: 'health', label: 'Health' }, { value: 'resources', label: 'Resources' }, { value: 'logs', label: 'Activity log' }]} />
-    ${tab === 'agents' ? html`<${Agents} />` : tab === 'queue' ? html`<${Queue} />` : tab === 'health' ? html`<${Health} />` : tab === 'resources' ? html`<${Resources} />` : html`<${Logs} />`}
+    <${Tabs} value=${tab} onChange=${(t) => { setTab(t); navigate(`/system?tab=${t}`); }} tabs=${[{ value: 'agents', label: 'Agents' }, { value: 'conversations', label: 'Agent conversations' }, { value: 'queue', label: 'Queue', badge: q?.failed24h || 0 }, { value: 'health', label: 'Health' }, { value: 'resources', label: 'Resources' }, { value: 'logs', label: 'Activity log' }]} />
+    ${tab === 'agents' ? html`<${Agents} />` : tab === 'conversations' ? html`<${AgentConversations} />` : tab === 'queue' ? html`<${Queue} />` : tab === 'health' ? html`<${Health} />` : tab === 'resources' ? html`<${Resources} />` : html`<${Logs} />`}
   </div>`;
 }
 

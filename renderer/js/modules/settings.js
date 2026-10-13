@@ -4,16 +4,18 @@ import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { setSound, soundOn } from '../lib/sound.js';
 import { ago } from '../lib/format.js';
+import { AgentConnections } from './agents.js';
 
 export function Settings() {
   const route = useStore((s) => s.route);
   const boot = useStore((s) => s.boot);
   const [tab, setTab] = useState(route.query.tab || (route.path.split('/')[2]) || 'general');
+  useEffect(() => { const t = route.query.tab || route.path.split('/')[2]; if (t) setTab(t); }, [route.query.tab, route.path]);
   const isOwner = boot.user.role === 'owner';
-  const tabs = [{ value: 'general', label: 'General' }, ...(isOwner ? [{ value: 'connections', label: 'Connections' }, { value: 'ai', label: 'AI' }, { value: 'messaging', label: 'Messaging' }, { value: 'production', label: 'Production' }, { value: 'team', label: 'Team & agents' }, { value: 'backups', label: 'Backups' }] : []), { value: 'appearance', label: 'Appearance' }];
+  const tabs = [{ value: 'general', label: 'General' }, ...(isOwner ? [{ value: 'connections', label: 'Connections' }, { value: 'ai', label: 'AI' }, { value: 'messaging', label: 'Messaging' }, { value: 'production', label: 'Production' }, { value: 'team', label: 'Team & agents' }, { value: 'agents', label: 'Agent Connections' }, { value: 'backups', label: 'Backups' }] : []), { value: 'appearance', label: 'Appearance' }];
   return html`<div class="page"><div class="page-head"><div class="grow"><h1>Settings</h1><div class="sub">Data folder: <span class="mono selectable">${boot.dataDir}</span></div></div></div>
     <${Tabs} value=${tab} onChange=${setTab} tabs=${tabs} />
-    <div style="max-width:980px">${{ general: General, connections: Connections, ai: AI, messaging: Messaging, production: Production, team: Team, backups: Backups, appearance: Appearance }[tab]?.({}) || null}</div></div>`;
+    <div style=${{ maxWidth: tab === 'agents' ? '1400px' : '980px' }}>${(() => { const Tab = { general: General, connections: Connections, ai: AI, messaging: Messaging, production: Production, team: Team, agents: AgentConnections, backups: Backups, appearance: Appearance }[tab]; return Tab ? html`<${Tab} key=${tab} />` : null; })()}</div></div>`;
 }
 
 function useSettings() {

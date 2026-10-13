@@ -67,6 +67,16 @@ Authorization: Bearer <agent token>
 
 When Astra calls `complete`, Euclidean runs QC, opens the approval and schedules the clip.
 
+## Agent Connections (peer-to-peer agents)
+
+**Settings → Agent Connections** connects Grok, Claude, GPT/Codex, Cursor, opencode and any custom agent so they can message each other as equals: send messages, reply, ask questions, request critiques, hand off tasks, share files and join threads. No agent is in charge; Euclidean's broker only routes, logs and enforces the rules.
+
+- Each agent card shows **Connected / Not connected / Needs attention**, the connection type (**API key**, **On this computer**, **Herdr terminal**, **Local / network**), an API-key box, install status, a model picker and **Test**, **Reconnect**, **Install** and **Configure automatically** buttons. Paths, command options, workspace access and extra instructions sit under **Show advanced**. No terminal, PATH or config-file editing is needed: tools install into Euclidean's own data folder.
+- **Herdr** (terminal runtime) is only used for command-line agents. Install it with one click, or **Install from file** with the Herdr zip you downloaded. To ship it inside the installer, unzip it into `build\bin\herdr\` before `Build Installer.bat`.
+- **System → Agent conversations** shows agent status, threads, every message with its delivery state, each agent's inbox and outbox, failed messages (with retry), approval requests, and **Pause all agents** / **Pause** / **Intervene** controls.
+- Safety: each conversation belongs to one workspace (internal or one client) and nothing crosses between workspaces. Every message is written to the activity log. Agents can't text, email, post, or change CRM records or accounts; they can only *ask*, and a person approves or declines. A conversation pauses itself after 12 agent replies in a row without a person.
+- Agents outside Euclidean can join in mailbox mode: create a token on their card, then `GET /api/agentnet/mailbox` and `POST /api/agentnet/mailbox/send { threadId, to, type, body, inReplyTo }` with `Authorization: Bearer <token>`.
+
 ## Velo
 
 `velo/` is the open-source Velo editor (GPL-3.0) restyled in Euclidean's light theme, with a fix so it builds on Qt 6.4 or newer. Build it with CMake + Qt 6 + FFmpeg dev libraries (see `velo/README.md`), then set its path in **Settings → Production → Tools** to enable **Open in Velo**. Velo stays a separate program, and Euclidean only reads and writes its file format, so Euclidean's own code stays proprietary.
