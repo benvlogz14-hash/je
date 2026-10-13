@@ -1,6 +1,6 @@
 // Analytics: performance of published shorts, by day, platform and client, plus tracked creators
 // (search any creator and follow their public numbers).
-import { html, useApi, useState, useStore, Empty, Loading, BarChart, Button, Tabs, Avatar, Drawer, Modal, Field, Sparkline, act, toast, navigate, openMenu, confirmDialog, promptDialog } from '../lib/ui.js';
+import { html, useApi, useState, useStore, Empty, Loading, BarChart, Button, Tabs, Seg, Avatar, Drawer, Modal, Field, Sparkline, act, toast, navigate, openMenu, confirmDialog, promptDialog } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { num, ago, PLATFORM_LABEL } from '../lib/format.js';
@@ -99,16 +99,7 @@ function Creators() {
       <div class="panel pad"><div class="faint" style="font-size:var(--fs-sm)">Fastest growing</div><div style="font-size:var(--fs-lg);font-weight:600">${fastest ? html`${fastest.c.name} <span class="badge moss">+${fastest.g.pct.toFixed(1)}% in ${fastest.g.days}d</span>` : html`<span class="faint">Shows after a couple of updates</span>`}</div></div>
     </div>` : null}
 
-    <div class="panel">${!list ? html`<${Loading} rows=${3} />` : !creators.length ? html`<${Empty} icon="user" title="No creators tracked yet">Search above for any creator (prospects, competitors, inspiration) and click Track. Euclidean follows their followers and views over time.</${Empty}>` : html`
-      <div class="table-wrap"><table class="table"><thead><tr><th>Creator</th><th class="num">Followers</th><th>Trend</th><th class="num">Avg views</th><th class="num">Median views</th><th class="num">Uploads / 30d</th><th>Updated</th><th></th></tr></thead><tbody>
-        ${creators.map((c) => { const g = growth(c); const hist = (c.history || []).map((x) => x.followers).filter((v) => v != null); return html`<tr class="click" onClick=${() => setOpen(c.id)}>
-          <td><div class="row" style="gap:10px"><${Avatar} name=${c.name} size="sm" /><div style="min-width:0"><div class="row" style="gap:6px"><b class="ellipsis" style="max-width:220px">${c.name}</b><span class=${'badge ' + (PLAT_TONE[c.platform] || '')}>${platLabel(c.platform)}</span></div><div class="faint" style="font-size:var(--fs-xs)">${c.handle || ''}</div></div></div></td>
-          <td class="num"><b>${short(c.followers)}</b>${g ? html`<div style=${{ fontSize: 'var(--fs-xs)', color: g.delta >= 0 ? 'var(--moss-ink)' : 'var(--coral-ink)' }}>${g.delta >= 0 ? '+' : ''}${short(g.delta)} (${g.pct.toFixed(1)}%)</div>` : null}</td>
-          <td>${hist.length > 1 ? html`<${Sparkline} values=${hist} width=${90} height=${26} color=${g && g.delta < 0 ? 'var(--coral)' : 'var(--moss)'} />` : html`<span class="faint" style="font-size:var(--fs-xs)">—</span>`}</td>
-          <td class="num">${short(c.metrics?.avgViews)}</td><td class="num">${short(c.metrics?.medianViews)}</td><td class="num">${c.metrics?.uploads30d ?? '—'}</td>
-          <td>${c.syncError ? html`<span class="badge gold" title=${c.syncError}>Needs attention</span>` : c.syncedAt ? html`<span class="faint">${ago(c.syncedAt)} ago</span>` : ['youtube', 'tiktok'].includes(c.platform) && c.url ? html`<span class="faint">Updating…</span>` : html`<span class="faint" title="This platform needs a login for automatic stats; update the number from the ⋯ menu">By hand · ${ago(c.updatedAt)} ago</span>`}</td>
-          <td onClick=${(e) => e.stopPropagation()}><${Button} kind="ghost" size="sm" icon="more" title="More" onClick=${(e) => creatorMenu(e, c, reload)} /></td></tr>`; })}
-      </tbody></table></div>`}</div>
+    <div class="panel">${!list ? html`<${Loading} rows=${3} />` : !creators.length ? html`<${Empty} icon="user" title="No creators tracked yet">Search above for any creator (prospects, competitors, inspiration) and click Track. Euclidean collects their whole upload history and follows their numbers month by month.</${Empty}>` : html`<${CreatorTable} creators=${creators} onOpen=${setOpen} reload=${reload} />`}</div>
     ${open ? html`<${CreatorDrawer} c=${creators.find((x) => x.id === open)} onClose=${() => setOpen(null)} reload=${reload} />` : null}
     ${adding ? html`<${AddCreator} onClose=${() => setAdding(false)} onDone=${() => { setAdding(false); reload(); }} />` : null}
   </div>`;
@@ -117,6 +108,7 @@ function Creators() {
 function creatorMenu(e, c, reload) {
   openMenu(e, [
     { label: 'Update now', icon: 'refresh', onClick: () => act(() => api.post(`/api/creators/${c.id}/sync`), { ok: `Updating ${c.name}` }) },
+    ['youtube', 'tiktok'].includes(c.platform) && c.url ? { label: 'Collect full history', icon: 'download', onClick: () => act(() => api.post(`/api/creators/${c.id}/sync`, { full: true }), { ok: `Collecting ${c.name}'s full upload history` }) } : null,
     c.url ? { label: 'Open profile', icon: 'external', onClick: () => openUrl(c.url) } : null,
     { label: 'Set follower count…', icon: 'edit', onClick: async () => { const v = await promptDialog({ title: `Followers for ${c.name}`, label: 'Type the number from their profile', value: c.followers != null ? String(c.followers) : '' }); if (v != null) act(() => api.patch(`/api/creators/${c.id}`, { followers: v.replace(/[^\d]/g, '') }), { ok: 'Saved' }).then(reload); } },
     c.prospectId ? { label: 'Open in Growth', icon: 'growth', onClick: () => navigate('/growth') } : { label: 'Add to prospects', icon: 'growth', onClick: () => act(() => api.post(`/api/creators/${c.id}/prospect`), { ok: `${c.name} added to Growth → prospects` }).then(reload) },
@@ -125,23 +117,112 @@ function creatorMenu(e, c, reload) {
   ]);
 }
 
-function CreatorDrawer({ c, onClose, reload }) {
-  const [notes, setNotes] = useState(c?.notes || '');
-  if (!c) return null;
-  const hist = (c.history || []).filter((x) => x.followers != null);
-  const top = (c.videos || []).slice().sort((a, b) => (b.views || 0) - (a.views || 0));
-  return html`<${Drawer} wide title=${c.name} sub=${`${platLabel(c.platform)}${c.handle ? ` · ${c.handle}` : ''}${c.syncedAt ? ` · updated ${ago(c.syncedAt)} ago` : ''}`} onClose=${onClose}
-    actions=${html`${c.url ? html`<${Button} size="sm" kind="ghost" icon="external" onClick=${() => openUrl(c.url)}>Profile</${Button}>` : null}<${Button} size="sm" kind="soft" icon="refresh" onClick=${() => act(() => api.post(`/api/creators/${c.id}/sync`), { ok: 'Updating' })}>Update</${Button}>`}>
-    <div class="col" style="gap:14px">
+// ---- month helpers
+const monthLabel = (m, long) => { const [y, mo] = m.split('-').map(Number); return new Date(y, mo - 1, 15).toLocaleDateString(undefined, { month: long ? 'long' : 'short', year: 'numeric' }); };
+const mins = (sec) => (sec == null ? '—' : sec >= 3600 ? `${Math.floor(sec / 3600)}h ${Math.round((sec % 3600) / 60)}m` : `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`);
+const signed = (v) => (v == null ? '—' : `${v > 0 ? '+' : ''}${short(v)}`);
+const KIND = { video: 'Long-form', short: 'Short', live: 'Live' };
+/** Sortable header cell. */
+function Th({ k, sort, setSort, children, num: n }) {
+  const on = sort.key === k;
+  return html`<th class=${n ? 'num' : ''} style="cursor:pointer;white-space:nowrap" onClick=${() => setSort({ key: k, dir: on && sort.dir === 'desc' ? 'asc' : 'desc' })} aria-sort=${on ? (sort.dir === 'desc' ? 'descending' : 'ascending') : 'none'}>${children}${on ? (sort.dir === 'desc' ? ' ↓' : ' ↑') : ''}</th>`;
+}
+function sortRows(rows, { key, dir }, get = (r, k) => r[k]) {
+  const m = dir === 'asc' ? 1 : -1;
+  return rows.slice().sort((a, b) => { const x = get(a, key), y = get(b, key); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === 'string' ? x.localeCompare(y) : x - y) * m; });
+}
+
+/** The tracked-creators table: all-time numbers, or any single month, sortable by every column. */
+function CreatorTable({ creators, onOpen, reload }) {
+  const allMonths = [...new Set(creators.flatMap((c) => (c.months || []).map((m) => m.month)))].sort().reverse();
+  const [month, setMonth] = useState('all');
+  const [sort, setSort] = useState({ key: 'followers', dir: 'desc' });
+  const rowOf = (c) => {
+    const m = month === 'all' ? null : (c.months || []).find((x) => x.month === month) || {};
+    const g = growth(c);
+    return month === 'all'
+      ? { c, name: c.name, followers: c.followers, growth: g?.pct ?? null, avgViews: c.metrics?.avgViews, medianViews: c.metrics?.medianViews, uploads30d: c.metrics?.uploads30d, uploads: c.metrics?.uploadsTracked ?? null, totalViews: c.metrics?.totalViews }
+      : { c, name: c.name, followers: m.followers ?? null, followersDelta: m.followersDelta ?? null, uploads: m.uploads ?? 0, shorts: m.shorts ?? 0, views: m.views ?? null, avgViews: m.avgViews ?? null, medianViews: m.medianViews ?? null, engagementPct: m.engagementPct ?? null };
+  };
+  const rows = sortRows(creators.map(rowOf), sort);
+  const H = (k, label, n = true) => html`<${Th} k=${k} sort=${sort} setSort=${setSort} num=${n}>${label}</${Th}>`;
+  return html`
+    <div class="row wrap" style="gap:8px;padding:12px 16px;border-bottom:1px solid var(--line)">
+      <span class="faint" style="font-size:var(--fs-sm)">Show</span>
+      <select class="select sm" style="width:auto" value=${month} onChange=${(e) => { setMonth(e.target.value); setSort({ key: e.target.value === 'all' ? 'followers' : 'views', dir: 'desc' }); }} aria-label="Month">
+        <option value="all">All time</option>${allMonths.map((m) => html`<option value=${m}>${monthLabel(m, true)}</option>`)}</select>
+      <span class="faint" style="font-size:var(--fs-sm)">· click a column to sort</span>
+    </div>
+    <div class="table-wrap"><table class="table"><thead><tr>${H('name', 'Creator', false)}
+      ${month === 'all' ? html`${H('followers', 'Followers')}${H('growth', 'Growth')}<th>Trend</th>${H('avgViews', 'Avg views (last 30)')}${H('medianViews', 'Median')}${H('uploads30d', 'Uploads / 30d')}${H('uploads', 'Uploads tracked')}`
+        : html`${H('uploads', 'Uploads')}${H('shorts', 'Shorts')}${H('views', 'Views')}${H('avgViews', 'Avg views')}${H('medianViews', 'Median')}${H('engagementPct', 'Engagement')}${H('followersDelta', 'Followers +/-')}`}
+      <th>Updated</th><th></th></tr></thead><tbody>
+      ${rows.map((r) => { const c = r.c; const g = growth(c); const hist = (c.history || []).map((x) => x.followers).filter((v) => v != null); return html`<tr class="click" onClick=${() => onOpen(c.id)}>
+        <td><div class="row" style="gap:10px"><${Avatar} name=${c.name} size="sm" /><div style="min-width:0"><div class="row" style="gap:6px"><b class="ellipsis" style="max-width:220px">${c.name}</b><span class=${'badge ' + (PLAT_TONE[c.platform] || '')}>${platLabel(c.platform)}</span></div><div class="faint" style="font-size:var(--fs-xs)">${c.handle || ''}</div></div></div></td>
+        ${month === 'all' ? html`
+          <td class="num"><b>${short(c.followers)}</b></td>
+          <td class="num">${g ? html`<span style=${{ color: g.delta >= 0 ? 'var(--moss-ink)' : 'var(--coral-ink)' }}>${g.delta >= 0 ? '+' : ''}${g.pct.toFixed(1)}%</span>` : '—'}</td>
+          <td>${hist.length > 1 ? html`<${Sparkline} values=${hist} width=${90} height=${26} color=${g && g.delta < 0 ? 'var(--coral)' : 'var(--moss)'} />` : html`<span class="faint" style="font-size:var(--fs-xs)">—</span>`}</td>
+          <td class="num">${short(r.avgViews)}</td><td class="num">${short(r.medianViews)}</td><td class="num">${r.uploads30d ?? '—'}</td><td class="num">${r.uploads ?? '—'}</td>`
+        : html`<td class="num">${r.uploads}</td><td class="num">${r.shorts}</td><td class="num">${short(r.views)}</td><td class="num">${short(r.avgViews)}</td><td class="num">${short(r.medianViews)}</td><td class="num">${r.engagementPct != null ? `${r.engagementPct}%` : '—'}</td>
+          <td class="num" style=${{ color: r.followersDelta > 0 ? 'var(--moss-ink)' : r.followersDelta < 0 ? 'var(--coral-ink)' : '' }}>${signed(r.followersDelta)}</td>`}
+        <td>${c.syncError ? html`<span class="badge gold" title=${c.syncError}>Needs attention</span>` : c.syncedAt ? html`<span class="faint">${ago(c.syncedAt)} ago</span>` : ['youtube', 'tiktok'].includes(c.platform) && c.url ? html`<span class="faint">Collecting…</span>` : html`<span class="faint" title="This platform needs a login for automatic stats; update the number from the ⋯ menu">By hand</span>`}</td>
+        <td onClick=${(e) => e.stopPropagation()}><${Button} kind="ghost" size="sm" icon="more" title="More" onClick=${(e) => creatorMenu(e, c, reload)} /></td></tr>`; })}
+    </tbody></table></div>
+    ${month !== 'all' ? html`<div class="faint" style="font-size:var(--fs-xs);padding:8px 16px">Views are each upload's views so far, grouped by the month it was posted. Followers +/- needs Euclidean to have checked the creator during that month.</div>` : null}`;
+}
+
+function CreatorDrawer({ c: brief, onClose, reload }) {
+  const { data: c, reload: reloadOne } = useApi(brief ? `/api/creators/${brief.id}` : null, ['creators'], [brief?.id]);
+  const [notes, setNotes] = useState(brief?.notes || '');
+  const [view, setView] = useState('months');
+  const [sort, setSort] = useState({ key: 'month', dir: 'desc' });
+  const [vsort, setVsort] = useState({ key: 'date', dir: 'desc' });
+  const [kind, setKind] = useState('all');
+  const [vmonth, setVmonth] = useState('all');
+  if (!brief) return null;
+  const sub = `${platLabel(brief.platform)}${brief.handle ? ` · ${brief.handle}` : ''}${brief.syncedAt ? ` · updated ${ago(brief.syncedAt)} ago` : ''}`;
+  const full = () => act(() => api.post(`/api/creators/${brief.id}/sync`, { full: true }), { ok: 'Collecting their full upload history. This can take a few minutes.' });
+  const csv = (of) => api.url(`/api/creators/${brief.id}/export.csv?of=${of}`);
+  const months = c?.months || [];
+  const videos = (c?.videos || []).filter((v) => (kind === 'all' || v.kind === kind) && (vmonth === 'all' || (v.date || '').startsWith(vmonth)));
+  const m = c?.metrics || {};
+  const hist = (c?.history || []).filter((x) => x.followers != null);
+  const H = (k, label, n = true) => html`<${Th} k=${k} sort=${sort} setSort=${setSort} num=${n}>${label}</${Th}>`;
+  const V = (k, label, n = true) => html`<${Th} k=${k} sort=${vsort} setSort=${setVsort} num=${n}>${label}</${Th}>`;
+  return html`<${Drawer} wide title=${brief.name} sub=${sub} onClose=${onClose}
+    actions=${html`${brief.url ? html`<${Button} size="sm" kind="ghost" icon="external" onClick=${() => openUrl(brief.url)}>Profile</${Button}>` : null}<${Button} size="sm" kind="soft" icon="refresh" onClick=${() => act(() => api.post(`/api/creators/${brief.id}/sync`), { ok: 'Updating' })}>Update</${Button}>`}>
+    ${!c ? html`<${Loading} rows=${4} />` : html`<div class="col" style="gap:14px">
       ${c.syncError ? html`<div class="notice gold"><${Icon} name="info" size=${16} />${c.syncError}</div>` : null}
-      ${c.about ? html`<p class="muted" style="margin:0">${c.about}</p>` : null}
-      <div class="grid c4">${[['Followers', short(c.followers)], ['Avg views', short(c.metrics?.avgViews)], ['Median views', short(c.metrics?.medianViews)], ['Uploads / 30d', c.metrics?.uploads30d ?? '—']].map(([l, v]) => html`<div class="panel pad"><div class="faint" style="font-size:var(--fs-xs)">${l}</div><div style="font-size:var(--fs-xl);font-weight:650">${v}</div></div>`)}</div>
-      ${hist.length > 1 ? html`<div class="panel"><div class="panel-head"><h4>Followers over time</h4></div><div class="panel-body"><${BarChart} height=${150} data=${hist.slice(-30).map((h) => ({ label: new Date(h.at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }), value: h.followers }))} format=${short} color="var(--moss)" /></div></div>` : null}
-      <div class="panel"><div class="panel-head"><h4 class="grow">Recent uploads</h4><span class="faint" style="font-size:var(--fs-sm)">${top.length ? `${top.length} videos, most viewed first` : ''}</span></div>
-        ${top.length ? html`<div class="table-wrap"><table class="table"><thead><tr><th>Title</th><th class="num">Views</th><th>Posted</th></tr></thead><tbody>${top.map((v) => html`<tr class="click" onClick=${() => openUrl(v.url)}><td class="ellipsis" style="max-width:420px">${v.title}</td><td class="num">${num(v.views)}</td><td class="faint">${v.published || (v.ageDays != null ? `${Math.round(v.ageDays)}d ago` : '')}</td></tr>`)}</tbody></table></div>`
-          : html`<div class="panel-body faint">${c.platform === 'instagram' || c.platform === 'x' ? 'This platform needs a login to read stats automatically. Use "Set follower count" from the ⋯ menu to log numbers by hand.' : 'Uploads appear after the first update.'}</div>`}</div>
-      <${Field} label="Notes" id="cr-notes"><textarea id="cr-notes" class="textarea" rows="3" value=${notes} onInput=${(e) => setNotes(e.target.value)} onBlur=${() => notes !== (c.notes || '') && api.patch(`/api/creators/${c.id}`, { notes }).then(reload)} placeholder="What stands out: formats, hooks, posting times…" /></${Field}>
-    </div></${Drawer}>`;
+      ${c.partial ? html`<div class="notice"><${Icon} name="info" size=${16} />Only the latest uploads could be read from YouTube's page. Install yt-dlp (winget install yt-dlp.yt-dlp, or re-run Start Euclidean.bat) for the full history with dates, likes and comments.</div>` : null}
+      <div class="grid c4">${[['Followers', short(c.followers)], ['Uploads tracked', `${num(m.uploadsTracked ?? 0)}${c.totalVideos && c.totalVideos > (m.uploadsTracked || 0) ? ` of ${num(c.totalVideos)}` : ''}`], ['Views (all tracked)', short(m.totalViews)], ['Avg views (last 30)', short(m.avgViews)],
+        ['Long-form / Shorts / Live', `${m.longForm ?? 0} / ${m.shorts ?? 0} / ${m.lives ?? 0}`], ['Uploads / 30d', m.uploads30d ?? '—'], ['First upload tracked', m.firstUpload || '—'], ['Latest upload', m.lastUpload || '—']].map(([l, v]) => html`<div class="panel pad"><div class="faint" style="font-size:var(--fs-xs)">${l}</div><div style="font-size:var(--fs-lg);font-weight:650" class="tnum">${v}</div></div>`)}</div>
+      ${c.about || c.keywords?.length ? html`<div class="panel pad col" style="gap:6px">${c.about ? html`<div class="muted" style="white-space:pre-wrap;font-size:var(--fs-sm);max-height:90px;overflow:auto">${c.about}</div>` : null}${c.keywords?.length ? html`<div class="row wrap" style="gap:4px">${c.keywords.map((k) => html`<span class="badge">${k}</span>`)}</div>` : null}</div>` : null}
+      <div class="row wrap" style="gap:8px">
+        <${Tabs} value=${view} onChange=${setView} tabs=${[{ value: 'months', label: 'By month' }, { value: 'uploads', label: `All uploads (${num(c.videos?.length || 0)})` }, { value: 'followers', label: 'Followers' }]} />
+        <div class="grow" />
+        ${['youtube', 'tiktok'].includes(c.platform) && c.url ? html`<${Button} size="sm" kind="lav" icon="download" onClick=${full} title="Go back through every upload on the channel">${c.fullHistoryAt ? 'Refresh full history' : 'Collect full history'}</${Button}>` : null}
+        <a class="btn sm ghost" href=${csv(view === 'uploads' ? 'uploads' : 'months')} download>Download CSV</a>
+      </div>
+      ${view === 'months' ? (months.length ? html`<div class="panel"><div class="table-wrap"><table class="table"><thead><tr>${H('month', 'Month', false)}${H('uploads', 'Uploads')}${H('videos', 'Long')}${H('shorts', 'Shorts')}${H('lives', 'Live')}${H('views', 'Views')}${H('avgViews', 'Avg')}${H('medianViews', 'Median')}${H('likes', 'Likes')}${H('comments', 'Comments')}${H('engagementPct', 'Eng.')}${H('avgDurationSec', 'Avg length')}${H('followers', 'Followers')}${H('followersDelta', '+/-')}<th>Top upload</th></tr></thead><tbody>
+          ${sortRows(months, sort).map((r) => html`<tr><td style="white-space:nowrap"><b>${monthLabel(r.month)}</b>${r.datesApprox ? html`<span class="faint" title=${`${r.datesApprox} upload date(s) estimated from "x weeks ago"`}> ~</span>` : null}</td>
+            <td class="num">${r.uploads}</td><td class="num">${r.videos}</td><td class="num">${r.shorts}</td><td class="num">${r.lives}</td><td class="num">${short(r.views)}</td><td class="num">${short(r.avgViews)}</td><td class="num">${short(r.medianViews)}</td>
+            <td class="num">${short(r.likes)}</td><td class="num">${short(r.comments)}</td><td class="num">${r.engagementPct != null ? `${r.engagementPct}%` : '—'}</td><td class="num">${mins(r.avgDurationSec)}</td>
+            <td class="num">${short(r.followers)}</td><td class="num" style=${{ color: r.followersDelta > 0 ? 'var(--moss-ink)' : r.followersDelta < 0 ? 'var(--coral-ink)' : '' }}>${signed(r.followersDelta)}</td>
+            <td class="ellipsis" style="max-width:260px">${r.top ? html`<a href="#" onClick=${(e) => { e.preventDefault(); openUrl(r.top.url); }}>${r.top.title || r.top.id}</a> <span class="faint">${short(r.top.views)}</span>` : '—'}</td></tr>`)}
+        </tbody></table></div><div class="faint" style="font-size:var(--fs-xs);padding:8px 16px">Grouped by the month each upload was posted. Views, likes and comments are totals so far for those uploads. ~ means some dates are estimated.</div></div>`
+        : html`<div class="panel pad faint">${['youtube', 'tiktok'].includes(c.platform) ? 'Months appear once their uploads have been collected. Click Update or Collect full history.' : 'This platform needs a login for automatic stats. Follower numbers you enter by hand still appear in the Followers tab.'}</div>`) : null}
+      ${view === 'uploads' ? html`<div class="panel">
+        <div class="row wrap" style="gap:8px;padding:10px 16px;border-bottom:1px solid var(--line)">
+          <${Seg} value=${kind} onChange=${setKind} options=${[{ value: 'all', label: 'All' }, { value: 'video', label: 'Long-form' }, { value: 'short', label: 'Shorts' }, { value: 'live', label: 'Live' }]} />
+          <select class="select sm" style="width:auto" value=${vmonth} onChange=${(e) => setVmonth(e.target.value)} aria-label="Month"><option value="all">Every month</option>${months.map((r) => html`<option value=${r.month}>${monthLabel(r.month, true)}</option>`)}</select>
+          <span class="faint" style="font-size:var(--fs-sm)">${num(videos.length)} uploads</span></div>
+        <div class="table-wrap" style="max-height:60vh;overflow:auto"><table class="table"><thead><tr>${V('date', 'Posted', false)}${V('title', 'Title', false)}<th>Type</th>${V('views', 'Views')}${V('likes', 'Likes')}${V('comments', 'Comments')}${V('shares', 'Shares')}${V('durationSec', 'Length')}</tr></thead><tbody>
+          ${sortRows(videos, vsort).slice(0, 500).map((v) => html`<tr class="click" onClick=${() => openUrl(v.url)}><td style="white-space:nowrap" class="tnum">${v.date || '—'}${v.dateApprox && v.date ? html`<span class="faint" title="Estimated"> ~</span>` : null}</td><td class="ellipsis" style="max-width:340px">${v.title || v.id}</td><td><span class="badge">${KIND[v.kind] || v.kind}</span></td><td class="num">${num(v.views)}</td><td class="num">${num(v.likes)}</td><td class="num">${num(v.comments)}</td><td class="num">${num(v.shares)}</td><td class="num">${mins(v.durationSec)}</td></tr>`)}
+        </tbody></table></div>${videos.length > 500 ? html`<div class="faint" style="font-size:var(--fs-xs);padding:8px 16px">Showing 500 of ${num(videos.length)}. Download CSV for all of them.</div>` : null}</div>` : null}
+      ${view === 'followers' ? html`<div class="panel">${hist.length > 1 ? html`<div class="panel-body"><${BarChart} height=${170} data=${hist.slice(-60).map((h) => ({ label: new Date(h.at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }), value: h.followers }))} format=${short} color="var(--moss)" /></div>` : html`<div class="panel-body faint">The follower trend builds up as Euclidean checks this creator (every 6 hours while the app runs).</div>`}</div>` : null}
+      <${Field} label="Notes" id="cr-notes"><textarea id="cr-notes" class="textarea" rows="3" value=${notes} onInput=${(e) => setNotes(e.target.value)} onBlur=${() => notes !== (brief.notes || '') && api.patch(`/api/creators/${brief.id}`, { notes }).then(() => { reload(); reloadOne(); })} placeholder="What stands out: formats, hooks, posting times…" /></${Field}>
+    </div>`}</${Drawer}>`;
 }
 
 function AddCreator({ onClose, onDone }) {

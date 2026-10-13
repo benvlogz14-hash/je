@@ -337,20 +337,25 @@ queue.register('creator.sync', {
     const creators = require('../integrations/creators');
     const c = ctx.store.get('creators', job.payload.creatorId);
     if (!c) return { skipped: true };
-    h.progress(0.2, 'Fetching public stats');
+    const full = !!job.payload.full;
+    h.progress(0.2, full ? 'Collecting the full upload history' : 'Fetching public stats');
     let st;
-    try { st = await creators.fetchStats(c); }
+    try { st = await creators.fetchStats(c, { full }); }
     catch (e) { ctx.store.update('creators', c.id, { syncError: e.message, syncedAt: now() }); events.publish('creators', {}); throw permanent(e.message); }
-    const videos = (st.videos || []).slice(0, 30);
+    h.progress(0.85, 'Saving');
+    const videos = creators.mergeVideos(c.videos || [], st.videos || []);
     const m = creators.metrics(videos);
     const followers = st.followers ?? c.followers ?? null;
     ctx.store.update('creators', c.id, (x) => ({
-      name: x.nameLocked ? x.name : st.name || x.name, handle: x.handle || st.handle || '', avatar: st.avatar || x.avatar || null, about: x.about || st.about || '',
-      followers, followersSource: st.followers != null ? 'auto' : x.followersSource, videos, metrics: m, syncedAt: now(), syncError: null, verified: true,
-      history: [...(x.history || []), { at: now(), followers, avgViews: m.avgViews, medianViews: m.medianViews }].slice(-180),
+      name: x.nameLocked ? x.name : st.name || x.name, handle: x.handle || st.handle || '', avatar: st.avatar || x.avatar || null, about: st.about || x.about || '',
+      keywords: st.keywords?.length ? st.keywords : x.keywords || [], channelId: x.channelId || st.channelId || null, totalVideos: st.totalVideos ?? x.totalVideos ?? null,
+      followers, followersSource: st.followers != null ? 'auto' : x.followersSource, videos, metrics: m, syncedAt: now(), syncError: null, verified: true, partial: !!st.partial,
+      fullHistoryAt: full ? now() : x.fullHistoryAt || null,
+      // one follower snapshot per day is enough for monthly numbers
+      history: [...(x.history || []).filter((hh) => String(hh.at).slice(0, 10) !== now().slice(0, 10)), { at: now(), followers, avgViews: m.avgViews, medianViews: m.medianViews, uploads: videos.length }].slice(-800),
     }));
     events.publish('creators', {});
-    return { followers, videos: videos.length };
+    return { followers, uploads: videos.length, new: videos.length - (c.videos || []).length };
   },
 });
 

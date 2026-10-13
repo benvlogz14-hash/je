@@ -4,8 +4,9 @@
  * inspiration) and follow their public numbers over time.
  *
  * Sources, best first:
- *  - yt-dlp when installed (YouTube, TikTok): channel follower count and recent uploads with views.
- *  - YouTube's public pages (no API key): search results and a channel's Videos tab.
+ *  - yt-dlp when installed (YouTube, TikTok): followers, channel details and the whole upload history
+ *    (Videos, Shorts, Live) with dates, views, likes, comments, shares and length.
+ *  - YouTube's public pages (no API key): search results and the latest Videos and Shorts.
  *  - AI search (Grok/Claude/GPT, optional) to find creators on TikTok/Instagram by description;
  *    those results are marked unverified until their stats sync.
  * Anything that can't be fetched automatically can still be added and its numbers typed in.
@@ -140,47 +141,182 @@ async function searchWithAI(q) {
   }));
 }
 
-/** Pull a creator's current numbers. Returns { followers, videos[], name?, avatar?, handle? }. */
-async function fetchStats(creator) {
+// ------------------------------------------------------------ collecting a creator's data
+const DAY = 864e5;
+const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+/** yt-dlp gives upload_date "20260914" or a unix timestamp; pages give "3 weeks ago". */
+function dateOf({ upload_date: ud, timestamp, release_timestamp: rt, ageDays }) {
+  if (ud && /^\d{8}$/.test(ud)) return { date: `${ud.slice(0, 4)}-${ud.slice(4, 6)}-${ud.slice(6, 8)}`, approx: false };
+  const ts = timestamp || rt;
+  if (ts) return { date: isoDay(ts * 1000), approx: true };
+  if (ageDays != null) return { date: isoDay(Date.now() - ageDays * DAY), approx: true };
+  return { date: null, approx: true };
+}
+const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/** One upload in the shape Euclidean stores, whatever the source. */
+function video(e, kind, platform) {
+  const d = dateOf(e);
+  const id = String(e.id || e.videoId || '');
+  return {
+    id, kind, title: String(e.title || e.description || '').replace(/\s+/g, ' ').trim().slice(0, 200),
+    date: d.date, dateApprox: d.approx,
+    views: num(e.view_count ?? e.views), likes: num(e.like_count ?? e.likes), comments: num(e.comment_count ?? e.comments), shares: num(e.repost_count ?? e.shares),
+    durationSec: num(e.duration) != null ? Math.round(e.duration) : null,
+    url: e.webpage_url || (e.url && /^https?:/.test(e.url) ? e.url : platform === 'youtube' ? (kind === 'short' ? `https://www.youtube.com/shorts/${id}` : `https://www.youtube.com/watch?v=${id}`) : e.url || null),
+  };
+}
+
+/** yt-dlp prints one JSON object per line with -j. */
+function jsonLines(out) { return String(out || '').split('\n').map((l) => safeJson(l.trim())).filter((x) => x && typeof x === 'object'); }
+
+async function ytTab(y, base, tab, limit) {
+  const r = await run(y, ['-J', '--flat-playlist', '--playlist-end', String(limit), '--extractor-args', 'youtubetab:approximate_date', `${base}/${tab}`], { timeoutMs: 180000 });
+  return safeJson(r.out, {});
+}
+
+/** Likes, comments and exact dates need each video's own page; done for the newest uploads only. */
+async function ytDetails(y, urls) {
+  if (!urls.length) return [];
+  const r = await run(y, ['-j', '--skip-download', '--no-warnings', '--ignore-errors', '--extractor-args', 'youtube:skip=dash,hls,translated_subs', ...urls], { timeoutMs: 60000 + urls.length * 15000 }).catch((e) => ({ out: e.out || '' }));
+  return jsonLines(r.out);
+}
+
+/** Shorts tab on the public page (no yt-dlp): views only, no dates. */
+function parseYouTubeShorts(data) {
+  const out = [];
+  for (const r of walk(data, 'reelItemRenderer')) if (r.videoId) out.push({ id: r.videoId, title: text(r.headline), views: parseCount(text(r.viewCountText)) });
+  for (const l of walk(data, 'shortsLockupViewModel')) {
+    const id = String(l.entityId || '').replace(/^shorts-shelf-item-/, '') || l.onTap?.innertubeCommand?.reelWatchEndpoint?.videoId;
+    if (id && !out.some((x) => x.id === id)) out.push({ id, title: l.overlayMetadata?.primaryText?.content || '', views: parseCount(l.overlayMetadata?.secondaryText?.content) });
+  }
+  return out;
+}
+
+/**
+ * Collect everything public about a creator.
+ * @param opts.full  go back through the whole upload history (slower) instead of the latest ~200 per tab
+ * Returns { name, handle, avatar, about, keywords, followers, totalVideos, totalViews, videos[] }.
+ */
+async function fetchStats(creator, { full = false } = {}) {
   const y = ytdlp();
+  const limit = full ? 5000 : 200;
   if (creator.platform === 'youtube') {
-    const base = String(creator.url || '').replace(/\/(videos|shorts|featured|streams)\/?$/, '').replace(/\/$/, '');
+    const base = String(creator.url || '').replace(/\/(videos|shorts|featured|streams|about)\/?$/, '').replace(/\/$/, '');
     if (y) {
-      try {
-        const r = await run(y, ['-J', '--flat-playlist', '--playlist-end', '30', `${base}/videos`], { timeoutMs: 90000 });
-        const j = safeJson(r.out, {});
-        return {
-          name: j.channel || j.uploader || j.title?.replace(/ - Videos$/, ''), handle: j.uploader_id || null, followers: j.channel_follower_count ?? null,
-          avatar: (j.thumbnails || []).find((t) => /avatar/i.test(t.id || ''))?.url || null,
-          videos: (j.entries || []).map((e) => ({ id: e.id, title: e.title, views: e.view_count ?? null, ageDays: e.timestamp ? (Date.now() / 1000 - e.timestamp) / 86400 : null, published: '', url: e.url || `https://www.youtube.com/watch?v=${e.id}` })),
-        };
-      } catch { /* fall back to the page */ }
+      const out = { videos: [] }; let got = false; const errors = [];
+      for (const [tab, kind] of [['videos', 'video'], ['shorts', 'short'], ['streams', 'live']]) {
+        try {
+          const j = await ytTab(y, base, tab, limit); got = true;
+          if (!out.name) Object.assign(out, { name: j.channel || j.uploader || String(j.title || '').replace(/ - \w+$/, '') || null, handle: j.uploader_id || null, followers: num(j.channel_follower_count), about: String(j.description || '').slice(0, 1000), keywords: (j.tags || []).slice(0, 30), channelId: j.channel_id || null, avatar: (j.thumbnails || []).find((t) => /avatar/i.test(t.id || ''))?.url || null });
+          for (const e of j.entries || []) if (e && e.id) out.videos.push(video(e, kind, 'youtube'));
+        } catch (e) { if (!/does not have a|no videos|This channel has no/i.test(e.message)) errors.push(`${tab}: ${e.message.slice(0, 120)}`); }
+      }
+      if (got) {
+        // Exact dates, likes and comments for the newest uploads that don't have them yet.
+        const known = new Map((creator.videos || []).map((v) => [v.id, v]));
+        const need = out.videos.filter((v) => { const k = known.get(v.id); return !(k && k.likes != null && !k.dateApprox); }).sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, full ? 60 : 15);
+        for (const d of await ytDetails(y, need.map((v) => v.url))) {
+          const v = out.videos.find((x) => x.id === d.id); if (!v) continue;
+          Object.assign(v, Object.fromEntries(Object.entries(video(d, v.kind, 'youtube')).filter(([k, x]) => x != null && x !== '' && k !== 'kind' && k !== 'url' && k !== 'id')));
+        }
+        out.totalVideos = out.videos.length;
+        return out;
+      }
+      if (errors.length) console.warn('[creators] yt-dlp failed, using the public page:', errors.join(' | '));
     }
-    const html = await fetchPage(`${base}/videos?hl=en`);
-    const d = initialData(html);
-    if (!d) throw new Error('YouTube didn\'t return the channel page. Check the link, or install yt-dlp (winget install yt-dlp.yt-dlp) for more reliable stats.');
-    return parseYouTubeChannel(d, base);
+    const d = initialData(await fetchPage(`${base}/videos?hl=en`));
+    if (!d) throw new Error('YouTube didn\'t return the channel page. Check the link, or install yt-dlp (winget install yt-dlp.yt-dlp) for full history, likes and comments.');
+    const c = parseYouTubeChannel(d, base);
+    const json = JSON.stringify(d);
+    c.totalVideos = parseCount((/"([\d.,]+[KMB]?) videos"/i.exec(json) || [])[1]);
+    c.keywords = String(d?.metadata?.channelMetadataRenderer?.keywords || '').match(/"[^"]+"|\S+/g)?.map((k) => k.replace(/"/g, '')).slice(0, 30) || [];
+    c.videos = c.videos.map((v) => video(v, 'video', 'youtube'));
+    try { c.videos.push(...parseYouTubeShorts(initialData(await fetchPage(`${base}/shorts?hl=en`))).map((v) => video(v, 'short', 'youtube'))); } catch { /* shorts tab optional */ }
+    c.partial = true;
+    return c;
   }
   if (creator.platform === 'tiktok') {
     if (!y) throw new Error('TikTok stats need yt-dlp (winget install yt-dlp.yt-dlp). You can type the follower count in by hand meanwhile.');
-    const r = await run(y, ['-J', '--flat-playlist', '--playlist-end', '30', creator.url], { timeoutMs: 90000 })
-      .catch(() => { throw new Error('TikTok blocked the automatic stats request. Try again later, or type the numbers in by hand.'); });
-    const j = safeJson(r.out, {});
-    return { name: j.uploader || j.title || null, followers: j.channel_follower_count ?? null, videos: (j.entries || []).map((e) => ({ id: e.id, title: e.title || e.description || '', views: e.view_count ?? null, ageDays: e.timestamp ? (Date.now() / 1000 - e.timestamp) / 86400 : null, url: e.url })) };
+    const r = await run(y, ['-j', '--skip-download', '--ignore-errors', '--no-warnings', '--playlist-end', String(full ? 1000 : 120), creator.url], { timeoutMs: full ? 1800000 : 300000 }).catch((e) => ({ out: e.out || '' }));
+    const items = jsonLines(r.out);
+    if (!items.length) throw new Error('TikTok blocked the automatic stats request. Try again later, or type the numbers in by hand.');
+    const f = items[0];
+    return { name: f.uploader || f.channel || null, handle: f.uploader_id ? `@${String(f.uploader_id).replace(/^@/, '')}` : null, followers: num(f.channel_follower_count), videos: items.map((e) => video(e, 'short', 'tiktok')), totalVideos: items.length };
   }
   throw new Error(`Automatic stats aren't available for ${creator.platform} (it requires logging in). Type the numbers in by hand from their profile.`);
 }
 
-/** Summary numbers shown in Analytics. */
-function metrics(videos) {
-  const v = (videos || []).map((x) => x.views).filter((n) => typeof n === 'number');
-  if (!v.length) return { avgViews: null, medianViews: null, uploads30d: null, totalRecentViews: null };
-  const sorted = v.slice().sort((a, b) => a - b);
-  const recent = (videos || []).filter((x) => x.ageDays != null && x.ageDays <= 30);
+/** Merge a fresh fetch into what's stored: newest numbers win, nothing already known is lost. */
+function mergeVideos(oldList = [], fresh = [], at = new Date().toISOString()) {
+  const map = new Map(oldList.map((v) => [v.id, v]));
+  for (const v of fresh) {
+    if (!v.id) continue;
+    const o = map.get(v.id);
+    if (!o) { map.set(v.id, { ...v, firstSeenAt: at, updatedAt: at }); continue; }
+    const m = { ...o, updatedAt: at };
+    for (const [k, x] of Object.entries(v)) {
+      if (x == null || x === '') continue;
+      if (k === 'date' && o.date && !o.dateApprox && v.dateApprox) continue; // keep an exact date over an estimate
+      if (k === 'dateApprox' && o.date && !o.dateApprox) continue;
+      m[k] = x;
+    }
+    map.set(v.id, m);
+  }
+  return [...map.values()].sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 5000);
+}
+
+const median = (a) => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y); const i = s.length >> 1; return s.length % 2 ? s[i] : Math.round((s[i - 1] + s[i]) / 2); };
+const sum = (a) => a.reduce((t, n) => t + n, 0);
+
+/** Everything grouped by upload month ("2026-09"), plus followers at the end of each month. */
+function monthly(videos = [], history = []) {
+  const months = new Map();
+  const get = (k) => { if (!months.has(k)) months.set(k, { month: k, uploads: 0, videos: 0, shorts: 0, lives: 0, views: [], likes: [], comments: [], shares: [], durations: [], top: null, approx: 0 }); return months.get(k); };
+  for (const v of videos) {
+    if (!v.date) continue;
+    const m = get(v.date.slice(0, 7));
+    m.uploads++; m[v.kind === 'short' ? 'shorts' : v.kind === 'live' ? 'lives' : 'videos']++;
+    if (v.dateApprox) m.approx++;
+    if (v.views != null) m.views.push(v.views);
+    if (v.likes != null) m.likes.push(v.likes);
+    if (v.comments != null) m.comments.push(v.comments);
+    if (v.shares != null) m.shares.push(v.shares);
+    if (v.durationSec != null) m.durations.push(v.durationSec);
+    if (v.views != null && (!m.top || v.views > m.top.views)) m.top = { id: v.id, title: v.title, views: v.views, url: v.url, kind: v.kind };
+  }
+  for (const h of history) if (h.followers != null) get(String(h.at).slice(0, 7));
+  const byMonth = {}; for (const h of history) if (h.followers != null) byMonth[String(h.at).slice(0, 7)] = h.followers; // last snapshot in each month
+  const rows = [...months.values()].sort((a, b) => a.month.localeCompare(b.month));
+  let prev = null;
+  return rows.map((m) => {
+    const followers = byMonth[m.month] ?? null;
+    const views = sum(m.views); const eng = m.likes.length || m.comments.length ? sum(m.likes) + sum(m.comments) : null;
+    const row = {
+      month: m.month, uploads: m.uploads, videos: m.videos, shorts: m.shorts, lives: m.lives, datesApprox: m.approx,
+      views: m.views.length ? views : null, avgViews: m.views.length ? Math.round(views / m.views.length) : null, medianViews: median(m.views),
+      likes: m.likes.length ? sum(m.likes) : null, comments: m.comments.length ? sum(m.comments) : null, shares: m.shares.length ? sum(m.shares) : null,
+      engagementPct: eng != null && views ? Math.round((eng / views) * 10000) / 100 : null,
+      avgDurationSec: m.durations.length ? Math.round(sum(m.durations) / m.durations.length) : null,
+      top: m.top, followers, followersDelta: followers != null && prev != null ? followers - prev : null,
+    };
+    if (followers != null) prev = followers;
+    return row;
+  }).reverse(); // newest month first
+}
+
+/** Summary numbers shown in the creators table. */
+function metrics(videos = []) {
+  const v = videos.map((x) => x.views).filter((n) => typeof n === 'number');
+  const cutoff = isoDay(Date.now() - 30 * DAY);
+  const recent = videos.filter((x) => x.date && x.date >= cutoff);
+  const recent30 = videos.slice(0, 30).map((x) => x.views).filter((n) => typeof n === 'number');
   return {
-    avgViews: Math.round(v.reduce((t, n) => t + n, 0) / v.length), medianViews: sorted[Math.floor(sorted.length / 2)],
-    uploads30d: (videos || []).some((x) => x.ageDays != null) ? recent.length : null, totalRecentViews: v.reduce((t, n) => t + n, 0), sample: v.length,
+    avgViews: recent30.length ? Math.round(sum(recent30) / recent30.length) : null, medianViews: median(recent30),
+    uploads30d: videos.some((x) => x.date) ? recent.length : null, totalViews: v.length ? sum(v) : null, uploadsTracked: videos.length,
+    shorts: videos.filter((x) => x.kind === 'short').length, longForm: videos.filter((x) => x.kind === 'video').length, lives: videos.filter((x) => x.kind === 'live').length,
+    firstUpload: videos.map((x) => x.date).filter(Boolean).sort()[0] || null, lastUpload: videos.map((x) => x.date).filter(Boolean).sort().pop() || null,
   };
 }
 
-module.exports = { classify, searchYouTube, searchWithAI, fetchStats, metrics, parseCount, parseAgo, parseYouTubeSearch, parseYouTubeChannel };
+module.exports = { classify, searchYouTube, searchWithAI, fetchStats, mergeVideos, monthly, metrics, video, parseCount, parseAgo, parseYouTubeSearch, parseYouTubeChannel, parseYouTubeShorts };

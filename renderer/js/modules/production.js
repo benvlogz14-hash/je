@@ -7,6 +7,13 @@ import { ago, dur } from '../lib/format.js';
 import { ClipDrawer } from './clip.js';
 import { QuotaBar } from './cards.js';
 
+/** Quick "new client" so Production works on a fresh install; the full profile lives in Clients. */
+async function quickClient() {
+  const name = await promptDialog({ title: 'New client', label: 'Client or creator name (you can fill in the rest of their profile in Clients later)', placeholder: 'Stringer Media', confirm: 'Create client' });
+  if (!name || !name.trim()) return null;
+  return act(() => api.post('/api/clients', { name: name.trim(), type: 'creator' }), { ok: `${name.trim()} created` });
+}
+
 const LANES = [
   { key: 'production', label: 'In production', statuses: ['queued', 'rendering', 'revising'], color: 'var(--slate)' },
   { key: 'review', label: 'Founder review', statuses: ['review'], color: 'var(--gold)' },
@@ -29,10 +36,11 @@ export function Production() {
 
   return html`<div class="page">
     <div class="page-head"><div class="grow"><h1>Production</h1><div class="sub">Footage in, finished shorts out. Everything here runs automatically; step in only where you're needed.</div></div>
-      <select class="select" id="prod-client" style="width:220px" value=${clientId} onChange=${(e) => setClientId(e.target.value)} aria-label="Client"><option value="">All clients</option>${(clients || []).map((c) => html`<option value=${c.id}>${c.name}</option>`)}</select>
+      <select class="select" id="prod-client" style="width:220px" value=${clientId} onChange=${async (e) => { const v = e.target.value; if (v === '__new') { e.target.value = clientId; const c = await quickClient().catch(() => null); if (c) setClientId(c.id); return; } setClientId(v); }} aria-label="Client">
+        <option value="">${(clients || []).length ? 'All clients' : 'No clients yet'}</option>${(clients || []).map((c) => html`<option value=${c.id}>${c.name}</option>`)}<option value="__new">+ New client…</option></select>
     </div>
     ${client?.quota ? html`<${QuotaStrip} client=${client} />` : null}
-    <${Intake} clients=${clients || []} clientId=${clientId} assets=${assets || []} jobs=${jobs || []} />
+    <${Intake} clients=${clients || []} clientId=${clientId} setClientId=${setClientId} assets=${assets || []} jobs=${jobs || []} />
     <div class="row" style="margin:22px 0 10px"><h3 class="grow">Clips</h3><span class="faint" style="font-size:var(--fs-sm)">${(clips || []).length} total</span></div>
     ${loading ? html`<${Loading} />` : !(clips || []).length ? html`<div class="panel"><${Empty} icon="film" title="No clips yet">Drop footage above. Euclidean transcribes it, finds the strongest moments and renders vertical shorts with captions.</${Empty}></div>` : html`
       <div class="board">${LANES.map((l) => {
@@ -54,37 +62,47 @@ function QuotaStrip({ client }) {
   </div>`;
 }
 
-function Intake({ clients, clientId, assets, jobs }) {
+function Intake({ clients, clientId, setClientId, assets, jobs }) {
   const [over, setOver] = useState(false);
   const [uploads, setUploads] = useState([]);
   const input = useRef(null);
   const target = clientId || (clients.length === 1 ? clients[0].id : '');
+  /** Make sure there's a client to file footage under: pick one, or create the first one on the spot. */
+  const ensureTarget = async () => {
+    if (target) return target;
+    if (clients.length > 1) { toast('Choose which client this footage is for in the menu at the top right.', { kind: 'warn' }); document.getElementById('prod-client')?.focus(); return null; }
+    const c = await quickClient().catch(() => null);
+    if (c) { setClientId(c.id); return c.id; }
+    return null;
+  };
   const upload = async (files) => {
-    if (!target) return toast('Choose a client first so footage stays in the right workspace.', { kind: 'warn' });
+    if (!files.length) return;
+    const to = await ensureTarget(); if (!to) return;
     for (const f of files) {
       const id = Math.random(); setUploads((u) => [...u, { id, name: f.name, p: 0 }]);
-      try { await api.upload(`/api/clients/${target}/upload`, [f], { autoProcess: 'true' }, (p) => setUploads((u) => u.map((x) => (x.id === id ? { ...x, p } : x)))); play('success'); }
+      try { await api.upload(`/api/clients/${to}/upload`, [f], { autoProcess: 'true' }, (p) => setUploads((u) => u.map((x) => (x.id === id ? { ...x, p } : x)))); play('success'); }
       catch (e) { play('error'); toast(e.message, { kind: 'error', title: `${f.name} failed` }); }
       finally { setUploads((u) => u.filter((x) => x.id !== id)); }
     }
   };
   const addLink = async () => {
-    if (!target) return toast('Choose a client first.', { kind: 'warn' });
+    const to = await ensureTarget(); if (!to) return;
     const url = await promptDialog({ title: 'Import from a link', label: 'YouTube, Twitch, Google Drive or a direct video URL (needs yt-dlp for platform links)', placeholder: 'https://…', confirm: 'Import' });
-    if (url) act(() => api.post('/api/assets', { url, clientId: target, autoProcess: true }), { ok: 'Download queued' });
+    if (url) act(() => api.post('/api/assets', { url, clientId: to, autoProcess: true }), { ok: 'Download queued' });
   };
   const addPath = async () => {
-    if (!target) return toast('Choose a client first.', { kind: 'warn' });
-    if (window.euclidean?.pickFiles) { const r = await api.post('/api/system/pick', { filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'm4v', 'webm', 'avi', 'mxf', 'mts'] }] }); for (const p of r.paths || []) await act(() => api.post('/api/assets', { clientId: target, path: p, autoProcess: true }), { ok: 'Importing in place (no copy)' }); return; }
+    const to = await ensureTarget(); if (!to) return;
+    if (window.euclidean?.pickFiles) { const r = await api.post('/api/system/pick', { filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'm4v', 'webm', 'avi', 'mxf', 'mts'] }] }); for (const p of r.paths || []) await act(() => api.post('/api/assets', { clientId: to, path: p, autoProcess: true }), { ok: 'Importing in place (no copy)' }); return; }
     const p = await promptDialog({ title: 'Import a file on this computer', label: 'Full path. The file is used in place, not copied.', placeholder: 'D:\\Footage\\stream-2026-10-11.mp4', confirm: 'Import' });
-    if (p) act(() => api.post('/api/assets', { clientId: target, path: p, autoProcess: true }), { ok: 'Importing' });
+    if (p) act(() => api.post('/api/assets', { clientId: to, path: p, autoProcess: true }), { ok: 'Importing' });
   };
   const active = assets.filter((a) => ['importing', 'transcribing'].includes(a.status) || jobs.some((j) => j.payload?.assetId === a.id));
   const recent = assets.slice(0, 6);
   return html`<div class="grid c2">
     <div class=${'dropzone' + (over ? ' over' : '')} onDragOver=${(e) => { e.preventDefault(); setOver(true); }} onDragLeave=${() => setOver(false)} onDrop=${(e) => { e.preventDefault(); setOver(false); upload([...e.dataTransfer.files]); }}>
       <div class="avatar lg" style="background:var(--teal-soft);color:var(--teal-ink)"><${Icon} name="upload" size=${20} /></div>
-      <div class="grow"><b>Drop footage here</b><div class="muted" style="font-size:var(--fs-sm)">${target ? `For ${clients.find((c) => c.id === target)?.name}. Transcription and clip discovery start automatically.` : 'Pick a client above first.'}</div>
+      <div class="grow"><b>Drop footage here</b><div class="muted" style="font-size:var(--fs-sm)">${target ? `For ${clients.find((c) => c.id === target)?.name}. Transcription and clip discovery start automatically.` : clients.length ? 'Choose the client in the menu at the top right, then drop footage.' : 'Footage is filed under a client. Create your first one (just a name) and drop away.'}</div>
+        ${!clients.length ? html`<div style="margin-top:8px"><${Button} size="sm" kind="soft" icon="plus" onClick=${async () => { const c = await quickClient().catch(() => null); if (c) setClientId(c.id); }}>Create your first client</${Button}></div>` : null}
         ${uploads.map((u) => html`<div style="margin-top:8px"><div class="row" style="font-size:var(--fs-sm)"><span class="grow ellipsis">${u.name}</span><span class="tnum faint">${Math.round(u.p * 100)}%</span></div><${Progress} value=${u.p} /></div>`)}</div>
       <div class="col" style="gap:6px"><${Button} size="sm" kind="primary" icon="upload" onClick=${() => input.current.click()}>Upload</${Button}><${Button} size="sm" kind="ghost" icon="folder" onClick=${addPath}>From disk</${Button}><${Button} size="sm" kind="ghost" icon="link" onClick=${addLink}>From link</${Button}></div>
       <input ref=${input} type="file" accept="video/*,audio/*" multiple hidden onChange=${(e) => { upload([...e.target.files]); e.target.value = ''; }} />

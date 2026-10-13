@@ -491,7 +491,8 @@ r.post('/api/analytics/sync', () => queue.enqueue('analytics.sync', {}, { dedupe
 // ------------------------------------------------------------ tracked creators (Analytics → Creators)
 const creatorsSvc = require('./integrations/creators');
 const PLATFORMS_C = ['youtube', 'tiktok', 'instagram', 'x', 'facebook', 'twitch', 'other'];
-r.get('/api/creators', () => ctx.store.all('creators').slice().sort((a, b) => (b.followers || 0) - (a.followers || 0)));
+// The list leaves out each creator's upload list (it can be thousands long) but includes the monthly breakdown.
+r.get('/api/creators', () => ctx.store.all('creators').slice().sort((a, b) => (b.followers || 0) - (a.followers || 0)).map(({ videos, ...c }) => ({ ...c, months: creatorsSvc.monthly(videos || [], c.history || []).map(({ top, ...m }) => m) })));
 r.get('/api/creators/search', async (req) => {
   const q = String(req.query.q || '').trim();
   if (q.length < 2) throw new HttpError(400, 'Type at least 2 characters');
@@ -510,6 +511,17 @@ r.get('/api/creators/search', async (req) => {
   if (req.query.ai === '1') { try { results.push(...await creatorsSvc.searchWithAI(q)); } catch (e) { errors.push(e.message); } }
   return { results: results.map((x) => ({ ...x, trackedId: isTracked(x)?.id || null })), errors };
 });
+r.get('/api/creators/:id', (req, b, p) => { const c = must(ctx.store.get('creators', p.id)); return { ...c, months: creatorsSvc.monthly(c.videos || [], c.history || []) }; });
+/** CSV for spreadsheets: ?of=months (default) or ?of=uploads */
+r.get('/api/creators/:id/export.csv', (req, res, p) => {
+  const c = ctx.store.get('creators', p.id); if (!c) return send(res, 404, { error: 'Not found' });
+  const q = (v) => (v == null ? '' : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  let rows;
+  if (req.query.of === 'uploads') rows = [['date', 'date_estimated', 'type', 'title', 'views', 'likes', 'comments', 'shares', 'length_seconds', 'url'], ...(c.videos || []).map((v) => [v.date, v.dateApprox ? 'yes' : 'no', v.kind, v.title, v.views, v.likes, v.comments, v.shares, v.durationSec, v.url])];
+  else rows = [['month', 'uploads', 'long_form', 'shorts', 'live', 'views_to_date', 'avg_views', 'median_views', 'likes', 'comments', 'shares', 'engagement_pct', 'avg_length_seconds', 'followers_end_of_month', 'followers_change', 'top_upload', 'top_upload_views'], ...creatorsSvc.monthly(c.videos || [], c.history || []).map((m) => [m.month, m.uploads, m.videos, m.shorts, m.lives, m.views, m.avgViews, m.medianViews, m.likes, m.comments, m.shares, m.engagementPct, m.avgDurationSec, m.followers, m.followersDelta, m.top?.title, m.top?.views])];
+  const name = `${String(c.name).replace(/[^\w\- ]+/g, '').trim() || 'creator'} - ${req.query.of === 'uploads' ? 'uploads' : 'by month'}.csv`;
+  return send(res, 200, '\ufeff' + rows.map((r) => r.map(q).join(',')).join('\r\n'), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}"` });
+}, { stream: true });
 r.post('/api/creators', (req, b) => {
   const platform = PLATFORMS_C.includes(b.platform) ? b.platform : 'other';
   if (!b.name && !b.handle && !b.url) throw new HttpError(400, 'Give the creator a name, handle or profile link');
@@ -524,7 +536,7 @@ r.post('/api/creators', (req, b) => {
     clientId: b.clientId || null, prospectId: b.prospectId || null, tags: [], notes: '', verified: !!b.verified, videos: [], metrics: {}, history: typeof b.followers === 'number' ? [{ at: now(), followers: b.followers, avgViews: null }] : [], addedBy: actorOf(req),
   });
   audit.log(actorOf(req), 'creator.tracked', { creatorId: c.id, name: c.name, platform });
-  if (url && ['youtube', 'tiktok'].includes(platform)) queue.enqueue('creator.sync', { creatorId: c.id }, { dedupeKey: `creator:${c.id}` });
+  if (url && ['youtube', 'tiktok'].includes(platform)) queue.enqueue('creator.sync', { creatorId: c.id, full: true }, { dedupeKey: `creator:${c.id}:full` });
   events.publish('creators', {});
   return c;
 });
@@ -538,7 +550,7 @@ r.patch('/api/creators/:id', (req, b, p) => {
   events.publish('creators', {});
   return c;
 });
-r.post('/api/creators/:id/sync', (req, b, p) => queue.enqueue('creator.sync', { creatorId: must(ctx.store.get('creators', p.id)).id }, { dedupeKey: `creator:${p.id}`, actor: actorOf(req) }));
+r.post('/api/creators/:id/sync', (req, b, p) => queue.enqueue('creator.sync', { creatorId: must(ctx.store.get('creators', p.id)).id, full: !!b.full }, { dedupeKey: `creator:${p.id}${b.full ? ':full' : ''}`, actor: actorOf(req), title: b.full ? 'Collect full upload history' : undefined }));
 r.post('/api/creators/sync-all', (req) => ctx.store.all('creators').map((c) => queue.enqueue('creator.sync', { creatorId: c.id }, { dedupeKey: `creator:${c.id}`, actor: actorOf(req) }).id));
 r.del('/api/creators/:id', (req, b, p) => { const c = must(ctx.store.get('creators', p.id)); ctx.store.remove('creators', c.id); audit.log(actorOf(req), 'creator.untracked', { creatorId: c.id, name: c.name }); events.publish('creators', {}); return { ok: true }; });
 r.post('/api/creators/:id/prospect', (req, b, p) => {
