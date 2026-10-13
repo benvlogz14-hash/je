@@ -512,3 +512,9 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-md); }
 .range::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); border: 2px solid var(--teal); box-shadow: var(--shadow-1); cursor: pointer; transition: transform var(--t-fast) var(--ease); }
 .range::-webkit-slider-thumb:active { transform: scale(1.15); background: var(--teal-soft); }
 .range::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--surface); border: 2px solid var(--teal); }
+
+/* context menu extras: shortcut hints, headings, disabled items, scrolling when long */
+.menu { max-height: calc(100vh - 16px); overflow-y: auto; min-width: 230px; }
+.menu .menu-hint { color: var(--ink-3); font-size: var(--fs-xs); margin-left: 18px; font-family: var(--font-mono); }
+.menu .menu-heading { padding: 6px 10px 2px; font-size: var(--fs-xs); font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.04em; }
+.menu button:disabled { opacity: 0.45; cursor: default; }

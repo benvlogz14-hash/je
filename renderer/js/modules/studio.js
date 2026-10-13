@@ -17,7 +17,84 @@ const EFFECTS = [
   { id: 'vignette', name: 'Vignette', cat: 'Stylize', params: [['amount', 'Amount', 0, 100, 40]] },
   { id: 'flip', name: 'Flip', cat: 'Transform', params: [['horizontal', 'Horizontal', 0, 1, 1, 1], ['vertical', 'Vertical', 0, 1, 0, 1]] },
 ];
-const TRANSITIONS = [{ type: 1, name: 'Cross Dissolve' }, { type: 2, name: 'Fade' }, { type: 3, name: 'Dip to Black' }];
+// Transitions. Types 1–3 are Velo's own; the rest render with FFmpeg's xfade filter on export
+// (server/video/studio.js) and are drawn the same way in the program monitor below.
+const TRANSITIONS = [
+  { type: 1, name: 'Cross Dissolve', cat: 'Dissolve', x: 'fade' }, { type: 2, name: 'Fade', cat: 'Dissolve', x: 'fade' }, { type: 3, name: 'Dip to Black', cat: 'Dissolve', x: 'fadeblack' },
+  { type: 4, name: 'Dip to White', cat: 'Dissolve', x: 'fadewhite' }, { type: 5, name: 'Dither Dissolve', cat: 'Dissolve', x: 'dissolve' }, { type: 6, name: 'Fade Through Gray', cat: 'Dissolve', x: 'fadegrays' },
+  { type: 7, name: 'Blur Dissolve', cat: 'Dissolve', x: 'hblur' }, { type: 8, name: 'Pixelate', cat: 'Dissolve', x: 'pixelize' },
+  { type: 10, name: 'Wipe Left', cat: 'Wipe', x: 'wipeleft' }, { type: 11, name: 'Wipe Right', cat: 'Wipe', x: 'wiperight' }, { type: 12, name: 'Wipe Up', cat: 'Wipe', x: 'wipeup' }, { type: 13, name: 'Wipe Down', cat: 'Wipe', x: 'wipedown' },
+  { type: 14, name: 'Soft Wipe Left', cat: 'Wipe', x: 'smoothleft' }, { type: 15, name: 'Soft Wipe Right', cat: 'Wipe', x: 'smoothright' }, { type: 16, name: 'Soft Wipe Up', cat: 'Wipe', x: 'smoothup' }, { type: 17, name: 'Soft Wipe Down', cat: 'Wipe', x: 'smoothdown' },
+  { type: 18, name: 'Corner Wipe ↘', cat: 'Wipe', x: 'wipetl' }, { type: 19, name: 'Corner Wipe ↙', cat: 'Wipe', x: 'wipetr' }, { type: 20, name: 'Corner Wipe ↗', cat: 'Wipe', x: 'wipebl' }, { type: 21, name: 'Corner Wipe ↖', cat: 'Wipe', x: 'wipebr' },
+  { type: 22, name: 'Diagonal ↖', cat: 'Wipe', x: 'diagtl' }, { type: 23, name: 'Diagonal ↗', cat: 'Wipe', x: 'diagtr' }, { type: 24, name: 'Diagonal ↙', cat: 'Wipe', x: 'diagbl' }, { type: 25, name: 'Diagonal ↘', cat: 'Wipe', x: 'diagbr' },
+  { type: 26, name: 'Clock Wipe', cat: 'Wipe', x: 'radial' }, { type: 27, name: 'Slats Left', cat: 'Wipe', x: 'hlslice' }, { type: 28, name: 'Slats Right', cat: 'Wipe', x: 'hrslice' }, { type: 29, name: 'Slats Up', cat: 'Wipe', x: 'vuslice' }, { type: 30, name: 'Slats Down', cat: 'Wipe', x: 'vdslice' },
+  { type: 31, name: 'Iris Round', cat: 'Iris', x: 'circleopen' }, { type: 32, name: 'Iris Round Close', cat: 'Iris', x: 'circleclose' }, { type: 33, name: 'Split Open', cat: 'Iris', x: 'horzopen' }, { type: 34, name: 'Split Close', cat: 'Iris', x: 'horzclose' },
+  { type: 35, name: 'Barn Doors Open', cat: 'Iris', x: 'vertopen' }, { type: 36, name: 'Barn Doors Close', cat: 'Iris', x: 'vertclose' },
+  { type: 40, name: 'Push Left', cat: 'Slide', x: 'slideleft' }, { type: 41, name: 'Push Right', cat: 'Slide', x: 'slideright' }, { type: 42, name: 'Push Up', cat: 'Slide', x: 'slideup' }, { type: 43, name: 'Push Down', cat: 'Slide', x: 'slidedown' },
+  { type: 44, name: 'Slide Left', cat: 'Slide', x: 'coverleft' }, { type: 45, name: 'Slide Right', cat: 'Slide', x: 'coverright' }, { type: 46, name: 'Slide Up', cat: 'Slide', x: 'coverup' }, { type: 47, name: 'Slide Down', cat: 'Slide', x: 'coverdown' },
+  { type: 48, name: 'Squeeze Horizontal', cat: 'Slide', x: 'squeezeh' }, { type: 49, name: 'Squeeze Vertical', cat: 'Slide', x: 'squeezev' },
+];
+const TRANS_BY_TYPE = Object.fromEntries(TRANSITIONS.map((t) => [t.type, t]));
+
+/**
+ * What a transition does to a clip at progress p (0→1) in the clip's own frame (w×h, origin top-left).
+ * Mirrors FFmpeg xfade: the clip is the incoming side on an In edge and the outgoing side on an Out edge.
+ * Returns { alpha, dx, dy, clip: Path2D|null, evenodd, filter, dip: {color, a}, pixel }.
+ */
+function transitionFx(type, p, w, h, out) {
+  const x = TRANS_BY_TYPE[type]?.x || 'fade';
+  const fx = { alpha: 1, dx: 0, dy: 0, clip: null, evenodd: true, filter: '', dip: null, pixel: 0 };
+  const rect = (a, b, c, d) => { const q = new Path2D(); q.rect(a, b, c, d); return q; };
+  const not = (inner) => { const q = new Path2D(); q.rect(0, 0, w, h); q.addPath(inner); return q; };
+  // incoming region at progress p, as sampled from xfade
+  const R = Math.hypot(w / 2, h / 2);
+  const region = () => {
+    switch (x) {
+      case 'wipeleft': case 'smoothleft': case 'hlslice': case 'coverleft': return rect(w * (1 - p), 0, w * p, h);
+      case 'wiperight': case 'smoothright': case 'hrslice': case 'coverright': return rect(0, 0, w * p, h);
+      case 'wipeup': case 'smoothup': case 'vuslice': case 'coverup': return rect(0, h * (1 - p), w, h * p);
+      case 'wipedown': case 'smoothdown': case 'vdslice': case 'coverdown': return rect(0, 0, w, h * p);
+      case 'wipetl': return not(rect(0, 0, w * (1 - p), h * (1 - p)));
+      case 'wipetr': return not(rect(w * p, 0, w * (1 - p), h * (1 - p)));
+      case 'wipebl': return not(rect(0, h * p, w * (1 - p), h * (1 - p)));
+      case 'wipebr': return not(rect(w * p, h * p, w * (1 - p), h * (1 - p)));
+      case 'diagtl': case 'diagtr': case 'diagbl': case 'diagbr': {
+        // grows from the opposite corner along the diagonal
+        const k = 2 * p; const q = new Path2D();
+        const pts = { diagtl: [[w, h], [w - w * k, h], [w, h - h * k]], diagtr: [[0, h], [w * k, h], [0, h - h * k]], diagbl: [[w, 0], [w - w * k, 0], [w, h * k]], diagbr: [[0, 0], [w * k, 0], [0, h * k]] }[x];
+        q.moveTo(...pts[0]); q.lineTo(...pts[1]); q.lineTo(...pts[2]); q.closePath(); return q;
+      }
+      case 'radial': { const q = new Path2D(); q.moveTo(w / 2, h / 2); q.arc(w / 2, h / 2, R + 2, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); q.closePath(); return q; }
+      case 'circleopen': { const q = new Path2D(); q.arc(w / 2, h / 2, p * R, 0, Math.PI * 2); return q; }
+      case 'circleclose': { const q = new Path2D(); q.arc(w / 2, h / 2, (1 - p) * R, 0, Math.PI * 2); return not(q); }
+      case 'horzopen': return rect(0, h / 2 - (p * h) / 2, w, p * h);
+      case 'horzclose': case 'squeezeh': return not(rect(0, h / 2 - ((1 - p) * h) / 2, w, (1 - p) * h));
+      case 'vertopen': return rect(w / 2 - (p * w) / 2, 0, p * w, h);
+      case 'vertclose': case 'squeezev': return not(rect(w / 2 - ((1 - p) * w) / 2, 0, (1 - p) * w, h));
+      default: return null;
+    }
+  };
+  if (['fade', 'dissolve'].includes(x)) { fx.alpha = out ? 1 - p : p; return fx; }
+  if (x === 'fadegrays') { fx.alpha = out ? 1 - p : p; fx.filter = `grayscale(${out ? p : 1 - p})`; return fx; }
+  if (x === 'hblur') { fx.alpha = out ? 1 - p : p; fx.filter = `blur(${Math.round((1 - Math.abs(2 * p - 1)) * 12)}px)`; return fx; }
+  if (x === 'pixelize') { fx.alpha = out ? 1 - p : p; fx.pixel = Math.round((1 - Math.abs(2 * p - 1)) * 48); return fx; }
+  if (x === 'fadeblack' || x === 'fadewhite') {
+    const color = x === 'fadeblack' ? '#000' : '#fff';
+    const show = out ? p < 0.5 : p >= 0.5; // the clip is visible on its own half; the colour peaks in the middle
+    fx.alpha = show ? 1 : 0; fx.dip = { color, a: show ? (out ? 2 * p : 2 * (1 - p)) : (out ? 2 * (1 - p) : 2 * p) }; return fx;
+  }
+  const dir = { slideleft: [1, 0], slideright: [-1, 0], slideup: [0, 1], slidedown: [0, -1] }[x];
+  if (dir) { // push: both clips move
+    if (out) { fx.dx = -dir[0] * w * p; fx.dy = -dir[1] * h * p; } else { fx.dx = dir[0] * w * (1 - p); fx.dy = dir[1] * h * (1 - p); }
+    return fx;
+  }
+  const cover = { coverleft: [1, 0], coverright: [-1, 0], coverup: [0, 1], coverdown: [0, -1] }[x];
+  if (cover && !out) { fx.dx = cover[0] * w * (1 - p); fx.dy = cover[1] * h * (1 - p); return fx; }
+  const r = region();
+  // even-odd filling: the frame plus a region is that region's complement, which is what the outgoing side keeps
+  if (r) { if (out) { const q = new Path2D(); q.rect(0, 0, w, h); q.addPath(r); fx.clip = q; } else fx.clip = r; fx.evenodd = true; }
+  return fx;
+}
 const PRESETS = [{ label: 'Shorts / Reels / TikTok', w: 1080, h: 1920 }, { label: 'YouTube 1080p', w: 1920, h: 1080 }, { label: 'Instagram square', w: 1080, h: 1080 }, { label: 'YouTube 4K', w: 3840, h: 2160 }];
 
 const base = (p, d = 0) => (p && typeof p === 'object' ? (p.base ?? d) : (p ?? d));
@@ -174,6 +251,107 @@ function Editor({ id }) {
     }
     setSel([]);
   });
+
+  // ---- clip operations (right-click menu and shortcuts), Premiere-style
+  const groupOf = (s, ids) => [...new Set(ids.flatMap((cid) => { const f = findClip(s, cid); return f ? linked(s, f.c).map((x) => x.id) : []; }))];
+  const trackRef = (s, cid) => { const v = s.videoTracks.findIndex((tr) => tr.clips.some((c) => c.id === cid)); if (v >= 0) return { kind: 'v', i: v }; return { kind: 'a', i: s.audioTracks.findIndex((tr) => tr.clips.some((c) => c.id === cid)) }; };
+  const ensureTrack = (s, kind, i) => { const list = kind === 'v' ? s.videoTracks : s.audioTracks; while (list.length <= i) list.push({ type: kind === 'v' ? 0 : 1, name: `${kind === 'v' ? 'V' : 'A'}${list.length + 1}`, muted: false, locked: false, volume: { base: 1 }, clips: [] }); return list[i]; };
+  const forGroup = (ids, fn) => edit((d, s) => { for (const cid of groupOf(s, ids)) { const f = findClip(s, cid); if (f) fn(f.c, f.tr, d, s); } });
+  const copyClips = (ids = sel, quiet) => {
+    if (!ids.length) return false;
+    const g = groupOf(seq, ids); const items = g.map((cid) => ({ c: clone(findClip(seq, cid).c), ref: trackRef(seq, cid) }));
+    const t0 = Math.min(...items.map((x) => x.c.start));
+    clipboard = { items: items.map((x) => ({ ...x, off: x.c.start - t0 })), media: data.media.filter((m) => items.some((x) => x.c.mediaId === m.id)), span: Math.max(...items.map((x) => x.c.start + x.c.duration)) - t0 };
+    if (!quiet) toast(`${items.length} clip${items.length > 1 ? 's' : ''} copied`, { kind: 'ok', ms: 1800 });
+    return true;
+  };
+  const pasteAt = (at) => {
+    if (!clipboard) return toast('Copy a clip first (Ctrl+C)', { kind: 'warn' });
+    const ids = [];
+    edit((d, s) => {
+      for (const m of clipboard.media) if (!d.media.some((x) => x.id === m.id)) d.media.push(clone(m));
+      const links = {};
+      for (const it of clipboard.items) {
+        const c = clone(it.c); c.id = nextId(d); c.start = at + it.off;
+        if (c.linkId && c.linkId !== '0') { links[c.linkId] = links[c.linkId] || nextId(d); c.linkId = links[c.linkId]; }
+        overwrite(ensureTrack(s, it.ref.kind, Math.max(0, it.ref.i)), c); ids.push(c.id);
+      }
+    });
+    setTimeout(() => setSel(ids), 0);
+  };
+  const duplicate = (ids = sel) => { if (!copyClips(ids, true)) return; const g = groupOf(seq, ids).map((cid) => findClip(seq, cid).c); pasteAt(Math.max(...g.map((c) => c.start + c.duration))); };
+  const cut = (ids = sel) => { if (copyClips(ids, true)) { setSel(ids); setTimeout(() => remove(false), 0); } };
+  const unlink = (ids = sel) => forGroup(ids, (c) => { c.linkId = '0'; });
+  const link = (ids = sel) => edit((d, s) => { const L = nextId(d); for (const cid of ids) { const f = findClip(s, cid); if (f) f.c.linkId = L; } });
+  const setEnabled = (ids, on) => forGroup(ids, (c) => { c.enabled = on; });
+  const muteAudio = (ids, on) => forGroup(ids, (c) => { if (c.type === 1) c.volume = anim(on ? 0 : 1); });
+  const speedDialog = async (ids = sel) => {
+    const first = findClip(seq, ids[0])?.c; if (!first) return;
+    const v = await promptDialog({ title: 'Speed / Duration', label: 'Speed in percent (100 = normal, 200 = twice as fast, 50 = slow motion)', value: String(Math.round((first.speed || 1) * 100)), confirm: 'Apply' });
+    const pct = Number(v); if (!v || !(pct > 0) || pct > 2000) return v == null ? null : toast('Enter a number between 1 and 2000', { kind: 'warn' });
+    forGroup(ids, (c) => { const old = c.speed || 1; c.duration = (c.duration * old) / (pct / 100); c.speed = pct / 100; });
+  };
+  const fitClip = (ids, mode) => forGroup(ids, (c, tr, d, s) => {
+    const m = media[c.mediaId]; if (!m?.width || c.type === 1) return;
+    const k = mode === 'fill' ? Math.max(s.width / m.width, s.height / m.height) : Math.min(s.width / m.width, s.height / m.height);
+    c.scaleX = anim(k); c.scaleY = anim(k); c.posX = anim(0); c.posY = anim(0); c.rotation = anim(0);
+  });
+  const setTransitions = (ids, type) => forGroup(ids, (c) => { if (type) { c.transIn = { type, duration: Math.min(0.5, c.duration / 3) }; c.transOut = { type, duration: Math.min(0.5, c.duration / 3) }; } else { c.transIn = { type: 0, duration: 0.5 }; c.transOut = { type: 0, duration: 0.5 }; } });
+  const renameClip = async (c) => { const v = await promptDialog({ title: 'Rename clip', label: 'Clip name', value: c.name || '' }); if (v != null && v.trim()) forGroup([c.id], (x) => { if (x.id === c.id) x.name = v.trim(); }); };
+  /** Extract Audio: write the clip's sound to its own file, put it on a free audio track, unlink it from the picture. */
+  const extractAudio = async (c) => {
+    const m = media[c.mediaId]; if (!m?.hasAudio) return toast('This clip has no audio', { kind: 'warn' });
+    const item = await act(() => api.post(`/api/projects/${id}/extract-audio`, { mediaId: m.id }), { ok: (x) => `Audio extracted to ${x.name}` });
+    edit((d, s) => {
+      d.media.push(item);
+      const vid = findClip(s, c.id)?.c; if (!vid) return;
+      for (const x of linked(s, vid)) if (x.type === 1) for (const tr of s.audioTracks) tr.clips = tr.clips.filter((y) => y.id !== x.id);
+      vid.linkId = '0';
+      const a = { ...clone(vid), id: nextId(d), type: 1, mediaId: item.id, name: item.name, linkId: '0', effects: [], volume: anim(1), transIn: { type: 0, duration: 0.5 }, transOut: { type: 0, duration: 0.5 } };
+      let ti = s.audioTracks.findIndex((tr) => !tr.locked && !tr.clips.some((y) => y.start < a.start + a.duration - 1e-6 && y.start + y.duration > a.start + 1e-6));
+      if (ti < 0) ti = s.audioTracks.length;
+      overwrite(ensureTrack(s, 'a', ti), a);
+    });
+  };
+  const reveal = (c) => { const m = media[c.mediaId]; if (m) act(() => api.post('/api/system/open', { path: m.path, reveal: true })); };
+
+  const clipMenu = (e, c) => {
+    const ids = sel.includes(c.id) ? sel : [c.id];
+    if (!sel.includes(c.id)) setSel([c.id]);
+    const grp = groupOf(seq, ids).map((cid) => findClip(seq, cid)?.c).filter(Boolean);
+    const isLinked = grp.some((x) => x.linkId && x.linkId !== '0');
+    const kinds = new Set(ids.map((cid) => findClip(seq, cid)?.c.type));
+    const visual = grp.some((x) => x.type === 0 || x.type === 2);
+    const m = media[c.mediaId];
+    const allOn = grp.every((x) => x.enabled !== false);
+    const audioMuted = grp.filter((x) => x.type === 1).every((x) => base(x.volume, 1) === 0);
+    openMenu(e, [
+      { label: 'Cut', icon: 'scissors', hint: 'Ctrl+X', onClick: () => cut(ids) },
+      { label: 'Copy', icon: 'layers', hint: 'Ctrl+C', onClick: () => copyClips(ids) },
+      { label: 'Paste at playhead', icon: 'paperclip', hint: 'Ctrl+V', disabled: !clipboard, onClick: () => pasteAt(t) },
+      { label: 'Duplicate', icon: 'plus', hint: 'Ctrl+D', onClick: () => duplicate(ids) },
+      'sep',
+      { label: 'Split at playhead', icon: 'scissors', hint: 'S', disabled: !(t > c.start && t < c.start + c.duration), onClick: () => { setSel(ids); setTimeout(() => split(false), 0); } },
+      { label: allOn ? 'Disable' : 'Enable', icon: allOn ? 'eyeOff' : 'eye', hint: 'Shift+E', onClick: () => setEnabled(ids, !allOn) },
+      isLinked ? { label: 'Unlink audio and video', icon: 'link', onClick: () => unlink(ids) } : kinds.has(0) && kinds.has(1) ? { label: 'Link audio and video', icon: 'link', onClick: () => link(ids) } : null,
+      grp.some((x) => x.type === 1) ? { label: audioMuted ? 'Unmute audio' : 'Mute audio', icon: audioMuted ? 'volume' : 'mute', onClick: () => muteAudio(ids, !audioMuted) } : null,
+      c.type === 0 && m?.hasAudio ? { label: 'Extract audio to new file', icon: 'volume', onClick: () => extractAudio(c) } : null,
+      'sep',
+      c.type !== 3 ? { label: 'Speed / Duration…', icon: 'clock', hint: 'Ctrl+R', onClick: () => speedDialog(ids) } : null,
+      visual ? { label: 'Scale to fill frame', icon: 'zoomIn', onClick: () => fitClip(ids, 'fill') } : null,
+      visual ? { label: 'Fit inside frame', icon: 'zoomOut', onClick: () => fitClip(ids, 'fit') } : null,
+      { label: 'Apply Cross Dissolve (in + out)', icon: 'layers', hint: 'Ctrl+Shift+D', onClick: () => setTransitions(ids, 1) },
+      grp.some((x) => x.transIn?.type || x.transOut?.type) ? { label: 'Remove transitions', icon: 'x', onClick: () => setTransitions(ids, 0) } : null,
+      grp.some((x) => x.effects?.length) ? { label: 'Remove effects', icon: 'wand', onClick: () => forGroup(ids, (x) => { x.effects = []; }) } : null,
+      { label: 'Effects…', icon: 'wand', onClick: () => setLeftTab('effects') },
+      'sep',
+      { label: 'Rename…', icon: 'edit', onClick: () => renameClip(c) },
+      m && window.euclidean ? { label: 'Reveal in Explorer', icon: 'folder', onClick: () => reveal(c) } : null,
+      'sep',
+      { label: 'Delete', icon: 'trash', hint: 'Del', danger: true, onClick: () => { setSel(ids); setTimeout(() => remove(false), 0); } },
+      { label: 'Ripple delete', icon: 'trash', hint: 'Alt+Del', danger: true, onClick: () => { setSel(ids); setTimeout(() => remove(true), 0); } },
+    ]);
+  };
   const addMedia = (m, trackIdx = 0, at = null, audioIdx = 0) => edit((d, s) => {
     const isAudio = m.kind === 1; const len = m.kind >= 2 ? 5 : Math.max(0.1, (m.srcOut > 0 ? m.srcOut : m.duration) - (m.srcIn || 0));
     const vt = s.videoTracks[trackIdx] || s.videoTracks[0]; const at_ = at ?? Math.max(0, ...(isAudio ? (s.audioTracks[audioIdx] || s.audioTracks[0]).clips : vt.clips).map((c) => c.start + c.duration), 0);
@@ -198,6 +376,13 @@ function Editor({ id }) {
       if (mod && key === 'z' && !e.shiftKey) { e.preventDefault(); doUndo(); }
       else if (mod && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); doRedo(); }
       else if (mod && key === 's') { e.preventDefault(); save(); }
+      else if (mod && key === 'c') { if (copyClips()) e.preventDefault(); }
+      else if (mod && key === 'x') { e.preventDefault(); cut(); }
+      else if (mod && key === 'v') { e.preventDefault(); pasteAt(t); }
+      else if (mod && key === 'd' && e.shiftKey) { e.preventDefault(); if (sel.length) setTransitions(sel, 1); }
+      else if (mod && key === 'd') { e.preventDefault(); duplicate(); }
+      else if (mod && key === 'r') { e.preventDefault(); if (sel.length) speedDialog(); }
+      else if (e.shiftKey && key === 'e' && sel.length) { e.preventDefault(); const on = sel.every((cid) => findClip(seq, cid)?.c.enabled !== false); setEnabled(sel, !on); }
       else if (key === ' ') { e.preventDefault(); setPlaying((p) => !p); }
       else if (key === 'l') setPlaying(true);
       else if (key === 'k') setPlaying(false);
@@ -242,7 +427,7 @@ function Editor({ id }) {
       <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} edit=${edit} />
       <${EffectControls} selected=${selected} seq=${seq} edit=${edit} media=${media} />
     </div>
-    <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} />
+    <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onClipMenu=${clipMenu} />
   </div>`;
 }
 
@@ -290,7 +475,7 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
           <div class="grow" style="min-width:0"><div class="ellipsis" style="font-size:var(--fs-sm);font-weight:500">${m.name}</div><div class="faint tnum" style="font-size:var(--fs-xs)">${m.kind >= 2 ? 'Image' : dur(m.duration)}${m.width ? ` · ${m.width}×${m.height}` : ''}${m.proxyPending ? ' · preparing preview…' : m.proxyError ? ' · preview unavailable' : ''}</div></div></div>`)
         : html`<div class="empty" style="padding:30px 10px"><p style="font-size:var(--fs-sm)">Import or drop video, audio and images here.</p></div>`)
       : html`${['Blur', 'Color', 'Transform', 'Stylize'].map((cat) => html`<div class="eyebrow" style="padding:8px 6px 4px">${cat}</div>${EFFECTS.filter((f) => f.cat === cat).map((f) => html`<div class="review-item" onDblClick=${() => applyEffect(f)} onClick=${() => applyEffect(f)} title="Apply to the selected clip"><${Icon} name="wand" size=${15} /><span style="font-size:var(--fs-sm)">${f.name}</span></div>`)}`)}
-        <div class="eyebrow" style="padding:12px 6px 4px">Transitions</div>${TRANSITIONS.map((tt) => html`<div class="review-item" style="cursor:default"><${Icon} name="layers" size=${15} /><span class="grow" style="font-size:var(--fs-sm)">${tt.name}</span><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transIn')}>In</${Button}><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transOut')}>Out</${Button}></div>`)}`}
+        ${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<div class="eyebrow" style="padding:12px 6px 4px">${cat === 'Dissolve' ? 'Transitions · ' : ''}${cat}</div>${TRANSITIONS.filter((x) => x.cat === cat).map((tt) => html`<div class="review-item" style="cursor:default"><${Icon} name="layers" size=${15} /><span class="grow" style="font-size:var(--fs-sm)">${tt.name}</span><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transIn')}>In</${Button}><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transOut')}>Out</${Button}></div>`)}`)}`}
     </div></div>`;
 }
 
@@ -358,7 +543,8 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       const local = time - c.start;
       let alpha = base(c.opacity, 1);
       const ti = c.transIn?.type ? c.transIn.duration : 0, to = c.transOut?.type ? c.transOut.duration : 0;
-      if (ti && local < ti) alpha *= local / ti; if (to && local > c.duration - to) alpha *= Math.max(0, (c.duration - local) / to);
+      // Titles only fade (as in export); picture clips get the full transition below.
+      if (c.type === 3) { if (ti && local < ti) alpha *= local / ti; if (to && local > c.duration - to) alpha *= Math.max(0, (c.duration - local) / to); }
       g.save(); g.globalAlpha = Math.max(0, Math.min(1, alpha));
       g.translate(W / 2 + base(c.posX) * quality, H / 2 + base(c.posY) * quality);
       g.rotate((base(c.rotation) * Math.PI) / 180);
@@ -383,8 +569,25 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
           const iw = el.videoWidth || el.naturalWidth, ih = el.videoHeight || el.naturalHeight;
           let sxp = 0, syp = 0, sw = iw, sh = ih, dx = -nw / 2, dy = -nh / 2, dw = nw, dh = nh;
           if (crop) { sxp = iw * crop.left / 100; syp = ih * crop.top / 100; sw = iw * (1 - (crop.left + crop.right) / 100); sh = ih * (1 - (crop.top + crop.bottom) / 100); dx += nw * crop.left / 100; dy += nh * crop.top / 100; dw = nw * sw / iw; dh = nh * sh / ih; }
+          const fxs = [];
+          if (ti && local < ti) fxs.push(transitionFx(c.transIn.type, Math.max(0, local / ti), nw, nh, false));
+          if (to && local > c.duration - to) fxs.push(transitionFx(c.transOut.type, Math.min(1, (local - (c.duration - to)) / to), nw, nh, true));
+          const a0 = g.globalAlpha; let pixel = 0; const dips = [];
+          for (const f of fxs) {
+            g.globalAlpha *= f.alpha;
+            if (f.filter) g.filter = (g.filter === 'none' ? '' : g.filter + ' ') + f.filter;
+            if (f.clip || f.dx || f.dy) { g.translate(-nw / 2, -nh / 2); if (f.clip) g.clip(f.clip, 'evenodd'); else g.clip(new Path2D(`M0 0H${nw}V${nh}H0Z`)); g.translate(nw / 2 + f.dx, nh / 2 + f.dy); }
+            pixel = Math.max(pixel, f.pixel); if (f.dip) dips.push(f.dip);
+          }
           g.scale(flipH, flipV);
-          if (sw > 0 && sh > 0) g.drawImage(el, sxp, syp, sw, sh, dx, dy, dw, dh);
+          if (sw > 0 && sh > 0 && g.globalAlpha > 0) {
+            if (pixel > 1) {
+              const off = document.createElement('canvas'); off.width = Math.max(1, Math.round(dw / pixel)); off.height = Math.max(1, Math.round(dh / pixel));
+              off.getContext('2d').drawImage(el, sxp, syp, sw, sh, 0, 0, off.width, off.height);
+              g.imageSmoothingEnabled = false; g.drawImage(off, dx, dy, dw, dh); g.imageSmoothingEnabled = true;
+            } else g.drawImage(el, sxp, syp, sw, sh, dx, dy, dw, dh);
+          }
+          for (const d of dips) { g.filter = 'none'; g.globalAlpha = a0 * Math.max(0, Math.min(1, d.a)); g.fillStyle = d.color; g.fillRect(-nw / 2, -nh / 2, nw, nh); }
           if (vig) { g.filter = 'none'; const rg = g.createRadialGradient(0, 0, Math.min(nw, nh) * 0.25, 0, 0, Math.max(nw, nh) * 0.6); rg.addColorStop(0, 'rgba(0,0,0,0)'); rg.addColorStop(1, `rgba(0,0,0,${vig * 0.85})`); g.fillStyle = rg; g.fillRect(-nw / 2, -nh / 2, nw, nh); }
         }
       }
@@ -475,7 +678,7 @@ function NumField({ label, value, onChange, step = 1, min, max, unit = '', digit
 
 function EffectControls({ selected, seq, edit, media }) {
   if (!selected) return html`<div style="background:var(--ed-panel);border-left:1px solid var(--line);padding:14px"><div class="eyebrow">Effect controls</div><p class="faint" style="font-size:var(--fs-sm);margin-top:10px">Select a clip on the timeline to adjust position, scale, opacity, speed, effects and transitions. Drag any label to scrub its value.</p>
-    <div class="divider" /><div class="eyebrow">Shortcuts</div><div class="col" style="gap:4px;margin-top:8px;font-size:var(--fs-sm)" class="muted">${[['Space', 'Play / pause'], ['J K L', 'Shuttle'], ['S', 'Split selected'], ['Shift S', 'Split all tracks'], ['Del', 'Delete'], ['Alt Del', 'Ripple delete'], ['V / C / T', 'Select / razor / title'], ['Ctrl Z', 'Undo'], ['+ / −', 'Zoom timeline']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="faint">${d}</span></div>`)}</div></div>`;
+    <div class="divider" /><div class="eyebrow">Shortcuts</div><div class="col" style="gap:4px;margin-top:8px;font-size:var(--fs-sm)" class="muted">${[['Space', 'Play / pause'], ['J K L', 'Shuttle'], ['S', 'Split selected'], ['Shift S', 'Split all tracks'], ['Del', 'Delete'], ['Alt Del', 'Ripple delete'], ['V / C / T', 'Select / razor / title'], ['Ctrl Z', 'Undo'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl D', 'Duplicate'], ['Ctrl R', 'Speed / duration'], ['Shift E', 'Enable / disable'], ['Right-click', 'All clip tools'], ['+ / −', 'Zoom timeline']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="faint">${d}</span></div>`)}</div></div>`;
   const c = selected.c;
   // Live-preview while scrubbing (mutate in place); commit an undo step on release.
   const [, force] = useState(0);
@@ -504,13 +707,13 @@ function EffectControls({ selected, seq, edit, media }) {
       ${(def?.params || []).map(([k, label, mn, mx, dflt, stp]) => html`<${NumField} label=${label} value=${base(e.params?.[k], dflt)} min=${mn} max=${mx} step=${stp || (mx - mn > 50 ? 1 : 0.05)} digits=${stp && stp < 1 ? 2 : 0} onChange=${(v, l) => { if (l) liveSet(e.params, k, anim(v), c.id + 'fx' + i + k); else setRaw((x) => { x.effects[i].params[k] = anim(v); }); }} />`)}`; })}
     <div class="divider" /><div class="eyebrow">Transitions</div>
     ${['transIn', 'transOut'].map((edge) => html`<div class="row" style="padding:4px 0"><span class="muted" style="width:34px;font-size:var(--fs-sm)">${edge === 'transIn' ? 'In' : 'Out'}</span>
-      <select class="select sm" style="flex:1" value=${c[edge]?.type || 0} onChange=${(e) => setRaw((x) => { x[edge] = { type: Number(e.target.value), duration: x[edge]?.duration || 0.5 }; })} aria-label=${edge}><option value="0">None</option>${TRANSITIONS.map((tt) => html`<option value=${tt.type}>${tt.name}</option>`)}</select>
+      <select class="select sm" style="flex:1" value=${c[edge]?.type || 0} onChange=${(e) => setRaw((x) => { x[edge] = { type: Number(e.target.value), duration: x[edge]?.duration || 0.5 }; })} aria-label=${edge}><option value="0">None</option>${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<optgroup label=${cat}>${TRANSITIONS.filter((tt) => tt.cat === cat).map((tt) => html`<option value=${tt.type}>${tt.name}</option>`)}</optgroup>`)}</select>
       <input class="input sm tnum" style="width:62px" type="number" step="0.05" min="0.04" value=${c[edge]?.duration || 0.5} onChange=${(e) => setRaw((x) => { x[edge] = { ...(x[edge] || { type: 0 }), duration: Math.max(0.04, Number(e.target.value)) }; })} aria-label="Duration" /></div>`)}
   </div>`;
 }
 
 // ------------------------------------------------------------ timeline
-function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom, duration, edit, findClip, linked, onAdd, onDropFiles }) {
+function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom, duration, edit, findClip, linked, onAdd, onDropFiles, onClipMenu }) {
   const scroller = useRef(null);
   const [drag, setDrag] = useState(null);
   const [, force] = useState(0);
@@ -627,7 +830,7 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
           </div>
           <div style=${{ position: 'relative', flex: 1, background: lane.tr.locked ? 'repeating-linear-gradient(135deg, transparent 0 6px, var(--surface-3) 6px 7px)' : 'transparent', opacity: lane.tr.muted ? 0.5 : 1 }} onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => onDropMedia(e, lane)} onPointerDown=${() => setSel([])}>
             ${lane.tr.clips.map((c) => { const v = view(c); const isSel = sel.includes(c.id); const colors = c.type === 1 ? ['--clip-a', '--clip-a-line'] : c.type === 3 ? ['--clip-t', '--clip-t-line'] : ['--clip-v', '--clip-v-line'];
-              return html`<div key=${c.id} title=${c.name} onPointerDown=${(e) => onClipDown(e, c, lane)} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(4, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
+              return html`<div key=${c.id} title=${c.name} onContextMenu=${(e) => onClipMenu(e, c)} onPointerDown=${(e) => { if (e.button === 2) return; onClipDown(e, c, lane); }} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(4, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
                 ${c.type === 0 && media[c.mediaId] && xOf(v.duration) > 50 ? html`<div style=${{ position: 'absolute', inset: 0, backgroundImage: `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(media[c.mediaId].path)}&t=${Math.round(c.in || 0) + 1}`)})`, backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x', opacity: 0.45 }} />` : null}
                 <div class="ellipsis" style="position:relative;font-size:11px;font-weight:600;padding:3px 7px;color:var(--ink)">${c.type === 3 ? (c.text?.text || 'Title') : c.name}${c.effects?.length ? ' ·fx' : ''}${(c.speed || 1) !== 1 ? ` · ${Math.round((c.speed || 1) * 100)}%` : ''}</div>
                 ${c.transIn?.type ? html`<div style=${{ position: 'absolute', left: 0, top: 0, bottom: 0, width: xOf(c.transIn.duration) + 'px', background: 'linear-gradient(90deg, rgba(0,0,0,0.25), transparent)' }} />` : null}

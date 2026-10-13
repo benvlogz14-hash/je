@@ -550,7 +550,8 @@ r.put('/api/projects/:id', (req, b, p) => {
   // Keep preview-proxy fields the engine filled in after the editor last loaded the project.
   const known = Object.fromEntries((pr.data?.media || []).map((m) => [m.id, m]));
   for (const m of b.data?.media || []) { const k = known[m.id]; if (k && k.proxy && !m.proxy) { m.proxy = k.proxy; m.proxyPending = false; } }
-  return ctx.store.update('projects', p.id, { data: b.data, name: b.name || undefined });
+  // Only touch the name when one is sent (autosaves send data only; an undefined name used to wipe it).
+  return ctx.store.update('projects', p.id, { data: b.data, ...(b.name ? { name: String(b.name).slice(0, 120) } : {}) });
 });
 r.del('/api/projects/:id', (req, b, p) => ({ ok: ctx.store.remove('projects', p.id) }));
 r.post('/api/projects/:id/export', (req, b, p) => { const pr = must(ctx.store.get('projects', p.id)); return queue.enqueue('studio.export', { projectId: pr.id }, { clientId: pr.clientId, actor: actorOf(req), title: `Export ${pr.name}` }); });
@@ -588,6 +589,21 @@ r.post('/api/projects/:id/media', async (req, b, p) => {
   ctx.store.update('projects', pr.id, { data });
   return problems.length ? { media: added, problems } : added;
 }, { raw: true });
+/** Studio → right-click → Extract Audio: writes the clip's sound to its own file and adds it to the bin. */
+r.post('/api/projects/:id/extract-audio', async (req, b, p) => {
+  const pr = must(ctx.store.get('projects', p.id));
+  const m = must((pr.data.media || []).find((x) => x.id === b.mediaId), 'That clip\'s media is not in this project');
+  if (!m.hasAudio) throw new HttpError(400, `${m.name} has no audio to extract`);
+  const dir = pr.clientId ? paths.clientDir(pr.clientId, 'studio-media') : paths.tmp('studio-media');
+  let out = path.join(dir, `${path.basename(m.path, path.extname(m.path))} (audio).m4a`); let n = 2;
+  while (fs.existsSync(out)) out = path.join(dir, `${path.basename(m.path, path.extname(m.path))} (audio ${n++}).m4a`);
+  await require('./core/util').run(ff.bin('ffmpeg'), ['-hide_banner', '-y', '-i', m.path, '-map', '0:a:0', '-vn', '-c:a', 'aac', '-b:a', '256k', out], { timeoutMs: 3600000 });
+  const info = await ff.probe(out);
+  const item = { id: makeId('m'), path: out, name: path.basename(out), kind: 1, duration: info.duration, hasVideo: false, hasAudio: true, srcIn: 0, srcOut: -1, extractedFrom: m.id };
+  const cur = ctx.store.get('projects', pr.id); const data = cur.data; data.media = [...(data.media || []), item];
+  ctx.store.update('projects', pr.id, { data });
+  return item;
+});
 /** Media preview for Studio: only files referenced by a project or an asset can be served. */
 r.get('/api/media', (req, res) => {
   const f = String(req.query.path || '');

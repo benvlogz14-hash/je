@@ -178,8 +178,8 @@ let menuEl = null;
 export function openMenu(e, items) {
   e.preventDefault(); e.stopPropagation(); closeMenu(); play('tap');
   menuEl = document.createElement('div'); document.body.appendChild(menuEl);
-  const x = Math.min(e.clientX, innerWidth - 220), y = Math.min(e.clientY, innerHeight - items.length * 32 - 20);
-  render(html`<div class="menu" style=${{ left: x + 'px', top: y + 'px' }} onClick=${(ev) => ev.stopPropagation()}>${items.map((it) => it === 'sep' ? html`<hr />` : html`<button class=${it.danger ? 'danger' : ''} onClick=${() => { closeMenu(); play('tap'); it.onClick(); }}>${it.icon ? html`<${Icon} name=${it.icon} size=${15} />` : null}${it.label}</button>`)}</div>`, menuEl);
+  const x = Math.min(e.clientX, innerWidth - 250), y = Math.max(8, Math.min(e.clientY, innerHeight - items.filter(Boolean).length * 30 - 20));
+  render(html`<div class="menu" style=${{ left: x + 'px', top: y + 'px' }} onClick=${(ev) => ev.stopPropagation()}>${items.filter(Boolean).map((it) => it === 'sep' ? html`<hr />` : it.heading ? html`<div class="menu-heading">${it.heading}</div>` : html`<button class=${it.danger ? 'danger' : ''} disabled=${it.disabled} onClick=${() => { if (it.disabled) return; closeMenu(); play('tap'); it.onClick(); }}>${it.icon ? html`<${Icon} name=${it.icon} size=${15} />` : html`<span style="width:15px" />`}<span class="grow">${it.label}</span>${it.hint ? html`<span class="menu-hint">${it.hint}</span>` : null}</button>`)}</div>`, menuEl);
   setTimeout(() => window.addEventListener('pointerdown', onAway, { once: true }), 0);
 }
 function onAway(e) { if (menuEl && !menuEl.contains(e.target)) closeMenu(); else if (menuEl) window.addEventListener('pointerdown', onAway, { once: true }); }

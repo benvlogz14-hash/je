@@ -62,6 +62,27 @@ function colTag(hex) { const h = String(hex).replace('#', '').padEnd(6, '0'); re
 
 function transDur(t) { return t && t.type ? Math.max(0.04, t.duration || 1) : 0; }
 
+// Studio transition types → FFmpeg xfade names (types 1–3 are Velo's and use the plain fade filter).
+const XFADE = {
+  4: 'fadewhite', 5: 'dissolve', 6: 'fadegrays', 7: 'hblur', 8: 'pixelize',
+  10: 'wipeleft', 11: 'wiperight', 12: 'wipeup', 13: 'wipedown', 14: 'smoothleft', 15: 'smoothright', 16: 'smoothup', 17: 'smoothdown',
+  18: 'wipetl', 19: 'wipetr', 20: 'wipebl', 21: 'wipebr', 22: 'diagtl', 23: 'diagtr', 24: 'diagbl', 25: 'diagbr',
+  26: 'radial', 27: 'hlslice', 28: 'hrslice', 29: 'vuslice', 30: 'vdslice', 31: 'circleopen', 32: 'circleclose',
+  33: 'horzopen', 34: 'horzclose', 35: 'vertopen', 36: 'vertclose', 40: 'slideleft', 41: 'slideright', 42: 'slideup', 43: 'slidedown',
+  44: 'coverleft', 45: 'coverright', 46: 'coverup', 47: 'coverdown', 48: 'squeezeh', 49: 'squeezev',
+};
+let xfadeNames = null;
+/** Which xfade transitions this FFmpeg build has (older builds lack some; those fall back to a dissolve). */
+async function xfadeSupport() {
+  if (xfadeNames) return xfadeNames;
+  try {
+    const { run } = require('../core/util');
+    const r = await run(require('./ffmpeg').bin('ffmpeg'), ['-hide_banner', '-h', 'filter=xfade'], { timeoutMs: 15000 });
+    xfadeNames = new Set((r.out.match(/^\s{5,}(\w+)\s+-?\d+/gm) || []).map((l) => l.trim().split(/\s+/)[0]));
+  } catch { xfadeNames = new Set(); }
+  return xfadeNames;
+}
+
 async function exportProject(project, outPath, { signal, onProgress } = {}) {
   render.ensureFonts();
   const seq = project.sequences.find((s) => s.id === project.activeSequence) || project.sequences[0];
@@ -73,6 +94,16 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
   const warnings = new Set();
   const args = ['-f', 'lavfi', '-i', `color=c=black:s=${W}x${H}:r=${fps}:d=${num(dur)}`, '-f', 'lavfi', '-t', num(dur), '-i', 'anullsrc=r=48000:cl=stereo'];
   let idx = 2; const f = []; let last = '0:v'; const audio = ['1:a']; const texts = [];
+  const xf = await xfadeSupport();
+  /** xfade against a transparent frame: an In edge brings the clip in, an Out edge takes it out. */
+  const xfadeEdge = (label, trans, d, cdur, isOut, w, h, n) => {
+    let name = XFADE[trans.type];
+    if (!xf.has(name)) { warnings.add(`Transition "${name}" needs a newer FFmpeg; exported as a dissolve`); name = 'fade'; }
+    const z = `z${n}`; const outL = `${label}${isOut ? 'o' : 'i'}`;
+    f.push(`color=c=black@0.0:s=${w}x${h}:r=${fps}:d=${num(d + 0.1)},format=yuva420p,settb=AVTB[${z}]`);
+    f.push(isOut ? `[${label}][${z}]xfade=transition=${name}:duration=${num(d)}:offset=${num(Math.max(0, cdur - d))}[${outL}]` : `[${z}][${label}]xfade=transition=${name}:duration=${num(d)}:offset=0[${outL}]`);
+    return outL;
+  };
 
   seq.videoTracks.forEach((track, ti) => {
     if (track.muted) return; // hidden track
@@ -89,16 +120,25 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       const i = idx++;
       const sx = base(c.scaleX, 1), sy = c.uniformScale === false ? base(c.scaleY, 1) : sx;
       const nw = Math.max(2, Math.round(((m.width || W) * Math.abs(sx)) / 2) * 2), nh = Math.max(2, Math.round(((m.height || H) * Math.abs(sy)) / 2) * 2);
-      const chain = [`setpts=(PTS-STARTPTS)/${num(Math.abs(speed))}`, `fps=${fps}`, `scale=${nw}:${nh}`, ...effectFilters(c.effects, warnings), 'format=yuva420p'];
+      // xfade transitions work in the clip's own frame, right after scaling (the preview does the same).
+      const xin = c.transIn?.type && XFADE[c.transIn.type], xout = c.transOut?.type && XFADE[c.transOut.type];
+      let src = `${i}:v`;
+      if (xin || xout) {
+        f.push(`[${i}:v]setpts=(PTS-STARTPTS)/${num(Math.abs(speed))},fps=${fps},scale=${nw}:${nh},format=yuva420p,settb=AVTB,trim=duration=${num(c.duration)}[p${i}]`);
+        src = `p${i}`;
+        if (xin) src = xfadeEdge(src, c.transIn, Math.min(transDur(c.transIn), c.duration), c.duration, false, nw, nh, `${i}a`);
+        if (xout) src = xfadeEdge(src, c.transOut, Math.min(transDur(c.transOut), c.duration), c.duration, true, nw, nh, `${i}b`);
+      }
+      const chain = [...(src === `${i}:v` ? [`setpts=(PTS-STARTPTS)/${num(Math.abs(speed))}`, `fps=${fps}`, `scale=${nw}:${nh}`] : []), ...effectFilters(c.effects, warnings), 'format=yuva420p'];
       const rot = base(c.rotation, 0);
       if (rot) chain.push(`rotate=${num((rot * Math.PI) / 180)}:c=none:ow=rotw(${num((rot * Math.PI) / 180)}):oh=roth(${num((rot * Math.PI) / 180)})`);
       const op = base(c.opacity, 1);
       if (op < 0.999) chain.push(`colorchannelmixer=aa=${num(op)}`);
       const ti_ = transDur(c.transIn), to = transDur(c.transOut);
-      if (ti_) chain.push(`fade=t=in:st=0:d=${num(ti_)}:alpha=${c.transIn.type === 3 ? 0 : 1}`);
-      if (to) chain.push(`fade=t=out:st=${num(Math.max(0, c.duration - to))}:d=${num(to)}:alpha=${c.transOut.type === 3 ? 0 : 1}`);
+      if (ti_ && !xin) chain.push(`fade=t=in:st=0:d=${num(ti_)}:alpha=${c.transIn.type === 3 ? 0 : 1}`);
+      if (to && !xout) chain.push(`fade=t=out:st=${num(Math.max(0, c.duration - to))}:d=${num(to)}:alpha=${c.transOut.type === 3 ? 0 : 1}`);
       chain.push(`trim=duration=${num(c.duration)}`, `setpts=PTS+${num(c.start)}/TB`);
-      f.push(`[${i}:v]${chain.join(',')}[c${i}]`);
+      f.push(`[${src}]${chain.join(',')}[c${i}]`);
       const x = `(W-w)/2+${num(base(c.posX, 0))}`, y = `(H-h)/2+${num(base(c.posY, 0))}`;
       f.push(`[${last}][c${i}]overlay=x='${x}':y='${y}':enable='between(t,${num(c.start)},${num(c.start + c.duration)})':eof_action=pass[o${i}]`);
       last = `o${i}`;
