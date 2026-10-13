@@ -209,10 +209,16 @@ queue.register('studio.export', {
     const studio = require('../video/studio');
     const proj = ctx.store.get('projects', job.payload.projectId);
     if (!proj) throw permanent('Project not found');
-    const dir = proj.clientId ? paths.clientDir(proj.clientId, 'studio') : paths.exports('studio');
-    const out = path.join(dir, `${slug(proj.name)}-${Date.now().toString(36)}.mp4`);
+    const dir = job.payload.outDir || (proj.clientId ? paths.clientDir(proj.clientId, 'studio') : paths.exports('studio'));
+    fs.mkdirSync(dir, { recursive: true });
+    const baseName = job.payload.fileName || `${slug(proj.name || 'Untitled edit')}-${Date.now().toString(36)}`;
+    let out = path.join(dir, `${baseName}.mp4`); let n = 2;
+    while (fs.existsSync(out)) out = path.join(dir, `${baseName} (${n++}).mp4`); // never overwrite an earlier export
     const r = await studio.exportProject(proj.data, out, { signal: h.signal, onProgress: (p) => h.progress(p * 0.95, 'Rendering timeline') });
     ctx.store.update('projects', proj.id, (p) => ({ exports: [...(p.exports || []), { path: out, at: now(), warnings: r.warnings }] }));
+    events.publish('notify', { title: 'Export finished', body: path.basename(out) });
+    events.publish('studio.exported', { projectId: proj.id, path: out, warnings: r.warnings });
+    if (job.payload.reveal !== false && ctx.revealFile) ctx.revealFile(out);
     return { path: out, warnings: r.warnings };
   },
 });

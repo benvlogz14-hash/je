@@ -589,6 +589,7 @@ r.post('/api/system/open', (req, b) => {
   if (b.path && fs.existsSync(b.path)) { if (b.reveal && ctx.revealFile) ctx.revealFile(b.path); else if (ctx.openPath) ctx.openPath(b.path); return { ok: true }; }
   throw new HttpError(400, ctx.electron ? 'Nothing to open' : 'Opening files is only available in the desktop app');
 }, { roles: STAFF });
+r.post('/api/system/pick-folder', async (req, b) => { if (!ctx.pickFolder) throw new HttpError(400, 'Choosing a folder is only available in the desktop app'); return { path: await ctx.pickFolder(b) }; });
 r.post('/api/system/pick', async (req, b) => { if (!ctx.pickFiles) throw new HttpError(400, 'File picker is only available in the desktop app'); return { paths: await ctx.pickFiles(b) }; });
 r.post('/api/sandbox/simulate-inbound', (req, b) => {
   // Test environment only: lets you rehearse the inbound → triage → revision flow without a phone.
@@ -616,7 +617,22 @@ r.put('/api/projects/:id', (req, b, p) => {
   return ctx.store.update('projects', p.id, { data: b.data, ...(b.name ? { name: String(b.name).slice(0, 120) } : {}) });
 });
 r.del('/api/projects/:id', (req, b, p) => ({ ok: ctx.store.remove('projects', p.id) }));
-r.post('/api/projects/:id/export', (req, b, p) => { const pr = must(ctx.store.get('projects', p.id)); return queue.enqueue('studio.export', { projectId: pr.id }, { clientId: pr.clientId, actor: actorOf(req), title: `Export ${pr.name}` }); });
+r.get('/api/projects/:id/export-defaults', (req, b, p) => {
+  const pr = must(ctx.store.get('projects', p.id));
+  const folder = ctx.setting('studio.exportFolder', '') || path.join(require('os').homedir(), 'Videos', 'Euclidean');
+  return { folder, fileName: `${String(pr.name || '').replace(/[^\w\- ]+/g, '').trim() || 'Untitled edit'}.mp4`, desktop: !!ctx.pickFolder };
+});
+r.post('/api/projects/:id/export', (req, b, p) => {
+  const pr = must(ctx.store.get('projects', p.id));
+  let outDir = null; let fileName = null;
+  if (b.folder) {
+    outDir = path.resolve(String(b.folder));
+    try { fs.mkdirSync(outDir, { recursive: true }); fs.accessSync(outDir, fs.constants.W_OK); } catch { throw new HttpError(400, `Euclidean can't save into ${outDir}. Choose another folder.`); }
+    ctx.store.setSettings({ studio: { exportFolder: outDir } });
+  }
+  if (b.fileName) fileName = path.basename(String(b.fileName)).replace(/[<>:"/\\|?*]+/g, '').replace(/\.mp4$/i, '').trim().slice(0, 120) || null;
+  return queue.enqueue('studio.export', { projectId: pr.id, outDir, fileName, reveal: b.reveal !== false }, { clientId: pr.clientId, actor: actorOf(req), title: `Export ${pr.name}` });
+});
 r.get('/api/projects/:id/velo', (req, res, p) => { const pr = must(ctx.store.get('projects', p.id)); const f = path.join(paths.tmp('velo'), `${pr.id}.velo`); fs.writeFileSync(f, JSON.stringify(pr.data, null, 1)); return serveFile(req, res, f, { download: `${pr.name.replace(/[^\w\- ]/g, '')}.velo` }); }, { stream: true });
 r.post('/api/projects/:id/open-velo', (req, b, p) => {
   const pr = must(ctx.store.get('projects', p.id)); const f = path.join(paths.tmp('velo'), `${pr.id}.velo`); fs.writeFileSync(f, JSON.stringify(pr.data, null, 1));

@@ -131,7 +131,7 @@ function Projects() {
       <${Button} kind="primary" icon="plus" onClick=${() => setCreating(true)}>New project</${Button}></div>
     ${loading ? html`<${Loading} />` : !(data || []).length ? html`<div class="panel"><${Empty} icon="studio" title="No projects yet" action=${html`<${Button} kind="soft" icon="plus" onClick=${() => setCreating(true)}>New project</${Button}>`}>Open any clip with "Open in Studio" to get a project pre-built with footage, captions and hook, or start from scratch.</${Empty}></div>` : html`
       <div class="grid c3">${data.map((p) => html`<div class="panel pad" style="cursor:pointer" onClick=${() => { sfx('open'); navigate(`/studio/${p.id}`); }} onContextMenu=${(e) => openMenu(e, [{ label: 'Delete project', icon: 'trash', danger: true, onClick: async () => { if (await confirmDialog({ title: 'Delete project?', text: `"${p.name}" will be removed. Media files are not deleted.`, confirm: 'Delete' })) act(() => api.del(`/api/projects/${p.id}`), { ok: 'Deleted' }).then(reload); } }])}>
-        <div class="row"><div class="avatar" style="background:var(--slate-soft);color:var(--slate-ink)"><${Icon} name="studio" size=${17} /></div><div class="grow" style="min-width:0"><b class="ellipsis" style="display:block">${p.name}</b><div class="faint" style="font-size:var(--fs-sm)">${p.media} media · edited ${ago(p.updatedAt)}</div></div></div>
+        <div class="row"><div class="avatar" style="background:var(--slate-soft);color:var(--slate-ink)"><${Icon} name="studio" size=${17} /></div><div class="grow" style="min-width:0"><b class="ellipsis" style="display:block">${p.name || 'Untitled edit'}</b><div class="faint" style="font-size:var(--fs-sm)">${p.media} media · edited ${ago(p.updatedAt)}</div></div></div>
         ${(p.exports || []).length ? html`<div class="faint" style="font-size:var(--fs-xs);margin-top:10px">${p.exports.length} export${p.exports.length > 1 ? 's' : ''}</div>` : null}</div>`)}</div>`}
     ${creating ? html`<${NewProject} clients=${clients || []} onClose=${() => setCreating(false)} />` : null}
   </div>`;
@@ -186,6 +186,8 @@ function Editor({ id }) {
 
   // ---- importing (bin button, drag from the desktop onto the bin, the timeline or anywhere in the editor)
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  useEvent('studio.exported', (x) => { if (x.projectId === id) toast(`Saved to ${x.path}${x.warnings?.length ? ` · ${x.warnings.join(' · ')}` : ''}`, { kind: 'ok', title: 'Export finished', ms: 9000 }); }, [id]);
   const acceptImported = (r) => {
     const added = Array.isArray(r) ? r : r?.media || [];
     if (r?.problems?.length) toast(r.problems.join(' · '), { kind: 'warn', title: 'Some files were skipped' });
@@ -405,11 +407,11 @@ function Editor({ id }) {
   if (!data || !seq) return html`<div class="page"><${Loading} /></div>`;
   const selected = sel.length === 1 ? findClip(seq, sel[0]) : null;
 
-  const exportNow = async () => { await save(true); await act(() => api.post(`/api/projects/${id}/export`), { ok: 'Export started. Track it in the status bar.' }); };
+  const exportNow = async () => { await save(true); setExporting(true); };
   return html`<div style="position:absolute;inset:0;display:grid;grid-template-columns:minmax(0, 1fr);grid-template-rows:46px minmax(0, 1fr) minmax(210px, 38%);background:var(--ed-bg)">
     <div class="row" style="padding:0 12px;background:var(--surface);border-bottom:1px solid var(--line);gap:10px;min-width:0;overflow-x:auto">
       <${Button} kind="ghost" size="sm" icon="chevronLeft" title="All projects" onClick=${() => { if (dirty) save(true); navigate('/studio'); }} />
-      <b class="ellipsis" style="max-width:260px">${proj.name}</b><span class="faint tnum" style="font-size:var(--fs-sm)">${seq.width}×${seq.height} · ${seq.fps} fps</span>
+      <b class="ellipsis" style="max-width:260px">${proj.name || 'Untitled edit'}</b><span class="faint tnum" style="font-size:var(--fs-sm)">${seq.width}×${seq.height} · ${seq.fps} fps</span>
       <span class="faint" style="font-size:var(--fs-xs)">${dirty ? 'Unsaved changes' : 'Saved'}</span>
       <div class="spacer" />
       <div class="btn-group"><button class=${tool === 'select' ? 'on' : ''} title="Selection (V)" onClick=${() => { sfx('tap'); setTool('select'); }}><${Icon} name="pointer" size=${14} /></button><button class=${tool === 'razor' ? 'on' : ''} title="Razor (C)" onClick=${() => { sfx('tap'); setTool('razor'); }}><${Icon} name="scissors" size=${14} /></button><button title="Add title (T)" onClick=${addText}><${Icon} name="type" size=${14} /></button></div>
@@ -428,6 +430,7 @@ function Editor({ id }) {
       <${EffectControls} selected=${selected} seq=${seq} edit=${edit} media=${media} />
     </div>
     <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onClipMenu=${clipMenu} />
+    ${exporting ? html`<${ExportDialog} id=${id} onClose=${() => setExporting(false)} />` : null}
   </div>`;
 }
 
@@ -444,6 +447,22 @@ function overwrite(track, c) {
   }
   out.push(c); out.sort((a, b) => a.start - b.start);
   track.clips = out.filter((x) => x.duration > 0.01);
+}
+
+// ------------------------------------------------------------ export: choose where the video is saved
+function ExportDialog({ id, onClose }) {
+  const [d, setD] = useState(null);
+  const [reveal, setReveal] = useState(true);
+  useEffect(() => { api.get(`/api/projects/${id}/export-defaults`).then(setD).catch((e) => { toast(e.message, { kind: 'error' }); onClose(); }); }, [id]);
+  const choose = async () => { const r = await act(() => api.post('/api/system/pick-folder', { title: 'Save the exported video in…', defaultPath: d.folder })); if (r?.path) setD({ ...d, folder: r.path }); };
+  const start = () => act(() => api.post(`/api/projects/${id}/export`, { folder: d.folder, fileName: d.fileName, reveal }), { ok: 'Exporting. The folder opens when the video is ready.' }).then(onClose);
+  return html`<${Modal} title="Export video" icon="upload" onClose=${onClose} footer=${html`<${Button} kind="ghost" onClick=${onClose}>Cancel</${Button}><${Button} kind="primary" icon="upload" disabled=${!d} onClick=${start}>Export</${Button}>`}>
+    ${!d ? html`<${Loading} rows=${2} />` : html`<div class="col" style="gap:14px">
+      <${Field} label="Save in" id="ex-folder"><div class="row"><input id="ex-folder" class="input mono grow" value=${d.folder} onInput=${(e) => setD({ ...d, folder: e.target.value })} />${d.desktop ? html`<${Button} kind="soft" icon="folder" onClick=${choose}>Choose folder…</${Button}>` : null}</div></${Field}>
+      <${Field} label="File name" hint="An existing file is never overwritten; a number is added instead." id="ex-name"><input id="ex-name" class="input" value=${d.fileName} onInput=${(e) => setD({ ...d, fileName: e.target.value })} /></${Field}>
+      <div class="check-row"><${Toggle} on=${reveal} label="Open folder when done" onChange=${setReveal} /><span>Open the folder when the video is ready</span></div>
+      <div class="faint" style="font-size:var(--fs-sm)">MP4 (H.264 + AAC) at the sequence size. Progress shows in the status bar at the bottom.</div>
+    </div>`}</${Modal}>`;
 }
 
 // ------------------------------------------------------------ left: project bin + effects
