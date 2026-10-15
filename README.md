@@ -51,6 +51,18 @@ There is also a native app in `mobile/` (approvals, chat, AI Studio edits, agent
 
 The computer must keep that window open while you use the app. If the phone can't connect on your Wi-Fi, run `Start Phone App.bat tunnel`.
 
+### Install it as a real app (free Apple ID, no jailbreak)
+
+GitHub builds `Euclidean.ipa` on a Mac every time `mobile/` changes (Actions → **Build iPhone app** → Artifacts → *Euclidean-iPhone*; unzip it). Install it with **Sideloadly** on Windows:
+
+1. Install **iTunes** and **iCloud** from apple.com (the website versions, not the Microsoft Store ones), then **Sideloadly** from sideloadly.io.
+2. Plug the iPhone in with a cable, unlock it and tap **Trust**.
+3. Drag `Euclidean.ipa` into Sideloadly, type your Apple ID email and press **Start**. Enter your Apple ID password and any code Apple sends.
+4. On the iPhone: **Settings → Privacy & Security → Developer Mode → On** (it restarts), then **Settings → General → VPN & Device Management →** your Apple ID → **Trust**.
+5. Open Euclidean from the home screen and scan the phone code.
+
+With a free Apple ID the app works for 7 days; plug in and press Start in Sideloadly again to renew (turn on its auto-refresh to do this over Wi-Fi). A free ID allows 3 sideloaded apps at a time. The installed app doesn't need `Start Phone App.bat`, only Euclidean running on the computer.
+
 ## First-time setup (about 20 minutes)
 
 1. **Settings → General**: keep **Test** on. Enter your own phone and email as sandbox recipients.
