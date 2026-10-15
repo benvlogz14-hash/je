@@ -31,6 +31,16 @@ Check that the pipeline works on your machine with no API keys: `npm run selftes
 
 Data lives in `%APPDATA%\Euclidean\data` (database, encrypted credentials, client folders, renders, backups). The engine listens on `127.0.0.1:4870`.
 
+## On your iPhone
+
+Euclidean can't be installed from a file onto an iPhone (Apple only allows signed apps), but it runs as a **home-screen app** connected to this computer:
+
+1. **Settings → General → Use on your iPhone → Turn on phone access** (Euclidean restarts once; allow it on private networks if Windows asks).
+2. Click **Create my phone link** and scan the QR code with the iPhone Camera (same Wi-Fi).
+3. In Safari tap **Share → Add to Home Screen**. Open Euclidean from its icon: full-screen, signed in.
+
+The computer must be on with Euclidean running. To use it away from your Wi-Fi, expose Euclidean with Cloudflare Tunnel and enter that address as the Public URL in Settings → General → Network. **Disconnect phone** revokes the phone's access.
+
 ## First-time setup (about 20 minutes)
 
 1. **Settings → General**: keep **Test** on. Enter your own phone and email as sandbox recipients.

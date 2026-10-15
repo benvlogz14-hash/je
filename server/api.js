@@ -608,6 +608,22 @@ r.post('/api/system/open', (req, b) => {
   if (b.path && fs.existsSync(b.path)) { if (b.reveal && ctx.revealFile) ctx.revealFile(b.path); else if (ctx.openPath) ctx.openPath(b.path); return { ok: true }; }
   throw new HttpError(400, ctx.electron ? 'Nothing to open' : 'Opening files is only available in the desktop app');
 }, { roles: STAFF });
+// ---- Use on your iPhone: the engine serves the app to the phone over Wi-Fi (or a public URL)
+function phoneUser(owner, create) {
+  let u = ctx.store.find('users', (x) => x.device === 'phone' && x.forUser === owner.id);
+  if (!u && create) u = ctx.store.insert('users', { id: makeId('u_'), name: `${owner.name}'s phone`, role: owner.role, token: 'eu_' + crypto.randomBytes(24).toString('base64url'), device: 'phone', forUser: owner.id });
+  return u;
+}
+r.get('/api/phone', async (req) => {
+  const lanOn = !!ctx.setting('server.lan', false); const pub = String(ctx.setting('server.publicUrl', '') || '').replace(/\/$/, '');
+  const host = pub || (ctx.lanAddress ? `http://${ctx.lanAddress}:${ctx.port}` : null);
+  const u = phoneUser(req.user, false);
+  const url = host && u ? `${host}/?token=${u.token}` : null;
+  return { lanOn, lanActive: !!ctx.lanAddress, publicUrl: pub || null, host, url, qr: url ? await require('qrcode').toString(url, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }) : null, canRestart: !!ctx.relaunch };
+}, { roles: OWNER });
+r.post('/api/phone/link', (req) => { const u = phoneUser(req.user, true); audit.log(actorOf(req), 'phone.linked', { userId: u.id }); return { ok: true }; }, { roles: OWNER });
+r.post('/api/phone/unlink', (req) => { const u = phoneUser(req.user, false); if (u) ctx.store.remove('users', u.id); audit.log(actorOf(req), 'phone.unlinked', {}); return { ok: true }; }, { roles: OWNER });
+r.post('/api/system/restart', (req) => { if (!ctx.relaunch) throw new HttpError(400, 'Restart Euclidean by closing it from the tray and opening it again.'); audit.log(actorOf(req), 'system.restart', {}); setTimeout(() => ctx.relaunch(), 300); return { ok: true }; }, { roles: OWNER });
 r.post('/api/system/pick-folder', async (req, b) => { if (!ctx.pickFolder) throw new HttpError(400, 'Choosing a folder is only available in the desktop app'); return { path: await ctx.pickFolder(b) }; });
 r.post('/api/system/pick', async (req, b) => { if (!ctx.pickFiles) throw new HttpError(400, 'File picker is only available in the desktop app'); return { paths: await ctx.pickFiles(b) }; });
 r.post('/api/sandbox/simulate-inbound', (req, b) => {

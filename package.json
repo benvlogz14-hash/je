@@ -23,7 +23,8 @@
     "imapflow": "^1.0.164",
     "mailparser": "^3.7.1",
     "nodemailer": "^6.9.16",
-    "onnxruntime-web": "^1.20.1"
+    "onnxruntime-web": "^1.20.1",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "electron": "33.2.1",

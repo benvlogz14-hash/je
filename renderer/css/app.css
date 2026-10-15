@@ -518,3 +518,19 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-md); }
 .menu .menu-hint { color: var(--ink-3); font-size: var(--fs-xs); margin-left: 18px; font-family: var(--font-mono); }
 .menu .menu-heading { padding: 6px 10px 2px; font-size: var(--fs-xs); font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.04em; }
 .menu button:disabled { opacity: 0.45; cursor: default; }
+
+/* iPhone / small screens: compact title bar, nothing wider than the screen, clear of the home indicator */
+.msg-layout > * { min-width: 0; }
+@media (max-width: 560px) {
+  .titlebar { gap: 6px; padding: 0 8px; }
+  .titlebar .btn-group, .titlebar .avatar, .titlebar .btn.ghost.icon { display: none; }
+  .titlebar .badge { font-size: 10px; padding: 0 6px; }
+  .search-trigger { width: 34px; flex: none; padding: 0; justify-content: center; }
+  .search-trigger .grow, .search-trigger .kb { display: none; }
+  .empty .chips, .empty .row { flex-wrap: wrap; justify-content: center; }
+  .empty { padding-left: 12px; padding-right: 12px; }
+  .statusbar { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .modal { width: calc(100vw - 16px); max-height: calc(100vh - 32px); }
+  .drawer, .drawer.wide { width: 100vw; }
+  .page-head { gap: 8px; }
+}

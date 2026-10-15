@@ -26,12 +26,41 @@ function useSettings() {
 }
 const Section = ({ title, sub, children, action }) => html`<div class="panel pad col" style="gap:14px;margin-bottom:14px"><div class="row"><div class="grow"><h3>${title}</h3>${sub ? html`<div class="muted" style="font-size:var(--fs-sm);margin-top:2px">${sub}</div>` : null}</div>${action}</div>${children}</div>`;
 
+/** Use Euclidean on an iPhone: a home-screen app that connects to this computer over Wi-Fi. */
+function PhoneSetup() {
+  const { data: ph, reload } = useApi('/api/phone', ['settings']);
+  const [, , save] = useSettings();
+  if (!ph) return null;
+  const step = (n, t) => html`<div class="row" style="gap:10px;align-items:flex-start"><span class="badge teal" style="flex:none">${n}</span><span style="font-size:var(--fs-sm)">${t}</span></div>`;
+  const restart = () => act(() => api.post('/api/system/restart'), { ok: 'Restarting Euclidean…' });
+  return html`<${Section} title="Use on your iPhone" sub="Euclidean keeps running on this computer; your phone opens it full-screen from a home-screen icon, like an app. No App Store or jailbreak needed.">
+    ${!ph.lanOn && !ph.publicUrl ? html`<div class="col" style="gap:8px"><div class="notice"><${Icon} name="phone" size=${16} />Phone access is off. Turning it on lets devices on your Wi-Fi reach Euclidean (each one still needs your private link).</div>
+        <div><${Button} kind="primary" icon="phone" onClick=${async () => { await save({ server: { lan: true } }, 'Phone access turned on'); if (ph.canRestart) await restart(); else reload(); }}>Turn on phone access${ph.canRestart ? ' and restart' : ''}</${Button}></div>
+        <div class="faint" style="font-size:var(--fs-xs)">If Windows asks whether Euclidean may use your network, choose Allow on private networks.</div></div>`
+    : !ph.lanActive && !ph.publicUrl ? html`<div class="row" style="gap:10px"><div class="notice gold grow"><${Icon} name="info" size=${16} />Phone access is on but needs a restart to start.</div>${ph.canRestart ? html`<${Button} kind="primary" icon="refresh" onClick=${restart}>Restart Euclidean</${Button}>` : null}</div>`
+    : !ph.url ? html`<div><${Button} kind="primary" icon="phone" onClick=${() => act(() => api.post('/api/phone/link'), { ok: 'Phone link ready' }).then(reload)}>Create my phone link</${Button}></div>`
+    : html`<div class="row wrap" style="gap:22px;align-items:flex-start">
+        <div style="width:210px;height:210px;background:#fff;border-radius:12px;padding:8px;box-shadow:var(--shadow-1)" dangerouslySetInnerHTML=${{ __html: ph.qr }} aria-label="QR code with your phone link" />
+        <div class="col grow" style="gap:10px;min-width:240px">
+          ${step(1, 'Make sure your iPhone is on the same Wi-Fi as this computer.')}
+          ${step(2, 'Open the iPhone Camera and point it at the code. Tap the link that appears; Euclidean opens in Safari.')}
+          ${step(3, html`In Safari tap <b>Share</b> (the square with an arrow), then <b>Add to Home Screen</b>, then <b>Add</b>.`)}
+          ${step(4, 'Open Euclidean from its new home-screen icon. It runs full-screen and stays signed in.')}
+          <div class="row" style="gap:6px"><input class="input mono grow" readonly value=${ph.url} onFocus=${(e) => e.target.select()} aria-label="Phone link" /><${Button} size="sm" kind="ghost" onClick=${() => { navigator.clipboard?.writeText(ph.url).then(() => toast('Link copied', { kind: 'ok' })).catch(() => toast('Select the link and copy it', { kind: 'info' })); }}>Copy</${Button}></div>
+          <div class="faint" style="font-size:var(--fs-xs)">This link signs your phone in, so keep it private. ${ph.publicUrl ? 'It works anywhere because a public address is set.' : 'It works on your home or office Wi-Fi. To use it anywhere, expose Euclidean with Cloudflare Tunnel and enter that address as the Public URL under Network below.'} The computer must be on with Euclidean running.</div>
+          <div><${Button} size="sm" kind="coral" onClick=${async () => { if (await confirmDialog({ title: 'Disconnect your phone?', text: 'The home-screen app stops working until you create a new link.', confirm: 'Disconnect' })) act(() => api.post('/api/phone/unlink'), { ok: 'Phone disconnected' }).then(reload); }}>Disconnect phone</${Button}></div>
+        </div></div>`}
+  </${Section}>`;
+}
+
 function General() {
   const [s, setS, save] = useSettings();
   const a = s.agency;
   const setF = (i, k, v) => { const f = a.founders.slice(); f[i] = { ...f[i], [k]: v }; setS({ ...s, agency: { ...a, founders: f } }); };
   const own = a.founders.reduce((t, f) => t + Number(f.ownershipPct || 0), 0), dist = a.founders.reduce((t, f) => t + Number(f.distributionPct || 0), 0);
+  const boot = useStore((st) => st.boot);
   return html`
+    ${boot.user.role === 'owner' && window.euclidean ? html`<${PhoneSetup} />` : null}
     <${Section} title="Environment" sub="Rehearse safely before anything reaches real clients or audiences.">
       <${Seg} value=${s.environment} onChange=${(v) => setS({ ...s, environment: v })} options=${[{ value: 'test', label: 'Test' }, { value: 'production', label: 'Production' }]} />
       ${s.environment === 'test' ? html`<div class="notice gold"><${Icon} name="info" size=${16} />Test: every outgoing text and email is redirected to the sandbox recipient below with the real recipient in the first line. Publishing writes Manual Packs only; nothing is posted.</div>` : html`<div class="notice coral"><${Icon} name="alert" size=${16} />Production: messages reach real people and approved posts publish to connected accounts.</div>`}

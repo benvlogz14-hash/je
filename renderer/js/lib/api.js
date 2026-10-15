@@ -5,12 +5,18 @@ let token = null;
 const listeners = new Map(); // type -> Set(fn)
 let backend = null;
 
+const PHONE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.standalone === true);
 function readToken() {
   if (window.euclidean?.token) return window.euclidean.token;
   const u = new URL(location.href);
   const t = u.searchParams.get('token');
-  if (t) { try { sessionStorage.setItem('eu.token', t); } catch { /* ignore */ } u.searchParams.delete('token'); history.replaceState(null, '', u.pathname + u.search + u.hash); return t; }
-  try { return sessionStorage.getItem('eu.token'); } catch { return null; }
+  if (t) {
+    try { sessionStorage.setItem('eu.token', t); if (PHONE) localStorage.setItem('eu.token', t); } catch { /* ignore */ }
+    // On a phone the sign-in link stays in the address so "Add to Home Screen" keeps it; elsewhere it's hidden.
+    if (!PHONE) { u.searchParams.delete('token'); history.replaceState(null, '', u.pathname + u.search + u.hash); }
+    return t;
+  }
+  try { return sessionStorage.getItem('eu.token') || (PHONE ? localStorage.getItem('eu.token') : null); } catch { return null; }
 }
 
 export class ApiError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
