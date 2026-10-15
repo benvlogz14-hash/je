@@ -41,6 +41,16 @@ Euclidean can't be installed from a file onto an iPhone (Apple only allows signe
 
 The computer must be on with Euclidean running. To use it away from your Wi-Fi, expose Euclidean with Cloudflare Tunnel and enter that address as the Public URL in Settings → General → Network. **Disconnect phone** revokes the phone's access.
 
+### Native iPhone app (Expo Go)
+
+There is also a native app in `mobile/` (approvals, chat, AI Studio edits, agents, creators, status and the emergency stop). It runs inside Apple's free **Expo Go** app, so it needs no Apple developer account:
+
+1. Install **Expo Go** from the App Store.
+2. Double-click **Start Phone App.bat** on the computer (first run downloads its parts) and scan the QR code it shows with the iPhone Camera.
+3. In the app tap **Scan the code** and scan the phone code from step 2 above.
+
+The computer must keep that window open while you use the app. If the phone can't connect on your Wi-Fi, run `Start Phone App.bat tunnel`.
+
 ## First-time setup (about 20 minutes)
 
 1. **Settings → General**: keep **Test** on. Enter your own phone and email as sandbox recipients.
