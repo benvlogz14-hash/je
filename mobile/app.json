@@ -15,7 +15,8 @@
           "NSAllowsLocalNetworking": true
         },
         "NSLocalNetworkUsageDescription": "Connect to Euclidean on your computer over Wi-Fi."
-      }
+      },
+      "bundleIdentifier": "com.euclidean.remote"
     },
     "android": {
       "adaptiveIcon": {
@@ -24,7 +25,8 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "usesCleartextTraffic": true
+      "usesCleartextTraffic": true,
+      "package": "com.euclidean.remote"
     },
     "web": {
       "favicon": "./assets/favicon.png"
