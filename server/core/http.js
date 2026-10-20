@@ -11,7 +11,7 @@ const MIME = {
   '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.m4v': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska',
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.woff2': 'font/woff2',
   '.ttf': 'font/ttf', '.otf': 'font/otf', '.srt': 'text/plain; charset=utf-8', '.ass': 'text/plain; charset=utf-8',
-  '.xml': 'application/xml', '.webmanifest': 'application/manifest+json', '.velo': 'application/json', '.txt': 'text/plain; charset=utf-8',
+  '.xml': 'application/xml', '.webmanifest': 'application/manifest+json', '.velo': 'application/json', '.pdf': 'application/pdf', '.txt': 'text/plain; charset=utf-8',
 };
 
 class Router {

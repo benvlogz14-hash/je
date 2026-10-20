@@ -12,6 +12,18 @@ module.exports = {
     currency: 'USD',
     timezone: 'America/New_York',
   },
+  political: {
+    videoSeconds: 40,          // length of each sample video (15 to 240)
+    bookingUrl: '',            // e.g. a Calendly link, shown in the email and on the sheet
+    senderName: '',            // who signs the email; defaults to the first founder
+    offer: '',                 // your offer in your own words; a sensible default is used when empty
+    templates: '',             // paste your best outreach emails here; the writer matches their voice
+    theme: 'auto',             // auto (by party), blue, red, purple, green
+    narration: false,          // AI narrator voice (OpenAI) over the videos
+    voice: 'alloy',
+    musicDir: '',              // folder of music tracks; one is picked per video
+    allowGov: false,           // allow drafts to official .gov addresses
+  },
   environment: 'test', // 'test' redirects all outbound messages to the sandbox recipients and keeps publishing in Manual Pack mode
   sandbox: { phone: '', email: '' },
   ai: {

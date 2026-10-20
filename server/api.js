@@ -42,6 +42,7 @@ const SECRET_KEYS = new Set([
   'global.anthropic.apiKey', 'global.openai.apiKey', 'global.xai.apiKey',
   ...Object.values(twilio.K), ...Object.values(email.K),
   'global.ayrshare.apiKey', 'global.google.clientId', 'global.google.clientSecret',
+  ...Object.values(require('./political/sources').KEYS),
 ]);
 
 // ------------------------------------------------------------ bootstrap & settings
@@ -470,6 +471,56 @@ r.post('/api/prospects/:id/outreach', async (req, b, p) => {
   ctx.store.update('prospects', pr.id, { stage: pr.stage === 'new' ? 'drafted' : pr.stage });
   return { message: m, conversationId: m.conversationId };
 });
+// ---- Political outreach packages: research → brief → videos → sheet → email draft (waits in Approvals)
+const polPkg = require('./political/package');
+r.post('/api/political/packages', (req, b) => {
+  const names = (Array.isArray(b.names) ? b.names : String(b.names || '').split(/\r?\n|;/)).map((x) => String(x).trim()).filter(Boolean).slice(0, 200);
+  if (!names.length) throw new HttpError(400, 'Add at least one name, one per line.');
+  const out = [];
+  for (const line of names) {
+    // "Name — office/state" or "Name, office" lines give the lookup a hint.
+    const [name, ...rest] = line.split(/\s+[—–-]\s+|,\s*/); const hint = rest.join(', ');
+    let pr = ctx.store.find('prospects', (x) => x.name.toLowerCase() === name.toLowerCase());
+    if (!pr) pr = ctx.store.insert('prospects', { name, type: 'political', handle: '', platforms: [], why: '', angle: '', publicContact: '', location: hint, stage: 'new', verified: true, source: 'manual' });
+    else if (pr.type !== 'political') pr = ctx.store.update('prospects', pr.id, { type: 'political' });
+    queue.enqueue('political.package', { prospectId: pr.id, name: pr.name }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}` });
+    out.push(pr.id);
+  }
+  events.publish('prospects', {});
+  audit.log(actorOf(req), 'political.packages_queued', { count: out.length });
+  return { queued: out.length, ids: out };
+});
+r.post('/api/political/scout', (req, b) => {
+  const query = String(b.query || '').trim(); if (query.length < 4) throw new HttpError(400, 'Describe who you want to find.');
+  return queue.enqueue('political.scout', { query, count: Math.max(1, Math.min(100, Number(b.count) || 10)), autoPackage: !!b.autoPackage }, { actor: actorOf(req) });
+});
+r.post('/api/prospects/:id/package', (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id));
+  const steps = polPkg.STEPS.map((s) => s[0]);
+  if (b.from && !steps.includes(b.from)) throw new HttpError(400, 'Unknown step');
+  if (b.only && !steps.includes(b.only)) throw new HttpError(400, 'Unknown step');
+  return queue.enqueue('political.package', { prospectId: pr.id, name: pr.name, from: b.from || 'research', only: b.only || null }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}` });
+});
+r.get('/api/political/steps', () => polPkg.STEPS.map(([key, label]) => ({ key, label })));
+r.get('/api/prospects/:id/file/:kind', (req, res, p) => {
+  const pr = ctx.store.get('prospects', p.id); if (!pr) return send(res, 404, { error: 'Not found' });
+  const f = p.kind === 'photo' ? pr.pkg?.profile?.photo : pr.pkg?.files?.[p.kind];
+  if (!f || !paths.inside(path.join(paths.root, 'political'), f)) return send(res, 404, { error: 'Not made yet' });
+  if (req.query.reveal && ctx.revealFile) { ctx.revealFile(f); return send(res, 200, { ok: true }); }
+  return serveFile(req, res, f, { download: req.query.download ? path.basename(f) : null });
+}, { stream: true });
+/** Founder approves several political drafts at once (each was reviewed in the list). */
+r.post('/api/political/approve', (req, b) => {
+  const done = []; const errors = [];
+  for (const id of (b.ids || []).slice(0, 200)) {
+    const pr = ctx.store.get('prospects', id); const mid = pr?.pkg?.messageId;
+    try { if (!mid) throw new Error('no draft'); messaging.approveMessage(mid, actorOf(req)); ctx.store.update('prospects', id, { stage: 'contacted' }); done.push(id); } catch (e) { errors.push(`${pr?.name || id}: ${e.message}`); }
+  }
+  audit.log(actorOf(req), 'political.batch_approved', { count: done.length });
+  events.publish('prospects', {});
+  return { approved: done.length, errors };
+}, { roles: OWNER });
+
 r.post('/api/prospects/:id/convert', (req, b, p) => {
   const pr = must(ctx.store.get('prospects', p.id));
   const c = pipeline.createClient({ name: pr.name, type: pr.type === 'political' ? 'political' : 'creator', profile: { about: pr.why || '' } }, actorOf(req));

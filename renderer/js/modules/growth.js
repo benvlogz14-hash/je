@@ -3,6 +3,7 @@ import { html, useState, useApi, navigate, Button, HoldButton, Seg, Empty, Loadi
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { ago, providerLabel } from '../lib/format.js';
+import { Political } from './political.js';
 
 const STAGES = [['new', 'New'], ['drafted', 'Draft ready'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['meeting', 'Meeting'], ['proposal', 'Proposal'], ['won', 'Won'], ['lost', 'Lost']];
 
@@ -17,9 +18,9 @@ export function Growth() {
   const cur = open && (data || []).find((p) => p.id === open);
   return html`<div class="page">
     <div class="page-head"><div class="grow"><h1>Growth</h1><div class="sub">Find political and creator clients. Agents research; you approve every first message.</div></div>
-      <${Seg} value=${view} onChange=${setView} options=${[{ value: 'board', label: 'Pipeline' }, { value: 'table', label: 'Table' }]} />
+      <${Seg} value=${view} onChange=${setView} options=${[{ value: 'board', label: 'Pipeline' }, { value: 'table', label: 'Table' }, { value: 'political', label: 'Political packages' }]} />
       <${Button} kind="ghost" icon="plus" onClick=${async () => { const name = await promptDialog({ title: 'Add prospect', label: 'Name or handle', confirm: 'Add' }); if (name) act(() => api.post('/api/prospects', { name }), { ok: 'Added' }).then(reload); }}>Add manually</${Button}></div>
-    <div class="panel pad row" style="gap:10px;margin-bottom:16px">
+    ${view === 'political' ? html`<${Political} prospects=${data} reload=${reload} />` : html`<div class="panel pad row" style="gap:10px;margin-bottom:16px">
       <div class="avatar" style="background:var(--lav-soft);color:var(--lav-ink)"><${Icon} name="search" size=${17} /></div>
       <input class="input" id="prospect-query" placeholder="Who do you want? e.g. Connecticut state house candidates 2026 posting less than weekly on TikTok" value=${query} onInput=${(e) => setQuery(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && query.trim()) research(); }} />
       <${Button} kind="lav" icon="sparkle" disabled=${!query.trim()} onClick=${research}>Research</${Button}>
@@ -30,6 +31,7 @@ export function Growth() {
           <div class="clip-card" style="grid-template-columns:1fr" onClick=${() => setOpen(p.id)}><div><div class="row"><b class="grow ellipsis">${p.name}</b><span class=${'badge ' + (p.type === 'political' ? 'slate' : 'teal')}>${p.type}</span></div>
             <div class="m">${p.handle ? html`<span class="ellipsis">${p.handle}</span>` : null}${p.followers ? html`<span>${p.followers}</span>` : null}${p.confidence ? html`<span class=${'badge ' + (p.confidence === 'high' ? 'moss' : p.confidence === 'low' ? 'coral' : 'gold')}>${p.confidence}</span>` : null}${p.audit ? html`<span class="badge lav">Audited</span>` : null}</div></div></div>`)}</div></section>`; })}</div>`
       : html`<div class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Type</th><th>Handle</th><th>Why</th><th>Stage</th><th>Found</th></tr></thead><tbody>${data.map((p) => html`<tr class="click" onClick=${() => setOpen(p.id)}><td><b>${p.name}</b></td><td>${p.type}</td><td class="muted">${p.handle}</td><td class="muted ellipsis" style="max-width:320px">${p.why}</td><td>${STAGES.find((s) => s[0] === (p.stage || 'new'))?.[1]}</td><td class="faint">${ago(p.createdAt)}</td></tr>`)}</tbody></table></div></div>`}
+    `}
     ${cur ? html`<${ProspectDrawer} p=${cur} onClose=${() => setOpen(null)} reload=${reload} />` : null}
   </div>`;
 }

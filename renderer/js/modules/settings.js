@@ -117,6 +117,10 @@ function Connections() {
       <div class="form-grid"><${SecretInput} k="global.ayrshare.apiKey" label="Ayrshare API key" status=${status} value=${v} onChange=${setV} /></div>
       <div class="row"><${Button} kind="primary" onClick=${() => saveKeys(['global.ayrshare.apiKey'], 'ayrshare')}>Save & test</${Button}></div>
     </${Section}>
+    <${Section} title="Political research data" sub="Free keys that make political packages more complete. Open States covers every state legislator; api.data.gov unlocks Congress.gov and FEC fundraising at full speed. Both are optional.">
+      <div class="form-grid"><${SecretInput} k="global.political.openStatesKey" label="Open States API key (open.pluralpolicy.com)" status=${status} value=${v} onChange=${setV} /><${SecretInput} k="global.political.dataGovKey" label="api.data.gov key (api.data.gov/signup)" status=${status} value=${v} onChange=${setV} /></div>
+      <div class="row"><${Button} kind="primary" onClick=${() => saveKeys(['global.political.openStatesKey', 'global.political.dataGovKey'])}>Save</${Button}></div>
+    </${Section}>
     <${Section} title="YouTube direct upload (Google)" sub="Optional. Create an OAuth client of type Desktop app in Google Cloud Console with the YouTube Data API enabled." action=${row('', st?.google)}>
       <div class="form-grid"><${SecretInput} k="global.google.clientId" label="OAuth client ID" type="text" status=${status} value=${v} onChange=${setV} /><${SecretInput} k="global.google.clientSecret" label="OAuth client secret" status=${status} value=${v} onChange=${setV} /></div>
       <div class="row"><${Button} kind="primary" onClick=${() => saveKeys(['global.google.clientId', 'global.google.clientSecret'])}>Save</${Button}><span class="faint" style="font-size:var(--fs-sm)">Then connect each client's channel from their Billing & accounts tab.</span></div>

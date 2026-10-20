@@ -455,6 +455,50 @@ queue.register('prospect.audit', {
   },
 });
 
+// ------------------------------------------------------------ political outreach packages
+const political = require('../political/package');
+const polSources = require('../political/sources');
+
+queue.register('political.package', {
+  title: (p) => `Package: ${p.name || 'prospect'}${p.only ? ` (${p.only})` : ''}`,
+  heavy: true, maxAttempts: 1,
+  async run(job, h) {
+    if (!ctx.capabilities.ffmpeg && !['research', 'brief', 'creative', 'email'].includes(job.payload.only)) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
+    return political.run(job.payload.prospectId, { from: job.payload.from, only: job.payload.only, actor: job.createdBy }, h);
+  },
+});
+
+queue.register('political.scout', {
+  title: (p) => `Scout: ${p.query}`,
+  async run(job, h) {
+    const { query, count = 10, autoPackage } = job.payload;
+    const found = [];
+    // Public rosters first (Open States, when connected and the query names a state).
+    const st = /\b(alabama|alaska|arizona|arkansas|california|colorado|connecticut|delaware|florida|georgia|hawaii|idaho|illinois|indiana|iowa|kansas|kentucky|louisiana|maine|maryland|massachusetts|michigan|minnesota|mississippi|missouri|montana|nebraska|nevada|new hampshire|new jersey|new mexico|new york|north carolina|north dakota|ohio|oklahoma|oregon|pennsylvania|rhode island|south carolina|south dakota|tennessee|texas|utah|vermont|virginia|washington|west virginia|wisconsin|wyoming)\b/i.exec(query);
+    if (st && /legislat|house|senate|assembly|representative|delegate/i.test(query)) {
+      h.progress(0.15, 'Checking Open States');
+      try { for (const x of await polSources.rosterSearch({ state: st[1], chamber: /senate/i.test(query) ? 'upper' : /house|assembly|representative|delegate/i.test(query) ? 'lower' : '', limit: count * 2 })) found.push({ name: x.name, type: 'political', location: x.office, publicContact: x.email && !/\.gov$/.test(x.email) ? x.email : '', why: `${x.party || ''} ${x.office}`.trim(), source: 'openstates', confidence: 'high', handle: x.url || '' }); }
+      catch (e) { h.log(`Open States: ${e.message}`); }
+    }
+    if (found.length < count && ai.anyConnected()) {
+      h.progress(0.4, 'Research agent searching');
+      const r = await ai.ask({ role: 'research', json: true, jobId: job.id, search: true, maxTokens: 3500, system: PROSPECT_SYSTEM + '\nOnly return real, currently active political officials, candidates or campaigns. Prefer campaign or press emails over government office addresses.', prompt: `Find up to ${count - found.length} political prospects: ${query}` });
+      for (const x of (r.json.prospects || [])) found.push({ ...x, type: 'political', agent: `${r.provider}:${r.model}`, source: 'research' });
+    }
+    if (!found.length) throw permanent(ai.anyConnected() ? 'No prospects found. Try a broader description.' : 'Connect an AI provider (or an Open States key for state legislators) to scout leads.');
+    const created = [];
+    for (const x of found.slice(0, Math.max(1, Math.min(100, count)))) {
+      if (ctx.store.find('prospects', (y) => polSources.nameMatch(y.name, x.name) && polSources.nameMatch(x.name, y.name))) continue;
+      const pr = ctx.store.insert('prospects', { name: x.name, type: 'political', handle: x.handle || '', platforms: x.platforms || [], why: x.why || '', angle: x.angle || '', publicContact: x.publicContact || '', location: x.location || '', followers: x.followers || null, confidence: x.confidence || 'medium', stage: 'new', verified: x.source === 'openstates', source: x.source, agent: x.agent, query });
+      created.push(pr);
+      if (autoPackage) queue.enqueue('political.package', { prospectId: pr.id, name: pr.name }, { actor: job.createdBy, priority: 4, dedupeKey: `polpkg:${pr.id}` });
+    }
+    events.publish('prospects', {});
+    audit.log(job.createdBy || 'system', 'political.scouted', { query, count: created.length });
+    return { added: created.length };
+  },
+});
+
 // ------------------------------------------------------------ footage sources (creator channels)
 queue.register('source.check', {
   title: () => 'Check footage sources',

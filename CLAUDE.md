@@ -45,7 +45,7 @@ Desktop app for Euclidean Media (founders Ryan Rosario and Ben Gingold), a short
 - Emails are personal and specific, have one clear ask, make no invented claims, and include an opt-out line. Ryan's email templates are the house style.
 - Video style: bubbly, poppy motion graphics drawn entirely in code, tailored to each target.
 
-## Next build: political package system (planned, not started)
+## Political package system (base built; see status below)
 Build it into the existing prospects/Growth module (prospect `type: 'political'` already exists, with `prospect.research`, `prospect.audit` and `/api/prospects/:id/outreach`).
 
 1. **Scout:** find new leads from a plain-English query using OpenStates, FEC, Congress.gov, Wikidata, news and xAI search. Skip duplicates.
@@ -64,3 +64,20 @@ Build it into the existing prospects/Growth module (prospect `type: 'political'`
 6. **Automation:** paste names or run a scout, and each lead becomes a background job with progress and re-runnable steps, per-hour sending caps, opt-out handling and reply tracking. Show it on a Political screen on the desktop and in the phone app.
 
 API keys to connect: Anthropic (required), xAI (lead search), OpenAI (narrator), api.data.gov (Congress.gov and FEC), OpenStates, Twilio and ElevenLabs (calls/voice). Use a separate outreach email domain with SPF, DKIM and DMARC records.
+
+### Status (base build)
+Built and tested end to end with sample data; live lookups were blocked in the cloud session, so they still need testing on a real PC.
+- `server/political/sources.js`: lookup from Wikipedia, Wikidata, congress-legislators, FEC, Open States, Google News and the target's own sites (contact emails are ranked campaign/press first and .gov last), plus `rosterSearch` for Open States.
+- `server/political/render.js`: HTML scene layouts → headless Edge/Chrome sprite screenshot → FFmpeg animation (pop, slide, float, slow zoom, xfade) for 1080×1920 and 1920×1080. Fonts come from `renderer/assets/fonts`, with a "Concept by Euclidean Media" tag. About 85 seconds to render 30 seconds of video per orientation.
+- `server/political/package.js`: the steps research → brief → creative → video_v → video_h → sheet (PDF) → email. Results are stored on `prospect.pkg`, and any step can be re-run. `vetStoryboard` drops quotes and numbers that aren't in the research.
+- Jobs: `political.package` and `political.scout` in `server/jobs/handlers.js`.
+- API: `/api/political/packages|scout|approve|steps`, `/api/prospects/:id/package`, `/api/prospects/:id/file/:kind`.
+- UI: Growth → **Political packages** (`renderer/js/modules/political.js`). The Open States and api.data.gov keys are in Settings → Connections.
+- Settings live under `political.*` in `server/core/defaults.js`.
+
+**Not built yet:**
+- Twilio click-to-dial (calls are currently a tel: link plus a script and outcome logging).
+- Recording and attaching the voice note.
+- Cloned-voice answering of inbound calls.
+- A Political tab in the phone app (its email drafts already show in Approvals there).
+- Reply tracking that moves the prospect's stage automatically.

@@ -63,6 +63,17 @@ GitHub builds `Euclidean.ipa` on a Mac every time `mobile/` changes (Actions →
 
 With a free Apple ID the app works for 7 days; plug in and press Start in Sideloadly again to renew (turn on its auto-refresh to do this over Wi-Fi). A free ID allows 3 sideloaded apps at a time. The installed app doesn't need `Start Phone App.bat`, only Euclidean running on the computer.
 
+## Political packages
+
+Growth → **Political packages**: paste names (one per line, e.g. `Jane Rivera — Texas House District 12`) or describe who to scout. For each person Euclidean:
+1. researches public records (Wikipedia, Congress, FEC, Open States, news, their own website) and writes a cited brief;
+2. writes a storyboard, a tailored email and a call script;
+3. renders a vertical and a horizontal video drawn in code;
+4. makes a one-page PDF sheet;
+5. puts the email, with the videos and sheet attached, into Approvals.
+
+Nothing is sent until you approve it. You can tick several reviewed packages and approve them together. In Package settings you can set the video length, your booking link, who signs the email, your best emails to copy the style of, colours, music and an optional AI narrator. Free data keys (Open States, api.data.gov) go in Settings → Connections. Calls are made by a person from the script: automated robocalls are illegal without consent.
+
 ## First-time setup (about 20 minutes)
 
 1. **Settings → General**: keep **Test** on. Enter your own phone and email as sandbox recipients.
