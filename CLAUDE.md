@@ -1,0 +1,66 @@
+# Euclidean
+
+Desktop app for Euclidean Media (founders Ryan Rosario and Ben Gingold), a short-form video agency for creators and political campaigns. It runs clients, footage, clip production, approvals, messaging, publishing, analytics and AI agents in one place.
+
+## How it's built
+- **Electron shell:** `app/main.js` and `app/preload.js`. The engine runs inside it; `ctx` hooks include `pickFolder`, `pickFiles`, `relaunch` and `revealFile`.
+- **Node engine:** `server/index.js` and `server/api.js` (a custom Router: `r.get/post/patch/del(path, (req, body, params) => ..., { roles, stream, raw })`).
+  - JSON store: `server/core/store.js` (`ctx.store.all/get/find/insert/update/remove`).
+  - Audit log: `server/core/audit.js`.
+  - Server-sent events: `server/core/events.js`.
+- **Jobs:** `server/jobs/queue.js` and `server/jobs/handlers.js`. Every automated step is a `queue.register(name, { title, run(job, h) })` handler; `h.progress(frac, text)` reports progress.
+- **AI:** `server/integrations/ai.js`. Use `ai.ask({ role, system, prompt, json, search, clientId, jobId })`; it routes by role to Anthropic, OpenAI or xAI with fallback, budgets and usage tracking. `search: true` gives live web search on xAI only.
+- **Messaging:** `server/automation/messaging.js`.
+  - `createOutbound(...)` puts AI drafts and first contact with prospects into Approvals.
+  - `deliver` re-checks opt-outs, quiet hours, the hourly cap and Test mode before sending.
+  - In Test mode, mail goes to the sandbox address.
+  - Email is SMTP/IMAP (`server/integrations/email.js`); texts and calls use Twilio (`server/integrations/twilio.js`).
+- **Video:**
+  - FFmpeg helpers: `server/video/ffmpeg.js`.
+  - Studio exporter with 47 xfade transitions, keyframes and ASS titles: `server/video/studio.js`.
+  - AI edit operations: `server/video/edit-ops.js`.
+  - Preview proxies: `server/video/proxy.js`.
+- **Agent network:** `server/agents/` (registry, adapters, broker, protocol, routes). Peer-to-peer agents; nobody is the central orchestrator; external actions need human approval.
+- **Creators analytics:** `server/integrations/creators.js` (yt-dlp, Social Blade-style report).
+- **Renderer:** Preact + htm with no build step, in `renderer/js`. Modules are in `renderer/js/modules/*.js` (studio, analytics, growth, agents, settings, production and others).
+  - Light theme only: white base, pastel accents and buttons.
+- **Phone app:** `mobile/`, an Expo SDK 57 React Native remote for the engine.
+  - Run it with `Start Phone App.bat` (Expo Go).
+  - `.github/workflows/ios-app.yml` builds an unsigned `.ipa` for Sideloadly.
+- **Launchers:** `Start Euclidean.bat` installs Node, FFmpeg and yt-dlp, runs `npm install`, creates a desktop shortcut and starts the app. `Build Installer.bat` runs `npm run dist`. `.bat` files must keep CRLF line endings.
+
+## Run and test
+- `npm start` runs the Electron app; `npm run engine` runs the engine only (`--data <dir> --port <n>`). The login link with its token is printed in the log.
+- To test the UI, drive the engine's web UI with Playwright (Chromium is at `/opt/pw-browsers/chromium` in cloud sessions).
+- Check rendered video by grabbing frames with FFmpeg.
+- Don't run `npm run selftest` unless asked; the user rejected it as too long.
+
+## Working rules (from Ryan)
+- Write for beginners: plain-English errors, no terminal, config or JSON for the user, setup through buttons.
+- Commit and push finished work to the working branch. Don't open pull requests unless asked.
+- Never send texts or emails, post, or change CRM records or accounts without human approval. Keep each client's data inside its workspace.
+
+## Outreach offer and tone
+- Pitch: two free tailored example videos (one vertical, one horizontal) that they can use free of charge whether or not they talk to us, and the ask "Could you give us 20 minutes?"
+- Emails are personal and specific, have one clear ask, make no invented claims, and include an opt-out line. Ryan's email templates are the house style.
+- Video style: bubbly, poppy motion graphics drawn entirely in code, tailored to each target.
+
+## Next build: political package system (planned, not started)
+Build it into the existing prospects/Growth module (prospect `type: 'political'` already exists, with `prospect.research`, `prospect.audit` and `/api/prospects/:id/outreach`).
+
+1. **Scout:** find new leads from a plain-English query using OpenStates, FEC, Congress.gov, Wikidata, news and xAI search. Skip duplicates.
+2. **Research brief:** every claim has a cited source. Cover office, district, committees, votes and bills, fundraising, recent news, social presence, and a public campaign or press contact.
+   - Public, professional information only; no home addresses or family details.
+3. **Email:** tailored from Ryan's templates, with the free-videos and 20-minute ask. It goes to the campaign or press contact (not official .gov addresses) and waits in Approvals. Batch approve is allowed; nothing sends automatically.
+4. **Package:**
+   - Videos: about 40 seconds by default (adjustable to 4 minutes), 1080×1920 and 1920×1080. Scenes are laid out in HTML/CSS, screenshotted by headless Edge/Chromium (or an offscreen Electron window), then animated and joined with FFmpeg (zoom, slide-ins, xfade). Optional narrator voice through OpenAI text-to-speech.
+   - A one-page PDF sheet showing both videos, the offer and a booking link.
+   - Only real public photos and quotes; never fake the politician's face or voice. Add a small "Concept by Euclidean Media" tag.
+5. **Calls:**
+   - A call list with one-click Twilio dialing and a tailored script, made by a person.
+   - An optional voice note in your own (cloned) voice attached to the email.
+   - Cloned-voice AI only for inbound callbacks.
+   - **No automated robocalls:** under the TCPA they need prior consent, and the FCC counts AI voices as artificial.
+6. **Automation:** paste names or run a scout, and each lead becomes a background job with progress and re-runnable steps, per-hour sending caps, opt-out handling and reply tracking. Show it on a Political screen on the desktop and in the phone app.
+
+API keys to connect: Anthropic (required), xAI (lead search), OpenAI (narrator), api.data.gov (Congress.gov and FEC), OpenStates, Twilio and ElevenLabs (calls/voice). Use a separate outreach email domain with SPF, DKIM and DMARC records.
