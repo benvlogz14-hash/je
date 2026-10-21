@@ -1,5 +1,5 @@
 // Outreach lanes (Creators / Politics): autopilot switches, the review bubbles, and lead lists.
-import { html, useState, useApi, navigate, Button, Field, Toggle, Progress, act, toast, confirmDialog, store } from '../lib/ui.js';
+import { html, useState, useEffect, useApi, navigate, Button, Field, Toggle, Progress, act, toast, confirmDialog, promptDialog, store } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { ago } from '../lib/format.js';
@@ -16,6 +16,8 @@ export function Autopilot({ lane }) {
   const [rules, setRules] = useState({ mailingAddress: boot.settings?.outreach?.mailingAddress || boot.settings?.political?.mailingAddress || '', exclusions: boot.settings?.outreach?.exclusions || '' });
   const [open, setOpen] = useState(false);
   const s = st?.[lane] || {};
+  // Pick up changes made elsewhere (the scout chat, another window) unless the settings form is open.
+  useEffect(() => { if (st?.[lane] && !open) setV((cur) => ({ ...cur, ...Object.fromEntries(Object.entries(st[lane]).filter(([k]) => k in cur || ['continuous', 'scoutEveryMin', 'maxLeadsPerDay', 'lessons'].includes(k))) })); }, [st, open]);
   const save = (next = v) => act(() => api.patch('/api/settings', { outreach: { [lane]: next, ...rules } }), { ok: 'Saved' }).then((set) => { const b = store.get().boot; if (b && set) store.set({ boot: { ...b, settings: set } }); reload(); });
   const flip = async (k, on) => {
     if (k === 'autoSend' && on && !(await confirmDialog({ title: 'Turn on auto-send?', text: `Finished ${lane === 'political' ? 'packages' : 'emails'} that pass every safety check will send without review, up to ${Math.min(v.sendPerDay, v.warmupStart)} today and rising by ${v.warmupStep} a day to ${v.sendPerDay}. Anything that fails a check (no confirmed email, government address, contrast ad, exclusions, no mailing address) still waits for you. In Test mode emails go to your sandbox address.`, confirm: 'Turn on', kind: 'moss' }))) return;
@@ -31,13 +33,18 @@ export function Autopilot({ lane }) {
       <${Button} size="sm" kind="ghost" onClick=${() => setOpen(!open)}>${open ? 'Hide settings' : 'Settings'}</${Button}>
     </div>
     <div class="grid c4" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
-      ${[['Sent today', `${s.sentToday ?? 0} / ${s.capToday ?? '–'}`], ['Waiting for you', s.waiting ?? 0], ['Scouts today', s.scoutedToday ?? 0], ['Auto-send', v.autoSend ? (s.autoSendSince ? `on since ${new Date(s.autoSendSince).toLocaleDateString()}` : 'on') : 'off']].map(([k, val]) => html`<div class="panel pad" style="padding:10px 12px"><div class="faint" style="font-size:var(--fs-xs)">${k}</div><b style="font-size:18px">${val}</b></div>`)}
+      ${[['Sent today', `${s.sentToday ?? 0} / ${s.capToday ?? '–'}`], ['Waiting for you', s.waiting ?? 0], ['New leads today', `${s.leadsToday ?? 0}${v.continuous ? ` / ${v.maxLeadsPerDay ?? 60}` : ''}`], ['Auto-send', v.autoSend ? (s.autoSendSince ? `on since ${new Date(s.autoSendSince).toLocaleDateString()}` : 'on') : 'off']].map(([k, val]) => html`<div class="panel pad" style="padding:10px 12px"><div class="faint" style="font-size:var(--fs-xs)">${k}</div><b style="font-size:18px">${val}</b></div>`)}
     </div>
     ${!rules.mailingAddress ? html`<div class="notice gold"><${Icon} name="info" size=${16} />Add your mailing address in Settings below. The law (CAN-SPAM) requires it in every outreach email, and auto-send stays paused without it.</div>` : null}
     ${open ? html`<div class="col" style="gap:12px">
       <${Field} label="Saved searches (one per line; the daily scout uses the next one each day)" id=${`q-${lane}`}><textarea id=${`q-${lane}`} class="input" style="height:110px;font-family:inherit" value=${v.scoutQueries} onInput=${set('scoutQueries')} placeholder=${lane === 'political' ? 'Connecticut Democrats running for state house 2026\nConnecticut town council candidates 2026' : 'Political commentary YouTubers under 500K subscribers\nNews TikTok creators with no YouTube channel'} /></${Field}>
+      <label class="row" style="gap:8px"><${Toggle} on=${!!v.continuous} onChange=${(x) => setV({ ...v, continuous: x })} label="Keep scouting" /><span>Keep scouting all day while the computer is on (not just once each morning)</span></label>
       <div class="form-grid">
-        <${Field} label="New leads per day" id=${`spd-${lane}`}><input id=${`spd-${lane}`} class="input" type="number" min="1" max="100" value=${v.scoutPerDay} onInput=${set('scoutPerDay')} /></${Field}>
+        <${Field} label="Scout every (minutes)" id=${`se-${lane}`}><input id=${`se-${lane}`} class="input" type="number" min="10" max="1440" value=${v.scoutEveryMin ?? 30} onInput=${set('scoutEveryMin')} /></${Field}>
+        <${Field} label="Most new leads per day" id=${`ml-${lane}`}><input id=${`ml-${lane}`} class="input" type="number" min="1" max="500" value=${v.maxLeadsPerDay ?? 60} onInput=${set('maxLeadsPerDay')} /></${Field}>
+        <${Field} label="Leads per search" id=${`spd-${lane}`}><input id=${`spd-${lane}`} class="input" type="number" min="1" max="100" value=${v.scoutPerDay} onInput=${set('scoutPerDay')} /></${Field}>
+      </div>
+      <div class="form-grid">
         <${Field} label="Scout at (hour, 0-23)" id=${`sh-${lane}`}><input id=${`sh-${lane}`} class="input" type="number" min="0" max="23" value=${v.scoutHour} onInput=${set('scoutHour')} /></${Field}>
         <${Field} label="Most emails per day" hint="After warm-up" id=${`sp-${lane}`}><input id=${`sp-${lane}`} class="input" type="number" min="1" max="1000" value=${v.sendPerDay} onInput=${set('sendPerDay')} /></${Field}>
         <${Field} label="Warm-up: first day" id=${`ws-${lane}`}><input id=${`ws-${lane}`} class="input" type="number" min="1" max="500" value=${v.warmupStart} onInput=${set('warmupStart')} /></${Field}>
@@ -65,7 +72,11 @@ export function ReviewQueue({ lane }) {
     const e = Object.fromEntries(ids.filter((id) => edits[id]).map((id) => [id, edits[id]]));
     act(() => api.post('/api/outreach/approve', { ids, edits: e }), { ok: (r) => `${r.approved} sent${r.errors.length ? ` · ${r.errors.length} skipped` : ''}` }).then(() => { setPicked(new Set()); reload(); });
   };
-  const skip = (ids) => act(() => api.post('/api/outreach/skip', { ids }), { ok: 'Skipped' }).then(() => { setPicked(new Set()); reload(); });
+  const skip = async (ids) => {
+    const reason = await promptDialog({ title: ids.length > 1 ? `Skip ${ids.length} leads` : 'Skip this lead', label: 'Why? (optional; the scout learns from this)', placeholder: 'e.g. not running this year, too small, wrong state', confirm: 'Skip' });
+    if (reason === null || reason === undefined) return;
+    act(() => api.post('/api/outreach/skip', { ids, reason }), { ok: 'Skipped' }).then(() => { setPicked(new Set()); reload(); });
+  };
   return html`<div class="col" style="gap:10px">
     <div class="row" style="gap:8px"><h4 class="grow">Waiting for review <span class="faint">${items.length}</span></h4>
       ${items.length ? html`<${Button} size="sm" kind="ghost" onClick=${() => setPicked(new Set(items.filter((x) => !x.hasContrast).map((x) => x.id)))}>Select all</${Button}>` : null}
@@ -161,5 +172,50 @@ export function CreatorsLane({ prospects, reload }) {
           <td>${p.outreach?.conversationId ? html`<${Button} size="sm" kind="ghost" onClick=${() => navigate(`/messages/${p.outreach.conversationId}`)}>Open</${Button}>` : html`<${Button} size="sm" kind="ghost" icon="sparkle" onClick=${() => act(() => api.post(`/api/prospects/${p.id}/redo`), { ok: 'Started' }).then(reload)}>Write email</${Button}>`}</td></tr>`; })}
       </tbody></table></div>`}
     </div>
+  </div>`;
+}
+
+// ------------------------------------------------------------------ talk to the scout
+
+export function ScoutChat({ lane }) {
+  const { data, reload } = useApi(`/api/outreach/${lane}/chat`, ['outreachChat']);
+  const [text, setText] = useState(''); const [busy, setBusy] = useState(false);
+  const send = async () => {
+    const t = text.trim(); if (!t || busy) return;
+    setBusy(true); setText('');
+    try { await api.post(`/api/outreach/${lane}/chat`, { text: t }); } catch (e) { toast(e.message, { kind: 'error' }); }
+    setBusy(false); reload();
+  };
+  const msgs = data || [];
+  const examples = lane === 'political'
+    ? ['Find Connecticut Democrats running for state house in 2026', 'Keep going all day, 40 new leads max', 'Skip incumbents who already have a video team', 'Remember: mention their town by name in the first line']
+    : ['Find political commentary YouTubers like Aaron Rupar under 300K subscribers', 'Look for TikTok news creators with no YouTube channel', 'Never contact anyone from Fox News', 'Remember: lead with the $1,200 Shorts package'];
+  return html`<div class="panel pad col" style="gap:10px">
+    <div class="row"><div class="avatar" style="background:var(--lav-soft);color:var(--lav-ink)"><${Icon} name="sparkle" size=${16} /></div><h4 class="grow">Talk to the scout</h4><span class="faint" style="font-size:var(--fs-xs)">It changes searches, limits, exclusions and lessons for you</span></div>
+    <div class="col" style="gap:8px;max-height:300px;overflow:auto">
+      ${!msgs.length ? html`<div class="row wrap" style="gap:6px">${examples.map((x) => html`<button class="chip" onClick=${() => setText(x)}>${x}</button>`)}</div>` : null}
+      ${msgs.map((m) => html`<div style=${`align-self:${m.role === 'user' ? 'flex-end' : 'flex-start'};max-width:85%;background:${m.role === 'user' ? 'var(--sky-soft)' : 'var(--panel-2,#f4f5f8)'};border-radius:14px;padding:8px 12px;font-size:var(--fs-sm);line-height:1.45`}>
+        <div style="white-space:pre-wrap">${m.text}</div>${(m.changes || []).length ? html`<div class="row wrap" style="gap:4px;margin-top:6px">${m.changes.map((c) => html`<span class="badge moss">${c}</span>`)}</div>` : null}</div>`)}
+      ${busy ? html`<div class="faint"><span class="spinner" /> Thinking…</div>` : null}
+    </div>
+    <div class="row" style="gap:8px"><input class="input grow" placeholder="Tell the scout who to find, how many, or what to avoid…" value=${text} onInput=${(e) => setText(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter') send(); }} /><${Button} kind="lav" icon="send" disabled=${!text.trim() || busy} onClick=${send}>Send</${Button}></div>
+  </div>`;
+}
+
+// ------------------------------------------------------------------ what it has learned
+
+export function Learning({ lane }) {
+  const { data, reload } = useApi(`/api/outreach/${lane}/learning`, ['prospects', 'settings', 'outreachChat']);
+  const [lessons, setLessons] = useState(null);
+  if (!data) return null;
+  const st = data.stats; const pct = (x) => (x == null ? '–' : `${Math.round(x * 100)}%`);
+  const val = lessons ?? data.lessons ?? '';
+  return html`<div class="panel pad col" style="gap:10px">
+    <div class="row"><div class="avatar" style="background:var(--gold-soft,#fbf1d9);color:var(--gold-ink,#8a6410)"><${Icon} name="bolt" size=${16} /></div><h4 class="grow">What it has learned</h4></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px">
+      ${[['Approved unchanged', pct(st.unchangedRate), `last ${st.reviewed} reviewed`], ['You edited', st.edited, 'used as examples'], ['You skipped', st.skipped, 'scout avoids similar'], ['Reply rate', pct(st.replyRate), `${st.replies} of ${st.sent} sent`], ['Opt-outs', st.optOuts, '']].map(([k, v, sub]) => html`<div class="panel pad" style="padding:10px 12px"><div class="faint" style="font-size:var(--fs-xs)">${k}</div><b style="font-size:18px">${v}</b><div class="faint" style="font-size:var(--fs-xs)">${sub}</div></div>`)}
+    </div>
+    <${Field} label="Lessons (one per line; the writer and scout follow these, and the chat adds to them)" id=${`les-${lane}`}><textarea id=${`les-${lane}`} class="input" style="height:100px;font-family:inherit" value=${val} onInput=${(e) => setLessons(e.target.value)} /></${Field}>
+    <div class="row"><${Button} size="sm" kind="primary" disabled=${lessons == null} onClick=${() => act(() => api.patch('/api/settings', { outreach: { [lane]: { lessons: val } } }), { ok: 'Saved' }).then(() => { setLessons(null); reload(); })}>Save lessons</${Button}><span class="faint" style="font-size:var(--fs-xs)">Every edit you make before approving is saved as an example of how you want it written.</span></div>
   </div>`;
 }

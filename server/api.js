@@ -516,9 +516,14 @@ const autopilot = require('./outreach/autopilot');
 const leads = require('./outreach/leads');
 const laneOk = (l) => { if (!autopilot.LANES.includes(l)) throw new HttpError(400, 'Unknown lane'); return l; };
 r.get('/api/outreach/status', () => autopilot.status());
+const scoutChat = require('./outreach/chat');
+const learningSvc = require('./outreach/learning');
+r.get('/api/outreach/:lane/chat', (req, b, p) => scoutChat.history(laneOk(p.lane), 80));
+r.post('/api/outreach/:lane/chat', async (req, b, p) => { try { return await scoutChat.send(laneOk(p.lane), b.text, actorOf(req)); } catch (e) { throw new HttpError(400, e.message); } });
+r.get('/api/outreach/:lane/learning', (req, b, p) => ({ stats: learningSvc.stats(laneOk(p.lane)), lessons: ctx.setting(`outreach.${p.lane}.lessons`, ''), recent: ctx.store.all('outreachFeedback', (f) => f.lane === p.lane).slice(-30).reverse() }));
 r.get('/api/outreach/:lane/review', (req, b, p) => autopilot.reviewQueue(laneOk(p.lane)));
 r.post('/api/outreach/approve', (req, b) => autopilot.approve(b.ids, actorOf(req), b.edits || {}), { roles: OWNER });
-r.post('/api/outreach/skip', (req, b) => autopilot.skip(b.ids, actorOf(req)));
+r.post('/api/outreach/skip', (req, b) => autopilot.skip(b.ids, actorOf(req), b.reason));
 r.post('/api/outreach/:lane/import', (req, b, p) => { try { return leads.importCsv({ lane: laneOk(p.lane), csv: b.csv, actor: actorOf(req) }); } catch (e) { throw new HttpError(400, e.message); } });
 r.post('/api/outreach/:lane/start', (req, b, p) => {
   const lane = laneOk(p.lane); const ids = (b.ids && b.ids.length ? b.ids : ctx.store.all('prospects', (x) => autopilot.laneOf(x) === lane && (x.stage || 'new') === 'new' && !(lane === 'political' ? x.pkg : x.outreach)).map((x) => x.id)).slice(0, 500);

@@ -4,7 +4,7 @@ import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { ago, providerLabel } from '../lib/format.js';
 import { Political } from './political.js';
-import { Autopilot, ReviewQueue, Leads, CreatorsLane } from './outreach.js';
+import { Autopilot, ReviewQueue, Leads, CreatorsLane, ScoutChat, Learning } from './outreach.js';
 
 const STAGES = [['new', 'New'], ['drafted', 'Draft ready'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['meeting', 'Meeting'], ['proposal', 'Proposal'], ['won', 'Won'], ['lost', 'Lost']];
 
@@ -24,8 +24,10 @@ export function Growth() {
       <${Button} kind="ghost" icon="plus" onClick=${async () => { const name = await promptDialog({ title: 'Add prospect', label: 'Name or handle', confirm: 'Add' }); if (name) act(() => api.post('/api/prospects', { name }), { ok: 'Added' }).then(reload); }}>Add manually</${Button}></div>
     ${view === 'political' || view === 'creators' ? html`<div class="col" style="gap:16px">
       <${Autopilot} lane=${view === 'political' ? 'political' : 'creators'} />
+      <${ScoutChat} lane=${view === 'political' ? 'political' : 'creators'} />
       <${ReviewQueue} lane=${view === 'political' ? 'political' : 'creators'} />
       <${Leads} lane=${view === 'political' ? 'political' : 'creators'} />
+      <${Learning} lane=${view === 'political' ? 'political' : 'creators'} />
       ${view === 'political' ? html`<${Political} prospects=${data} reload=${reload} />` : html`<${CreatorsLane} prospects=${data} reload=${reload} />`}
     </div>` : html`<div class="panel pad row" style="gap:10px;margin-bottom:16px">
       <div class="avatar" style="background:var(--lav-soft);color:var(--lav-ink)"><${Icon} name="search" size=${17} /></div>
