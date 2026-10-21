@@ -119,6 +119,7 @@ function Schedule({ c, patch }) {
         <div class="col" style="gap:5px"><span class="label">Reframe to 9:16</span><${Seg} value=${prod.reframe} onChange=${(v) => setProd({ ...prod, reframe: v })} options=${[{ value: 'face', label: 'Track the speaker' }, { value: 'smart-blur', label: 'Blurred fill' }, { value: 'crop', label: 'Crop' }, { value: 'fit', label: 'Fit' }]} /></div>
         <div class="col" style="gap:5px"><span class="label">Clips per footage file</span><input class="input tnum" style="width:90px" type="number" min="1" max="12" value=${prod.clipsPerFootage} onInput=${(e) => setProd({ ...prod, clipsPerFootage: Number(e.target.value) })} aria-label="Clips per footage" /></div>
         <div class="row"><${Toggle} on=${prod.silenceCut !== false} label="Jump cuts" onChange=${(v) => setProd({ ...prod, silenceCut: v })} /><span>Remove pauses</span></div>
+        <div class="row"><${Toggle} on=${prod.retakeCut !== false} label="Cut retakes" onChange=${(v) => setProd({ ...prod, retakeCut: v })} /><span>Cut repeated takes and false starts (keeps the last take)</span></div>
         <div class="row"><${Toggle} on=${prod.punchIns !== false} label="Punch-ins" onChange=${(v) => setProd({ ...prod, punchIns: v })} /><span>AI punch-in zooms</span></div>
       </div>
     </div>

@@ -365,7 +365,12 @@ ${FIT}</body></html>`;
   if (music && fs.existsSync(music)) { inputs.push('-stream_loop', '-1', '-i', music); const mi = ai + (audio.length ? 1 : 0); audio.push(`[${mi}:a]aresample=48000,volume=${audio.length ? 0.18 : 0.6},afade=t=out:st=${Math.max(0, total - 1.5)}:d=1.5[ma]`); }
   if (!audio.length) { inputs.push('-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo'); f.push(`[${ai}:a]anull[a]`); }
   else if (audio.length === 1) { f.push(audio[0].replace(/\[(na|ma)\]$/, '[a]')); }
-  else { f.push(audio[0], audio[1], '[na][ma]amix=inputs=2:duration=longest:normalize=0[a]'); }
+  else {
+    // Music ducks under the narrator (sidechain compression keyed on the voice), then both are mixed and levelled.
+    f.push(audio[0].replace(/\[na\]$/, ',asplit=2[na][nk]'), audio[1].replace(/volume=[\d.]+/, 'volume=0.5'),
+      '[ma][nk]sidechaincompress=threshold=0.03:ratio=10:attack=15:release=350:makeup=1[md]',
+      '[na][md]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95[a]');
+  }
   await ff.ffmpegWithProgress([...inputs, '-filter_complex', f.join(';'), '-map', '[vt]', '-map', '[a]', '-t', total.toFixed(3),
     '-c:v', 'libx264', '-preset', 'medium', '-crf', '21', '-maxrate', '8M', '-bufsize', '16M', '-pix_fmt', 'yuv420p', '-r', String(FPS),
     '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', out], { totalSec: total, onProgress: (p) => onProgress(0.9 + p * 0.1, 'Joining scenes') });

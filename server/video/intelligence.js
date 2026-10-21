@@ -88,10 +88,20 @@ function normalizeClips(raw, { words, duration, minSec, maxSec, exclude = [], co
   return out.sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, count);
 }
 
+/** Taste rules so edits don't look AI-made (adapted from reel-room by Eli Colussi, MIT). */
+const TASTE_RULES = `Don't make it look AI-edited; viewers scroll past the generic auto-edit look:
+- No clickbait hooks ("You won't believe..."). Use the speaker's actual promise in their own words, 3-7 words.
+- Zooms only on the words that carry the point: roughly one every 4-8 seconds for energetic clips, none on serious lines. Never a zoom on every sentence.
+- Never more than two things on screen besides the speaker and captions, and nothing covers the face.
+- Graphics never repeat the captions word for word. No decorative emoji.
+- Every effect is motivated by a specific word or beat; when unsure, leave it out.`;
+
 const DISCOVERY_SYSTEM = `You are the clip editor for a short-form video agency. You find the strongest standalone moments in long footage for TikTok, Reels and YouTube Shorts.
 A great clip: opens on a hook in the first 2 seconds, makes one complete point, ends on a payoff or punchline, needs no outside context, and stays between the requested min and max length.
 For political clients: keep claims accurate to what was said, never splice meaning, and avoid moments that misrepresent anyone.
-Return JSON: {"clips":[{"start":sec,"end":sec,"title":"<=60 chars, curiosity-driven","hook":"<=8 word on-screen headline","caption":"1-2 sentence social caption","hashtags":["tag",...],"score":0-100,"reason":"why it works","punchIns":[{"at":seconds_from_clip_start,"dur":1.2}]}]}`;
+Return JSON: {"clips":[{"start":sec,"end":sec,"title":"<=60 chars, curiosity-driven","hook":"<=8 word on-screen headline","caption":"1-2 sentence social caption","hashtags":["tag",...],"score":0-100,"reason":"why it works","punchIns":[{"at":seconds_from_clip_start,"dur":1.2}],"trials":[{"name":"<=3 words","test":"the one thing this version tests","hook":"a genuinely different opening headline","start":sec}]}]}
+"trials": 2-3 alternative openings for the same clip, for Instagram trial reels: each opens differently (result first, question first, a bolder sentence later in the clip via a later start, or a contrarian line), never the same hook text, and every hook is paid off by the clip.
+${TASTE_RULES}`;
 
 async function discoverClips(asset, transcript, { count = 6, jobId, exclude = [], analysis = null } = {}) {
   const minSec = ctx.setting('production.minClipSec', 20), maxSec = ctx.setting('production.maxClipSec', 59);
@@ -133,7 +143,8 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
 }
 
 // ------------------------------------------------------------ Feedback → edit plan
-const REVISION_SYSTEM = `You turn client feedback on a short-form video into precise edit changes and durable preferences.
+const REVISION_SYSTEM = `${TASTE_RULES}
+You turn client feedback on a short-form video into precise edit changes and durable preferences.
 Return JSON:
 {"changes":{"start":number?,"end":number?,"hook":string?,"title":string?,"caption":string?,"reframe":"crop"|"smart-blur"|"fit"?,"focusX":0-1?,"silenceCut":bool?,"punchIns":[{"at":n,"dur":n}]?,"style":{"preset"?: "clean-pop"|"boxed"|"minimal"|"news"|"karaoke-teal","uppercase"?:bool,"wordsPerLine"?:1-6,"size"?:40-140,"primary"?:"#RRGGBB","highlight"?:"#RRGGBB","position"?:"lower"|"center"|"upper","animation"?:"pop"|"none","highlightMode"?:"word"|"none","box"?:bool,"hook"?:bool}?},
  "remember":[{"text":"durable preference in plain words","style":{...same keys as changes.style}?}],
@@ -154,4 +165,4 @@ function transcriptExcerpt(transcript, start, end, pad = 20) {
   return (transcript.segments || []).filter((s) => s.e > start - pad && s.s < end + pad).map((s) => `[${s.s.toFixed(1)}] ${s.t}`).join('\n').slice(0, 6000);
 }
 
-module.exports = { transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };
+module.exports = { TASTE_RULES, transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };

@@ -168,7 +168,7 @@ queue.register('render.short', {
     h.progress(0.12, `Rendering v${n}`);
     const r = await render.renderShort({ facePath, graphics: client.graphics,
       source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], style: client.style, hook: clip.hook,
-      reframe: clip.reframe, focusX: clip.focusX, plan: { silenceCut: clip.silenceCut && !!transcript, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
+      reframe: clip.reframe, focusX: clip.focusX, plan: { silenceCut: clip.silenceCut && !!transcript, retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
       outPath, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal,
       onProgress: (p) => h.progress(0.12 + p * 0.7, `Rendering v${n}`),
     });

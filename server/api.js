@@ -278,11 +278,19 @@ r.get('/api/clips', (req) => ctx.store.all('clips', (c) => (!req.query.clientId 
 r.get('/api/clips/:id', (req, b, p) => clipView(must(ctx.store.get('clips', p.id))));
 r.patch('/api/clips/:id', (req, b, p) => {
   const c = must(ctx.store.get('clips', p.id)); const patch = {};
-  for (const k of ['title', 'hook', 'caption', 'hashtags', 'start', 'end', 'reframe', 'focusX', 'silenceCut', 'punchIns']) if (b[k] !== undefined) patch[k] = b[k];
+  for (const k of ['title', 'hook', 'caption', 'hashtags', 'start', 'end', 'reframe', 'focusX', 'silenceCut', 'retakeCut', 'punchIns']) if (b[k] !== undefined) patch[k] = b[k];
   const u = ctx.store.update('clips', c.id, patch);
   if (c.postId && (patch.title || patch.caption || patch.hashtags)) ctx.store.update('posts', c.postId, { title: u.title, caption: u.caption, hashtags: u.hashtags });
   events.publish('clips', { id: c.id });
   return clipView(u);
+});
+/** Render one of the AI's trial openings (different hook and/or start) as the clip's next version. */
+r.post('/api/clips/:id/trial', (req, b, p) => {
+  const c = must(ctx.store.get('clips', p.id)); const t = (c.trials || [])[Number(b.i)]; if (!t) throw new HttpError(404, 'Trial not found');
+  const prev = { hook: c.hook, start: c.start };
+  ctx.store.update('clips', c.id, { hook: t.hook, start: t.start ?? c.start, trials: c.trials.map((x, j) => (j === Number(b.i) ? { ...prev, name: 'Original opening', test: 'The first version' } : x)) });
+  events.publish('clips', { id: c.id });
+  return pipeline.requestRender(ctx.store.get('clips', c.id), { reason: `trial: ${t.name}` });
 });
 r.post('/api/clips/:id/render', (req, b, p) => { const c = must(ctx.store.get('clips', p.id)); return pipeline.requestRender(c, { reason: 'manual' }); });
 r.post('/api/clips/:id/decide', (req, b, p) => clipView(pipeline.decideClip(p.id, b.decision, { actor: actorOf(req), note: b.note || '', stage: b.stage })));

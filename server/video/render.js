@@ -61,7 +61,7 @@ function remap(t, segs) {
  * @param o.hook       headline text for the opening seconds
  * @param o.reframe    'crop' | 'smart-blur' | 'fit'
  * @param o.focusX     0..1 horizontal crop focus
- * @param o.plan       { silenceCut, punchIns:[{at,dur,zoom}] } with clip-relative times
+ * @param o.plan       { silenceCut, retakeCut, punchIns:[{at,dur,zoom}] } with clip-relative times
  * @param o.logo       optional absolute path to a PNG logo
  * @param o.outPath    output mp4
  */
@@ -72,7 +72,12 @@ async function renderShort(o) {
   const info = o.info || await ff.probe(o.source);
   const start = Math.max(0, o.range.start), end = Math.min(info.duration || o.range.end, o.range.end);
   const plan = o.plan || {};
-  const segs = plan.silenceCut && o.words?.length ? keptSegments(o.words, start, end) : [[start, end]];
+  let segs = plan.silenceCut && o.words?.length ? keptSegments(o.words, start, end) : [[start, end]];
+  // Cut repeated takes and false starts (keeps the last take of each line).
+  if (plan.retakeCut !== false && o.words?.length) {
+    const rt = require('./retakes'); const inRange = o.words.filter((w) => w.e > start && w.s < end);
+    const ranges = rt.retakeRanges(inRange); if (ranges.length) segs = rt.subtract(segs, ranges);
+  }
   const outDur = segs.reduce((s, [a, b]) => s + (b - a), 0);
 
   // Captions are generated in the cut timeline so they stay in sync after jump cuts.
