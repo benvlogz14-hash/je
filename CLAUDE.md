@@ -38,7 +38,7 @@ Desktop app for Euclidean Media (founders Ryan Rosario and Ben Gingold), a short
 ## Working rules (from Ryan)
 - Write for beginners: plain-English errors, no terminal, config or JSON for the user, setup through buttons.
 - Commit and push finished work to the working branch. Don't open pull requests unless asked.
-- Never send texts or emails, post, or change CRM records or accounts without human approval. Keep each client's data inside its workspace.
+- Never send texts or emails, post, or change CRM records or accounts without human approval. The one exception is outreach autopilot, which a founder switches on per lane: drafts that pass every check in `server/outreach/autopilot.js` may send automatically. Contrast/attack ads always need a person. Keep each client's data inside its workspace.
 
 ## Outreach offer and tone
 - Pitch: two free tailored example videos (one vertical, one horizontal) that they can use free of charge whether or not they talk to us, and the ask "Could you give us 20 minutes?"
@@ -81,3 +81,26 @@ Built and tested end to end with sample data; live lookups were blocked in the c
 - Cloned-voice answering of inbound calls.
 - A Political tab in the phone app (its email drafts already show in Approvals there).
 - Reply tracking that moves the prospect's stage automatically.
+
+## Outreach lanes (Growth → Creators | Politics)
+- **Creators** get an email only, never sample videos. Offers (`creatorOffers.*` in defaults):
+  - Shorts package, $1,200 a month (the Stringer Media deal terms). This is the lead offer.
+  - Full YouTube management, $2,200 a month. Creators with no YouTube channel are pitched this.
+  - Code: `server/outreach/creators.js` (scout, research, email), jobs `creator.scout` and `creator.outreach`.
+- **Politicians** get the package: three ads (a short vertical, a short horizontal and a long horizontal), a one-pager and an email. The political plan is 12 posts a week for $949 (`political.plan`).
+  - Style: `political.videoStyle = 'campaign'` is the modern campaign-ad look in `server/video/campaign.js`; 'pop' is the bubbly look.
+  - Factual scenes show their sources on screen.
+  - Contrast ads are off by default (`political.contrastAds`). They need a researched opponent and cited facts, and are never auto-sent.
+- **Autopilot** (`server/outreach/autopilot.js`, ticked by the scheduler):
+  - Daily scout rotates through saved searches.
+  - Auto-send has a daily cap with a warm-up ramp.
+  - It only auto-sends when the email is confirmed on the person's own pages or comes from an imported list, it isn't a .gov or state address, it isn't on the exclusions list, they haven't opted out or already replied, a mailing address is set (CAN-SPAM), and, for politicians, the package is finished and has no contrast ad.
+  - Anything that fails a check waits in the review queue (the "bubbles") with the reason shown.
+- **House rules** (`server/outreach/common.js`):
+  - No em dashes.
+  - Every email has an opt-out line and the postal address.
+  - Never pitch government addresses.
+  - Never invent contacts.
+- **Leads:** `server/outreach/leads.js` imports any CSV and remembers its columns; the export writes leads back in the same layout. Ryan's brief and the 238-lead list (95 YouTube creators and 143 Connecticut Democrats) still need to be imported.
+- **Replies:** an email "stop" opts the contact out, and any reply moves the prospect to Replied (`messaging.receive`).
+- **Still to do:** the in-app Twilio dialer, recording a voice note, the phone-app Politics/Creators tabs, and a check of the Stringer contract terms against the signed agreement.
