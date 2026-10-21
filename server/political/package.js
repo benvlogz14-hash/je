@@ -150,7 +150,7 @@ async function stepCreative(p) {
   if (!ai.anyConnected()) { save(p.id, () => ({ creative: fallbackCreative(p, pkg, { booking, sender, style }) })); return 'Template scripts (connect an AI provider for tailored ads)'; }
   const templates = String(S('templates', '') || '').trim();
   const r = await ai.ask({ role: 'writing', json: true, maxTokens: 6000, system: `You create outreach for ${ctx.setting('agency.name', 'Euclidean Media')}, a video agency for political campaigns. You write sample campaign ads for the candidate, aimed at THEIR voters, that make the case for them on their key points (lower costs, schools, safety, jobs... whatever the material supports). Rules: use only facts in the material; numbers, headlines and quotes must appear in the material (quotes word for word) or be left out; cite source numbers on factual scenes; never claim endorsements or results you can't show; no personal details; ${contrast ? 'contrast with the opponent is allowed ONLY on specific, cited public-record facts' : 'do not mention or attack any opponent'}. The email is personal, specific and short (under 170 words): it says what we made for them, that the attached ads are theirs to use free of charge whether or not they talk to us, mentions the plan in one line, asks for 20 minutes, and ends with an opt-out line. Never use em dashes.${learning.writerBlock('political')}`, prompt: `${material(pkg)}\n\nBRIEF\n${JSON.stringify(pkg.brief || {}).slice(0, 6000)}\n\n${templates ? `HOUSE EMAIL TEMPLATES (match this voice and structure):\n${templates.slice(0, 6000)}\n\n` : ''}OFFER: ${offer}\n${booking ? `Booking link: ${booking}\n` : ''}${sender ? `Sign as: ${sender}, ${ctx.setting('agency.name', 'Euclidean Media')}\n` : ''}
-Write two ads from the same campaign: "short" (about ${shortSec} seconds, ${Math.max(4, Math.round(shortSec / 3.5))} scenes, used for both the vertical and the horizontal short) and "long" (about ${longSec} seconds, ${Math.max(6, Math.round(longSec / 4))} scenes). Each should open with a strong hook and end with a ${style === 'campaign' ? 'vote' : 'cta then end'} scene.
+${notesBlock(pkg)}Write two ads from the same campaign: "short" (about ${shortSec} seconds, ${Math.max(4, Math.round(shortSec / 3.5))} scenes, used for both the vertical and the horizontal short) and "long" (about ${longSec} seconds, ${Math.max(6, Math.round(longSec / 4))} scenes). Each should open with a strong hook and end with a ${style === 'campaign' ? 'vote' : 'cta then end'} scene.
 ${style === 'campaign' ? CAMPAIGN_DOC : POP_DOC}
 ${contrast ? CONTRAST_DOC : ''}
 
@@ -334,6 +334,7 @@ function stepEmail(p, actor) {
   // Replace an earlier unsent draft instead of stacking duplicates.
   if (pkg.messageId) { const old = ctx.store.get('messages', pkg.messageId); if (old?.status === 'pending_approval') messaging.rejectMessage(old.id, actor); }
   const att = attachmentsFor(pkg);
+  if (p.voiceNote && fs.existsSync(p.voiceNote)) att.push({ name: path.basename(p.voiceNote), path: p.voiceNote, size: fs.statSync(p.voiceNote).size });
   const m = messaging.createOutbound({ contactId: contact.id, channel: 'email', subject: noDashes(c.email.subject), body: withFooter(c.email.body), aiGenerated: true, agent: c.agent, category: 'prospecting', actor, attachments: att });
   save(p.id, () => ({ messageId: m.id, conversationId: m.conversationId }));
   if ((p.stage || 'new') === 'new') ctx.store.update('prospects', p.id, { stage: 'drafted' });
@@ -396,4 +397,74 @@ async function run(prospectId, { from = 'research', only = null, actor = 'system
   return { status: ctx.store.get('prospects', prospectId).pkg.status };
 }
 
-module.exports = { STEPS, VIDEOS, run, dirFor, fallbackCreative, vetStoryboard, material, attachmentsFor, DEFAULT_PLAN };
+
+// ------------------------------------------------------------------ notes, revisions and versions
+
+/** Founder notes for this lead, plus the current version to revise. */
+function notesBlock(pkg) {
+  const notes = (pkg.notes || []).filter((n) => n.target !== 'email');
+  if (!notes.length) return '';
+  const prev = pkg.creative ? `\nCURRENT VERSION (revise it; keep what the notes don't mention):\nShort ad: ${JSON.stringify(pkg.creative.short || []).slice(0, 2500)}\nLong ad: ${JSON.stringify(pkg.creative.long || []).slice(0, 3500)}\nEmail subject: ${pkg.creative.email?.subject || ''}\nEmail body:\n${String(pkg.creative.email?.body || '').slice(0, 1500)}\n` : '';
+  return `FOUNDER NOTES FOR THIS LEAD (apply every note; if two conflict, the later one wins):\n${notes.map((n, i) => `${i + 1}. ${n.text}`).join('\n')}\n${prev}\n`;
+}
+
+/** Keep a copy of the current creative and files before changing them. */
+function snapshot(p, label) {
+  const pkg = p.pkg || {}; if (!pkg.creative) return null;
+  const n = (pkg.versions || []).length + 1; const vdir = path.join(dirFor(p), `v${n}`); fs.mkdirSync(vdir, { recursive: true });
+  const files = {};
+  for (const [k, f] of Object.entries(pkg.files || {})) { if (f && fs.existsSync(f)) { const to = path.join(vdir, path.basename(f)); fs.copyFileSync(f, to); files[k] = to; } }
+  const v = { n, at: now(), label: label || `Version ${n}`, creative: pkg.creative, files };
+  save(p.id, (pk) => ({ versions: [...(pk.versions || []), v] }));
+  return v;
+}
+
+/** Rewrite only the email, following the notes. */
+async function reviseEmail(p) {
+  const pkg = p.pkg; const c = pkg.creative; if (!c?.email) throw new Error('Make the package first.');
+  const notes = (pkg.notes || []).map((n, i) => `${i + 1}. ${n.text}`).join('\n');
+  if (!ai.anyConnected()) throw new Error('Connect an AI provider to revise with notes.');
+  const r = await ai.ask({ role: 'writing', json: true, maxTokens: 1500, system: `You revise outreach emails for ${ctx.setting('agency.name', 'Euclidean Media')}. Apply the founder notes to the current email. Keep facts accurate to the brief, keep the free-ads offer, the 20-minute ask and the opt-out line. Never use em dashes.${learning.writerBlock('political')}`, prompt: `BRIEF\n${JSON.stringify(pkg.brief || {}).slice(0, 4000)}\n\nCURRENT EMAIL\nSubject: ${c.email.subject}\n${c.email.body}\n\nFOUNDER NOTES (latest wins)\n${notes}\n\nReturn {"subject":"...","body":"..."}` });
+  save(p.id, (pk) => ({ creative: { ...pk.creative, email: { subject: r.json.subject, body: withFooter(r.json.body) } } }));
+}
+
+/**
+ * Apply a founder note: target 'email' rewrites the email only, 'ads' remakes the ads (and the email
+ * to match), 'all' does both. The previous version is kept so it can be restored.
+ */
+async function revise(prospectId, { note, target = 'all', actor = 'user' }, h) {
+  let p = ctx.store.get('prospects', prospectId); if (!p?.pkg?.creative) throw Object.assign(new Error('Make the package first, then give notes.'), { permanent: true });
+  snapshot(p, `Before: ${String(note || '').slice(0, 60)}`);
+  save(p.id, (pk) => ({ notes: [...(pk.notes || []), { text: String(note || '').slice(0, 1000), target, at: now(), by: actor }], status: 'running', error: null }));
+  p = ctx.store.get('prospects', prospectId);
+  const steps = target === 'email' ? ['email_rewrite', 'email'] : ['creative', 'video_v', 'video_h', ...(S('longVideo', true) ? ['video_hl'] : []), 'sheet', 'email'];
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i]; p = ctx.store.get('prospects', prospectId);
+    const sub = { progress: (f, t) => h.progress((i + Math.max(0, Math.min(1, f))) / steps.length, t || step) };
+    sub.progress(0, step === 'email_rewrite' ? 'Rewriting the email' : (STEPS.find((x) => x[0] === step) || [0, step])[1]);
+    try {
+      if (step === 'email_rewrite') await reviseEmail(p);
+      else if (step === 'creative') await stepCreative(p);
+      else if (step.startsWith('video_')) await stepVideo(p, sub, { video_v: 'v', video_h: 'h', video_hl: 'hl' }[step]);
+      else if (step === 'sheet') await stepSheet(p);
+      else if (step === 'email') stepEmail(p, actor);
+    } catch (e) { save(p.id, () => ({ status: 'failed', error: `Revision: ${e.message}` })); throw e; }
+  }
+  save(prospectId, () => ({ status: 'ready', finishedAt: now() }));
+  events.publish('notify', { title: `Revised: ${p.name}`, body: `"${String(note).slice(0, 80)}" applied. Waiting for your review.`, route: '/growth' });
+  return { status: 'ready' };
+}
+
+/** Bring back an earlier version (its ads, sheet and email). */
+function restore(prospectId, n, actor = 'user') {
+  const p = ctx.store.get('prospects', prospectId); const v = (p?.pkg?.versions || []).find((x) => x.n === Number(n));
+  if (!v) throw new Error('Version not found');
+  snapshot(p, 'Before restoring');
+  const files = {};
+  for (const [k, f] of Object.entries(v.files || {})) { if (fs.existsSync(f)) { const to = path.join(dirFor(p), path.basename(f)); fs.copyFileSync(f, to); files[k] = to; } }
+  save(p.id, (pk) => ({ creative: v.creative, files: { ...(pk.files || {}), ...files } }));
+  stepEmail(ctx.store.get('prospects', prospectId), actor);
+  return { restored: v.n };
+}
+
+module.exports = { revise, restore, STEPS, VIDEOS, run, dirFor, fallbackCreative, vetStoryboard, material, attachmentsFor, DEFAULT_PLAN };

@@ -108,6 +108,7 @@ function Bubble({ it, lane, picked, toggle, edit, setEdit, onApprove, onSkip, on
     ${editing ? html`<div class="col" style="gap:6px"><input class="input" value=${edit?.subject ?? it.subject} onInput=${(e) => setEdit({ subject: e.target.value })} /><textarea class="input" style="height:200px;font-family:inherit;line-height:1.5" value=${edit?.body ?? it.body} onInput=${(e) => setEdit({ body: e.target.value })} /></div>`
       : html`<div class="panel pad" style="background:var(--bg,#fafbfc)"><b>${edit?.subject ?? it.subject}</b><div class="selectable" style="white-space:pre-wrap;font-size:var(--fs-sm);line-height:1.55;margin-top:6px;max-height:220px;overflow:auto">${edit?.body ?? it.body}</div>${it.attachments.length ? html`<div class="faint" style="font-size:var(--fs-xs);margin-top:6px">📎 ${it.attachments.map((a) => a.name).join(' · ')}</div>` : null}</div>`}
     ${it.why.length ? html`<div class="row wrap" style="gap:6px">${it.why.map((w) => html`<span class="badge gold" title="Why autopilot held this">${w}</span>`)}</div>` : null}
+    <${Notes} id=${it.id} lane=${lane} />
     <div class="row wrap" style="gap:8px"><${Button} kind="moss" icon="check" onClick=${onApprove}>Approve & send</${Button}><${Button} kind="ghost" icon="edit" onClick=${() => setEditing(!editing)}>${editing ? 'Done editing' : 'Edit'}</${Button}><${Button} kind="ghost" onClick=${onSkip}>Skip</${Button}>
       <${VoiceNote} id=${it.id} has=${it.attachments.some((a) => /^Voice note/.test(a.name))} /><${CallButton} id=${it.id} name=${it.name} />
       <div class="spacer" /><${Button} size="sm" kind="ghost" onClick=${() => act(() => api.post(`/api/prospects/${it.id}/redo`), { ok: 'Remaking' })}>Remake</${Button}></div>
@@ -261,4 +262,30 @@ function CallButton({ id, name }) {
     <${Button} size="sm" kind="primary" icon="phone" onClick=${call}>Ring me, then ${name.split(' ')[0]}</${Button}>
     ${[['voicemail', 'Left a voicemail'], ['talked', 'Talked'], ['meeting', 'Booked a meeting'], ['no', 'Not interested']].map(([k, l]) => html`<button class="chip" onClick=${() => log(k, l)}>${l}</button>`)}
     <${Button} size="sm" kind="ghost" onClick=${() => setOpen(false)}>Close</${Button}></span>`;
+}
+
+// ------------------------------------------------------------------ notes, iterations and versions
+
+function Notes({ id, lane }) {
+  const [note, setNote] = useState(''); const [remember, setRemember] = useState(false); const [show, setShow] = useState(false);
+  const { data, reload } = useApi(show ? `/api/prospects/${id}/versions` : null, ['prospects']);
+  const go = (target) => act(() => api.post(`/api/prospects/${id}/revise`, { note, target, remember }), { ok: target === 'email' ? 'Rewriting the email…' : 'Remaking with your notes… (a few minutes for ads)' }).then(() => { setNote(''); setRemember(false); });
+  const quick = lane === 'political' ? ['Punchier', 'Shorter email', 'Lead with their biggest win', 'More local, mention their town', 'Calmer, more serious tone'] : ['Shorter', 'More casual', 'Mention a recent video by name', 'Lead with the $2,200 full management'];
+  return html`<div class="col" style="gap:8px;background:var(--surface-2);border-radius:18px;padding:12px">
+    <div class="row wrap" style="gap:6px"><b style="font-size:var(--fs-sm)">Notes</b>${quick.map((q) => html`<button class="chip" onClick=${() => setNote(note ? `${note}. ${q}` : q)}>${q}</button>`)}</div>
+    <div class="row wrap" style="gap:8px">
+      <input class="input grow" style="min-width:240px" placeholder="Tell it what to change, e.g. use the childcare vote, less formal, shorter" value=${note} onInput=${(e) => setNote(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && note.trim()) go('email'); }} />
+      <${Button} size="sm" kind="lav" disabled=${!note.trim()} onClick=${() => go('email')}>Redo email</${Button}>
+      ${lane === 'political' ? html`<${Button} size="sm" kind="lav" disabled=${!note.trim()} onClick=${() => go('ads')}>Redo ads</${Button}><${Button} size="sm" kind="primary" disabled=${!note.trim()} onClick=${() => go('all')}>Redo both</${Button}>` : null}
+    </div>
+    <div class="row wrap" style="gap:12px"><label class="row" style="gap:6px;font-size:var(--fs-sm)"><input type="checkbox" checked=${remember} onChange=${(e) => setRemember(e.target.checked)} />Remember this for all future ${lane === 'political' ? 'packages' : 'emails'}</label>
+      <button class="chip" onClick=${() => { setShow(!show); if (!show) setTimeout(reload, 0); }}>${show ? 'Hide versions' : 'Versions & past notes'}</button></div>
+    ${show && data ? html`<div class="col" style="gap:8px">
+      ${data.notes.length ? html`<div class="faint" style="font-size:var(--fs-xs)">Notes so far: ${data.notes.map((n) => `"${n.text}"`).join(' · ')}</div>` : null}
+      ${!data.versions.length ? html`<div class="faint" style="font-size:var(--fs-sm)">No earlier versions yet. Each redo keeps the one before it here.</div>` : data.versions.map((v) => html`<div class="panel pad col" style="gap:6px;padding:10px 12px">
+        <div class="row"><b class="grow" style="font-size:var(--fs-sm)">${v.label}</b><span class="faint" style="font-size:var(--fs-xs)">${ago(v.at)}</span><${Button} size="sm" kind="ghost" onClick=${() => act(() => api.post(`/api/prospects/${id}/restore`, { n: v.n }), { ok: 'Restored' }).then(reload)}>Use this version</${Button}></div>
+        ${v.files.includes('posterV') ? html`<div class="row" style="gap:6px">${['posterV', 'posterH', 'posterHL'].filter((k) => v.files.includes(k)).map((k) => html`<img src=${api.url(`/api/prospects/${id}/version/${v.n}/file/${k}`)} style="height:70px;border-radius:8px" />`)}</div>` : null}
+        <div class="faint" style="font-size:var(--fs-xs);white-space:pre-wrap;max-height:90px;overflow:auto"><b>${v.subject}</b>${'\n'}${String(v.body || '').slice(0, 400)}</div></div>`)}
+    </div>` : null}
+  </div>`;
 }

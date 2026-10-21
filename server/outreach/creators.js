@@ -45,7 +45,7 @@ async function research(p) {
   return out;
 }
 
-async function writeEmail(p, r, offer) {
+async function writeEmail(p, r, offer, notes = []) {
   const sender = O('senderName', '') || ctx.setting('political.senderName', '') || ctx.setting('agency.founders', [])[0]?.name || '';
   const booking = O('bookingUrl', '') || ctx.setting('political.bookingUrl', '');
   const agency = ctx.setting('agency.name', 'Euclidean Media');
@@ -54,7 +54,7 @@ async function writeEmail(p, r, offer) {
   if (!ai.anyConnected()) return template();
   const recent = (r.stats?.recent || []).slice(0, 8).map((v) => `- ${v.title} (${v.views ?? '?'} views, ${v.kind || 'video'}${v.date ? `, ${v.date}` : ''})`).join('\n');
   let res;
-  try { res = await ai.ask({ role: 'writing', json: true, maxTokens: 1200, system: `You write first-touch emails for ${agency}, a Shorts and YouTube agency. Personal and specific to this creator's actual content, under 150 words, one clear ask (20 minutes), no hype, no invented numbers or results, no fake familiarity. Mention the offer in one or two plain lines. Never use em dashes. End with a simple opt-out line.${learning.writerBlock('creators')}${String(O('templates', '')).trim() ? `\nMatch the voice and structure of these house emails:\n${String(O('templates', '')).slice(0, 5000)}` : ''}`, prompt: `Creator: ${p.name} (${p.handle || ''}). Why they fit: ${p.why || 'n/a'}.\n${r.stats ? `YouTube: ${r.stats.followers ?? '?'} subscribers, ${r.stats.totalVideos ?? '?'} videos.\nRecent uploads:\n${recent}` : 'No YouTube channel found: pitch building one.'}\nOffer: ${offer.name}, ${offer.price}. ${offer.details}\n${booking ? `Booking link: ${booking}\n` : ''}Sign as: ${sender || agency}, ${agency}\nReturn {"subject":"≤8 words","body":"plain text"}` }); }
+  try { res = await ai.ask({ role: 'writing', json: true, maxTokens: 1200, system: `You write first-touch emails for ${agency}, a Shorts and YouTube agency. Personal and specific to this creator's actual content, under 150 words, one clear ask (20 minutes), no hype, no invented numbers or results, no fake familiarity. Mention the offer in one or two plain lines. Never use em dashes. End with a simple opt-out line.${learning.writerBlock('creators')}${String(O('templates', '')).trim() ? `\nMatch the voice and structure of these house emails:\n${String(O('templates', '')).slice(0, 5000)}` : ''}`, prompt: `Creator: ${p.name} (${p.handle || ''}). Why they fit: ${p.why || 'n/a'}.\n${r.stats ? `YouTube: ${r.stats.followers ?? '?'} subscribers, ${r.stats.totalVideos ?? '?'} videos.\nRecent uploads:\n${recent}` : 'No YouTube channel found: pitch building one.'}\nOffer: ${offer.name}, ${offer.price}. ${offer.details}\n${booking ? `Booking link: ${booking}\n` : ''}Sign as: ${sender || agency}, ${agency}\n${notes.length ? `FOUNDER NOTES FOR THIS CREATOR (apply all; latest wins):\n${notes.map((n, i) => `${i + 1}. ${n.text}`).join('\n')}\n${p.outreach?.email ? `CURRENT DRAFT:\nSubject: ${p.outreach.email.subject}\n${p.outreach.email.body}\n` : ''}` : ''}Return {"subject":"≤8 words","body":"plain text"}` }); }
   catch (e) { audit.log('system', 'creators.writer_fallback', { prospectId: p.id, error: e.message }, 'warn'); return { ...template(), note: `AI writer unavailable (${e.message.slice(0, 80)}); used your template` }; }
   if (!res.json?.subject || !res.json?.body) return template();
   return { subject: res.json.subject, body: res.json.body, agent: `${res.provider}:${res.model}` };
@@ -81,15 +81,17 @@ async function run(prospectId, h) {
     const ex = excluded({ name: p.name, email: to, handle: p.handle }); if (ex) { set({ status: 'excluded', note: `On the exclusions list (${ex})` }); return { status: 'excluded' }; }
     h.progress(0.6, 'Writing the email');
     const offer = offerFor({ ...p, research: r });
-    const em = await writeEmail(p, r, offer);
+    const em = await writeEmail(p, r, offer, p.outreach?.notes || []);
     let contact = p.contactId ? ctx.store.get('contacts', p.contactId) : ctx.store.find('contacts', (x) => (x.emails || []).includes(to));
     if (!contact) contact = ctx.store.insert('contacts', { name: p.name, phones: [], emails: [to], role: 'prospect', clientId: null, optedOut: {}, source: 'creator outreach' });
     if (contact.optedOut?.email) { set({ status: 'excluded', note: 'Opted out' }); return { status: 'opted_out' }; }
     ctx.store.update('prospects', p.id, { contactId: contact.id });
     const old = p.outreach?.messageId && ctx.store.get('messages', p.outreach.messageId);
     if (old?.status === 'pending_approval') messaging.rejectMessage(old.id, 'system');
-    const m = messaging.createOutbound({ contactId: contact.id, channel: 'email', subject: noDashes(em.subject), body: withFooter(em.body), aiGenerated: true, agent: em.agent, category: 'prospecting', actor: 'system' });
-    set({ status: 'ready', offer: offer.key, messageId: m.id, conversationId: m.conversationId, finishedAt: now(), agent: em.agent });
+    const fs = require('fs'); const path = require('path');
+    const att = p.voiceNote && fs.existsSync(p.voiceNote) ? [{ name: path.basename(p.voiceNote), path: p.voiceNote, size: fs.statSync(p.voiceNote).size }] : [];
+    const m = messaging.createOutbound({ contactId: contact.id, channel: 'email', subject: noDashes(em.subject), body: withFooter(em.body), aiGenerated: true, agent: em.agent, category: 'prospecting', actor: 'system', attachments: att });
+    set({ email: { subject: em.subject, body: em.body }, status: 'ready', offer: offer.key, messageId: m.id, conversationId: m.conversationId, finishedAt: now(), agent: em.agent });
     if ((p.stage || 'new') === 'new') ctx.store.update('prospects', p.id, { stage: 'drafted' });
     if (!require('./autopilot').maybeAutoSend(p.id)) events.publish('notify', { title: `Email ready: ${p.name}`, body: 'Waiting for your review in Growth → Creators.', route: '/growth' });
     return { status: 'ready' };
@@ -125,4 +127,12 @@ async function scout({ query, count = 15, autoPackage = true }, h, job) {
   return { added: created.length };
 }
 
-module.exports = { run, scout, research, offerFor, SCOUT_SYSTEM };
+/** Apply a founder note to a creator email: keeps the old version, rewrites, replaces the draft. */
+async function revise(prospectId, { note, actor = 'user' }, h) {
+  const p = ctx.store.get('prospects', prospectId); if (!p) throw Object.assign(new Error('Prospect not found'), { permanent: true });
+  const versions = [...(p.outreach?.versions || [])]; if (p.outreach?.email) versions.push({ n: versions.length + 1, at: now(), label: `Before: ${String(note).slice(0, 60)}`, email: p.outreach.email });
+  ctx.store.update('prospects', p.id, (cur) => ({ outreach: { ...(cur.outreach || {}), versions, notes: [...(cur.outreach?.notes || []), { text: String(note || '').slice(0, 1000), at: now(), by: actor }] } }));
+  return run(prospectId, h);
+}
+
+module.exports = { revise, run, scout, research, offerFor, SCOUT_SYSTEM };

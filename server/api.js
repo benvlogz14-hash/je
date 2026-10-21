@@ -557,9 +557,37 @@ r.post('/api/prospects/:id/voicenote', async (req, res, p) => {
   catch (e) { return send(res, 400, { error: `Couldn't read that recording: ${e.message.slice(0, 120)}` }); }
   const att = [...(msg.attachments || []).filter((a) => !/^Voice note/.test(a.name)), { name: path.basename(out), path: out, size: fs.statSync(out).size }];
   ctx.store.update('messages', msg.id, { attachments: att });
+  ctx.store.update('prospects', pr.id, { voiceNote: out });
   events.publish('prospects', { id: pr.id });
   return send(res, 200, { ok: true, name: path.basename(out) });
 }, { stream: true, raw: true });
+// Notes, revisions and versions for one lead.
+r.post('/api/prospects/:id/revise', (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id)); const note = String(b.note || '').trim();
+  if (!note) throw new HttpError(400, 'Write a note first, e.g. "punchier, lead with the school funding vote".');
+  const lane = pr.type === 'political' ? 'political' : 'creators';
+  if (b.remember) { const cur = String(ctx.setting(`outreach.${lane}.lessons`, '') || ''); ctx.store.setSettings({ outreach: { [lane]: { lessons: `${cur}${cur ? '\n' : ''}${note}` } } }); }
+  return queue.enqueue('outreach.revise', { prospectId: pr.id, name: pr.name, lane, note, target: ['email', 'ads', 'all'].includes(b.target) ? b.target : 'all' }, { actor: actorOf(req), priority: 3 });
+});
+r.get('/api/prospects/:id/versions', (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id));
+  const vs = pr.type === 'political' ? (pr.pkg?.versions || []).map((v) => ({ n: v.n, at: v.at, label: v.label, subject: v.creative?.email?.subject, body: v.creative?.email?.body, files: Object.keys(v.files || {}) })) : (pr.outreach?.versions || []).map((v) => ({ n: v.n, at: v.at, label: v.label, subject: v.email?.subject, body: v.email?.body, files: [] }));
+  return { versions: vs.reverse(), notes: (pr.type === 'political' ? pr.pkg?.notes : pr.outreach?.notes) || [] };
+});
+r.get('/api/prospects/:id/version/:n/file/:kind', (req, res, p) => {
+  const pr = ctx.store.get('prospects', p.id); const v = (pr?.pkg?.versions || []).find((x) => x.n === Number(p.n)); const f = v?.files?.[p.kind];
+  if (!f || !paths.inside(path.join(paths.root, 'political'), f)) return send(res, 404, { error: 'Not found' });
+  return serveFile(req, res, f);
+}, { stream: true });
+r.post('/api/prospects/:id/restore', (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id));
+  if (pr.type === 'political') return polPkg.restore(pr.id, b.n, actorOf(req));
+  const v = (pr.outreach?.versions || []).find((x) => x.n === Number(b.n)); if (!v) throw new HttpError(404, 'Version not found');
+  const msg = pr.outreach?.messageId && ctx.store.get('messages', pr.outreach.messageId);
+  if (msg?.status === 'pending_approval') ctx.store.update('messages', msg.id, { subject: v.email.subject, body: v.email.body });
+  ctx.store.update('prospects', pr.id, (cur) => ({ outreach: { ...(cur.outreach || {}), email: v.email } })); events.publish('prospects', { id: pr.id });
+  return { restored: v.n };
+});
 r.get('/api/outreach/:lane/review', (req, b, p) => autopilot.reviewQueue(laneOk(p.lane)));
 r.post('/api/outreach/approve', (req, b) => autopilot.approve(b.ids, actorOf(req), b.edits || {}), { roles: OWNER });
 r.post('/api/outreach/skip', (req, b) => autopilot.skip(b.ids, actorOf(req), b.reason));

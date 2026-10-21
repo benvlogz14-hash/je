@@ -468,6 +468,11 @@ queue.register('political.package', {
   },
 });
 
+queue.register('outreach.revise', {
+  title: (p) => `Revise: ${p.name || 'lead'}${p.target ? ` (${p.target})` : ''}`, heavy: true, maxAttempts: 1,
+  run: (job, h) => (job.payload.lane === 'political' ? political.revise(job.payload.prospectId, { note: job.payload.note, target: job.payload.target, actor: job.createdBy }, h) : creatorOutreach.revise(job.payload.prospectId, { note: job.payload.note, actor: job.createdBy }, h)),
+});
+
 queue.register('political.scout', {
   title: (p) => `Scout: ${p.query}`,
   async run(job, h) {
