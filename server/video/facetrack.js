@@ -136,4 +136,12 @@ function cropExpr(pathPts, scaledW, cropW) {
   return expr;
 }
 
-module.exports = { track, smooth, cropExpr, available, load };
+/** Faces in a still image: [{x1,y1,x2,y2,score}] as fractions of the frame (letterboxed to 4:3). Empty if the model can't load. */
+async function facesInImage(file) {
+  if (!(await load())) return null;
+  const found = [];
+  await frames(file, 0, 1, 1, async (rgb) => { if (!found.length) for (const b of await detect(rgb)) found.push({ x1: b[0], y1: b[1], x2: b[2], y2: b[3], score: b[4] }); });
+  return found;
+}
+
+module.exports = { track, smooth, cropExpr, available, load, facesInImage };

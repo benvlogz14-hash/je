@@ -17,6 +17,7 @@ module.exports = {
     shortSeconds: 20,          // the short vertical and short horizontal ads
     videoSeconds: 60,          // the long horizontal ad (30 to 240)
     longVideo: true,           // make the long horizontal ad
+    backgrounds: 'photo',      // 'photo' = real stock-style photos of their town/state behind the text; 'vector' = plain colour graphics
     photoMode: 'auto',         // auto (cut-out when available, else full photo, else silhouette) | cutout | full | silhouette
     photoCutout: true,         // remove the photo background (needs a remove.bg key or the free rembg tool)
     campaignPhotos: true,

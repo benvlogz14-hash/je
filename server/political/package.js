@@ -27,6 +27,7 @@ const learning = require('../outreach/learning');
 const STEPS = [
   ['research', 'Research public records'],
   ['brief', 'Write the brief'],
+  ['images', 'Find photos and backgrounds'],
   ['opponent', 'Research the opponent'],
   ['creative', 'Ad scripts, email and call script'],
   ['video_v', 'Short vertical ad'],
@@ -64,6 +65,13 @@ const norm = (s) => String(s || '').toLowerCase().replace(/[“”"'’‘]/g, '
 async function stepResearch(p, h) {
   const r = await sources.lookup({ name: p.name, hint: p.location || p.why || '', campaignSite: /^https?:/.test(p.handle || '') ? p.handle : null, dir: dirFor(p), onStep: (s) => h.progress(0.05, `Researching: ${s}`) });
   if (!r.sources.length) throw Object.assign(new Error(`No public records found for "${p.name}". Check the spelling, or add their office and state to the prospect.`), { permanent: true });
+  // Try every free source for a real photo, and keep only verified single-face photos.
+  try {
+    const images = require('./images');
+    const found = await images.findCandidatePhotos({ name: p.name, office: r.profile.office, sites: r.profile.sites || [], known: (r.profile.photos || []).map((x) => ({ url: x.url, credit: x.credit, score: 9 })), dir: path.join(dirFor(p), 'photos'), onStep: (x) => h.progress(0.1, `Looking for photos: ${x}`) });
+    if (found.photos.length) { r.profile.photo = found.photos[0].file; r.profile.photoCredit = found.photos[0].credit; r.profile.photos = found.photos; }
+    r.profile.photoFound = !!found.photos.length;
+  } catch (e) { r.errors.push(`Photo search: ${e.message}`); r.profile.photoFound = !!r.profile.photo; }
   // Cut the main photo out of its background for the campaign ads (remove.bg or the local rembg tool, when set up).
   if (r.profile.photo && S('photoCutout', true)) {
     try { const cut = await require('../video/cutout').removeBackground(r.profile.photo, path.join(dirFor(p), 'cutout.png')); if (cut) r.profile.cutout = cut; }
@@ -75,13 +83,24 @@ async function stepResearch(p, h) {
   else if (p.publicContact && (r.profile.emails || []).some((e) => e.email === String(p.publicContact).toLowerCase())) patch.contactVerified = true;
   if (!p.location && r.profile.office) patch.location = r.profile.office;
   if (Object.keys(patch).length) ctx.store.update('prospects', p.id, patch);
-  return `${r.sources.length} sources${r.errors.length ? ` (${r.errors.length} unavailable)` : ''}`;
+  return `${r.sources.length} sources · ${r.profile.photoFound ? `${(r.profile.photos || []).length} photo${(r.profile.photos || []).length === 1 ? '' : 's'} found` : 'no usable photo found'}${r.errors.length ? ` (${r.errors.length} lookups unavailable)` : ''}`;
 }
+
+/** Stock-style background photos of their town/state and their issues (free, credited). */
+async function stepImages(p, h) {
+  if (S('backgrounds', 'photo') !== 'photo') { save(p.id, () => ({ backgrounds: [] })); return { skip: true, note: 'Plain colour backgrounds (Package settings)' }; }
+  const pkg = p.pkg; const place = pkg.brief?.place || ''; const state = pkg.profile?.state ? STATES[pkg.profile.state] || pkg.profile.state : (String(pkg.profile?.office || p.location || '').match(new RegExp(Object.values(STATES).join('|'), 'i')) || [''])[0];
+  const queries = [place, place && `${place} downtown`, state && `${state} state capitol`, state && `${state} landscape`, ...(pkg.brief?.themes || []).slice(0, 2).map((t) => `${t}${state ? ` ${state}` : ''}`), 'american flag', 'main street small town america'];
+  const { backgrounds, errors } = await require('./images').findBackgrounds({ queries, dir: path.join(dirFor(p), 'backgrounds'), want: 5, onStep: (x) => h.progress(0.4, x) });
+  save(p.id, () => ({ backgrounds, backgroundErrors: errors.slice(0, 5) }));
+  return `${backgrounds.length} background photo${backgrounds.length === 1 ? '' : 's'}`;
+}
+const STATES = { AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming' };
 
 async function stepBrief(p) {
   const pkg = p.pkg;
   if (!ai.anyConnected()) { save(p.id, () => ({ brief: fallbackBrief(pkg) })); return 'Basic brief (connect an AI provider for a full one)'; }
-  const r = await ai.ask({ role: 'research', json: true, maxTokens: 3000, system: `You are a political research analyst for ${ctx.setting('agency.name', 'Euclidean Media')}, a short-form video agency. Write a briefing on a public official or candidate using ONLY the material provided. After every factual claim put its source number in brackets like [3]. If the material doesn't support something, leave it out. Public, professional information only: never include home addresses, family members, health or other personal details. Be neutral and factual.`, prompt: `${material(pkg)}\n\nReturn JSON: {"headline":"one line: who they are","summary":"2-3 sentences with citations","sections":[{"title":"Office & district","points":["... [n]"]},{"title":"Record & priorities","points":[]},{"title":"Fundraising","points":[]},{"title":"In the news","points":[]},{"title":"Online presence","points":[]}],"themes":["3-5 issues they clearly care about, short phrases"],"contentGaps":["2-4 observations about their video/social presence an agency could help with; say 'unverified' when unsure"],"angle":"one sentence: the most natural reason they'd want our videos","keyPoints":["3-5 campaign key points voters should hear, each with [n]"],"election":"the next election they're on the ballot for, with its date, only if stated in the material, else empty","opponent":{"name":"their main opponent in that race, ONLY if the material names one, else empty","src":[0]}}` });
+  const r = await ai.ask({ role: 'research', json: true, maxTokens: 3000, system: `You are a political research analyst for ${ctx.setting('agency.name', 'Euclidean Media')}, a short-form video agency. Write a briefing on a public official or candidate using ONLY the material provided. After every factual claim put its source number in brackets like [3]. If the material doesn't support something, leave it out. Public, professional information only: never include home addresses, family members, health or other personal details. Be neutral and factual.`, prompt: `${material(pkg)}\n\nReturn JSON: {"headline":"one line: who they are","summary":"2-3 sentences with citations","sections":[{"title":"Office & district","points":["... [n]"]},{"title":"Record & priorities","points":[]},{"title":"Fundraising","points":[]},{"title":"In the news","points":[]},{"title":"Online presence","points":[]}],"themes":["3-5 issues they clearly care about, short phrases"],"contentGaps":["2-4 observations about their video/social presence an agency could help with; say 'unverified' when unsure"],"angle":"one sentence: the most natural reason they'd want our videos","place":"the town, city or region they represent, e.g. 'Hartford, Connecticut' (for background photos)","keyPoints":["3-5 campaign key points voters should hear, each with [n]"],"election":"the next election they're on the ballot for, with its date, only if stated in the material, else empty","opponent":{"name":"their main opponent in that race, ONLY if the material names one, else empty","src":[0]}}` });
   const b = r.json || {};
   b.agent = `${r.provider}:${r.model}`;
   save(p.id, () => ({ brief: b }));
@@ -148,7 +167,10 @@ async function stepCreative(p) {
   const shortSec = Math.max(10, Math.min(90, Number(S('shortSeconds', 20)) || 20));
   const longSec = Math.max(30, Math.min(240, Number(S('videoSeconds', 60)) || 60));
   const style = S('videoStyle', 'campaign');
-  const offer = S('offer', '') || `Three free ads (a short vertical, a short horizontal and a longer horizontal cut) they can use free of charge whether or not they talk to us. Our political plan: ${S('plan', DEFAULT_PLAN)}. Ask for 20 minutes.`;
+  const hasPhoto = pkg.profile?.photoFound !== false && !!pkg.profile?.photo;
+  const offer = hasPhoto
+    ? (S('offer', '') || `Three free ads (a short vertical, a short horizontal and a longer horizontal cut) they can use free of charge whether or not they talk to us. Our political plan: ${S('plan', DEFAULT_PLAN)}. Ask for 20 minutes.`)
+    : `We could not find a usable photo of them, so the three attached ads are CONCEPTS with a "your photo here" placeholder that show the style and message. Do NOT say they are free to use or ready to post. Offer to make the finished versions with their photos and footage if they send a few, and mention our political plan: ${S('plan', DEFAULT_PLAN)}. Ask for 20 minutes.`;
   const booking = S('bookingUrl', '');
   const sender = S('senderName', '') || ctx.setting('agency.founders', [])[0]?.name || '';
   const contrast = !!(S('contrastAds', false) && pkg.opp);
@@ -228,7 +250,7 @@ function fallbackCreative(p, pkg, { booking, sender, style = 'campaign' }) {
   const agency = ctx.setting('agency.name', 'Euclidean Media');
   return {
     style, tone: 'positive', hasContrast: false, short: board, long: board, storyboard: board,
-    email: { subject: `Three free ads for ${p.name}`, body: withFooter(`Hi ${first} team,\n\nWe made three short campaign ads for ${p.name}: a vertical one for Reels/TikTok/Shorts, a horizontal one for YouTube and the web, and a longer cut. They're attached, and they're yours to use free of charge, whether or not you decide to talk with us.\n\nWe're ${agency}. Our political plan is ${S('plan', DEFAULT_PLAN)}. Could you give us 20 minutes?${booking ? `\n\nPick a time: ${booking}` : ''}\n\nThanks,\n${sender || agency}`) },
+    email: pr.photoFound === false || !pr.photo ? { subject: `Ad concepts for ${p.name}`, body: withFooter(`Hi ${first} team,\n\nWe sketched three short campaign ad concepts for ${p.name}: a vertical one for Reels/TikTok/Shorts, a horizontal one for YouTube and the web, and a longer cut. They're attached with a placeholder where your photo goes. Send us a few photos or clips and we'll make the finished versions.\n\nWe're ${agency}. Our political plan is ${S('plan', DEFAULT_PLAN)}. Could you give us 20 minutes?${booking ? `\n\nPick a time: ${booking}` : ''}\n\nThanks,\n${sender || agency}`) } : { subject: `Three free ads for ${p.name}`, body: withFooter(`Hi ${first} team,\n\nWe made three short campaign ads for ${p.name}: a vertical one for Reels/TikTok/Shorts, a horizontal one for YouTube and the web, and a longer cut. They're attached, and they're yours to use free of charge, whether or not you decide to talk with us.\n\nWe're ${agency}. Our political plan is ${S('plan', DEFAULT_PLAN)}. Could you give us 20 minutes?${booking ? `\n\nPick a time: ${booking}` : ''}\n\nThanks,\n${sender || agency}`) },
     callScript: `Hi, this is ${sender || 'a producer'} with ${agency}. We make campaign videos, and we put together three free sample ads for ${p.name}. They're free to use either way. Who's the best person to send them to? And could we get 20 minutes with whoever handles digital?`,
     voiceNote: `Hey, it's ${sender || 'the team'} from ${agency}. We made three quick ads for ${p.name}, attached and free to use. If you've got 20 minutes this week, we'd love to show you more.`,
     narration: '', agent: 'template',
@@ -257,7 +279,8 @@ async function stepVideo(p, h, kind) {
   const mode = S('photoMode', 'auto'); // auto | cutout | full | silhouette
   const pr = p.pkg.profile || {};
   const silhouette = mode === 'silhouette' || !pr.photo;
-  const info = { brand: S('brandColors', true) ? pr.brand : null, name: p.name, silhouette, cutout: !silhouette && mode !== 'full' && pr.cutout && fs.existsSync(pr.cutout) ? pr.cutout : null, photo: silhouette ? null : pr.photo, oppPhoto: p.pkg.opp?.profile?.photo, party: p.pkg.profile?.party, style, tone: c.tone, citeText: citeText(p.pkg), theme: S('theme', 'auto') === 'auto' ? null : S('theme') };
+  const backgrounds = S('backgrounds', 'photo') === 'photo' ? (p.pkg.backgrounds || []).map((b) => b.file).filter((f) => fs.existsSync(f)) : [];
+  const info = { backgrounds, brand: S('brandColors', true) ? pr.brand : null, name: p.name, silhouette, cutout: !silhouette && mode !== 'full' && pr.cutout && fs.existsSync(pr.cutout) ? pr.cutout : null, photo: silhouette ? null : pr.photo, oppPhoto: p.pkg.opp?.profile?.photo, party: p.pkg.profile?.party, style, tone: c.tone, citeText: citeText(p.pkg), theme: S('theme', 'auto') === 'auto' ? null : S('theme') };
   const work = path.join(dir, `work_${kind}`);
   const res = await render.renderVideo({ scenes: board, info, vertical: K.vertical, out, work, music, narration, onProgress: (f, t) => h.progress(f * 0.92, t) });
   fs.rmSync(work, { recursive: true, force: true });
@@ -290,6 +313,7 @@ async function tts(text, out) {
 
 async function stepSheet(p) {
   const dir = dirFor(p); const pkg = p.pkg; const pr = pkg.profile || {};
+  const noPhoto = pr.photoFound === false || !pr.photo || S('photoMode', 'auto') === 'silhouette';
   const T = render.themeFor(pr.party, S('theme', 'auto') === 'auto' ? null : S('theme'));
   const agency = ctx.setting('agency.name', 'Euclidean Media'); const booking = S('bookingUrl', '');
   const sender = S('senderName', '') || ctx.setting('agency.founders', [])[0]?.name || '';
@@ -309,8 +333,8 @@ h1{font:800 34px/1.05 Pop;color:${T.ink};letter-spacing:-.02em} h1 b{color:${T.a
 .dot{position:absolute;border-radius:50%}
 </style></head><body>
 <div class="dot" style="right:.5in;top:.45in;width:90px;height:90px;background:${T.c}"></div><div class="dot" style="right:1.35in;top:.3in;width:34px;height:34px;background:${T.b}"></div>
-<h1>Three free ads for<br><b>${e(p.name)}</b></h1>
-<div class="lead">${e(cap(pr.office || ''))}${pr.office ? '. ' : ''}We made three campaign ads from your public record: a short vertical, a short horizontal and a longer cut. They're attached to our email and <b style="color:${T.a}">yours to use free of charge</b>, whether or not you decide to talk with us.</div>
+<h1>${noPhoto ? 'Ad concepts for' : 'Three free ads for'}<br><b>${e(p.name)}</b></h1>
+<div class="lead">${e(cap(pr.office || ''))}${pr.office ? '. ' : ''}${noPhoto ? `We sketched three campaign ad concepts from your public record: a short vertical, a short horizontal and a longer cut, with a placeholder where your photo goes. <b style="color:${T.a}">Send us a few photos and we'll make the finished versions.</b>` : `We made three campaign ads from your public record: a short vertical, a short horizontal and a longer cut. They're attached to our email and <b style="color:${T.a}">yours to use free of charge</b>, whether or not you decide to talk with us.`}</div>
 <div class="vids">
   ${img(pkg.files?.posterV) ? `<div class="v"><img src="${img(pkg.files.posterV)}" style="width:2.1in;height:3.73in"><div>Vertical · Reels, TikTok, Shorts</div></div>` : ''}
   ${img(pkg.files?.posterH) ? `<div class="v" style="flex:1"><img src="${img(pkg.files.posterH)}" style="width:100%;height:2.3in"><div>Horizontal · YouTube, web, email</div></div>` : ''}
@@ -381,6 +405,7 @@ async function run(prospectId, { from = 'research', only = null, actor = 'system
       let note;
       if (step === 'research') note = await stepResearch(p, sub);
       else if (step === 'brief') note = await stepBrief(p);
+      else if (step === 'images') { const r = await stepImages(p, sub); if (r?.skip) { setStep(p.id, step, { status: 'skipped', note: r.note }); continue; } note = r; }
       else if (step === 'opponent') { const r = await stepOpponent(p, sub); note = r.note; if (r.skip) { setStep(p.id, step, { status: 'skipped', note }); continue; } }
       else if (step === 'creative') note = await stepCreative(p);
       else if (step === 'video_v') note = await stepVideo(p, sub, 'v');

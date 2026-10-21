@@ -285,7 +285,7 @@ async function renderVideo({ scenes, info, vertical, out, work, music, narration
     let off = H; const placed = els.map((e) => { const p = { ...e, off }; off += e.h; return p; });
     const PAD = 240; // the window's viewport is a little shorter than the window itself
     const page = `<!doctype html><html><head><meta charset="utf-8"><style>${baseCss}</style></head><body style="width:${W}px;height:${off + PAD}px">
-<div class="slot" style="top:0;width:${W}px;height:${H}px;display:block">${camp ? camp.background(P, W, H, s, info) : background(T, W, H, i)}</div>
+<div class="slot" style="top:0;width:${W}px;height:${H}px;display:block">${camp ? camp.background(P, W, H, s, { ...info, sceneIndex: i }) : background(T, W, H, i)}</div>
 ${placed.map((e) => `<div class="slot" style="top:${e.off}px;width:${e.w}px;height:${e.h}px;${e.anim === 'drift' || e.anim === 'sweep' ? 'display:block' : ''}">${e.html}</div>`).join('\n')}
 ${FIT}</body></html>`;
     const htmlFile = path.join(work, `s${i}.html`); fs.writeFileSync(htmlFile, page);

@@ -53,11 +53,20 @@ function setup(h) {
 .cx-item i{font-style:normal;flex:none;width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:32px}`;
   }
 
-  /** Generic person silhouette with a "your candidate here" tag (used when there's no usable photo). */
+  /** Instagram-style default avatar (grey circle, white head and shoulders) with a "your photo here" label. Only used when no photo was found. */
   function silhouette(P, W, H) {
-    const V = H > W; const sw = V ? W * 0.78 : H * 0.95; const x = V ? (W - sw) / 2 : W - sw - W * 0.06; const y = V ? H * 0.16 : H * 0.08;
-    return `<svg style="position:absolute;left:${x | 0}px;top:${y | 0}px;width:${sw | 0}px;height:${(sw * 1.05) | 0}px" viewBox="0 0 200 210"><defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity=".34"/><stop offset="1" stop-color="#ffffff" stop-opacity=".08"/></linearGradient></defs><circle cx="100" cy="62" r="40" fill="url(#sg)"/><path d="M18 210c0-52 37-88 82-88s82 36 82 88z" fill="url(#sg)"/></svg>
-<div style="position:absolute;left:${(x + sw * 0.18) | 0}px;top:${(y + sw * 0.5) | 0}px;width:${(sw * 0.64) | 0}px;text-align:center;font:800 ${V ? 34 : 30}px Pop;letter-spacing:.12em;color:rgba(255,255,255,.75);text-transform:uppercase">Your candidate here</div>`;
+    const V = H > W; const d = V ? W * 0.62 : H * 0.62; const cx = V ? W / 2 : W * 0.74; const cy = V ? H * 0.27 : H * 0.44;
+    return `<div style="position:absolute;left:${(cx - d / 2) | 0}px;top:${(cy - d / 2) | 0}px;width:${d | 0}px;height:${d | 0}px;border-radius:50%;background:#dbdbdb;overflow:hidden;box-shadow:0 0 0 ${(d * 0.035) | 0}px rgba(255,255,255,.9),0 30px 60px rgba(0,0,0,.35)">
+<svg viewBox="0 0 100 100" style="width:100%;height:100%;display:block"><circle cx="50" cy="38" r="17" fill="#fff"/><path d="M14 100c0-22 16-36 36-36s36 14 36 36z" fill="#fff"/></svg></div>
+<div style="position:absolute;left:${(cx - d * 0.7) | 0}px;top:${(cy + d / 2 + d * 0.08) | 0}px;width:${(d * 1.4) | 0}px;text-align:center;font:800 ${V ? 40 : 34}px Pop;color:#fff;letter-spacing:.06em;text-transform:uppercase;text-shadow:0 2px 12px rgba(0,0,0,.4)">Your photo here</div>
+<div style="position:absolute;left:${(cx - d * 0.7) | 0}px;top:${(cy + d / 2 + d * 0.08 + (V ? 52 : 44)) | 0}px;width:${(d * 1.4) | 0}px;text-align:center;font:600 ${V ? 26 : 22}px Pop;color:rgba(255,255,255,.8)">with image rights</div>`;
+  }
+
+  /** A real background photo (town, capitol, issue) under a brand-colour wash, so text stays readable. */
+  function photoBg(P, file, i) {
+    return `<div style="position:absolute;inset:0;background:url('${fileUrl(file)}') center/cover;filter:saturate(.9) contrast(1.05)"></div>
+<div style="position:absolute;inset:0;background:linear-gradient(${150 + i * 20}deg,${P.bg1}cc,${P.bg2}73 55%,${P.bg1}bf)"></div>
+<div style="position:absolute;inset:0;background:repeating-linear-gradient(-35deg,rgba(255,255,255,.035) 0 40px,transparent 40px 80px)"></div>`;
   }
 
   /** Cut-out candidate standing over the campaign colours, with a soft glow behind them. */
@@ -74,7 +83,7 @@ function setup(h) {
     const who = scene.who === 'opponent' ? 'opp' : 'cand';
     if (who === 'cand' && (scene.type === 'photo' || scene.type === 'vote')) {
       if (info.cutout && fs.existsSync(info.cutout)) return cutoutBg(P, W, H, info.cutout);
-      if (info.silhouette) return `<div style="position:absolute;inset:0;background:linear-gradient(160deg,${P.bg1},${P.bg2})"></div><div style="position:absolute;inset:0;background:repeating-linear-gradient(-35deg,rgba(255,255,255,.04) 0 40px,transparent 40px 80px)"></div>${silhouette(P, W, H)}<div style="position:absolute;inset:0;background:linear-gradient(180deg,transparent 55%,rgba(0,0,0,.6) 100%)"></div>`;
+      if (info.silhouette) return `${(info.backgrounds || []).length && fs.existsSync(info.backgrounds[0]) ? photoBg(P, info.backgrounds[0], 0) : `<div style="position:absolute;inset:0;background:linear-gradient(160deg,${P.bg1},${P.bg2})"></div><div style="position:absolute;inset:0;background:repeating-linear-gradient(-35deg,rgba(255,255,255,.04) 0 40px,transparent 40px 80px)"></div>`}${silhouette(P, W, H)}<div style="position:absolute;inset:0;background:linear-gradient(180deg,transparent 55%,rgba(0,0,0,.6) 100%)"></div>`;
     }
     const photo = scene.type === 'photo' || scene.type === 'vote' ? (who === 'opp' ? info.oppPhoto : info.photo) : null;
     const grain = `<div style="position:absolute;inset:0;opacity:.18;background-image:repeating-linear-gradient(0deg,rgba(255,255,255,.08) 0 1px,transparent 1px 3px)"></div>`;
@@ -84,6 +93,11 @@ function setup(h) {
       return `<div style="position:absolute;inset:0;background:url('${fileUrl(photo)}') center 25%/cover;filter:${attack ? 'grayscale(1) contrast(1.25) brightness(.8)' : 'saturate(1.05)'}"></div>
 <div style="position:absolute;inset:0;background:${attack ? 'rgba(160,15,30,.35)' : P.wash};mix-blend-mode:${attack ? 'multiply' : 'normal'}"></div>
 <div style="position:absolute;inset:0;background:linear-gradient(180deg,transparent 35%,rgba(0,0,0,.75) 100%)"></div>${grain}${vignette}`;
+    }
+    const bgs = info.backgrounds || [];
+    if (bgs.length && !['quote', 'disclaimer'].includes(scene.type)) {
+      const i = (info.sceneIndex || 0) % bgs.length;
+      if (fs.existsSync(bgs[i])) return `${photoBg(P, bgs[i], info.sceneIndex || 0)}<div style="position:absolute;inset:0;opacity:.18;background-image:repeating-linear-gradient(0deg,rgba(255,255,255,.08) 0 1px,transparent 1px 3px)"></div><div style="position:absolute;inset:0;background:radial-gradient(ellipse at 50% 40%,transparent 40%,rgba(0,0,0,.55) 100%)"></div>`;
     }
     const stars = Array.from({ length: 18 }, (_, k) => `<div style="position:absolute;left:${(k * 137) % W}px;top:${(k * 251) % H}px;font-size:${18 + (k % 4) * 8}px;color:rgba(255,255,255,.07)">★</div>`).join('');
     const stripes = `<div style="position:absolute;inset:0;background:repeating-linear-gradient(-35deg,rgba(255,255,255,.035) 0 40px,transparent 40px 80px)"></div>`;
