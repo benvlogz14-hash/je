@@ -34,7 +34,8 @@ function counters() {
 
 /** Today's sending limit: warm-up start + step per day since auto-send was switched on, up to the daily limit. */
 function capToday(lane) {
-  const c = cfg(lane); const since = ctx.store.settings._outreachSince?.[lane];
+  const c = cfg(lane); let since = ctx.store.settings._outreachSince?.[lane];
+  if (!since && graduated(lane)) { since = now(); ctx.store.settings._outreachSince = { ...(ctx.store.settings._outreachSince || {}), [lane]: since }; ctx.store.touch(); }
   const days = since ? Math.max(0, Math.floor((Date.now() - new Date(since).getTime()) / 864e5)) : 0;
   return Math.max(1, Math.min(Number(c.sendPerDay) || 50, (Number(c.warmupStart) || 15) + days * (Number(c.warmupStep) || 10)));
 }
@@ -43,6 +44,13 @@ function leadsToday(lane) {
   const day = today();
   return ctx.store.all('prospects', (p) => laneOf(p) === lane && p.source !== 'import' && new Date(p.createdAt).toLocaleDateString('en-CA', { timeZone: ctx.setting('agency.timezone', 'America/New_York') }) === day).length;
 }
+/** Auto-graduate: auto-send counts as on once the founders approve enough drafts unchanged. */
+function graduated(lane) {
+  const c = cfg(lane); if (!c.autoGraduate) return false;
+  const st = learning.stats(lane, Number(c.graduateWindow) || 25);
+  return st.reviewed >= (Number(c.graduateWindow) || 25) && (st.unchangedRate || 0) >= (Number(c.graduateAt) || 0.9);
+}
+const sendingOn = (lane) => !!cfg(lane).autoSend || graduated(lane);
 function laneOf(p) { return p.type === 'political' ? 'political' : 'creators'; }
 function draftOf(p) { const id = p.type === 'political' ? p.pkg?.messageId : p.outreach?.messageId; return id ? ctx.store.get('messages', id) : null; }
 
@@ -50,7 +58,7 @@ function draftOf(p) { const id = p.type === 'political' ? p.pkg?.messageId : p.o
 function checks(p, { ignoreCap = false } = {}) {
   const lane = laneOf(p); const c = cfg(lane); const why = [];
   const msg = draftOf(p);
-  if (!c.autoSend) why.push('Auto-send is off');
+  if (!sendingOn(lane)) why.push(c.autoGraduate ? 'Auto-send not earned yet (approve more drafts unchanged)' : 'Auto-send is off');
   if (!msg || msg.status !== 'pending_approval') why.push('No draft waiting');
   if (!mailingAddress()) why.push('Add your mailing address (Outreach settings); the law requires it in every email');
   const contact = msg && ctx.store.get('contacts', msg.contactId);
@@ -124,13 +132,13 @@ function skip(ids, actor, reason = '') {
 function reviewQueue(lane) {
   return ctx.store.all('prospects', (p) => laneOf(p) === lane && draftOf(p)?.status === 'pending_approval').map((p) => {
     const msg = draftOf(p); const contact = ctx.store.get('contacts', msg.contactId);
-    return { id: p.id, name: p.name, type: p.type, office: p.pkg?.profile?.office || p.location || '', handle: p.handle, followers: p.followers, to: contact?.emails?.[0] || '', subject: msg.subject, body: msg.body, messageId: msg.id, attachments: (msg.attachments || []).map((a) => ({ name: a.name, size: a.size })), files: p.pkg?.files ? Object.keys(p.pkg.files) : [], hasContrast: !!p.pkg?.creative?.hasContrast, why: checks(p, { ignoreCap: true }).filter((w) => w !== 'Auto-send is off'), createdAt: msg.createdAt };
+    return { id: p.id, name: p.name, type: p.type, office: p.pkg?.profile?.office || p.location || '', handle: p.handle, followers: p.followers, to: contact?.emails?.[0] || '', subject: msg.subject, body: msg.body, messageId: msg.id, attachments: (msg.attachments || []).map((a) => ({ name: a.name, size: a.size })), files: p.pkg?.files ? Object.keys(p.pkg.files) : [], hasContrast: !!p.pkg?.creative?.hasContrast, why: checks(p, { ignoreCap: true }).filter((w) => !/^Auto-send (is off|not earned)/.test(w)), createdAt: msg.createdAt };
   }).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 
 function status() {
   const c = counters();
-  return Object.fromEntries(LANES.map((l) => [l, { ...cfg(l), learning: learning.stats(l), leadsToday: leadsToday(l), sentToday: c.sent[l] || 0, capToday: capToday(l), scoutedToday: c.scouted[l] || 0, waiting: reviewQueue(l).length, autoSendSince: ctx.store.settings._outreachSince?.[l] || null, lastScout: ctx.store.settings._outreachScout?.[l] || null }]));
+  return Object.fromEntries(LANES.map((l) => [l, { ...cfg(l), learning: learning.stats(l), graduated: graduated(l), leadsToday: leadsToday(l), sentToday: c.sent[l] || 0, capToday: capToday(l), scoutedToday: c.scouted[l] || 0, waiting: reviewQueue(l).length, autoSendSince: ctx.store.settings._outreachSince?.[l] || null, lastScout: ctx.store.settings._outreachScout?.[l] || null }]));
 }
 
 /** Remember when auto-send was switched on, for the warm-up ramp. */
@@ -179,7 +187,7 @@ function tick() {
       }
     }
     // Drafts held back by yesterday's limit go out first thing today.
-    if (l.autoSend && (c.sent[lane] || 0) < capToday(lane)) {
+    if (sendingOn(lane) && (c.sent[lane] || 0) < capToday(lane)) {
       for (const p of ctx.store.all('prospects', (x) => laneOf(x) === lane && (x.pkg?.autoBlock || x.outreach?.autoBlock || []).some((w) => /limit reached/.test(w))).slice(0, 25)) {
         if ((counters().sent[lane] || 0) >= capToday(lane)) break;
         maybeAutoSend(p.id);
@@ -188,4 +196,4 @@ function tick() {
   }
 }
 
-module.exports = { leadsToday, LANES, checks, maybeAutoSend, approve, skip, reviewQueue, status, tick, noteSettings, capToday, laneOf };
+module.exports = { graduated, leadsToday, LANES, checks, maybeAutoSend, approve, skip, reviewQueue, status, tick, noteSettings, capToday, laneOf };
