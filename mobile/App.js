@@ -89,7 +89,7 @@ function Button({ title, onPress, tone = 'blue', small, disabled }) {
   const ink = { blue: C.blueInk, green: C.greenInk, pink: C.pinkInk, amber: C.amberInk, lilac: C.lilacInk, plain: C.text }[tone];
   return (
     <Pressable disabled={disabled} onPress={() => { tap(); onPress && onPress(); }}
-      style={({ pressed }) => [s.btn, small && s.btnSmall, { backgroundColor: bg, opacity: disabled ? 0.45 : pressed ? 0.7 : 1 }, tone === 'plain' && { borderWidth: 1, borderColor: C.line }]}>
+      style={({ pressed }) => [s.btn, small && s.btnSmall, { backgroundColor: bg, opacity: disabled ? 0.45 : 1, transform: [{ scale: pressed ? 0.94 : 1 }] }, tone === 'plain' && { borderWidth: 1, borderColor: C.line }]}>
       <Text style={[s.btnText, small && { fontSize: 13 }, { color: ink }]}>{title}</Text>
     </Pressable>
   );
@@ -710,8 +710,8 @@ const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: C.bg, paddingTop: Platform.OS === 'android' ? 28 : 0 },
   list: { padding: 14, paddingBottom: 30 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 },
-  h1: { fontSize: 28, fontWeight: '800', color: C.text, flexShrink: 1 },
-  card: { backgroundColor: C.card, borderRadius: 16, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: C.line, gap: 6 },
+  h1: { fontSize: 32, fontWeight: '900', color: C.text, flexShrink: 1, letterSpacing: -0.6 },
+  card: { backgroundColor: C.card, borderRadius: 24, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: C.line, gap: 6, shadowColor: '#1d2333', shadowOpacity: 0.07, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 2 },
   rowCard: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   cardTitle: { fontSize: 16, fontWeight: '700', color: C.text },
@@ -719,7 +719,7 @@ const s = StyleSheet.create({
   body: { fontSize: 15, color: C.text, lineHeight: 21 },
   code: { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 12, color: C.dim, backgroundColor: C.bg, padding: 8, borderRadius: 8 },
   actions: { flexDirection: 'row', gap: 8, marginTop: 6, flexWrap: 'wrap' },
-  btn: { paddingVertical: 12, paddingHorizontal: 18, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+  btn: { paddingVertical: 13, paddingHorizontal: 20, borderRadius: 999, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   btnSmall: { paddingVertical: 8, paddingHorizontal: 14, marginTop: 0 },
   btnText: { fontSize: 15, fontWeight: '700' },
   pill: { paddingHorizontal: 9, paddingVertical: 3, borderRadius: 99 },
@@ -756,7 +756,7 @@ const s = StyleSheet.create({
   avatarText: { fontSize: 17, fontWeight: '800', color: C.text },
   rank: { fontSize: 15, fontWeight: '800', color: C.dim, width: 36 },
   stats: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 10 },
-  stat: { flexGrow: 1, flexBasis: '45%', backgroundColor: C.card, borderRadius: 16, padding: 14, borderWidth: 1, borderColor: C.line },
+  stat: { flexGrow: 1, flexBasis: '45%', backgroundColor: C.card, borderRadius: 22, padding: 14, borderWidth: 1, borderColor: C.line },
   statValue: { fontSize: 22, fontWeight: '800', color: C.text },
   statLabel: { fontSize: 12, color: C.dim, marginTop: 2 },
   section: { fontSize: 13, fontWeight: '800', color: C.dim, textTransform: 'uppercase', marginTop: 10, marginBottom: 8 },
