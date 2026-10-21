@@ -254,7 +254,7 @@ function compact(v, target = v) {
 
 function initials(n) { return String(n || '?').split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase(); }
 
-const DEFAULT_SEC = { hook: 4.5, portrait: 4.5, stat: 4.5, counter: 4.5, chart: 6, gallery: 5.5, issues: 6, quote: 6, cta: 5, end: 3.5 };
+const DEFAULT_SEC = { checklist: 5.5, notification: 5, hook: 4.5, portrait: 4.5, stat: 4.5, counter: 4.5, chart: 6, gallery: 5.5, issues: 6, quote: 6, cta: 5, end: 3.5 };
 const TRANSITIONS = ['circleopen', 'slideleft', 'smoothup', 'zoomin', 'radial', 'slideup', 'circlecrop', 'smoothleft'];
 const XF = 0.4;
 

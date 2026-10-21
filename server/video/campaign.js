@@ -176,6 +176,20 @@ function setup(h) {
         });
         break;
       }
+      case 'checklist': {
+        if (s.headline) add(box([40, 260, 1000, 280], [100, 80, 1720, 200]), title(s.headline, V ? 120 : 110), 'slide', 0.05);
+        (s.items || []).slice(0, 5).forEach((it, k) => add(V ? [70, 640 + k * 210, 940, 170] : [260, 330 + k * 140, 1400, 118],
+          `<div style="position:absolute;inset:8px;display:flex;align-items:center;gap:28px;background:rgba(255,255,255,.1);border-radius:22px;padding:0 30px;border:2px solid rgba(255,255,255,.18)"><span style="flex:none;width:${V ? 86 : 72}px;height:${V ? 86 : 72}px;border-radius:50%;background:${P.c};color:${P.ink};display:flex;align-items:center;justify-content:center;font:800 ${V ? 54 : 46}px Pop">✓</span><div class="fit cx-sub" style="font-size:${V ? 52 : 46}px;justify-content:flex-start;text-align:left"><span>${cap(it)}</span></div></div>`, 'pop', 0.4 + k * 0.45));
+        break;
+      }
+      case 'notification': {
+        // A phone with a news alert sliding in (real, cited headline only).
+        const pw = V ? 640 : 520; const ph = V ? 1180 : 880; const px = V ? 220 : 1260; const py = V ? 380 : 70;
+        add([px, py, pw, ph], `<div style="position:absolute;inset:0;border-radius:${pw * 0.14 | 0}px;background:#0d0f14;border:14px solid #1d2028;box-shadow:0 40px 80px rgba(0,0,0,.5);overflow:hidden"><div style="position:absolute;inset:0;background:linear-gradient(170deg,${P.bg2},${P.bg1})"></div><div style="position:absolute;top:${ph * 0.12 | 0}px;width:100%;text-align:center;font:600 ${pw * 0.2 | 0}px Pop;color:#fff;opacity:.95">${esc(s.time || '9:41')}</div></div>`, 'slide', 0.05);
+        add([px + 26, py + ph * 0.36 | 0, pw - 52, V ? 300 : 250], `<div style="position:absolute;inset:6px;border-radius:30px;background:rgba(250,250,252,.96);padding:22px 26px;display:flex;flex-direction:column;gap:8px;box-shadow:0 14px 30px rgba(0,0,0,.3)"><div style="display:flex;justify-content:space-between;font:700 ${V ? 26 : 22}px Pop;color:#666"><span>${esc(s.outlet || 'News')}</span><span>now</span></div><div class="fit" style="font:800 ${V ? 40 : 34}px Pop;color:#111;justify-content:flex-start;text-align:left;align-items:flex-start"><span>${esc(s.title || '')}</span></div></div>`, 'pop', 0.6);
+        if (s.sub) add(box([60, 1620, 960, 140], [100, 440, 1060, 200]), V ? bar(s.sub, 48) : title(s.sub, 110), 'slideX', 1.1);
+        break;
+      }
       case 'disclaimer':
         add(box([80, 820, 920, 280], [300, 420, 1320, 240]), `<div class="fit cx-sub" style="font-size:34px;font-weight:600;text-transform:none;letter-spacing:0;color:rgba(255,255,255,.9)"><span>${esc(s.text || '')}</span></div>`, 'fade', 0.1);
         break;

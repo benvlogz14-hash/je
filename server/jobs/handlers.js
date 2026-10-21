@@ -473,6 +473,16 @@ queue.register('outreach.revise', {
   run: (job, h) => (job.payload.lane === 'political' ? political.revise(job.payload.prospectId, { note: job.payload.note, target: job.payload.target, actor: job.createdBy }, h) : creatorOutreach.revise(job.payload.prospectId, { note: job.payload.note, actor: job.createdBy }, h)),
 });
 
+queue.register('political.reference', {
+  title: () => 'Study a reference ad', heavy: true, maxAttempts: 1,
+  async run(job, h) {
+    const ref = await require('../video/reference').analyze(job.payload.src, path.join(paths.root, 'political', '_reference'), (t) => h.progress(0.3, t));
+    ctx.store.setSettings({ political: { reference: ref } });
+    events.publish('settings', {});
+    return ref;
+  },
+});
+
 queue.register('political.scout', {
   title: (p) => `Scout: ${p.query}`,
   async run(job, h) {

@@ -511,6 +511,9 @@ r.post('/api/prospects/:id/package', (req, b, p) => {
   return queue.enqueue('political.package', { prospectId: pr.id, name: pr.name, from: b.from || 'research', only: b.only || null }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}` });
 });
 r.post('/api/political/approve', (req, b) => require('./outreach/autopilot').approve(b.ids, actorOf(req)), { roles: OWNER });
+r.post('/api/political/reference', (req, b) => { const src = String(b.src || '').trim(); if (!src) throw new HttpError(400, 'Paste a link to an ad you like.'); return queue.enqueue('political.reference', { src }, { actor: actorOf(req) }); });
+r.del('/api/political/reference', () => { ctx.store.setSettings({ political: { reference: null } }); return { ok: true }; });
+r.get('/api/political/reference/sheet', (req, res) => { const f = ctx.setting('political.reference', null)?.sheet; return f && fs.existsSync(f) ? serveFile(req, res, f) : send(res, 404, { error: 'No sheet' }); }, { stream: true });
 r.get('/api/political/steps', () => polPkg.STEPS.map(([key, label]) => ({ key, label })));
 r.get('/api/prospects/:id/file/:kind', (req, res, p) => {
   const pr = ctx.store.get('prospects', p.id); if (!pr) return send(res, 404, { error: 'Not found' });

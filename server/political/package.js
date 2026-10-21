@@ -135,6 +135,8 @@ Scene types (fields; keep on-screen text SHORT):
 - {"type":"quote","quote":"≤22 words, VERBATIM from the sources","source":"who/where","cite":[n]}
 - {"type":"counter","to":12345,"prefix":"$ or empty","suffix":"+ or %, or empty","label":"≤8 words","cite":[n]}  (a number that counts up; must be in the material)
 - {"type":"chart","headline":"≤5 words","bars":[{"label":"2022","value":1200000,"display":"$1.2M"}],"cite":[n]}  (2-8 bars, every value from the material, e.g. fundraising by cycle)
+- {"type":"checklist","headline":"≤5 words","items":["2-5 accomplishments or promises, ≤5 words each"]}  (items tick on one by one)
+- {"type":"notification","outlet":"news outlet from the sources","title":"the real headline","sub":"≤6 word takeaway","cite":[n]}  (a phone news alert; only real headlines)
 - {"type":"vote","headline":"VOTE <NAME> or a ≤5 word slogan","date":"election date only if in the material","button":"their website"}
 Every factual scene needs "cite" with the source numbers it relies on. Optional "sec" per scene (2.5-6).`;
 
@@ -177,7 +179,7 @@ async function stepCreative(p) {
   if (!ai.anyConnected()) { save(p.id, () => ({ creative: fallbackCreative(p, pkg, { booking, sender, style }) })); return 'Template scripts (connect an AI provider for tailored ads)'; }
   const templates = String(S('templates', '') || '').trim();
   const r = await ai.ask({ role: 'writing', json: true, maxTokens: 6000, system: `You create outreach for ${ctx.setting('agency.name', 'Euclidean Media')}, a video agency for political campaigns. You write sample campaign ads for the candidate, aimed at THEIR voters, that make the case for them on their key points (lower costs, schools, safety, jobs... whatever the material supports). Rules: use only facts in the material; numbers, headlines and quotes must appear in the material (quotes word for word) or be left out; cite source numbers on factual scenes; never claim endorsements or results you can't show; no personal details; ${contrast ? 'contrast with the opponent is allowed ONLY on specific, cited public-record facts' : 'do not mention or attack any opponent'}. The email is personal, specific and short (under 170 words): it says what we made for them, that the attached ads are theirs to use free of charge whether or not they talk to us, mentions the plan in one line, asks for 20 minutes, and ends with an opt-out line. Never use em dashes.${learning.writerBlock('political')}`, prompt: `${material(pkg)}\n\nBRIEF\n${JSON.stringify(pkg.brief || {}).slice(0, 6000)}\n\n${templates ? `HOUSE EMAIL TEMPLATES (match this voice and structure):\n${templates.slice(0, 6000)}\n\n` : ''}OFFER: ${offer}\n${booking ? `Booking link: ${booking}\n` : ''}${sender ? `Sign as: ${sender}, ${ctx.setting('agency.name', 'Euclidean Media')}\n` : ''}
-${notesBlock(pkg)}Write two ads from the same campaign: "short" (about ${shortSec} seconds, ${Math.max(4, Math.round(shortSec / 3.5))} scenes, used for both the vertical and the horizontal short) and "long" (about ${longSec} seconds, ${Math.max(6, Math.round(longSec / 4))} scenes). Each should open with a strong hook and end with a ${style === 'campaign' ? 'vote' : 'cta then end'} scene.
+${notesBlock(pkg)}${S('reference', null)?.avgShot ? `PACING: match a reference ad the founders like: about ${S('reference').avgShot} seconds per scene (${S('reference').cutsPerMinute} cuts a minute). Set "sec" on each scene accordingly.\n` : ''}Write two ads from the same campaign: "short" (about ${shortSec} seconds, ${Math.max(4, Math.round(shortSec / 3.5))} scenes, used for both the vertical and the horizontal short) and "long" (about ${longSec} seconds, ${Math.max(6, Math.round(longSec / 4))} scenes). Each should open with a strong hook and end with a ${style === 'campaign' ? 'vote' : 'cta then end'} scene.
 ${style === 'campaign' ? CAMPAIGN_DOC : POP_DOC}
 ${contrast ? CONTRAST_DOC : ''}
 
@@ -197,7 +199,7 @@ function vetStoryboard(list, pkg, p, { style = 'pop', contrast = false } = {}) {
   const all = [...(pkg.facts || []).map((f) => f.text), ...(pkg.text || []).map((t) => t.text)].join(' ');
   const corpus = norm(all); const numbers = all.toLowerCase().replace(/(\d),(?=\d{3})/g, '$1');
   const srcN = new Set((pkg.sources || []).map((x) => x.n)); const oppN = new Set((pkg.sources || []).filter((x) => x.opponent).map((x) => x.n));
-  const TYPES = style === 'campaign' ? ['photo', 'headline', 'stat', 'issues', 'quote', 'contrast', 'vote', 'counter', 'chart'] : ['hook', 'portrait', 'stat', 'issues', 'quote', 'cta', 'end', 'counter', 'chart'];
+  const TYPES = style === 'campaign' ? ['photo', 'headline', 'stat', 'issues', 'quote', 'contrast', 'vote', 'counter', 'chart', 'checklist', 'notification'] : ['hook', 'portrait', 'stat', 'issues', 'quote', 'cta', 'end', 'counter', 'chart'];
   const numbersOk = (txt) => (String(txt || '').replace(/(\d),(?=\d{3})/g, '$1').match(/\d+(?:\.\d+)?/g) || []).every((d) => d.length < 2 && !/\$/.test(txt) ? true : new RegExp(`(^|[^\\d.])${d.replace('.', '\\.')}(?![\\d])`).test(numbers));
   const exactNumber = (v) => new RegExp(`(^|[^\\d.])${String(v).replace('.', '\\.')}(?![\\d])`).test(numbers);
   const ok = [];
@@ -210,13 +212,14 @@ function vetStoryboard(list, pkg, p, { style = 'pop', contrast = false } = {}) {
     if (type === 'stat' && !numbersOk(s.value)) continue;
     if (type === 'counter' && !(Number(s.to) >= 10 && exactNumber(Number(s.to)))) continue;
     if (type === 'chart' && !((s.bars || []).length >= 2 && (s.bars || []).every((b) => Number(b.value) >= 1 && exactNumber(Number(b.value))))) continue;
-    if (type === 'headline' && !(s.title && corpus.includes(norm(String(s.title).replace(/\*/g, '')).slice(0, 50)))) continue;
+    if ((type === 'headline' || type === 'notification') && !(s.title && corpus.includes(norm(String(s.title).replace(/\*/g, '')).slice(0, 50)))) continue;
+    if (type === 'checklist' && !(s.items || []).every(numbersOk)) continue;
     if (type === 'contrast' || s.who === 'opponent') {
       if (!contrast || !cite.some((n) => oppN.has(n))) continue;
       const items = [...(s.left?.items || []), ...(s.right?.items || []), s.headline, s.sub].filter(Boolean);
       if (!items.every(numbersOk)) continue;
     }
-    if (['headline', 'stat', 'quote', 'counter', 'chart'].includes(type) && !cite.length && style === 'campaign') continue;
+    if (['headline', 'stat', 'quote', 'counter', 'chart', 'notification'].includes(type) && !cite.length && style === 'campaign') continue;
     ok.push(x);
   }
   if (style === 'campaign') {
@@ -282,7 +285,9 @@ async function stepVideo(p, h, kind) {
   const backgrounds = S('backgrounds', 'photo') === 'photo' ? (p.pkg.backgrounds || []).map((b) => b.file).filter((f) => fs.existsSync(f)) : [];
   const info = { backgrounds, brand: S('brandColors', true) ? pr.brand : null, name: p.name, silhouette, cutout: !silhouette && mode !== 'full' && pr.cutout && fs.existsSync(pr.cutout) ? pr.cutout : null, photo: silhouette ? null : pr.photo, oppPhoto: p.pkg.opp?.profile?.photo, party: p.pkg.profile?.party, style, tone: c.tone, citeText: citeText(p.pkg), theme: S('theme', 'auto') === 'auto' ? null : S('theme') };
   const work = path.join(dir, `work_${kind}`);
-  const res = await render.renderVideo({ scenes: board, info, vertical: K.vertical, out, work, music, narration, onProgress: (f, t) => h.progress(f * 0.92, t) });
+  const ref = S('reference', null);
+  const paced = ref?.avgShot ? board.map((x) => (x.sec ? x : { ...x, sec: Math.max(2.5, Math.min(7, ref.avgShot * (['issues', 'checklist', 'chart', 'contrast'].includes(x.type) ? 1.6 : 1))) })) : board;
+  const res = await render.renderVideo({ scenes: paced, info, vertical: K.vertical, out, work, music, narration, onProgress: (f, t) => h.progress(f * 0.92, t) });
   fs.rmSync(work, { recursive: true, force: true });
   // Small copy for email attachments (720p), the full-quality file stays in the folder.
   h.progress(0.94, 'Making the email-sized copy');

@@ -1,6 +1,6 @@
 // Political outreach: names or a scout query in, finished packages out
 // (cited brief, vertical + horizontal video, one-page sheet, email draft waiting in Approvals).
-import { html, useState, useApi, navigate, Button, Drawer, Field, Tabs, Progress, Toggle, act, toast, confirmDialog, store } from '../lib/ui.js';
+import { html, useState, useEffect, useApi, navigate, Button, Drawer, Field, Tabs, Progress, Toggle, act, toast, confirmDialog, store } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { ago, providerLabel } from '../lib/format.js';
@@ -95,6 +95,7 @@ function PackageSettings() {
     </div>
     <div class="col" style="gap:8px">${[['photoCutout', 'Remove photo backgrounds with AI (needs a remove.bg key or the free rembg tool)'], ['campaignPhotos', "Also use the photo from the candidate's own website (credited)"], ['longVideo', 'Make the long horizontal ad too'], ['brandColors', "Use the colours from the candidate's own website (campaign style)"], ['contrastAds', 'Allow contrast ads against a researched opponent (cited facts only; always needs your review)'], ['narration', 'AI narrator voice over the long ad (needs OpenAI)']].map(([k, l]) => html`<label class="row" style="gap:8px"><${Toggle} on=${!!v[k]} onChange=${(x) => setV({ ...v, [k]: x })} label=${l} /><span>${l}</span></label>`)}</div>
     <div class="faint" style="font-size:var(--fs-xs)">Music: put tracks in a "positive" and a "contrast" subfolder of your music folder to match the mood of each ad.</div>
+    <${ReferenceAd} />
     <${Field} label="Your offer, in your words (optional)" id="pol-offer"><textarea id="pol-offer" class="input" rows="2" value=${v.offer} onInput=${set('offer')} placeholder="Two free videos, yours to use whether or not we talk. Could you give us 20 minutes?" style="font-family:inherit;height:64px" /></${Field}>
     <${Field} label="Your best outreach emails" hint="Paste 1-3 emails that worked. The writer matches their voice and structure." id="pol-tpl"><textarea id="pol-tpl" class="input" rows="6" value=${v.templates} onInput=${set('templates')} style="font-family:inherit;height:150px" /></${Field}>
     <div class="row"><${Button} kind="primary" onClick=${save}>Save settings</${Button}><span class="faint" style="font-size:var(--fs-xs)">Data keys (Open States, api.data.gov) are in Settings → Connections.</span></div>
@@ -149,4 +150,23 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
       ${tab === 'sources' ? html`<ol class="selectable" style="padding-left:22px;font-size:var(--fs-sm);line-height:1.6">${(pkg.sources || []).map((s) => html`<li value=${s.n}><a href=${s.url} target="_blank" rel="noreferrer">${s.title}</a></li>`)}${pkg.researchErrors?.length ? html`<div class="faint" style="margin-top:8px;font-size:var(--fs-xs)">Unavailable: ${pkg.researchErrors.join(' · ')}</div>` : null}</ol>` : null}
       <div class="faint" style="font-size:var(--fs-xs)">${pkg.finishedAt ? `Made ${ago(pkg.finishedAt)}` : ''}</div>
     </div></${Drawer}>`;
+}
+
+/** Paste an ad you like; Euclidean measures how fast it cuts and paces the ads to match. */
+function ReferenceAd() {
+  const boot = store.get().boot || {};
+  const [src, setSrc] = useState('');
+  const { data: jobs } = useApi('/api/jobs?status=running,queued', ['job']);
+  const [ref, setRef] = useState(boot.settings?.political?.reference || null);
+  const busy = (jobs || []).find((j) => j.type === 'political.reference');
+  useEffect(() => { if (!busy) api.get('/api/settings').then((x) => setRef(x?.political?.reference || null)).catch(() => {}); }, [!!busy]);
+  return html`<div class="panel pad col" style="gap:8px;background:var(--surface-2)">
+    <b>Copy the pacing of an ad you like</b>
+    <div class="row wrap" style="gap:8px"><input class="input grow" style="min-width:260px" placeholder="Paste a YouTube, TikTok, Instagram or X link to a political ad" value=${src} onInput=${(e) => setSrc(e.target.value)} />
+      <${Button} size="sm" kind="lav" icon="film" disabled=${!src.trim() || !!busy} onClick=${() => act(() => api.post('/api/political/reference', { src }), { ok: 'Studying the ad…' }).then(() => setSrc(''))}>Study it</${Button}></div>
+    ${busy ? html`<div class="faint"><span class="spinner" /> ${busy.note || 'Studying the ad…'}</div>` : null}
+    ${ref ? html`<div class="row wrap" style="gap:12px;align-items:flex-start">${ref.sheet ? html`<img src=${api.url('/api/political/reference/sheet') + '&v=' + encodeURIComponent(ref.at || '')} style="height:120px;border-radius:10px" />` : null}
+      <div class="col" style="gap:4px;font-size:var(--fs-sm)"><b>${ref.cuts} cuts in ${ref.duration}s · about ${ref.avgShot}s per shot</b><span class="faint">Your ads now cut at this pace.</span><span class="faint ellipsis" style="max-width:360px">${ref.src}</span>
+      <${Button} size="sm" kind="ghost" onClick=${() => act(() => api.del('/api/political/reference'), { ok: 'Back to the default pacing' }).then(() => setRef(null))}>Stop copying this pacing</${Button}></div></div>` : html`<div class="faint" style="font-size:var(--fs-xs)">Without one, ads use Euclidean's default pacing.</div>`}
+  </div>`;
 }
