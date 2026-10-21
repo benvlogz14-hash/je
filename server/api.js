@@ -521,6 +521,45 @@ const learningSvc = require('./outreach/learning');
 r.get('/api/outreach/:lane/chat', (req, b, p) => scoutChat.history(laneOk(p.lane), 80));
 r.post('/api/outreach/:lane/chat', async (req, b, p) => { try { return await scoutChat.send(laneOk(p.lane), b.text, actorOf(req)); } catch (e) { throw new HttpError(400, e.message); } });
 r.get('/api/outreach/:lane/learning', (req, b, p) => ({ stats: learningSvc.stats(laneOk(p.lane)), lessons: ctx.setting(`outreach.${p.lane}.lessons`, ''), recent: ctx.store.all('outreachFeedback', (f) => f.lane === p.lane).slice(-30).reverse() }));
+// Click-to-call (a person calls; Twilio rings your phone first) and voice notes attached to a draft.
+r.post('/api/prospects/:id/call', async (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id));
+  const me = String(b.me || ctx.setting('outreach.callerPhone', '') || '').trim();
+  const to = String(b.to || pr.phone || pr.pkg?.profile?.officePhone || '').trim();
+  if (!me) throw new HttpError(400, 'Add your own phone number in Autopilot → Settings (the number Twilio rings first).');
+  if (!to) throw new HttpError(400, 'No phone number for this lead. Type one in.');
+  try {
+    const r = await twilio.bridgeCall({ me, to, name: pr.name });
+    ctx.store.update('prospects', pr.id, (cur) => ({ calls: [...(cur.calls || []), { at: now(), to, by: actorOf(req), sid: r.callSid }] }));
+    audit.log(actorOf(req), 'prospect.call_started', { prospectId: pr.id, to });
+    return { ok: true, ...r };
+  } catch (e) { throw new HttpError(400, e.message); }
+});
+r.post('/api/prospects/:id/call-outcome', (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id)); const outcome = String(b.outcome || '').slice(0, 200);
+  const stage = { voicemail: 'contacted', talked: 'replied', meeting: 'meeting', no: 'lost' }[b.kind] || pr.stage;
+  ctx.store.update('prospects', pr.id, (cur) => ({ stage, notes: `${cur.notes ? cur.notes + '\n' : ''}${new Date().toLocaleDateString()}: call, ${outcome || b.kind}` }));
+  try { require('./outreach/learning').record(b.kind === 'no' ? 'skipped' : 'replied', { lane: pr.type === 'political' ? 'political' : 'creators', prospectId: pr.id, name: pr.name, reason: `call: ${outcome || b.kind}` }); } catch { /* best effort */ }
+  events.publish('prospects', { id: pr.id });
+  return { ok: true };
+});
+r.post('/api/prospects/:id/voicenote', async (req, res, p) => {
+  const pr = ctx.store.get('prospects', p.id); if (!pr) return send(res, 404, { error: 'Not found' });
+  const msgId = pr.type === 'political' ? pr.pkg?.messageId : pr.outreach?.messageId; const msg = msgId && ctx.store.get('messages', msgId);
+  if (!msg || msg.status !== 'pending_approval') return send(res, 400, { error: 'There is no draft waiting for this lead.' });
+  const dir = path.join(paths.root, 'outreach-voice', pr.id); fs.mkdirSync(dir, { recursive: true });
+  const ext = /mp4|m4a/.test(req.headers['content-type'] || '') ? 'm4a' : /mpeg|mp3/.test(req.headers['content-type'] || '') ? 'mp3' : /wav/.test(req.headers['content-type'] || '') ? 'wav' : 'webm';
+  const raw = path.join(dir, `raw.${ext}`);
+  await new Promise((ok, bad) => { const w = fs.createWriteStream(raw); let n = 0; req.on('data', (c) => { n += c.length; if (n > 25e6) { req.destroy(); bad(new Error('Too long')); } }); req.pipe(w); w.on('finish', ok); w.on('error', bad); });
+  // Normalise to a small MP3 that every mail client plays.
+  const out = path.join(dir, `Voice note from ${String(ctx.setting('political.senderName', '') || ctx.setting('agency.name', 'Euclidean Media')).replace(/[^\w .-]/g, '')}.mp3`);
+  try { await require('./core/util').run(ff.bin('ffmpeg'), ['-y', '-i', raw, '-vn', '-ac', '1', '-ar', '44100', '-b:a', '96k', '-af', 'loudnorm=I=-16:TP=-1.5', out], { timeoutMs: 120000 }); }
+  catch (e) { return send(res, 400, { error: `Couldn't read that recording: ${e.message.slice(0, 120)}` }); }
+  const att = [...(msg.attachments || []).filter((a) => !/^Voice note/.test(a.name)), { name: path.basename(out), path: out, size: fs.statSync(out).size }];
+  ctx.store.update('messages', msg.id, { attachments: att });
+  events.publish('prospects', { id: pr.id });
+  return send(res, 200, { ok: true, name: path.basename(out) });
+}, { stream: true, raw: true });
 r.get('/api/outreach/:lane/review', (req, b, p) => autopilot.reviewQueue(laneOk(p.lane)));
 r.post('/api/outreach/approve', (req, b) => autopilot.approve(b.ids, actorOf(req), b.edits || {}), { roles: OWNER });
 r.post('/api/outreach/skip', (req, b) => autopilot.skip(b.ids, actorOf(req), b.reason));

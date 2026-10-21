@@ -13,7 +13,7 @@ export function Autopilot({ lane }) {
   const boot = store.get().boot || {};
   const init = boot.settings?.outreach?.[lane] || {};
   const [v, setV] = useState({ scout: false, autoSend: false, scoutQueries: '', scoutPerDay: 15, sendPerDay: 50, warmupStart: 15, warmupStep: 10, scoutHour: 7, ...init });
-  const [rules, setRules] = useState({ mailingAddress: boot.settings?.outreach?.mailingAddress || boot.settings?.political?.mailingAddress || '', exclusions: boot.settings?.outreach?.exclusions || '' });
+  const [rules, setRules] = useState({ mailingAddress: boot.settings?.outreach?.mailingAddress || boot.settings?.political?.mailingAddress || '', exclusions: boot.settings?.outreach?.exclusions || '', callerPhone: boot.settings?.outreach?.callerPhone || '' });
   const [open, setOpen] = useState(false);
   const s = st?.[lane] || {};
   // Pick up changes made elsewhere (the scout chat, another window) unless the settings form is open.
@@ -51,6 +51,7 @@ export function Autopilot({ lane }) {
         <${Field} label="Warm-up: add per day" id=${`wst-${lane}`}><input id=${`wst-${lane}`} class="input" type="number" min="0" max="500" value=${v.warmupStep} onInput=${set('warmupStep')} /></${Field}>
       </div>
       <${Field} label="Mailing address (shown at the bottom of every email)" id="ob-addr"><textarea id="ob-addr" class="input" style="height:64px;font-family:inherit" value=${rules.mailingAddress} onInput=${(e) => setRules({ ...rules, mailingAddress: e.target.value })} placeholder="Euclidean Media, 123 Main St, Hartford, CT 06103" /></${Field}>
+      <${Field} label="Your phone number (for one-click calls, Twilio rings this first)" id="ob-ph"><input id="ob-ph" class="input" value=${rules.callerPhone} onInput=${(e) => setRules({ ...rules, callerPhone: e.target.value })} placeholder="+1 203 555 0100" /></${Field}>
       <${Field} label="Never contact (names, organisations or email domains, one per line)" id="ob-ex"><textarea id="ob-ex" class="input" style="height:80px;font-family:inherit" value=${rules.exclusions} onInput=${(e) => setRules({ ...rules, exclusions: e.target.value })} /></${Field}>
       <div class="row"><${Button} kind="primary" onClick=${() => save()}>Save autopilot settings</${Button}><span class="faint" style="font-size:var(--fs-xs)">Sending also respects quiet hours, the hourly limit and opt-outs (Settings → Messaging).</span></div>
     </div>` : null}
@@ -106,7 +107,9 @@ function Bubble({ it, lane, picked, toggle, edit, setEdit, onApprove, onSkip, on
     ${editing ? html`<div class="col" style="gap:6px"><input class="input" value=${edit?.subject ?? it.subject} onInput=${(e) => setEdit({ subject: e.target.value })} /><textarea class="input" style="height:200px;font-family:inherit;line-height:1.5" value=${edit?.body ?? it.body} onInput=${(e) => setEdit({ body: e.target.value })} /></div>`
       : html`<div class="panel pad" style="background:var(--bg,#fafbfc)"><b>${edit?.subject ?? it.subject}</b><div class="selectable" style="white-space:pre-wrap;font-size:var(--fs-sm);line-height:1.55;margin-top:6px;max-height:220px;overflow:auto">${edit?.body ?? it.body}</div>${it.attachments.length ? html`<div class="faint" style="font-size:var(--fs-xs);margin-top:6px">📎 ${it.attachments.map((a) => a.name).join(' · ')}</div>` : null}</div>`}
     ${it.why.length ? html`<div class="row wrap" style="gap:6px">${it.why.map((w) => html`<span class="badge gold" title="Why autopilot held this">${w}</span>`)}</div>` : null}
-    <div class="row" style="gap:8px"><${Button} kind="moss" icon="check" onClick=${onApprove}>Approve & send</${Button}><${Button} kind="ghost" icon="edit" onClick=${() => setEditing(!editing)}>${editing ? 'Done editing' : 'Edit'}</${Button}><${Button} kind="ghost" onClick=${onSkip}>Skip</${Button}><div class="spacer" /><${Button} size="sm" kind="ghost" onClick=${() => act(() => api.post(`/api/prospects/${it.id}/redo`), { ok: 'Remaking' })}>Remake</${Button}></div>
+    <div class="row wrap" style="gap:8px"><${Button} kind="moss" icon="check" onClick=${onApprove}>Approve & send</${Button}><${Button} kind="ghost" icon="edit" onClick=${() => setEditing(!editing)}>${editing ? 'Done editing' : 'Edit'}</${Button}><${Button} kind="ghost" onClick=${onSkip}>Skip</${Button}>
+      <${VoiceNote} id=${it.id} has=${it.attachments.some((a) => /^Voice note/.test(a.name))} /><${CallButton} id=${it.id} name=${it.name} />
+      <div class="spacer" /><${Button} size="sm" kind="ghost" onClick=${() => act(() => api.post(`/api/prospects/${it.id}/redo`), { ok: 'Remaking' })}>Remake</${Button}></div>
   </div>`;
 }
 
@@ -218,4 +221,43 @@ export function Learning({ lane }) {
     <${Field} label="Lessons (one per line; the writer and scout follow these, and the chat adds to them)" id=${`les-${lane}`}><textarea id=${`les-${lane}`} class="input" style="height:100px;font-family:inherit" value=${val} onInput=${(e) => setLessons(e.target.value)} /></${Field}>
     <div class="row"><${Button} size="sm" kind="primary" disabled=${lessons == null} onClick=${() => act(() => api.patch('/api/settings', { outreach: { [lane]: { lessons: val } } }), { ok: 'Saved' }).then(() => { setLessons(null); reload(); })}>Save lessons</${Button}><span class="faint" style="font-size:var(--fs-xs)">Every edit you make before approving is saved as an example of how you want it written.</span></div>
   </div>`;
+}
+
+// ------------------------------------------------------------------ voice note + click-to-call
+
+async function uploadVoice(id, blob) {
+  const res = await fetch(api.url(`/api/prospects/${id}/voicenote`), { method: 'POST', headers: { 'content-type': blob.type || 'audio/webm' }, body: blob });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || `Upload failed (${res.status})`);
+  return j;
+}
+
+function VoiceNote({ id, has }) {
+  const [rec, setRec] = useState(null); const [busy, setBusy] = useState(false);
+  const start = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream); const chunks = [];
+      mr.ondataavailable = (e) => chunks.push(e.data);
+      mr.onstop = async () => { stream.getTracks().forEach((t) => t.stop()); setBusy(true); try { await uploadVoice(id, new Blob(chunks, { type: mr.mimeType || 'audio/webm' })); toast('Voice note attached', { kind: 'ok' }); } catch (e) { toast(e.message, { kind: 'error' }); } setBusy(false); };
+      mr.start(); setRec(mr);
+    } catch { toast('Microphone not available. Upload a recording instead.', { kind: 'warn' }); }
+  };
+  const stop = () => { rec?.stop(); setRec(null); };
+  const pick = async (e) => { const f = e.target.files?.[0]; if (!f) return; setBusy(true); try { await uploadVoice(id, f); toast('Voice note attached', { kind: 'ok' }); } catch (err) { toast(err.message, { kind: 'error' }); } setBusy(false); e.target.value = ''; };
+  if (busy) return html`<span class="faint"><span class="spinner" /> Attaching…</span>`;
+  if (rec) return html`<${Button} kind="coral" icon="stop" onClick=${stop}>Stop recording</${Button}>`;
+  return html`<span class="row" style="gap:4px"><${Button} kind="ghost" icon="mic" onClick=${start}>${has ? 'Re-record voice note' : 'Voice note'}</${Button}><label class="btn ghost sm" style="cursor:pointer" title="Upload a recording">Upload<input type="file" accept="audio/*" style="display:none" onChange=${pick} /></label></span>`;
+}
+
+function CallButton({ id, name }) {
+  const [open, setOpen] = useState(false); const [to, setTo] = useState('');
+  const call = () => act(() => api.post(`/api/prospects/${id}/call`, to.trim() ? { to: to.trim() } : {}), { ok: 'Calling your phone now. Answer it to be connected.' });
+  const log = (kind, outcome) => act(() => api.post(`/api/prospects/${id}/call-outcome`, { kind, outcome }), { ok: 'Logged' }).then(() => setOpen(false));
+  if (!open) return html`<${Button} kind="ghost" icon="phone" onClick=${() => setOpen(true)}>Call</${Button}>`;
+  return html`<span class="row wrap" style="gap:6px">
+    <input class="input" style="width:170px" placeholder="Their number (optional)" value=${to} onInput=${(e) => setTo(e.target.value)} />
+    <${Button} size="sm" kind="primary" icon="phone" onClick=${call}>Ring me, then ${name.split(' ')[0]}</${Button}>
+    ${[['voicemail', 'Left a voicemail'], ['talked', 'Talked'], ['meeting', 'Booked a meeting'], ['no', 'Not interested']].map(([k, l]) => html`<button class="chip" onClick=${() => log(k, l)}>${l}</button>`)}
+    <${Button} size="sm" kind="ghost" onClick=${() => setOpen(false)}>Close</${Button}></span>`;
 }

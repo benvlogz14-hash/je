@@ -36,6 +36,23 @@ async function send({ to, body }) {
   return { providerId: j.sid, status: j.status };
 }
 
+/**
+ * Click-to-call: Twilio rings YOUR phone first; when you answer it connects you
+ * to the lead, showing your Twilio number. A person makes every call; nothing
+ * is prerecorded or automated.
+ */
+async function bridgeCall({ me, to, name }) {
+  if (!secrets.has(K.sid) || !secrets.has(K.token) || !secrets.has(K.from)) throw new Error('Calling needs Twilio with a From number (Settings → Connections → Twilio)');
+  const from = normalize(secrets.get(K.from));
+  const esc = (x) => String(x || '').replace(/[<>&"]/g, '');
+  const twiml = `<Response><Say voice="alice">Connecting you to ${esc(name || 'your lead')}.</Say><Dial callerId="${esc(from)}" timeout="30">${esc(normalize(to))}</Dial></Response>`;
+  const form = new URLSearchParams({ To: normalize(me), From: from, Twiml: twiml });
+  const res = await fetch(`${base()}/Calls.json`, { method: 'POST', headers: { authorization: auth(), 'content-type': 'application/x-www-form-urlencoded' }, body: form, signal: AbortSignal.timeout(30000) });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Twilio: ${j.message || res.status}${j.code ? ` (code ${j.code})` : ''}`);
+  return { callSid: j.sid, status: j.status };
+}
+
 /** Fetch inbound messages received since `sinceIso`. */
 async function pollInbound(sinceIso) {
   if (!configured()) return [];
@@ -73,4 +90,4 @@ async function test() {
   } catch (e) { state.ok = false; state.lastError = e.message; return { ok: false, error: e.message }; }
 }
 
-module.exports = { K, configured, send, pollInbound, validSignature, normalize, test, state, pollSeconds: () => ctx.setting('messaging.smsPollSeconds', 20) };
+module.exports = { K, configured, send, bridgeCall, pollInbound, validSignature, normalize, test, state, pollSeconds: () => ctx.setting('messaging.smsPollSeconds', 20) };
