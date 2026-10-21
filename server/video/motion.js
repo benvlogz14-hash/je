@@ -266,8 +266,8 @@ const XF = 0.4;
  */
 async function renderVideo({ scenes, info, vertical, out, work, music, narration, onProgress = () => {} }) {
   const T = themeFor(info.party, info.theme);
-  const camp = info.style === 'campaign' ? campaign.setup({ esc, fileUrl }) : null;
-  const P = camp ? campaign.PALETTES[info.tone === 'contrast' ? 'contrast' : 'positive'] : null;
+  const camp = info.style === 'campaign' ? campaign.setup({ esc, fileUrl, compact }) : null;
+  const P = camp ? campaign.paletteFor({ tone: info.tone, party: info.party, brand: info.brand }) : null;
   if (camp) {
     info = { citeText: () => '', ...info };
     const disclaimer = info.disclaimer || 'Concept ad by Euclidean Media. Not paid for or authorized by any candidate or committee.';
@@ -367,7 +367,7 @@ ${FIT}</body></html>`;
   else if (audio.length === 1) { f.push(audio[0].replace(/\[(na|ma)\]$/, '[a]')); }
   else { f.push(audio[0], audio[1], '[na][ma]amix=inputs=2:duration=longest:normalize=0[a]'); }
   await ff.ffmpegWithProgress([...inputs, '-filter_complex', f.join(';'), '-map', '[vt]', '-map', '[a]', '-t', total.toFixed(3),
-    '-c:v', 'libx264', '-preset', 'medium', '-crf', '22', '-maxrate', '5M', '-bufsize', '10M', '-pix_fmt', 'yuv420p', '-r', String(FPS),
+    '-c:v', 'libx264', '-preset', 'medium', '-crf', '21', '-maxrate', '8M', '-bufsize', '16M', '-pix_fmt', 'yuv420p', '-r', String(FPS),
     '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', out], { totalSec: total, onProgress: (p) => onProgress(0.9 + p * 0.1, 'Joining scenes') });
   return { file: out, duration: total };
 }

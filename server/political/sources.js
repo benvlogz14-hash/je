@@ -150,13 +150,27 @@ const decode = (s) => String(s).replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;
 
 const SOCIAL_RX = /https?:\/\/(?:www\.)?(?:x|twitter|facebook|instagram|youtube|tiktok|threads)\.(?:com|net)\/[A-Za-z0-9_.@\/-]+/g;
 async function website(url, c, label) {
-  const found = { emails: [], socials: [] };
+  const found = { emails: [], socials: [], brand: null };
   const pages = [url, new URL('/contact', url).href, new URL('/contact-us', url).href];
   for (const p of pages) {
     let html; try { html = await get(p, { json: false, timeoutMs: 12000 }); } catch { continue; }
     const n = c.source(`${label}: ${new URL(p).hostname}${new URL(p).pathname === '/' ? '' : new URL(p).pathname}`, p);
     const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-    if (p === url) c.raw(n, text.slice(0, 5000));
+    if (p === url) {
+      c.raw(n, text.slice(0, 5000));
+      // Brand colour: the site's theme-color, else its most used saturated colour.
+      const tc = /<meta[^>]+name=["']theme-color["'][^>]+content=["'](#[0-9a-f]{6})/i.exec(html) || /<meta[^>]+content=["'](#[0-9a-f]{6})["'][^>]+name=["']theme-color/i.exec(html);
+      if (tc) found.brand = tc[1].toLowerCase();
+      else {
+        const counts = {};
+        for (const m of html.matchAll(/#([0-9a-f]{6})\b/gi)) {
+          const hx = m[1].toLowerCase(); const [r, g, b] = [0, 2, 4].map((i) => parseInt(hx.substr(i, 2), 16));
+          const mx = Math.max(r, g, b); const mn = Math.min(r, g, b);
+          if (mx - mn > 60 && mx > 60 && mx < 250) counts[hx] = (counts[hx] || 0) + 1;
+        }
+        const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]; if (top && top[1] >= 3) found.brand = `#${top[0]}`;
+      }
+    }
     for (const m of html.matchAll(/mailto:([^"'?>\s]+)/gi)) found.emails.push({ email: decodeURIComponent(m[1]).toLowerCase(), src: n, page: p });
     for (const m of text.matchAll(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g)) found.emails.push({ email: m[0].toLowerCase(), src: n, page: p });
     for (const m of html.matchAll(SOCIAL_RX)) found.socials.push(m[0].replace(/\/$/, ''));
@@ -196,8 +210,8 @@ async function lookup({ name, hint, campaignSite, dir, onStep = () => {} }) {
   const money = await tryStep('FEC', () => fecTotals([...(cong?.fec || []), ...(wd?.fec || [])], c));
   const headlines = await tryStep('News', () => news(name, cong?.office, c));
   const sites = [...new Set([campaignSite, wd?.website, cong?.officialSite, ...(os?.links || [])].filter(Boolean))].slice(0, 3);
-  const emails = []; const socials = [];
-  for (const s of sites) { const r = await tryStep(`Website ${s}`, () => website(s, c, s === campaignSite ? 'Campaign site' : 'Website')); if (r) { emails.push(...r.emails); socials.push(...r.socials); } }
+  const emails = []; const socials = []; let brand = null;
+  for (const s of sites) { const r = await tryStep(`Website ${s}`, () => website(s, c, s === campaignSite ? 'Campaign site' : 'Website')); if (r) { emails.push(...r.emails); socials.push(...r.socials); brand = brand || r.brand; } }
   if (os?.email) emails.push({ email: os.email.toLowerCase(), src: c.sources.find((s) => /Open States/.test(s.title))?.n, page: 'Open States' });
   if (wd?.email) emails.push({ email: String(wd.email).replace(/^mailto:/, '').toLowerCase(), src: c.sources.find((s) => /Wikidata/.test(s.title))?.n, page: 'Wikidata' });
   const socialLinks = [...new Set([...socials,
@@ -220,7 +234,7 @@ async function lookup({ name, hint, campaignSite, dir, onStep = () => {} }) {
     state: cong?.state || null, district: cong?.district ?? null, level: cong ? 'federal' : os ? 'state' : 'unknown',
     sites, socials: socialLinks, emails: ranked, contact: ranked[0]?.email || null,
     officePhone: cong?.officePhone || null, contactForm: cong?.contactForm || null,
-    money, news: headlines || [], photo, photoCredit, wikipedia: wp?.title || null,
+    money, news: headlines || [], photo, photoCredit, wikipedia: wp?.title || null, brand,
   };
   return { profile, sources: c.sources, facts: c.facts, text: c.text, errors: c.errors };
 }

@@ -17,6 +17,7 @@ module.exports = {
     shortSeconds: 20,          // the short vertical and short horizontal ads
     videoSeconds: 60,          // the long horizontal ad (30 to 240)
     longVideo: true,           // make the long horizontal ad
+    brandColors: true,         // campaign style uses the candidate's website colour when found
     contrastAds: false,        // allow contrast ads that compare with a researched opponent (never auto-sent)
     plan: '12 posts a week for $949',
     bookingUrl: '',            // e.g. a Calendly link, shown in the email and on the sheet

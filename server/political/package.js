@@ -109,6 +109,8 @@ Scene types (fields; keep on-screen text SHORT):
 - {"type":"stat","value":"≤8 characters","label":"≤8 words","cite":[n]}
 - {"type":"issues","headline":"≤5 words","items":["2-4 key points, ≤5 words each"]}
 - {"type":"quote","quote":"≤22 words, VERBATIM from the sources","source":"who/where","cite":[n]}
+- {"type":"counter","to":12345,"prefix":"$ or empty","suffix":"+ or %, or empty","label":"≤8 words","cite":[n]}  (a number that counts up; must be in the material)
+- {"type":"chart","headline":"≤5 words","bars":[{"label":"2022","value":1200000,"display":"$1.2M"}],"cite":[n]}  (2-8 bars, every value from the material, e.g. fundraising by cycle)
 - {"type":"vote","headline":"VOTE <NAME> or a ≤5 word slogan","date":"election date only if in the material","button":"their website"}
 Every factual scene needs "cite" with the source numbers it relies on. Optional "sec" per scene (2.5-6).`;
 
@@ -170,6 +172,7 @@ function vetStoryboard(list, pkg, p, { style = 'pop', contrast = false } = {}) {
   const srcN = new Set((pkg.sources || []).map((x) => x.n)); const oppN = new Set((pkg.sources || []).filter((x) => x.opponent).map((x) => x.n));
   const TYPES = style === 'campaign' ? ['photo', 'headline', 'stat', 'issues', 'quote', 'contrast', 'vote', 'counter', 'chart'] : ['hook', 'portrait', 'stat', 'issues', 'quote', 'cta', 'end', 'counter', 'chart'];
   const numbersOk = (txt) => (String(txt || '').replace(/(\d),(?=\d{3})/g, '$1').match(/\d+(?:\.\d+)?/g) || []).every((d) => d.length < 2 && !/\$/.test(txt) ? true : new RegExp(`(^|[^\\d.])${d.replace('.', '\\.')}(?![\\d])`).test(numbers));
+  const exactNumber = (v) => new RegExp(`(^|[^\\d.])${String(v).replace('.', '\\.')}(?![\\d])`).test(numbers);
   const ok = [];
   for (const s of Array.isArray(list) ? list : []) {
     if (!s || typeof s !== 'object') continue;
@@ -178,13 +181,15 @@ function vetStoryboard(list, pkg, p, { style = 'pop', contrast = false } = {}) {
     const x = { ...s, type, cite: cite.length ? cite : undefined };
     if (type === 'quote' && !(s.quote && corpus.includes(norm(s.quote).slice(0, 80)))) continue;
     if (type === 'stat' && !numbersOk(s.value)) continue;
+    if (type === 'counter' && !(Number(s.to) >= 10 && exactNumber(Number(s.to)))) continue;
+    if (type === 'chart' && !((s.bars || []).length >= 2 && (s.bars || []).every((b) => Number(b.value) >= 1 && exactNumber(Number(b.value))))) continue;
     if (type === 'headline' && !(s.title && corpus.includes(norm(String(s.title).replace(/\*/g, '')).slice(0, 50)))) continue;
     if (type === 'contrast' || s.who === 'opponent') {
       if (!contrast || !cite.some((n) => oppN.has(n))) continue;
       const items = [...(s.left?.items || []), ...(s.right?.items || []), s.headline, s.sub].filter(Boolean);
       if (!items.every(numbersOk)) continue;
     }
-    if (['headline', 'stat', 'quote'].includes(type) && !cite.length && style === 'campaign') continue;
+    if (['headline', 'stat', 'quote', 'counter', 'chart'].includes(type) && !cite.length && style === 'campaign') continue;
     ok.push(x);
   }
   if (style === 'campaign') {
@@ -237,21 +242,21 @@ async function stepVideo(p, h, kind) {
   const K = VIDEOS[kind]; const c = p.pkg.creative; const board = c?.[K.board] || c?.storyboard;
   if (!board?.length) throw new Error('Run the ad scripts step first.');
   const dir = dirFor(p); const out = path.join(dir, `${slugName(p.name)} - ${K.label} ad.mp4`);
-  const music = pickMusic();
+  const music = pickMusic(c.tone);
   let narration = null;
   if (kind === 'hl' && S('narration', false) && c.narration && ai.connected('openai')) {
     narration = path.join(dir, 'narration.mp3');
     if (!fs.existsSync(narration)) { try { await tts(c.narration, narration); } catch (e) { narration = null; audit.log('system', 'political.tts_failed', { prospectId: p.id, error: e.message }, 'warn'); } }
   }
   const style = c.style || S('videoStyle', 'campaign');
-  const info = { name: p.name, photo: p.pkg.profile?.photo, oppPhoto: p.pkg.opp?.profile?.photo, party: p.pkg.profile?.party, style, tone: c.tone, citeText: citeText(p.pkg), theme: S('theme', 'auto') === 'auto' ? null : S('theme') };
+  const info = { brand: S('brandColors', true) ? p.pkg.profile?.brand : null, name: p.name, photo: p.pkg.profile?.photo, oppPhoto: p.pkg.opp?.profile?.photo, party: p.pkg.profile?.party, style, tone: c.tone, citeText: citeText(p.pkg), theme: S('theme', 'auto') === 'auto' ? null : S('theme') };
   const work = path.join(dir, `work_${kind}`);
   const res = await render.renderVideo({ scenes: board, info, vertical: K.vertical, out, work, music, narration, onProgress: (f, t) => h.progress(f * 0.92, t) });
   fs.rmSync(work, { recursive: true, force: true });
   // Small copy for email attachments (720p), the full-quality file stays in the folder.
   h.progress(0.94, 'Making the email-sized copy');
   const mail = path.join(dir, `${slugName(p.name)} - ${K.label} ad (email).mp4`);
-  await ff.ffmpegWithProgress(['-i', out, '-vf', K.vertical ? 'scale=720:-2' : 'scale=-2:720', '-c:v', 'libx264', '-preset', 'medium', '-crf', '27', '-maxrate', '1800k', '-bufsize', '3600k', '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', mail], { totalSec: res.duration });
+  await ff.ffmpegWithProgress(['-i', out, '-vf', K.vertical ? 'scale=720:-2' : 'scale=-2:720', '-c:v', 'libx264', '-preset', 'medium', '-crf', '27', '-maxrate', '2500k', '-bufsize', '5000k', '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', mail], { totalSec: res.duration });
   const poster = path.join(dir, `poster_${kind}.jpg`);
   await ff.thumbnail(out, poster, Math.min(3, res.duration / 4), K.vertical ? 540 : 960).catch(() => {});
   const posterKey = { v: 'posterV', h: 'posterH', hl: 'posterHL' }[kind];
@@ -259,8 +264,11 @@ async function stepVideo(p, h, kind) {
   return `${Math.round(res.duration)}s · email copy ${(fs.statSync(mail).size / 1e6).toFixed(1)} MB`;
 }
 
-function pickMusic() {
-  const dir = S('musicDir', '');
+/** A track from the music folder; a "positive" or "contrast" subfolder is used for that kind of ad when present. */
+function pickMusic(tone) {
+  const root = S('musicDir', '');
+  const sub = tone && path.join(root, tone);
+  const dir = sub && fs.existsSync(sub) ? sub : root;
   try { const list = fs.readdirSync(dir).filter((f) => /\.(mp3|m4a|wav|aac|ogg)$/i.test(f)); if (list.length) return path.join(dir, list[(Math.random() * list.length) | 0]); } catch { /* none */ }
   return null;
 }

@@ -52,7 +52,7 @@ export function Political({ prospects, reload }) {
 
     <div class="panel pad col" style="gap:10px">
       <div class="row"><h4 class="grow">Package settings</h4><${Button} size="sm" kind="ghost" onClick=${() => setShowSettings(!showSettings)}>${showSettings ? 'Hide' : 'Show'}</${Button}></div>
-      ${showSettings ? html`<${PackageSettings} />` : html`<div class="faint" style="font-size:var(--fs-sm)">Video length, booking link, who signs, your email templates, colours and narrator voice.</div>`}
+      ${showSettings ? html`<${PackageSettings} />` : html`<div class="faint" style="font-size:var(--fs-sm)">Ad style and lengths, your plan, booking link, who signs, your email templates, colours, contrast ads and narrator voice.</div>`}
     </div>
 
     <div class="panel">
@@ -77,18 +77,22 @@ export function Political({ prospects, reload }) {
 function PackageSettings() {
   const boot = store.get().boot || {};
   const init = boot.settings?.political || {};
-  const [v, setV] = useState({ videoSeconds: 40, bookingUrl: '', senderName: '', offer: '', templates: '', theme: 'auto', narration: false, musicDir: '', ...init });
+  const [v, setV] = useState({ videoStyle: 'campaign', shortSeconds: 20, videoSeconds: 60, longVideo: true, contrastAds: false, brandColors: true, plan: '12 posts a week for $949', bookingUrl: '', senderName: '', offer: '', templates: '', theme: 'auto', narration: false, musicDir: '', ...init });
   const set = (k) => (e) => setV({ ...v, [k]: e && e.target ? (e.target.type === 'number' ? Number(e.target.value) : e.target.value) : e });
   const save = () => act(() => api.patch('/api/settings', { political: v }), { ok: 'Saved' }).then((s) => { const b = store.get().boot; if (b && s) store.set({ boot: { ...b, settings: s } }); });
   return html`<div class="col" style="gap:12px">
     <div class="form-grid">
-      <${Field} label="Video length (seconds)" hint="15 to 240" id="pol-len"><input id="pol-len" class="input" type="number" min="15" max="240" value=${v.videoSeconds} onInput=${set('videoSeconds')} /></${Field}>
+      <${Field} label="Ad style" id="pol-style"><select id="pol-style" class="input" value=${v.videoStyle} onChange=${set('videoStyle')}><option value="campaign">Campaign ad (like real political ads)</option><option value="pop">Bubbly and poppy</option></select></${Field}>
+      <${Field} label="Short ads (seconds)" hint="Vertical and horizontal, 10 to 90" id="pol-short"><input id="pol-short" class="input" type="number" min="10" max="90" value=${v.shortSeconds} onInput=${set('shortSeconds')} /></${Field}>
+      <${Field} label="Long ad (seconds)" hint="Horizontal, 30 to 240" id="pol-len"><input id="pol-len" class="input" type="number" min="30" max="240" value=${v.videoSeconds} onInput=${set('videoSeconds')} /></${Field}>
+      <${Field} label="Your political plan (one line)" id="pol-plan"><input id="pol-plan" class="input" value=${v.plan} onInput=${set('plan')} placeholder="12 posts a week for $949 a month" /></${Field}>
       <${Field} label="Booking link" hint="Shown in the email and on the sheet" id="pol-book"><input id="pol-book" class="input" placeholder="https://calendly.com/..." value=${v.bookingUrl} onInput=${set('bookingUrl')} /></${Field}>
       <${Field} label="Who signs the email" id="pol-sender"><input id="pol-sender" class="input" placeholder="Ryan Rosario" value=${v.senderName} onInput=${set('senderName')} /></${Field}>
-      <${Field} label="Colours" id="pol-theme"><select id="pol-theme" class="input" value=${v.theme} onChange=${set('theme')}>${[['auto', 'Match their party'], ['blue', 'Blue'], ['red', 'Red'], ['purple', 'Purple'], ['green', 'Green']].map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></${Field}>
+      <${Field} label="Colours (bubbly style)" id="pol-theme"><select id="pol-theme" class="input" value=${v.theme} onChange=${set('theme')}>${[['auto', 'Match their party'], ['blue', 'Blue'], ['red', 'Red'], ['purple', 'Purple'], ['green', 'Green']].map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></${Field}>
       <${Field} label="Music folder (optional)" hint="One track is picked for each video" id="pol-music"><div class="row" style="gap:6px"><input id="pol-music" class="input" value=${v.musicDir} onInput=${set('musicDir')} placeholder="C:\\Music\\Upbeat" />${window.euclidean?.pickFolder || boot.electron ? html`<${Button} size="sm" kind="ghost" onClick=${() => api.post('/api/system/pick-folder', {}).then((r) => r.path && setV({ ...v, musicDir: r.path })).catch(() => {})}>Choose</${Button}>` : null}</div></${Field}>
     </div>
-    <${Toggle} on=${!!v.narration} onChange=${(x) => setV({ ...v, narration: x })} label="AI narrator voice over the videos (needs OpenAI)" />
+    <div class="col" style="gap:8px">${[['longVideo', 'Make the long horizontal ad too'], ['brandColors', "Use the colours from the candidate's own website (campaign style)"], ['contrastAds', 'Allow contrast ads against a researched opponent (cited facts only; always needs your review)'], ['narration', 'AI narrator voice over the long ad (needs OpenAI)']].map(([k, l]) => html`<label class="row" style="gap:8px"><${Toggle} on=${!!v[k]} onChange=${(x) => setV({ ...v, [k]: x })} label=${l} /><span>${l}</span></label>`)}</div>
+    <div class="faint" style="font-size:var(--fs-xs)">Music: put tracks in a "positive" and a "contrast" subfolder of your music folder to match the mood of each ad.</div>
     <${Field} label="Your offer, in your words (optional)" id="pol-offer"><textarea id="pol-offer" class="input" rows="2" value=${v.offer} onInput=${set('offer')} placeholder="Two free videos, yours to use whether or not we talk. Could you give us 20 minutes?" style="font-family:inherit;height:64px" /></${Field}>
     <${Field} label="Your best outreach emails" hint="Paste 1-3 emails that worked. The writer matches their voice and structure." id="pol-tpl"><textarea id="pol-tpl" class="input" rows="6" value=${v.templates} onInput=${set('templates')} style="font-family:inherit;height:150px" /></${Field}>
     <div class="row"><${Button} kind="primary" onClick=${save}>Save settings</${Button}><span class="faint" style="font-size:var(--fs-xs)">Data keys (Open States, api.data.gov) are in Settings → Connections.</span></div>

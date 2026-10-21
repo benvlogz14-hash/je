@@ -10,11 +10,30 @@ const fs = require('fs');
 
 const PALETTES = {
   positive: { a: '#0a2a6b', b: '#d7263d', c: '#f2c14e', ink: '#0a1633', paper: '#fbf8f1', wash: 'rgba(10,30,90,.55)', bg1: '#081c4a', bg2: '#13336f' },
+  republican: { a: '#7a0f1c', b: '#0a2a6b', c: '#f2c14e', ink: '#2a0a10', paper: '#fbf8f1', wash: 'rgba(110,10,25,.5)', bg1: '#4a0912', bg2: '#8a1424' },
+  independent: { a: '#2a2350', b: '#e0663a', c: '#f2c14e', ink: '#141026', paper: '#fbf8f1', wash: 'rgba(40,30,90,.5)', bg1: '#1b1638', bg2: '#3a2f6e' },
   contrast: { a: '#111418', b: '#d7263d', c: '#f2c14e', ink: '#0d0f12', paper: '#f4f1ea', wash: 'rgba(20,20,24,.6)', bg1: '#121418', bg2: '#2a2d33' },
 };
 
+function hexMix(hex, to, t) {
+  const n = (x) => parseInt(x, 16); const a = hex.replace('#', ''); const b = to.replace('#', '');
+  return '#' + [0, 2, 4].map((i) => Math.round(n(a.substr(i, 2)) * (1 - t) + n(b.substr(i, 2)) * t).toString(16).padStart(2, '0')).join('');
+}
+/** Palette for an ad: contrast look, the candidate's brand colour (from their website), or their party's colours. */
+function paletteFor({ tone, party, brand }) {
+  if (tone === 'contrast') return PALETTES.contrast;
+  if (brand && /^#[0-9a-f]{6}$/i.test(brand)) {
+    const base = PALETTES.positive;
+    return { ...base, a: brand, bg1: hexMix(brand, '#000000', 0.55), bg2: hexMix(brand, '#000000', 0.25), ink: hexMix(brand, '#000000', 0.8), wash: `${brand}88` };
+  }
+  const p = String(party || '').toLowerCase();
+  if (/republican/.test(p)) return PALETTES.republican;
+  if (/democrat/.test(p)) return PALETTES.positive;
+  return p ? PALETTES.independent : PALETTES.positive;
+}
+
 function setup(h) {
-  const { esc, fileUrl } = h;
+  const { esc, fileUrl, compact } = h;
   const cap = (s) => esc(String(s || '').toUpperCase());
   const mark = (s) => esc(s).replace(/\*([^*]+)\*/g, '<b>$1</b>');
 
@@ -98,6 +117,28 @@ function setup(h) {
         if (s.date) add(box([90, 1200, 900, 150], [460, 700, 1000, 130]), bar(s.date, 54, P.b), 'slideX', 0.5);
         if (s.button) add(box([140, 1380, 800, 120], [560, 850, 800, 100]), `<div class="fit cx-sub" style="font-size:46px;color:#fff"><span>${esc(s.button)}</span></div>`, 'fade', 0.8);
         break;
+      case 'counter': {
+        const target = Number(s.to) || 0; const K = 12; const dur = 1.4; const from = 0.2;
+        for (let k = 0; k < K; k++) {
+          const v = target * (1 - Math.pow(1 - (k + 1) / K, 3)); const b = box([40, 560, 1000, 440], [120, 230, 1680, 420]);
+          els.push({ x: b[0], y: b[1], w: b[2], h: b[3], html: title(`${s.prefix || ''}${compact(v, target)}${s.suffix || ''}`, V ? 300 : 300), anim: 'step', at: from + (dur * k) / K, until: k === K - 1 ? 999 : from + (dur * (k + 1)) / K });
+        }
+        add(box([90, 1040, 900, 170], [360, 690, 1200, 140]), bar(s.label, V ? 52 : 54), 'slideX', 0.6);
+        break;
+      }
+      case 'chart': {
+        if (s.headline) add(box([40, 220, 1000, 260], [100, 60, 1720, 190]), title(s.headline, V ? 120 : 110), 'slide', 0.05);
+        const bars = (s.bars || []).slice(-8); const max = Math.max(1, ...bars.map((x) => Number(x.value) || 0)); const n = Math.max(1, bars.length);
+        const area = V ? [70, 560, 940, 1020] : [160, 290, 1600, 660]; const gap = Math.round(area[2] * 0.05); const bw = Math.floor((area[2] - gap * (n - 1)) / n);
+        bars.forEach((x, k) => {
+          const hgt = Math.max(20, Math.round((area[3] - 150) * ((Number(x.value) || 0) / max))); const bx = area[0] + k * (bw + gap); const by = area[1] + area[3] - 70 - hgt;
+          const last = k === bars.length - 1;
+          els.push({ x: bx, y: by, w: bw, h: hgt, html: `<div style="position:absolute;inset:0;background:${last ? P.c : '#ffffff'};opacity:${last ? 1 : 0.85}"></div>`, anim: 'grow', at: 0.35 + k * 0.12 });
+          els.push({ x: bx - 10, y: by - 72, w: bw + 20, h: 64, html: `<div class="fit cx-sub" style="font-size:${V ? 42 : 40}px"><span>${esc(x.display || compact(Number(x.value) || 0))}</span></div>`, anim: 'fade', at: 0.8 + k * 0.12 });
+          els.push({ x: bx - 10, y: area[1] + area[3] - 62, w: bw + 20, h: 58, html: `<div class="fit cx-sub" style="font-size:${V ? 32 : 30}px;opacity:.8"><span>${esc(x.label || '')}</span></div>`, anim: 'fade', at: 0.3 });
+        });
+        break;
+      }
       case 'disclaimer':
         add(box([80, 820, 920, 280], [300, 420, 1320, 240]), `<div class="fit cx-sub" style="font-size:34px;font-weight:600;text-transform:none;letter-spacing:0;color:rgba(255,255,255,.9)"><span>${esc(s.text || '')}</span></div>`, 'fade', 0.1);
         break;
@@ -113,4 +154,4 @@ function setup(h) {
   return { css, background, deco, layout };
 }
 
-module.exports = { setup, PALETTES };
+module.exports = { setup, PALETTES, paletteFor };

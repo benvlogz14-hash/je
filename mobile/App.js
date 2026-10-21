@@ -498,9 +498,110 @@ function Creators({ api }) {
   );
 }
 
+
+// ---------------------------------------------------------------- leads (outreach review + scout chat)
+
+function Leads({ api }) {
+  const [lane, setLane] = useState('political');
+  const [view, setView] = useState('review');
+  const q = useLoad(api, `/api/outreach/${lane}/review`, 15000);
+  const st = useLoad(api, '/api/outreach/status', 20000);
+  const s = st.data?.[lane] || {};
+  const approve = (it) => act(() => api.post('/api/outreach/approve', { ids: [it.id] }), q.refresh);
+  const skip = (it) => {
+    const go = (reason) => act(() => api.post('/api/outreach/skip', { ids: [it.id], reason: reason || '' }), q.refresh);
+    if (Alert.prompt) Alert.prompt('Skip this lead?', 'Why? (optional, the scout learns from it)', [{ text: 'Cancel', style: 'cancel' }, { text: 'Skip', onPress: go }]);
+    else go('');
+  };
+  const vids = [['v', 'posterV', 'Short vertical'], ['h', 'posterH', 'Short horizontal'], ['hl', 'posterHL', 'Long']];
+  const header = (
+    <>
+      <Header title="Leads" />
+      <View style={s2.seg}>{[['political', 'Politics'], ['creators', 'Creators']].map(([k, l]) => (
+        <Pressable key={k} onPress={() => { tap(); setLane(k); }} style={[s2.segBtn, lane === k && s2.segOn]}><Text style={[s2.segText, lane === k && { color: C.blueInk }]}>{l}</Text></Pressable>
+      ))}</View>
+      <View style={s.stats}>
+        {[['Waiting', s.waiting ?? '–'], ['Sent today', `${s.sentToday ?? 0}/${s.capToday ?? '–'}`], ['New leads today', s.leadsToday ?? 0], ['Scouting', s.scout ? (s.continuous ? 'all day' : 'daily') : 'off']].map(([k, v]) => (
+          <View key={k} style={s.stat}><Text style={s.statValue}>{v}</Text><Text style={s.statLabel}>{k}</Text></View>
+        ))}
+      </View>
+      <View style={s2.seg}>{[['review', 'Review'], ['chat', 'Talk to the scout']].map(([k, l]) => (
+        <Pressable key={k} onPress={() => { tap(); setView(k); }} style={[s2.segBtn, view === k && s2.segOn]}><Text style={[s2.segText, view === k && { color: C.blueInk }]}>{l}</Text></Pressable>
+      ))}</View>
+      <ErrorBar text={q.error} />
+    </>
+  );
+  if (view === 'chat') return <ScoutChat api={api} lane={lane} header={header} />;
+  return (
+    <FlatList data={q.data || []} keyExtractor={(it) => it.id} contentContainerStyle={s.list}
+      refreshControl={<RefreshControl refreshing={q.busy} onRefresh={q.reload} />} ListHeaderComponent={header}
+      ListEmptyComponent={q.data ? <Empty title="Nothing waiting" text="New leads appear here, ready to approve." /> : <ActivityIndicator style={{ marginTop: 40 }} />}
+      renderItem={({ item: it }) => (
+        <View style={s.card}>
+          <View style={s.row}><Text style={[s.cardTitle, { flex: 1 }]} numberOfLines={1}>{it.name}</Text>{it.hasContrast ? <Pill text="Contrast" tone="pink" /> : null}</View>
+          <Text style={s.meta} numberOfLines={1}>{it.office || it.handle || ''}</Text>
+          <Text style={s.meta} numberOfLines={1}>To {it.to}</Text>
+          {lane === 'political' ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 6 }}>
+              {vids.filter(([k]) => it.files.includes(k)).map(([k, pk, label]) => (
+                <Pressable key={k} onPress={() => Linking.openURL(api.file(`/api/prospects/${it.id}/file/${k}`))} style={{ marginRight: 10 }}>
+                  <Image source={{ uri: api.file(`/api/prospects/${it.id}/file/${pk}`) }} style={{ width: k === 'v' ? 90 : 160, height: 160, borderRadius: 10, backgroundColor: '#111' }} resizeMode="cover" />
+                  <Text style={s.meta}>▶︎ {label}</Text>
+                </Pressable>
+              ))}
+              {it.files.includes('sheet') ? <Pressable onPress={() => Linking.openURL(api.file(`/api/prospects/${it.id}/file/sheet`))} style={{ width: 90, height: 160, borderRadius: 10, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' }}><Text style={s.cardTitle}>PDF</Text><Text style={s.meta}>One-pager</Text></Pressable> : null}
+            </ScrollView>
+          ) : null}
+          <Text style={s.cardTitle}>{it.subject}</Text>
+          <Text style={s.body} numberOfLines={8}>{it.body}</Text>
+          {it.why.length ? <View style={[s.row, { marginTop: 4 }]}>{it.why.map((w) => <Pill key={w} text={w} tone="amber" />)}</View> : null}
+          <View style={s.actions}>
+            <Button small title="Approve & send" tone="green" onPress={() => approve(it)} />
+            <Button small title="Skip" tone="pink" onPress={() => skip(it)} />
+          </View>
+        </View>
+      )} />
+  );
+}
+
+function ScoutChat({ api, lane, header }) {
+  const { data, refresh } = useLoad(api, `/api/outreach/${lane}/chat`, 10000);
+  const [text, setText] = useState(''); const [busy, setBusy] = useState(false); const list = useRef(null);
+  const send = async () => {
+    const t = text.trim(); if (!t) return;
+    setBusy(true); setText('');
+    try { await api.post(`/api/outreach/${lane}/chat`, { text: t }); ok(); } catch (e) { fail(); Alert.alert('Not sent', e.message); }
+    setBusy(false); refresh();
+  };
+  return (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }} keyboardVerticalOffset={70}>
+      <FlatList ref={list} data={data || []} keyExtractor={(m) => m.id} contentContainerStyle={s.list} ListHeaderComponent={header}
+        onContentSizeChange={() => list.current && list.current.scrollToEnd({ animated: false })}
+        ListEmptyComponent={<Empty title="Tell the scout what you want" text={'e.g. "Find Connecticut Democrats running for state house, 40 a day, keep going"'} />}
+        renderItem={({ item: m }) => (
+          <View style={[s.bubble, m.role === 'user' ? s.mine : s.theirs]}>
+            <Text style={s.bubbleText}>{m.text}</Text>
+            {(m.changes || []).map((c) => <Text key={c} style={[s.bubbleMeta, { color: C.greenInk }]}>✓ {c}</Text>)}
+          </View>
+        )} />
+      <View style={s.composer}>
+        <TextInput value={text} onChangeText={setText} placeholder="Who should it find? What to avoid?" placeholderTextColor={C.dim} style={[s.input, { flex: 1, marginBottom: 0 }]} multiline />
+        <Button small title={busy ? '…' : 'Send'} onPress={send} disabled={busy || !text.trim()} />
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+const s2 = StyleSheet.create({
+  seg: { flexDirection: 'row', backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.line, padding: 3, marginBottom: 10 },
+  segBtn: { flex: 1, paddingVertical: 8, borderRadius: 10, alignItems: 'center' },
+  segOn: { backgroundColor: C.blue },
+  segText: { fontSize: 14, fontWeight: '700', color: C.dim },
+});
+
 // ---------------------------------------------------------------- status
 
-function Status({ api, link, boot, onUnlink }) {
+function Status({ api, link, boot, onUnlink, onCreators }) {
   const q = useLoad(api, '/api/queue/stats', 8000);
   const h = useLoad(api, '/api/health', 0);
   const paused = q.data?.paused;
@@ -529,6 +630,8 @@ function Status({ api, link, boot, onUnlink }) {
           {i.level === 'warn' || i.level === 'error' ? <Text style={[s.meta, { color: C.text }]}>Fix: {i.fix}</Text> : null}
         </View>
       ))}
+      <Text style={s.section}>Analytics</Text>
+      <View style={s.card}><Text style={s.meta}>Creator rankings, monthly stats and projections.</Text><Button title="Open creator stats" tone="lilac" onPress={onCreators} /></View>
       <Text style={s.section}>This phone</Text>
       <View style={s.card}>
         <Text style={s.meta}>Linked to {link.base}{boot?.user ? ` as ${boot.user.name}` : ''}{boot?.version ? ` · Euclidean ${boot.version}` : ''}</Text>
@@ -545,7 +648,7 @@ const TABS = [
   { key: 'chat', label: 'Chat', icon: '✉︎' },
   { key: 'studio', label: 'Studio', icon: '✂︎' },
   { key: 'agents', label: 'Agents', icon: '⚇' },
-  { key: 'creators', label: 'Creators', icon: '↗︎' },
+  { key: 'leads', label: 'Leads', icon: '★' },
   { key: 'status', label: 'Status', icon: '●' },
 ];
 
@@ -580,8 +683,9 @@ export default function App() {
           {tab === 'chat' && <Chat api={a} />}
           {tab === 'studio' && <Studio api={a} />}
           {tab === 'agents' && <Agents api={a} />}
+          {tab === 'leads' && <Leads api={a} />}
           {tab === 'creators' && <Creators api={a} />}
-          {tab === 'status' && <Status api={a} link={link} boot={boot} onUnlink={unlink} />}
+          {tab === 'status' && <Status api={a} link={link} boot={boot} onUnlink={unlink} onCreators={() => setTab('creators')} />}
         </View>
         <View style={s.tabs}>
           {TABS.map((t) => (
