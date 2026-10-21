@@ -42,7 +42,7 @@ const SECRET_KEYS = new Set([
   'global.anthropic.apiKey', 'global.openai.apiKey', 'global.xai.apiKey',
   ...Object.values(twilio.K), ...Object.values(email.K),
   'global.ayrshare.apiKey', 'global.google.clientId', 'global.google.clientSecret',
-  ...Object.values(require('./political/sources').KEYS),
+  ...Object.values(require('./political/sources').KEYS), require('./video/cutout').KEY,
 ]);
 
 // ------------------------------------------------------------ bootstrap & settings

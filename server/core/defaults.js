@@ -17,6 +17,10 @@ module.exports = {
     shortSeconds: 20,          // the short vertical and short horizontal ads
     videoSeconds: 60,          // the long horizontal ad (30 to 240)
     longVideo: true,           // make the long horizontal ad
+    photoMode: 'auto',         // auto (cut-out when available, else full photo, else silhouette) | cutout | full | silhouette
+    photoCutout: true,         // remove the photo background (needs a remove.bg key or the free rembg tool)
+    campaignPhotos: true,
+    jinaReader: true,          // read JavaScript-built websites through Jina Reader (r.jina.ai, public pages only)      // also use the share image from the candidate's own website (credited)
     brandColors: true,         // campaign style uses the candidate's website colour when found
     contrastAds: false,        // allow contrast ads that compare with a researched opponent (never auto-sent)
     plan: '12 posts a week for $949',

@@ -53,8 +53,29 @@ function setup(h) {
 .cx-item i{font-style:normal;flex:none;width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:32px}`;
   }
 
+  /** Generic person silhouette with a "your candidate here" tag (used when there's no usable photo). */
+  function silhouette(P, W, H) {
+    const V = H > W; const sw = V ? W * 0.78 : H * 0.95; const x = V ? (W - sw) / 2 : W - sw - W * 0.06; const y = V ? H * 0.16 : H * 0.08;
+    return `<svg style="position:absolute;left:${x | 0}px;top:${y | 0}px;width:${sw | 0}px;height:${(sw * 1.05) | 0}px" viewBox="0 0 200 210"><defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity=".34"/><stop offset="1" stop-color="#ffffff" stop-opacity=".08"/></linearGradient></defs><circle cx="100" cy="62" r="40" fill="url(#sg)"/><path d="M18 210c0-52 37-88 82-88s82 36 82 88z" fill="url(#sg)"/></svg>
+<div style="position:absolute;left:${(x + sw * 0.18) | 0}px;top:${(y + sw * 0.5) | 0}px;width:${(sw * 0.64) | 0}px;text-align:center;font:800 ${V ? 34 : 30}px Pop;letter-spacing:.12em;color:rgba(255,255,255,.75);text-transform:uppercase">Your candidate here</div>`;
+  }
+
+  /** Cut-out candidate standing over the campaign colours, with a soft glow behind them. */
+  function cutoutBg(P, W, H, file) {
+    const V = H > W; const ch = V ? H * 0.66 : H * 0.98; const left = V ? '50%' : '74%';
+    return `<div style="position:absolute;inset:0;background:linear-gradient(160deg,${P.bg1},${P.bg2})"></div>
+<div style="position:absolute;inset:0;background:repeating-linear-gradient(-35deg,rgba(255,255,255,.04) 0 40px,transparent 40px 80px)"></div>
+<div style="position:absolute;left:${left};top:${V ? '46%' : '52%'};width:${(ch * 0.95) | 0}px;height:${(ch * 0.95) | 0}px;transform:translate(-50%,-50%);border-radius:50%;background:radial-gradient(circle,${P.c}55 0%,${P.b}33 45%,transparent 70%)"></div>
+<img src="${fileUrl(file)}" style="position:absolute;left:${left};bottom:0;height:${ch | 0}px;transform:translateX(-50%);filter:drop-shadow(0 20px 40px rgba(0,0,0,.45))">
+<div style="position:absolute;inset:0;background:linear-gradient(180deg,transparent ${V ? 52 : 62}%,rgba(0,0,0,.7) 100%)"></div>`;
+  }
+
   function background(P, W, H, scene, info) {
     const who = scene.who === 'opponent' ? 'opp' : 'cand';
+    if (who === 'cand' && (scene.type === 'photo' || scene.type === 'vote')) {
+      if (info.cutout && fs.existsSync(info.cutout)) return cutoutBg(P, W, H, info.cutout);
+      if (info.silhouette) return `<div style="position:absolute;inset:0;background:linear-gradient(160deg,${P.bg1},${P.bg2})"></div><div style="position:absolute;inset:0;background:repeating-linear-gradient(-35deg,rgba(255,255,255,.04) 0 40px,transparent 40px 80px)"></div>${silhouette(P, W, H)}<div style="position:absolute;inset:0;background:linear-gradient(180deg,transparent 55%,rgba(0,0,0,.6) 100%)"></div>`;
+    }
     const photo = scene.type === 'photo' || scene.type === 'vote' ? (who === 'opp' ? info.oppPhoto : info.photo) : null;
     const grain = `<div style="position:absolute;inset:0;opacity:.18;background-image:repeating-linear-gradient(0deg,rgba(255,255,255,.08) 0 1px,transparent 1px 3px)"></div>`;
     const vignette = `<div style="position:absolute;inset:0;background:radial-gradient(ellipse at 50% 40%,transparent 40%,rgba(0,0,0,.55) 100%)"></div>`;
@@ -112,11 +133,13 @@ function setup(h) {
         add(box([60, 500, 960, 760], [200, 170, 1520, 560]), `<div class="fit cx-title" style="font-size:${V ? 96 : 90}px;font-family:Pop;font-weight:800;text-transform:none"><span>“${esc(s.quote || '')}”</span></div>`, 'fade', 0.1);
         if (s.source) add(box([120, 1300, 840, 120], [460, 780, 1000, 110]), bar(`— ${s.source}`, 40), 'slideX', 0.6);
         break;
-      case 'vote':
-        add(box([40, 640, 1000, 520], [120, 220, 1680, 440]), title(s.headline || `Vote ${info.name}`, V ? 190 : 200), 'pop', 0.1);
-        if (s.date) add(box([90, 1200, 900, 150], [460, 700, 1000, 130]), bar(s.date, 54, P.b), 'slideX', 0.5);
-        if (s.button) add(box([140, 1380, 800, 120], [560, 850, 800, 100]), `<div class="fit cx-sub" style="font-size:46px;color:#fff"><span>${esc(s.button)}</span></div>`, 'fade', 0.8);
+      case 'vote': {
+        const side = info.cutout || info.silhouette;
+        add(box([40, side ? 1080 : 640, 1000, side ? 380 : 520], side ? [90, 230, 1060, 420] : [120, 220, 1680, 440]), title(s.headline || `Vote ${info.name}`, V ? 190 : 200), 'pop', 0.1);
+        if (s.date) add(box([90, side ? 1480 : 1200, 900, 140], side ? [90, 690, 900, 120] : [460, 700, 1000, 130]), bar(s.date, 54, P.b), 'slideX', 0.5);
+        if (s.button) add(box([140, side ? 1640 : 1380, 800, 110], side ? [90, 840, 900, 100] : [560, 850, 800, 100]), `<div class="fit cx-sub" style="font-size:46px;color:#fff"><span>${esc(s.button)}</span></div>`, 'fade', 0.8);
         break;
+      }
       case 'counter': {
         const target = Number(s.to) || 0; const K = 12; const dur = 1.4; const from = 0.2;
         for (let k = 0; k < K; k++) {
@@ -143,9 +166,11 @@ function setup(h) {
         add(box([80, 820, 920, 280], [300, 420, 1320, 240]), `<div class="fit cx-sub" style="font-size:34px;font-weight:600;text-transform:none;letter-spacing:0;color:rgba(255,255,255,.9)"><span>${esc(s.text || '')}</span></div>`, 'fade', 0.1);
         break;
       case 'photo':
-      default:
-        add(box([40, 1060, 1000, 460], [100, 560, 1720, 300]), title(s.headline, V ? 150 : 150), 'slide', 0.15);
-        if (s.sub) add(box([60, 1540, 960, 130], [100, 870, 1100, 110]), bar(s.sub, V ? 46 : 46, s.who === 'opponent' ? P.b : P.a), 'slideX', 0.6);
+      default: {
+        const side = s.who !== 'opponent' && (info.cutout || info.silhouette);
+        add(box([40, 1060, 1000, 460], side ? [90, 300, 1060, 400] : [100, 560, 1720, 300]), title(s.headline, V ? 150 : side ? 140 : 150), 'slide', 0.15);
+        if (s.sub) add(box([60, 1540, 960, 130], side ? [90, 740, 900, 110] : [100, 870, 1100, 110]), bar(s.sub, V ? 46 : 46, s.who === 'opponent' ? P.b : P.a), 'slideX', 0.6);
+      }
     }
     if (cite) add(box([40, 1780, 1000, 60], [60, 1010, 1300, 50]), `<div class="fit cx-cite"><span>${esc(cite)}</span></div>`, 'fade', 0.4);
     return { W, H, els };

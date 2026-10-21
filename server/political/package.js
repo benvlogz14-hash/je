@@ -64,6 +64,11 @@ const norm = (s) => String(s || '').toLowerCase().replace(/[“”"'’‘]/g, '
 async function stepResearch(p, h) {
   const r = await sources.lookup({ name: p.name, hint: p.location || p.why || '', campaignSite: /^https?:/.test(p.handle || '') ? p.handle : null, dir: dirFor(p), onStep: (s) => h.progress(0.05, `Researching: ${s}`) });
   if (!r.sources.length) throw Object.assign(new Error(`No public records found for "${p.name}". Check the spelling, or add their office and state to the prospect.`), { permanent: true });
+  // Cut the main photo out of its background for the campaign ads (remove.bg or the local rembg tool, when set up).
+  if (r.profile.photo && S('photoCutout', true)) {
+    try { const cut = await require('../video/cutout').removeBackground(r.profile.photo, path.join(dirFor(p), 'cutout.png')); if (cut) r.profile.cutout = cut; }
+    catch (e) { r.errors.push(`Background removal: ${e.message}`); }
+  }
   save(p.id, () => ({ profile: r.profile, sources: r.sources, facts: r.facts, text: r.text, researchErrors: r.errors }));
   const patch = {};
   if (!p.publicContact && r.profile.contact) { patch.publicContact = r.profile.contact; patch.contactVerified = true; }
@@ -249,7 +254,10 @@ async function stepVideo(p, h, kind) {
     if (!fs.existsSync(narration)) { try { await tts(c.narration, narration); } catch (e) { narration = null; audit.log('system', 'political.tts_failed', { prospectId: p.id, error: e.message }, 'warn'); } }
   }
   const style = c.style || S('videoStyle', 'campaign');
-  const info = { brand: S('brandColors', true) ? p.pkg.profile?.brand : null, name: p.name, photo: p.pkg.profile?.photo, oppPhoto: p.pkg.opp?.profile?.photo, party: p.pkg.profile?.party, style, tone: c.tone, citeText: citeText(p.pkg), theme: S('theme', 'auto') === 'auto' ? null : S('theme') };
+  const mode = S('photoMode', 'auto'); // auto | cutout | full | silhouette
+  const pr = p.pkg.profile || {};
+  const silhouette = mode === 'silhouette' || !pr.photo;
+  const info = { brand: S('brandColors', true) ? pr.brand : null, name: p.name, silhouette, cutout: !silhouette && mode !== 'full' && pr.cutout && fs.existsSync(pr.cutout) ? pr.cutout : null, photo: silhouette ? null : pr.photo, oppPhoto: p.pkg.opp?.profile?.photo, party: p.pkg.profile?.party, style, tone: c.tone, citeText: citeText(p.pkg), theme: S('theme', 'auto') === 'auto' ? null : S('theme') };
   const work = path.join(dir, `work_${kind}`);
   const res = await render.renderVideo({ scenes: board, info, vertical: K.vertical, out, work, music, narration, onProgress: (f, t) => h.progress(f * 0.92, t) });
   fs.rmSync(work, { recursive: true, force: true });

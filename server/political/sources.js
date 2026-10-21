@@ -150,17 +150,25 @@ const decode = (s) => String(s).replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;
 
 const SOCIAL_RX = /https?:\/\/(?:www\.)?(?:x|twitter|facebook|instagram|youtube|tiktok|threads)\.(?:com|net)\/[A-Za-z0-9_.@\/-]+/g;
 async function website(url, c, label) {
-  const found = { emails: [], socials: [], brand: null };
+  const found = { emails: [], socials: [], brand: null, image: null };
   const pages = [url, new URL('/contact', url).href, new URL('/contact-us', url).href];
   for (const p of pages) {
     let html; try { html = await get(p, { json: false, timeoutMs: 12000 }); } catch { continue; }
     const n = c.source(`${label}: ${new URL(p).hostname}${new URL(p).pathname === '/' ? '' : new URL(p).pathname}`, p);
     const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
     if (p === url) {
-      c.raw(n, text.slice(0, 5000));
+      // Sites built with JavaScript come back nearly empty; read those through Jina Reader (anonymous, public pages only).
+      let body = text;
+      if (body.trim().length < 600 && ctx.setting('political.jinaReader', true)) {
+        try { const md = await get(`https://r.jina.ai/${url}`, { json: false, timeoutMs: 25000, headers: { accept: 'text/plain' } }); if (md && md.length > body.length) { body = md; for (const m of md.matchAll(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g)) found.emails.push({ email: m[0].toLowerCase(), src: n, page: p }); } } catch { /* reader unavailable */ }
+      }
+      c.raw(n, body.slice(0, 5000));
       // Brand colour: the site's theme-color, else its most used saturated colour.
       const tc = /<meta[^>]+name=["']theme-color["'][^>]+content=["'](#[0-9a-f]{6})/i.exec(html) || /<meta[^>]+content=["'](#[0-9a-f]{6})["'][^>]+name=["']theme-color/i.exec(html);
       if (tc) found.brand = tc[1].toLowerCase();
+      // The site's share image (usually the candidate) for the ads, credited to the campaign.
+      const og = /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i.exec(html) || /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image/i.exec(html) || /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)/i.exec(html);
+      if (og) { try { found.image = new URL(og[1].replace(/&amp;/g, '&'), p).href; } catch { /* bad url */ } }
       else {
         const counts = {};
         for (const m of html.matchAll(/#([0-9a-f]{6})\b/gi)) {
@@ -190,7 +198,10 @@ function bestContact(emails) {
 async function download(url, file) {
   const res = await fetch(url, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new Error(`photo ${res.status}`);
-  fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+  if (!/^image\//.test(res.headers.get('content-type') || 'image/')) throw new Error('not an image');
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length < 6000) throw new Error('image too small');
+  fs.writeFileSync(file, buf);
   return file;
 }
 
@@ -210,8 +221,8 @@ async function lookup({ name, hint, campaignSite, dir, onStep = () => {} }) {
   const money = await tryStep('FEC', () => fecTotals([...(cong?.fec || []), ...(wd?.fec || [])], c));
   const headlines = await tryStep('News', () => news(name, cong?.office, c));
   const sites = [...new Set([campaignSite, wd?.website, cong?.officialSite, ...(os?.links || [])].filter(Boolean))].slice(0, 3);
-  const emails = []; const socials = []; let brand = null;
-  for (const s of sites) { const r = await tryStep(`Website ${s}`, () => website(s, c, s === campaignSite ? 'Campaign site' : 'Website')); if (r) { emails.push(...r.emails); socials.push(...r.socials); brand = brand || r.brand; } }
+  const emails = []; const socials = []; let brand = null; let siteImage = null;
+  for (const s of sites) { const r = await tryStep(`Website ${s}`, () => website(s, c, s === campaignSite ? 'Campaign site' : 'Website')); if (r) { emails.push(...r.emails); socials.push(...r.socials); brand = brand || r.brand; siteImage = siteImage || (r.image ? { url: r.image, site: s } : null); } }
   if (os?.email) emails.push({ email: os.email.toLowerCase(), src: c.sources.find((s) => /Open States/.test(s.title))?.n, page: 'Open States' });
   if (wd?.email) emails.push({ email: String(wd.email).replace(/^mailto:/, '').toLowerCase(), src: c.sources.find((s) => /Wikidata/.test(s.title))?.n, page: 'Wikidata' });
   const socialLinks = [...new Set([...socials,
@@ -220,12 +231,16 @@ async function lookup({ name, hint, campaignSite, dir, onStep = () => {} }) {
     wd?.socials?.youtube && `https://youtube.com/channel/${wd.socials.youtube}`].filter(Boolean))];
 
   // Photo: official congressional portrait (public domain), else Open States, else Wikipedia/Wikimedia (credit kept).
-  let photo = null; let photoCredit = null;
+  let photo = null; let photoCredit = null; const photos = [];
   if (dir) {
-    for (const [u, credit] of [[cong?.photo, 'Official U.S. Congress portrait'], [os?.image, 'Open States'], [wp?.image, 'Wikimedia Commons']]) {
-      if (!u) continue;
-      const file = path.join(dir, `photo${path.extname(new URL(u).pathname).slice(0, 5) || '.jpg'}`);
-      if (await tryStep('Photo', () => download(u, file))) { photo = file; photoCredit = credit; break; }
+    // Collect every usable photo (up to 4); the first is the main one. Campaign-site images are credited to the campaign.
+    const cands = [[cong?.photo, 'Official U.S. Congress portrait'], [os?.image, 'Open States'], [wp?.image, 'Wikimedia Commons'], ...(ctx.setting('political.campaignPhotos', true) && siteImage ? [[siteImage.url, `Campaign website (${new URL(siteImage.site).hostname})`]] : [])];
+    for (const [u, credit] of cands) {
+      if (!u || photos.length >= 4) continue;
+      let ext = '.jpg'; try { ext = (path.extname(new URL(u).pathname).slice(0, 5) || '.jpg').toLowerCase(); } catch { continue; }
+      if (!/\.(jpe?g|png|webp)$/.test(ext)) ext = '.jpg';
+      const file = path.join(dir, `photo${photos.length ? photos.length + 1 : ''}${ext}`);
+      if (await tryStep('Photo', () => download(u, file))) { photos.push({ file, credit, url: u }); if (!photo) { photo = file; photoCredit = credit; } }
     }
   }
   const ranked = bestContact(dedupe(emails, (e) => e.email));
@@ -234,7 +249,7 @@ async function lookup({ name, hint, campaignSite, dir, onStep = () => {} }) {
     state: cong?.state || null, district: cong?.district ?? null, level: cong ? 'federal' : os ? 'state' : 'unknown',
     sites, socials: socialLinks, emails: ranked, contact: ranked[0]?.email || null,
     officePhone: cong?.officePhone || null, contactForm: cong?.contactForm || null,
-    money, news: headlines || [], photo, photoCredit, wikipedia: wp?.title || null, brand,
+    money, news: headlines || [], photo, photoCredit, photos, wikipedia: wp?.title || null, brand,
   };
   return { profile, sources: c.sources, facts: c.facts, text: c.text, errors: c.errors };
 }
