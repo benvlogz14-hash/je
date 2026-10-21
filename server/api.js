@@ -266,6 +266,9 @@ r.get('/api/assets/:id/media', (req, res, p) => serveFile(req, res, must(ctx.sto
 r.get('/api/assets/:id/thumb', (req, res, p) => { const a = must(ctx.store.get('assets', p.id)); return a.thumb ? serveFile(req, res, a.thumb, { cache: true }) : send(res, 404, {}); }, { stream: true });
 r.get('/api/assets/:id/filmstrip', (req, res, p) => { const a = must(ctx.store.get('assets', p.id)); return a.filmstrip ? serveFile(req, res, a.filmstrip, { cache: true }) : send(res, 404, {}); }, { stream: true });
 r.get('/api/assets/:id/waveform', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); const f = path.join(a.workDir, 'waveform.json'); return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : []; });
+r.get('/api/assets/:id/shots', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); const v = require('./video/vision').cached(a.path, a.workDir); return v ? { engine: v.engine, at: v.at, shots: v.shots.map(({ frame, ...x }, i) => ({ ...x, n: i + 1, hasFrame: !!frame && fs.existsSync(frame) })) } : { shots: [] }; });
+r.get('/api/assets/:id/shot/:n', (req, res, p) => { const a = must(ctx.store.get('assets', p.id)); const v = require('./video/vision').cached(a.path, a.workDir); const f = v?.shots?.[Number(p.n) - 1]?.frame; return f && paths.inside(a.workDir, f) ? serveFile(req, res, f, { cache: true }) : send(res, 404, {}); }, { stream: true });
+r.post('/api/assets/:id/look', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); return queue.enqueue('video.look', { assetId: a.id }, { actor: actorOf(req), dedupeKey: `look:${a.id}` }); });
 r.get('/api/assets/:id/transcript', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); return require('./jobs/handlers').loadTranscript(a) || { words: [], segments: [] }; });
 r.del('/api/assets/:id', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); ctx.store.remove('assets', a.id); audit.log(actorOf(req), 'footage.removed', { clientId: a.clientId, assetId: a.id }); return { ok: true }; }, { roles: OWNER });
 
@@ -517,7 +520,7 @@ r.get('/api/political/reference/sheet', (req, res) => { const f = ctx.setting('p
 // One place that lists everything the full process needs, and one-click fixes.
 r.get('/api/setup/checklist', async () => ({ items: await require('./setup/checklist').build(), ollama: await require('./setup/ollama').status() }));
 r.post('/api/setup/:action', (req, b, p) => {
-  const job = { ollama: 'setup.ollama', rembg: 'setup.rembg', whisper: 'setup.whisper' }[p.action]; if (!job) throw new HttpError(404, 'Unknown setup action');
+  const job = { ollama: 'setup.ollama', rembg: 'setup.rembg', whisper: 'setup.whisper', vision: 'setup.vision' }[p.action]; if (!job) throw new HttpError(404, 'Unknown setup action');
   return queue.enqueue(job, {}, { actor: actorOf(req), dedupeKey: job });
 }, { roles: OWNER });
 r.get('/api/political/steps', () => polPkg.STEPS.map(([key, label]) => ({ key, label })));

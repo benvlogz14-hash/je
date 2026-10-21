@@ -58,10 +58,10 @@ async function start(onStep) {
 }
 
 /** Download the model through Ollama's API, reporting progress 0..1. */
-async function pull(onStep, onProgress) {
-  const r = await running(); if (hasModel(r.models)) return;
-  onStep(`Downloading the ${model()} model (about 2 GB, one time only)`);
-  const res = await fetch(`${base()}/api/pull`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: model(), stream: true }) });
+async function pull(onStep, onProgress, name = model(), size = 'about 2 GB') {
+  const r = await running(); if (hasModel(r.models, name)) return;
+  onStep(`Downloading the ${name} model (${size}, one time only)`);
+  const res = await fetch(`${base()}/api/pull`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, stream: true }) });
   if (!res.ok || !res.body) throw new Error(`Couldn't download the model (${res.status}).`);
   const dec = new TextDecoder(); let buf = '';
   for await (const chunk of res.body) {
@@ -73,7 +73,7 @@ async function pull(onStep, onProgress) {
       if (j.total && j.completed) onProgress(j.completed / j.total, `${j.status || 'Downloading'} ${(j.completed / 1e9).toFixed(2)} of ${(j.total / 1e9).toFixed(2)} GB`);
     }
   }
-  if (!hasModel((await running()).models)) throw new Error('The model download did not finish. Click "Turn on Ollama" to resume.');
+  if (!hasModel((await running()).models, name)) throw new Error('The model download did not finish. Click "Turn on Ollama" to resume.');
 }
 
 /** The whole thing, for the "Turn on Ollama" button. */
@@ -87,10 +87,23 @@ async function setup(h) {
   return status();
 }
 
+/** Free "eyes": the Llama vision model, so the app can look through video without a paid AI. */
+async function setupVision(h) {
+  await install((t) => h.progress(0.05, t));
+  await start((t) => h.progress(0.2, t));
+  const name = ctx.setting('ai.ollama.visionModel', 'llama3.2-vision');
+  await pull((t) => h.progress(0.25, t), (f, t) => h.progress(0.25 + f * 0.7, t), name, 'about 8 GB');
+  ctx.store.setSettings({ ai: { ollama: { enabled: true, autostart: true } } });
+  await require('../integrations/ai').pingOllama(true);
+  h.progress(1, 'Euclidean can now look at video for free');
+  return { ok: true, model: name };
+}
+async function visionReady() { const r = await running(); return r.ok && hasModel(r.models, ctx.setting('ai.ollama.visionModel', 'llama3.2-vision')); }
+
 /** On engine start: if the user turned Llama on before and it's installed, start it quietly. */
 async function autostart() {
   if (!ctx.setting('ai.ollama.autostart', false) || ctx.setting('ai.ollama.enabled', true) === false || !find()) return;
   try { await start(() => {}); await require('../integrations/ai').pingOllama(true); } catch { /* user can press the button */ }
 }
 
-module.exports = { status, setup, autostart, find };
+module.exports = { status, setup, setupVision, visionReady, autostart, find };

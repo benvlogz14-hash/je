@@ -1,5 +1,5 @@
 // Production: footage intake and the clip board, per client.
-import { html, useRoute, useState, useEffect, useRef, useStore, useApi, navigate, Button, Empty, Loading, StatusBadge, Progress, act, toast, promptDialog, Avatar } from '../lib/ui.js';
+import { html, useRoute, useState, useEffect, useRef, useStore, useApi, navigate, Button, Empty, Loading, StatusBadge, Progress, act, toast, promptDialog, Avatar, Drawer } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { play } from '../lib/sound.js';
@@ -64,6 +64,7 @@ function QuotaStrip({ client }) {
 
 function Intake({ clients, clientId, setClientId, assets, jobs }) {
   const [over, setOver] = useState(false);
+  const [shotsOf, setShotsOf] = useState(null);
   const [uploads, setUploads] = useState([]);
   const input = useRef(null);
   const target = clientId || (clients.length === 1 ? clients[0].id : '');
@@ -111,10 +112,25 @@ function Intake({ clients, clientId, setClientId, assets, jobs }) {
       <div class="list" style="max-height:190px;overflow:auto">${recent.length ? recent.map((a) => {
         const j = jobs.find((x) => x.payload?.assetId === a.id && x.status === 'running');
         return html`<div class="list-row"><div class="th" style=${{ width: '52px', height: '30px', borderRadius: '6px', background: a.thumb ? `var(--surface-3) url(${api.url(`/api/assets/${a.id}/thumb`)}) center/cover` : 'var(--surface-3)', flex: 'none' }} />
-          <div class="grow"><div class="ellipsis" style="font-weight:500">${a.name}</div><div class="faint" style="font-size:var(--fs-xs)">${j ? j.note || j.title : a.info ? `${dur(a.info.duration)} · ${a.info.width}×${a.info.height}${a.transcript ? ` · ${a.transcript.words} words` : ''}` : a.status} · ${ago(a.createdAt)}</div>${j ? html`<div style="margin-top:4px"><${Progress} value=${j.progress} indeterminate=${!j.progress} /></div>` : null}</div>
+          <div class="grow"><div class="ellipsis" style="font-weight:500">${a.name}</div><div class="faint" style="font-size:var(--fs-xs)">${j ? j.note || j.title : a.info ? `${dur(a.info.duration)} · ${a.info.width}×${a.info.height}${a.transcript ? ` · ${a.transcript.words} words` : ''}${a.vision ? ` · ${a.vision.shots} shots` : ''}` : a.status} · ${ago(a.createdAt)}</div>${j ? html`<div style="margin-top:4px"><${Progress} value=${j.progress} indeterminate=${!j.progress} /></div>` : null}</div>
+          ${a.status === 'ready' && !j ? html`<${Button} size="sm" kind="ghost" icon="eye" title="What Euclidean sees in this video, shot by shot" onClick=${() => (a.vision ? setShotsOf(a) : act(() => api.post(`/api/assets/${a.id}/look`, {}), { ok: 'Looking through the video' }))}>${a.vision ? 'Shots' : 'Look through'}</${Button}>` : null}
           ${a.status === 'ready' && !j ? html`<${Button} size="sm" kind="ghost" icon="sparkle" onClick=${() => act(() => api.post(`/api/assets/${a.id}/process`, {}), { ok: 'Finding clips' })}>${a.transcript ? 'More clips' : 'Process'}</${Button}>` : html`<${StatusBadge} status=${a.status} />`}</div>`;
       }) : html`<div class="list-row faint">No footage yet</div>`}</div></div>
+    ${shotsOf ? html`<${ShotsDrawer} asset=${shotsOf} onClose=${() => setShotsOf(null)} />` : null}
   </div>`;
+}
+
+const KIND_TONE = { speaker: 'sky', interview: 'sky', crowd: 'lav', broll: 'moss', graphic: 'gold', text: 'gold', other: '' };
+/** What Euclidean saw in a video: one still per shot with its description, kind and quality. */
+function ShotsDrawer({ asset, onClose }) {
+  const { data } = useApi(`/api/assets/${asset.id}/shots`, []);
+  const shots = data?.shots || [];
+  return html`<${Drawer} wide title=${`Shots in ${asset.name}`} sub=${data ? `${shots.length} shots · ${data.engine && data.engine !== 'measured' ? 'described by AI' : 'faces, sharpness and brightness only (connect an AI that can see for descriptions)'}` : ''} onClose=${onClose}>
+    ${!data ? html`<${Loading} />` : html`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">${shots.map((x) => html`<div class="panel" style=${{ overflow: 'hidden', opacity: x.usable ? 1 : 0.5 }}>
+      ${x.hasFrame ? html`<img src=${api.url(`/api/assets/${asset.id}/shot/${x.n}`)} style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block" loading="lazy" />` : null}
+      <div class="pad col" style="gap:4px;padding:8px 10px"><div class="row" style="gap:6px"><span class=${'badge ' + (KIND_TONE[x.kind] || '')}>${x.kind}</span><span class="faint tnum" style="font-size:var(--fs-xs)">${dur(x.s)}–${dur(x.e)}</span><span class="grow" /><span class="faint" style="font-size:var(--fs-xs)">${'★'.repeat(x.quality || 0)}</span></div>
+      ${x.what ? html`<div style="font-size:var(--fs-sm)">${x.what}</div>` : null}${x.text ? html`<div class="faint" style="font-size:var(--fs-xs)">On screen: "${x.text}"</div>` : null}${!x.usable ? html`<div class="faint" style="font-size:var(--fs-xs)">Not usable</div>` : null}</div></div>`)}</div>`}
+  </${Drawer}>`;
 }
 
 function ClipCard({ c, showClient }) {

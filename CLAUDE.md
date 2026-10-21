@@ -20,6 +20,7 @@ Desktop app for Euclidean Media (founders Ryan Rosario and Ben Gingold), a short
   - Studio exporter with 47 xfade transitions, keyframes and ASS titles: `server/video/studio.js`.
   - AI edit operations: `server/video/edit-ops.js`.
   - Preview proxies: `server/video/proxy.js`.
+  - Looking through video: `server/video/vision.js` (`look`, `cached`, `summarize`, `shotAt`). FFmpeg finds the shots, grabs a still per shot, measures brightness, sharpness and motion; faces are counted; an AI that can see (`ai.ask({ images })`, Claude/GPT/Grok, or the free `llama3.2-vision` via Ollama) describes each shot (kind, what, on-screen text, quality, usable). Runs in the `analyze` job (setting `video.lookThrough`) and on demand (`video.look`, Production → Footage → Look through / Shots); feeds clip discovery and the speech ads' B-roll and line picking.
 - **Agent network:** `server/agents/` (registry, adapters, broker, protocol, routes). Peer-to-peer agents; nobody is the central orchestrator; external actions need human approval.
 - **Creators analytics:** `server/integrations/creators.js` (yt-dlp, Social Blade-style report).
 - **Renderer:** Preact + htm with no build step, in `renderer/js`. Modules are in `renderer/js/modules/*.js` (studio, analytics, growth, agents, settings, production and others).

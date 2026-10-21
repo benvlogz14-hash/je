@@ -174,9 +174,9 @@ async function pickBites({ name, office, sentences: list, clips, shortSec, longS
   const shortTarget = Math.max(8, shortSec - 6); const longTarget = Math.max(20, longSec - 7);
   let short = []; let long = []; let labels = {}; let tagline = ''; let agent = 'basic';
   if (ai.anyConnected() && list.length) {
-    const lines = list.slice(0, 400).map((x) => `#${x.id} [video ${x.clip + 1}, ${(x.e - x.s).toFixed(1)}s] ${x.text}`).join('\n').slice(0, 26000);
+    const lines = list.filter((x) => x.shot?.usable !== false).slice(0, 400).map((x) => `#${x.id} [video ${x.clip + 1}, ${(x.e - x.s).toFixed(1)}s${x.shot ? `, on screen: ${x.shot.kind}${x.shot.what ? ` - ${x.shot.what}` : ''}` : ''}] ${x.text}`).join('\n').slice(0, 26000);
     const vids = clips.map((c, k) => `video ${k + 1}: ${c.platform}${c.title ? `, "${c.title}"` : ''}`).join('\n');
-    const r = await ai.ask({ role: 'writing', json: true, maxTokens: 2500, system: `You edit campaign ads from a candidate's own public speeches. You pick whole sentences from transcripts; you never change, shorten or combine words, and never invent lines. Pick ONLY sentences the candidate ${name} clearly says themselves (first person about their own values, record or plans, or introducing themselves). Skip anything an interviewer, host, reporter or other speaker says, questions, crosstalk, filler and anything unclear; when unsure, skip it. ${contrast ? 'Criticism of an opponent is allowed only if the candidate said it.' : 'Skip attacks on opponents.'} Tell a story: an introduction or strong hook, then what they will fight for (issue by issue), then a closing line.`, prompt: `CANDIDATE: ${name}${office ? `, ${office}` : ''}\nTHEIR ISSUES: ${themes.join(', ') || 'unknown'}\n${notes ? `FOUNDER NOTES: ${notes}\n` : ''}\nVIDEOS\n${vids}\n\nSENTENCES\n${lines}\n\nReturn JSON: {"short":[sentence ids in play order, about ${shortTarget} seconds total],"long":[ids in play order, about ${longTarget} seconds total],"labels":{"id":"2-5 word on-screen issue title taken from what that sentence says, e.g. Lower health care costs; only for issue sentences"},"tagline":"a short opening title like '${name} is *fighting for you*' (wrap 1-3 words in *stars* for the accent colour; no facts or numbers)"}` });
+    const r = await ai.ask({ role: 'writing', json: true, maxTokens: 2500, system: `You edit campaign ads from a candidate's own public speeches. You pick whole sentences from transcripts; you never change, shorten or combine words, and never invent lines. Pick ONLY sentences the candidate ${name} clearly says themselves (first person about their own values, record or plans, or introducing themselves). Skip anything an interviewer, host, reporter or other speaker says, questions, crosstalk, filler and anything unclear; when unsure, skip it. ${contrast ? 'Criticism of an opponent is allowed only if the candidate said it.' : 'Skip attacks on opponents.'} Prefer lines where the shot shows them speaking (speaker or interview) over lines where they are off screen. Tell a story: an introduction or strong hook, then what they will fight for (issue by issue), then a closing line.`, prompt: `CANDIDATE: ${name}${office ? `, ${office}` : ''}\nTHEIR ISSUES: ${themes.join(', ') || 'unknown'}\n${notes ? `FOUNDER NOTES: ${notes}\n` : ''}\nVIDEOS\n${vids}\n\nSENTENCES\n${lines}\n\nReturn JSON: {"short":[sentence ids in play order, about ${shortTarget} seconds total],"long":[ids in play order, about ${longTarget} seconds total],"labels":{"id":"2-5 word on-screen issue title taken from what that sentence says, e.g. Lower health care costs; only for issue sentences"},"tagline":"a short opening title like '${name} is *fighting for you*' (wrap 1-3 words in *stars* for the accent colour; no facts or numbers)"}` });
     const j = r.json || {}; agent = `${r.provider}:${r.model}`;
     const clean = (ids) => [...new Set([].concat(ids || []).map(Number))].map((id) => byId.get(id)).filter(Boolean);
     short = clean(j.short); long = clean(j.long);
@@ -201,6 +201,18 @@ function quietWindows(clips) {
   return out;
 }
 
+/** B-roll from what's actually on screen: usable crowd and scenery shots, best first. */
+function visualBroll(clips) {
+  const out = [];
+  clips.forEach((c, k) => {
+    for (const x of c.vision?.shots || []) {
+      if (!x.usable || !['broll', 'crowd'].includes(x.kind) || (x.quality || 3) < 3 || x.e - x.s < 2) continue;
+      out.push({ clip: k, s: x.s + 0.15, e: x.e - 0.15, quality: x.quality, what: x.what });
+    }
+  });
+  return out.sort((a, b) => (b.quality || 0) - (a.quality || 0));
+}
+
 /** Everything the speech ads need, saved on prospect.pkg.footage. */
 async function prepare({ name, office, socials, sites, links, dir, themes, shortSec, longSec, contrast, notes, want = 4, onStep = () => {} }) {
   const found = await find({ name, socials, sites, links }, onStep);
@@ -208,10 +220,17 @@ async function prepare({ name, office, socials, sites, links, dir, themes, short
   const dl = await download(found.list, path.join(dir, 'footage'), { want, name, onStep });
   if (!dl.clips.length) return { clips: [], bites: { short: [], long: [] }, errors: [...found.errors, ...dl.errors, "Couldn't download any of the videos found."] };
   const tr = await transcribeClips(dl.clips, path.join(dir, 'footage'), onStep);
+  // Look through each video shot by shot: who's on camera, crowds, scenery, and what's unusable.
+  const vision = require('../video/vision');
+  for (let k = 0; k < dl.clips.length; k++) {
+    try { dl.clips[k].vision = await vision.look(dl.clips[k].file, { workDir: path.join(dir, 'footage'), maxShots: 30, purpose: `a campaign ad for ${name}: find shots of them speaking and good B-roll`, onProgress: (f, t) => onStep(`Video ${k + 1}: ${t}`) }); }
+    catch { dl.clips[k].vision = null; }
+  }
+  for (const x of tr.sentences) { const sh = vision.shotAt(dl.clips[x.clip].vision, (x.s + x.e) / 2); if (sh) x.shot = sh; }
   onStep('Picking the best lines');
   const bites = await pickBites({ name, office, sentences: tr.sentences, clips: dl.clips, shortSec, longSec, themes, contrast, notes });
-  const clips = dl.clips.map(({ words, ...c }) => ({ ...c, words: (words || []).length }));
-  return { clips, bites: { short: bites.short, long: bites.long }, tagline: bites.tagline, agent: bites.agent, broll: quietWindows(dl.clips), found: found.list.length, errors: [...found.errors, ...dl.errors, ...tr.errors].slice(0, 12) };
+  const clips = dl.clips.map(({ words, vision: v, ...c }) => ({ ...c, words: (words || []).length, shots: v?.shots?.length || 0, seen: v?.engine || null }));
+  return { clips, bites: { short: bites.short, long: bites.long }, tagline: bites.tagline, agent: bites.agent, broll: [...visualBroll(dl.clips), ...quietWindows(dl.clips)], found: found.list.length, errors: [...found.errors, ...dl.errors, ...tr.errors].slice(0, 12) };
 }
 
 // ------------------------------------------------------------------ render
@@ -249,7 +268,7 @@ async function renderBite(b, k, { clips, W, H, vertical, brollPool, stills, work
     for (let t = at; t < at + len - 0.4; t += 3.4) {
       const L = Math.min(3.4, at + len - t);
       const src = brollPool.next(b.clip);
-      if (src) overlays.push({ at: t, len: L, ...src });
+      if (src) overlays.push({ at: t, len: src.e ? Math.max(1.2, Math.min(L, src.e - src.s)) : L, ...src });
     }
   }
   const inputs = ['-ss', start.toFixed(3), '-t', dur.toFixed(3), '-i', c.file];
@@ -286,7 +305,7 @@ function pool({ broll = [], stills = [] }) {
       const vids = broll.filter((x) => x.clip !== avoidClip);
       const useStill = stills.length && (!vids.length || (i + j) % 2 === 1);
       if (useStill) return { still: stills[j++ % stills.length] };
-      if (vids.length) { const w = vids[i++ % vids.length]; return { clip: w.clip, s: w.s }; }
+      if (vids.length) { const w = vids[i++ % vids.length]; return { clip: w.clip, s: w.s, e: w.e }; }
       return null;
     },
   };

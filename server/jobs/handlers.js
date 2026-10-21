@@ -116,6 +116,13 @@ queue.register('analyze', {
     h.progress(0.05, 'Finding scene cuts and energy peaks');
     const a = await analysis.analyze(asset, { signal: h.signal, onProgress: (p) => h.progress(0.05 + p * 0.9, 'Analyzing video and audio') });
     ctx.store.update('assets', asset.id, { analysis: { scenes: a.scenes.length, peaks: a.peaks.length } });
+    // Look through the picture too: every shot's still, faces, quality and (with an AI that can see) a description.
+    if (ctx.setting('video.lookThrough', true) && asset.info?.hasVideo) {
+      try {
+        const v = await require('../video/vision').look(asset.path, { workDir: asset.workDir, clientId: asset.clientId, jobId: job.id, signal: h.signal, purpose: 'finding short-form clips', onProgress: (p, t) => h.progress(0.6 + p * 0.38, t) });
+        ctx.store.update('assets', asset.id, { vision: { shots: v.shots.length, engine: v.engine, usable: v.shots.filter((x) => x.usable).length } });
+      } catch (e) { h.log(`Looking through the video: ${e.message}`); }
+    }
     if (job.payload.thenDiscover) h.enqueue('discover', { assetId: asset.id }, { title: `Find clips in ${asset.name}`, dedupeKey: `discover:${asset.id}:auto` });
     return { scenes: a.scenes.length, peaks: a.peaks.length };
   },
@@ -131,6 +138,18 @@ function loadTranscript(asset) {
   return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null;
 }
 
+queue.register('video.look', {
+  title: () => 'Look through the video', heavy: true,
+  async run(job, h) {
+    const asset = ctx.store.get('assets', job.payload.assetId);
+    if (!asset) throw permanent('Asset no longer exists');
+    const v = await require('../video/vision').look(asset.path, { workDir: asset.workDir, clientId: asset.clientId, jobId: job.id, signal: h.signal, purpose: 'finding short-form clips', onProgress: (p, t) => h.progress(p, t) });
+    ctx.store.update('assets', asset.id, { vision: { shots: v.shots.length, engine: v.engine, usable: v.shots.filter((x) => x.usable).length } });
+    events.publish('assets', { id: asset.id });
+    return { shots: v.shots.length, engine: v.engine };
+  },
+});
+
 queue.register('discover', {
   title: () => 'Find clips',
   async run(job, h) {
@@ -140,7 +159,7 @@ queue.register('discover', {
     const count = job.payload.count || client.production?.clipsPerFootage || ctx.setting('production.defaultClipCount', 6);
     h.progress(0.2, ai.anyConnected() ? 'Asking the analysis agent for the strongest moments' : 'Scanning speech (no AI connected)');
     const transcript = loadTranscript(asset);
-    const result = await intel.discoverClips(asset, transcript, { count, jobId: job.id, exclude: pipeline.usedRanges(asset.id), analysis: loadAnalysis(asset) });
+    const result = await intel.discoverClips(asset, transcript, { count, jobId: job.id, exclude: pipeline.usedRanges(asset.id), analysis: loadAnalysis(asset), vision: require('../video/vision').cached(asset.path, asset.workDir) });
     if (!result.clips.length) { ctx.store.update('assets', asset.id, { exhausted: true }); return { clips: 0, note: 'No further usable moments found' }; }
     h.progress(0.8, `Creating ${result.clips.length} clips`);
     const clips = pipeline.createClips(asset, result);
@@ -484,6 +503,7 @@ queue.register('political.reference', {
 });
 
 queue.register('setup.ollama', { title: () => 'Turn on Ollama', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setup(h) });
+queue.register('setup.vision', { title: () => 'Download free video vision (Llama vision)', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setupVision(h) });
 queue.register('setup.whisper', { title: () => 'Install free speech-to-text (Whisper)', maxAttempts: 1, run: (job, h) => require('../setup/whisper').install(h) });
 queue.register('setup.rembg', { title: () => 'Install the free photo cut-out tool', maxAttempts: 1, run: (job, h) => require('../setup/rembg').install(h) });
 

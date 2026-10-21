@@ -13,6 +13,7 @@ async function build() {
   const motion = require('../video/motion');
   const cutout = require('../video/cutout');
   const ollama = await require('./ollama').status();
+  const eyes = await require('./ollama').visionReady();
   const S = (k, d) => ctx.setting(k, d);
   const caps = ctx.capabilities || {};
   const item = (group, key, label, ok, why, fix, level = 'required') => ({ group, key, label, ok: !!ok, why, fix, level });
@@ -40,6 +41,7 @@ async function build() {
     item('Video', 'browser', 'Edge or Chrome (draws the graphics)', !!motion.findBrowser(), 'Draws every scene of the ads and the one-page sheet. Windows already has Edge.', go('/system', 'Check')),
     item('Video', 'ytdlp', 'yt-dlp (YouTube data and reference ads)', caps.ytdlp, 'Creator stats, YouTube scouting and copying a reference ad\'s pacing.', go('/system', 'Check'), 'recommended'),
     item('Video', 'cutout', 'Photo background removal', !!cutout.available(), cutout.available() ? `Using ${cutout.available()}.` : 'Cuts candidates out of their photos for the cut-out ad look. Free tool, one click.', act('rembg', 'Install free tool'), 'optional'),
+    item('Video', 'vision', 'AI that can see video (looks through footage shot by shot)', eyes || ['anthropic', 'openai', 'xai'].some((p) => ai.connected(p)), eyes ? 'Llama vision is installed: looking through video is free.' : ['anthropic', 'openai', 'xai'].some((p) => ai.connected(p)) ? 'Using your paid AI (a fraction of a cent per shot). Download the free one to stop paying.' : 'Lets Euclidean see what is in each shot to pick clips and B-roll. Free download, about 8 GB.', act('vision', eyes ? 'Installed' : 'Download free'), 'recommended'),
     item('Video', 'whisper', 'Free speech-to-text (Whisper)', require('./whisper').status().ready || ai.connected('openai'), require('./whisper').status().ready ? 'Installed. Captions and speech ads transcribe for free on this computer.' : ai.connected('openai') ? 'Using OpenAI (paid, about 36 cents an hour of video). Install the free tool to stop paying.' : 'Turns speeches into text for captions and the "their own speeches" ads. Free tool, one click.', act('whisper', require('./whisper').status().ready ? 'Installed' : 'Install free tool'), 'recommended'),
     // Outreach content
     item('Outreach', 'booking', 'Booking link', !!(S('political.bookingUrl', '') || S('creatorOffers.bookingUrl', '')), 'Shown in every email and on the one-pager so leads can book the 20 minutes.', go('/growth', 'Add in Package settings'), 'recommended'),

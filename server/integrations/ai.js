@@ -86,8 +86,22 @@ async function httpJson(url, opts, provider) {
   return body;
 }
 
+/** Attach still frames (JPEG/PNG files) to the last user message in each provider's format. */
+function withImages(provider, messages, images) {
+  const fs = require('fs');
+  const pics = images.slice(0, 20).map((f) => ({ data: fs.readFileSync(f).toString('base64'), type: /\.png$/i.test(f) ? 'image/png' : 'image/jpeg' }));
+  const out = messages.map((m) => ({ ...m })); const last = out[out.length - 1]; const text = String(last.content || '');
+  if (provider === 'ollama') last.images = pics.map((p) => p.data);
+  else if (provider === 'anthropic') last.content = [...pics.map((p) => ({ type: 'image', source: { type: 'base64', media_type: p.type, data: p.data } })), { type: 'text', text }];
+  else last.content = [{ type: 'text', text }, ...pics.map((p) => ({ type: 'image_url', image_url: { url: `data:${p.type};base64,${p.data}`, detail: 'low' } }))];
+  return out;
+}
+const visionModel = () => ctx.setting('ai.ollama.visionModel', 'llama3.2-vision');
+const hasVisionModel = () => (ollamaState.models || []).some((m) => m === visionModel() || m.split(':')[0] === visionModel().split(':')[0]);
+
 /** Low-level provider call. messages: [{role:'user'|'assistant', content:string}] */
-async function callProvider(provider, { model, system, messages, json, maxTokens = 2000, temperature, search }) {
+async function callProvider(provider, { model, system, messages, json, maxTokens = 2000, temperature, search, images }) {
+  if (images?.length) messages = withImages(provider, messages, images);
   if (provider === 'ollama') {
     const msgs = [...(system ? [{ role: 'system', content: system + (json ? '\n\nRespond with a single valid JSON object only.' : '') }] : []), ...messages];
     const r = await httpJson(`${ollamaBase()}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, timeoutMs: 600000,
@@ -154,7 +168,7 @@ function clientContext(clientId) {
  * High-level agent call with role routing, budget checks and fallback.
  * @returns {{text, json, provider, model}}
  */
-async function ask({ role = 'operations', system, prompt, messages, json = false, clientId, jobId, maxTokens, search, provider: forceProvider }) {
+async function ask({ role = 'operations', system, prompt, messages, json = false, clientId, jobId, maxTokens, search, images, provider: forceProvider }) {
   const cfg = ctx.setting(`ai.roles.${role}`) || ctx.setting('ai.roles.operations');
   await pingOllama();
   // Local-first: "all" sends every task to Llama on this computer; "most" keeps only emails/ad writing on the paid
@@ -164,6 +178,8 @@ async function ask({ role = 'operations', system, prompt, messages, json = false
   let chain = forceProvider ? [forceProvider] : [cfg.provider, ...(cfg.fallbacks || [])];
   if (!forceProvider) chain = useLocalFirst ? ['ollama', ...chain] : [...chain, 'ollama'];
   chain = chain.filter((p, i, a) => PROVIDERS[p] && a.indexOf(p) === i);
+  // Looking at pictures: the local AI only when its vision model is downloaded.
+  if (images?.length) chain = chain.filter((p) => p !== 'ollama' || hasVisionModel());
   // Free web search for providers without built-in search (everything except Grok): results go in as context.
   if (search && !(chain.find((p) => connected(p) && !overBudget(p)) === 'xai')) {
     try { const ws = await require('./websearch').forPrompt(prompt || (messages || []).slice(-1)[0]?.content || ''); if (ws) system = `${system || ''}\n\n${ws}`; } catch { /* search unavailable */ }
@@ -174,13 +190,13 @@ async function ask({ role = 'operations', system, prompt, messages, json = false
   for (const provider of chain) {
     if (!connected(provider)) { errors.push(`${PROVIDERS[provider].label}: not connected`); continue; }
     if (overBudget(provider)) { errors.push(`${PROVIDERS[provider].label}: monthly budget reached`); continue; }
-    const model = provider === 'ollama' ? ollamaModel() : provider === cfg.provider ? cfg.model : (ctx.setting(`ai.defaultModels.${provider}`) || defaultModelFor(provider));
+    const model = provider === 'ollama' ? (images?.length ? visionModel() : ollamaModel()) : provider === cfg.provider ? cfg.model : (ctx.setting(`ai.defaultModels.${provider}`) || defaultModelFor(provider));
     inflight[provider] = (inflight[provider] || 0) + 1;
     events.publish('agents', agentStatus(), { coalesceKey: 'agents' });
     try {
       let r; let attempt = 0;
       for (;;) {
-        try { r = await callProvider(provider, { model, system: sys, messages: msgs, json, maxTokens, search }); break; }
+        try { r = await callProvider(provider, { model, system: sys, messages: msgs, json, maxTokens, search, images }); break; }
         catch (e) { if (e.retryable && attempt++ < 2) { await new Promise((ok) => setTimeout(ok, 1500 * attempt)); continue; } throw e; }
       }
       recordUsage({ provider, model: r.model, role, clientId, jobId, inTok: r.inTok, outTok: r.outTok });
@@ -257,4 +273,7 @@ function agentStatus() {
   };
 }
 
-module.exports = { pingOllama, ollamaState, PROVIDERS, ask, test, transcribeOpenAI, connected, anyConnected, agentStatus, recordUsage, clientContext, AIError, monthSpend, callProvider, overBudget, defaultModelFor };
+/** Can any connected AI look at pictures right now? */
+function canSee() { return ['anthropic', 'openai', 'xai'].some((p) => connected(p) && !overBudget(p)) || (ollamaState.ok && hasVisionModel()); }
+
+module.exports = { canSee, pingOllama, ollamaState, PROVIDERS, ask, test, transcribeOpenAI, connected, anyConnected, agentStatus, recordUsage, clientContext, AIError, monthSpend, callProvider, overBudget, defaultModelFor };

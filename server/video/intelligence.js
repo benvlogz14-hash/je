@@ -103,7 +103,7 @@ Return JSON: {"clips":[{"start":sec,"end":sec,"title":"<=60 chars, curiosity-dri
 "trials": 2-3 alternative openings for the same clip, for Instagram trial reels: each opens differently (result first, question first, a bolder sentence later in the clip via a later start, or a contrarian line), never the same hook text, and every hook is paid off by the clip.
 ${TASTE_RULES}`;
 
-async function discoverClips(asset, transcript, { count = 6, jobId, exclude = [], analysis = null } = {}) {
+async function discoverClips(asset, transcript, { count = 6, jobId, exclude = [], analysis = null, vision = null } = {}) {
   const minSec = ctx.setting('production.minClipSec', 20), maxSec = ctx.setting('production.maxClipSec', 59);
   const duration = asset.info?.duration || 0;
   const words = transcript?.words || [];
@@ -117,7 +117,7 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
     for (const win of windows) {
       const r = await ai.ask({
         role: 'analysis', json: true, clientId: asset.clientId, jobId, maxTokens: 4000, system: DISCOVERY_SYSTEM,
-        prompt: `Footage: "${asset.name}" (${Math.round(duration)}s). Find the ${Math.min(count + 2, 12)} best clips, each ${minSec}-${maxSec} seconds.${exclude.length ? ` Do not reuse these ranges: ${exclude.map((e) => `${e.start}-${e.end}`).join(', ')}.` : ''}\nUse the video signals too: energy peaks often mark the strongest reactions, and starting a clip on a scene cut looks cleaner.\n${require('./analysis').summarize(analysis)}\n\nTRANSCRIPT (timestamps in seconds):\n${win.join('\n')}`,
+        prompt: `Footage: "${asset.name}" (${Math.round(duration)}s). Find the ${Math.min(count + 2, 12)} best clips, each ${minSec}-${maxSec} seconds.${exclude.length ? ` Do not reuse these ranges: ${exclude.map((e) => `${e.start}-${e.end}`).join(', ')}.` : ''}\nUse the video signals too: energy peaks often mark the strongest reactions, and starting a clip on a scene cut looks cleaner.\n${require('./analysis').summarize(analysis)}\n${vision ? `${require('./vision').summarize(vision)}\nPrefer clips whose shots are usable and well framed; avoid stretches marked UNUSABLE.\n` : ''}\nTRANSCRIPT (timestamps in seconds):\n${win.join('\n')}`,
       });
       all.push(...(r.json.clips || []).map((c) => ({ ...c, agent: `${r.provider}:${r.model}` })));
     }
