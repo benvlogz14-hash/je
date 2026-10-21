@@ -142,7 +142,7 @@ function App() {
   }, []);
   useEvent('connection', (c) => store.set({ online: c.online }));
   useEvent('alert', (a) => { play(a.level === 'error' ? 'error' : 'receive'); toast(a.text, { kind: a.level === 'error' ? 'error' : a.level === 'warn' ? 'warn' : 'info', title: a.title, ms: 7000 }); });
-  useEvent('notify', (n) => { play('receive'); if (window.euclidean?.notify && document.hidden) window.euclidean.notify(n.title, n.body); });
+  useEvent('notify', (n) => { play('receive'); if (window.euclidean?.notify && document.hidden) window.euclidean.notify(n.title, n.body); else if (n.route) toast(n.body || '', { title: n.title, kind: 'info', ms: 6000 }); });
 
   if (!boot) return null;
   if (route.path === '/lite') return html`<${Lite} /><${Toasts} /><${ModalHost} />`;

@@ -20,6 +20,7 @@ const queue = require('../jobs/queue');
 const messaging = require('../automation/messaging');
 const { isGov, excluded, mailingAddress, noDashes, withFooter } = require('./common');
 const { now } = require('../core/util');
+const learning = require('./learning');
 
 const LANES = ['political', 'creators'];
 const cfg = (lane) => ctx.setting(`outreach.${lane}`, {}) || {};
@@ -38,6 +39,10 @@ function capToday(lane) {
   return Math.max(1, Math.min(Number(c.sendPerDay) || 50, (Number(c.warmupStart) || 15) + days * (Number(c.warmupStep) || 10)));
 }
 
+function leadsToday(lane) {
+  const day = today();
+  return ctx.store.all('prospects', (p) => laneOf(p) === lane && p.source !== 'import' && new Date(p.createdAt).toLocaleDateString('en-CA', { timeZone: ctx.setting('agency.timezone', 'America/New_York') }) === day).length;
+}
 function laneOf(p) { return p.type === 'political' ? 'political' : 'creators'; }
 function draftOf(p) { const id = p.type === 'political' ? p.pkg?.messageId : p.outreach?.messageId; return id ? ctx.store.get('messages', id) : null; }
 
@@ -76,6 +81,7 @@ function maybeAutoSend(prospectId) {
   const c = counters(); c.sent[lane] = (c.sent[lane] || 0) + 1; ctx.store.touch();
   ctx.store.update('prospects', p.id, (cur) => ({ stage: 'contacted', [patchKey]: { ...(cur[patchKey] || {}), autoBlock: null, autoSent: true, sentAt: now() } }));
   audit.log('autopilot', 'outreach.auto_sent', { prospectId: p.id, lane, name: p.name });
+  learning.record('auto_sent', { lane, prospectId: p.id, name: p.name });
   events.publish('prospects', { id: p.id });
   return true;
 }
@@ -88,6 +94,8 @@ function approve(ids, actor, edits = {}) {
     try {
       if (!msg || msg.status !== 'pending_approval') throw new Error('no draft waiting');
       const ed = edits[id];
+      const changed = ed && ((ed.subject && ed.subject !== msg.subject) || (ed.body && ed.body.trim() !== String(msg.body).trim()));
+      learning.record(changed ? 'edited' : 'approved', { lane: laneOf(p), prospectId: id, name: p.name, before: { subject: msg.subject, body: msg.body }, after: changed ? { subject: ed.subject || msg.subject, body: ed.body || msg.body } : null });
       if (ed?.subject) ctx.store.update('messages', msg.id, { subject: noDashes(ed.subject) });
       messaging.approveMessage(msg.id, actor, ed?.body ? withFooter(ed.body) : undefined);
       const key = p.type === 'political' ? 'pkg' : 'outreach';
@@ -100,10 +108,11 @@ function approve(ids, actor, edits = {}) {
   return { approved: done.length, errors };
 }
 
-function skip(ids, actor) {
+function skip(ids, actor, reason = '') {
   let n = 0;
   for (const id of (ids || []).slice(0, 500)) {
     const p = ctx.store.get('prospects', id); const msg = p && draftOf(p);
+    if (p) learning.record('skipped', { lane: laneOf(p), prospectId: id, name: p.name, reason: String(reason || '').slice(0, 300) });
     if (msg?.status === 'pending_approval') messaging.rejectMessage(msg.id, actor);
     if (p) { ctx.store.update('prospects', id, { stage: 'lost', skippedAt: now() }); n++; }
   }
@@ -121,7 +130,7 @@ function reviewQueue(lane) {
 
 function status() {
   const c = counters();
-  return Object.fromEntries(LANES.map((l) => [l, { ...cfg(l), sentToday: c.sent[l] || 0, capToday: capToday(l), scoutedToday: c.scouted[l] || 0, waiting: reviewQueue(l).length, autoSendSince: ctx.store.settings._outreachSince?.[l] || null, lastScout: ctx.store.settings._outreachScout?.[l] || null }]));
+  return Object.fromEntries(LANES.map((l) => [l, { ...cfg(l), learning: learning.stats(l), leadsToday: leadsToday(l), sentToday: c.sent[l] || 0, capToday: capToday(l), scoutedToday: c.scouted[l] || 0, waiting: reviewQueue(l).length, autoSendSince: ctx.store.settings._outreachSince?.[l] || null, lastScout: ctx.store.settings._outreachScout?.[l] || null }]));
 }
 
 /** Remember when auto-send was switched on, for the warm-up ramp. */
@@ -154,6 +163,21 @@ function tick() {
         c.scouted[lane] = (c.scouted[lane] || 0) + 1;
       }
     }
+    // Continuous scouting while the computer is on: another search every few minutes, up to the daily lead limit.
+    if (l.scout && l.continuous) {
+      const every = Math.max(10, Number(l.scoutEveryMin) || 30) * 60000; const prev = ctx.store.settings._outreachCont?.[lane];
+      const busy = ctx.store.find('jobs', (j) => j.type === (lane === 'political' ? 'political.scout' : 'creator.scout') && ['queued', 'running'].includes(j.status));
+      if (!busy && (!prev || Date.now() - new Date(prev.at).getTime() >= every) && leadsToday(lane) < (Number(l.maxLeadsPerDay) || 60)) {
+        const queries = String(l.scoutQueries || '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+        if (queries.length) {
+          const i = ((prev?.i ?? -1) + 1) % queries.length;
+          const room = (Number(l.maxLeadsPerDay) || 60) - leadsToday(lane);
+          queue.enqueue(lane === 'political' ? 'political.scout' : 'creator.scout', { query: queries[i], count: Math.max(1, Math.min(room, Number(l.scoutPerDay) || 15, 25)), autoPackage: true, continuous: true }, { actor: 'autopilot', dedupeKey: `cscout:${lane}:${Math.floor(Date.now() / every)}` });
+          ctx.store.settings._outreachCont = { ...(ctx.store.settings._outreachCont || {}), [lane]: { at: now(), i, query: queries[i] } }; ctx.store.touch();
+          c.scouted[lane] = (c.scouted[lane] || 0) + 1;
+        }
+      }
+    }
     // Drafts held back by yesterday's limit go out first thing today.
     if (l.autoSend && (c.sent[lane] || 0) < capToday(lane)) {
       for (const p of ctx.store.all('prospects', (x) => laneOf(x) === lane && (x.pkg?.autoBlock || x.outreach?.autoBlock || []).some((w) => /limit reached/.test(w))).slice(0, 25)) {
@@ -164,4 +188,4 @@ function tick() {
   }
 }
 
-module.exports = { LANES, checks, maybeAutoSend, approve, skip, reviewQueue, status, tick, noteSettings, capToday, laneOf };
+module.exports = { leadsToday, LANES, checks, maybeAutoSend, approve, skip, reviewQueue, status, tick, noteSettings, capToday, laneOf };

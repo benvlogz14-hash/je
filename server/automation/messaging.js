@@ -206,6 +206,8 @@ function receive(m) {
   // A reply from a prospect moves them to "Replied" and stops automatic follow-up.
   for (const pr of ctx.store.all('prospects', (x) => x.contactId === contact.id && ['new', 'drafted', 'contacted'].includes(x.stage || 'new'))) {
     ctx.store.update('prospects', pr.id, { stage: 'replied', repliedAt: now() }); events.publish('prospects', { id: pr.id });
+    try { require('../outreach/learning').record(contact.optedOut?.email || STOP_WORDS.test(firstLine) ? 'opted_out' : 'replied', { lane: pr.type === 'political' ? 'political' : 'creators', prospectId: pr.id, name: pr.name }); } catch { /* learning is best-effort */ }
+    events.publish('notify', { title: `${pr.name} replied`, body: String(m.body || '').slice(0, 140), route: '/growth' });
   }
   if (m.channel === 'sms' && STOP_WORDS.test(m.body || '')) {
     ctx.store.update('contacts', contact.id, (c) => ({ optedOut: { ...(c.optedOut || {}), sms: true } }));

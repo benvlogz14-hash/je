@@ -22,6 +22,7 @@ const sources = require('./sources');
 const render = require('../video/motion');
 const { now, safeJson } = require('../core/util');
 const { withFooter, isGov, excluded, noDashes } = require('../outreach/common');
+const learning = require('../outreach/learning');
 
 const STEPS = [
   ['research', 'Research public records'],
@@ -146,7 +147,7 @@ async function stepCreative(p) {
   const contrast = !!(S('contrastAds', false) && pkg.opp);
   if (!ai.anyConnected()) { save(p.id, () => ({ creative: fallbackCreative(p, pkg, { booking, sender, style }) })); return 'Template scripts (connect an AI provider for tailored ads)'; }
   const templates = String(S('templates', '') || '').trim();
-  const r = await ai.ask({ role: 'writing', json: true, maxTokens: 6000, system: `You create outreach for ${ctx.setting('agency.name', 'Euclidean Media')}, a video agency for political campaigns. You write sample campaign ads for the candidate, aimed at THEIR voters, that make the case for them on their key points (lower costs, schools, safety, jobs... whatever the material supports). Rules: use only facts in the material; numbers, headlines and quotes must appear in the material (quotes word for word) or be left out; cite source numbers on factual scenes; never claim endorsements or results you can't show; no personal details; ${contrast ? 'contrast with the opponent is allowed ONLY on specific, cited public-record facts' : 'do not mention or attack any opponent'}. The email is personal, specific and short (under 170 words): it says what we made for them, that the attached ads are theirs to use free of charge whether or not they talk to us, mentions the plan in one line, asks for 20 minutes, and ends with an opt-out line.`, prompt: `${material(pkg)}\n\nBRIEF\n${JSON.stringify(pkg.brief || {}).slice(0, 6000)}\n\n${templates ? `HOUSE EMAIL TEMPLATES (match this voice and structure):\n${templates.slice(0, 6000)}\n\n` : ''}OFFER: ${offer}\n${booking ? `Booking link: ${booking}\n` : ''}${sender ? `Sign as: ${sender}, ${ctx.setting('agency.name', 'Euclidean Media')}\n` : ''}
+  const r = await ai.ask({ role: 'writing', json: true, maxTokens: 6000, system: `You create outreach for ${ctx.setting('agency.name', 'Euclidean Media')}, a video agency for political campaigns. You write sample campaign ads for the candidate, aimed at THEIR voters, that make the case for them on their key points (lower costs, schools, safety, jobs... whatever the material supports). Rules: use only facts in the material; numbers, headlines and quotes must appear in the material (quotes word for word) or be left out; cite source numbers on factual scenes; never claim endorsements or results you can't show; no personal details; ${contrast ? 'contrast with the opponent is allowed ONLY on specific, cited public-record facts' : 'do not mention or attack any opponent'}. The email is personal, specific and short (under 170 words): it says what we made for them, that the attached ads are theirs to use free of charge whether or not they talk to us, mentions the plan in one line, asks for 20 minutes, and ends with an opt-out line. Never use em dashes.${learning.writerBlock('political')}`, prompt: `${material(pkg)}\n\nBRIEF\n${JSON.stringify(pkg.brief || {}).slice(0, 6000)}\n\n${templates ? `HOUSE EMAIL TEMPLATES (match this voice and structure):\n${templates.slice(0, 6000)}\n\n` : ''}OFFER: ${offer}\n${booking ? `Booking link: ${booking}\n` : ''}${sender ? `Sign as: ${sender}, ${ctx.setting('agency.name', 'Euclidean Media')}\n` : ''}
 Write two ads from the same campaign: "short" (about ${shortSec} seconds, ${Math.max(4, Math.round(shortSec / 3.5))} scenes, used for both the vertical and the horizontal short) and "long" (about ${longSec} seconds, ${Math.max(6, Math.round(longSec / 4))} scenes). Each should open with a strong hook and end with a ${style === 'campaign' ? 'vote' : 'cta then end'} scene.
 ${style === 'campaign' ? CAMPAIGN_DOC : POP_DOC}
 ${contrast ? CONTRAST_DOC : ''}
@@ -379,7 +380,8 @@ async function run(prospectId, { from = 'research', only = null, actor = 'system
   }
   p = ctx.store.get('prospects', prospectId);
   if (!['needs_contact', 'excluded'].includes(p.pkg.status)) save(p.id, () => ({ status: 'ready', finishedAt: now() }));
-  if (!only || only === 'email') require('../outreach/autopilot').maybeAutoSend(prospectId);
+  const autoSent = (!only || only === 'email') ? require('../outreach/autopilot').maybeAutoSend(prospectId) : false;
+  if (autoSent) save(prospectId, () => ({ autoSent: true }));
   audit.log(actor, 'political.package_ready', { prospectId, name: p.name });
   p = ctx.store.get('prospects', prospectId);
   if (!only && !p.pkg.autoSent) events.publish('notify', { title: `Package ready: ${p.name}`, body: p.pkg.status === 'needs_contact' ? 'Needs a campaign email before the draft can be made.' : 'Email with the ads is waiting for review.' });

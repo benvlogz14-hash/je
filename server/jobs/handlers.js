@@ -482,7 +482,7 @@ queue.register('political.scout', {
     }
     if (found.length < count && ai.anyConnected()) {
       h.progress(0.4, 'Research agent searching');
-      const r = await ai.ask({ role: 'research', json: true, jobId: job.id, search: true, maxTokens: 3500, system: PROSPECT_SYSTEM + '\nOnly return real, currently active political officials, candidates or campaigns. Prefer campaign or press emails over government office addresses.', prompt: `Find up to ${count - found.length} political prospects: ${query}` });
+      const r = await ai.ask({ role: 'research', json: true, jobId: job.id, search: true, maxTokens: 3500, system: PROSPECT_SYSTEM + '\nOnly return real, currently active political officials, candidates or campaigns. Never make up contact details; only give an email that is publicly listed. No government emails. No em dashes.' + require('../outreach/learning').scoutBlock('political'), prompt: `Find up to ${count - found.length} political prospects: ${query}` });
       for (const x of (r.json.prospects || [])) found.push({ ...x, type: 'political', agent: `${r.provider}:${r.model}`, source: 'research' });
     }
     if (!found.length) throw permanent(ai.anyConnected() ? 'No prospects found. Try a broader description.' : 'Connect an AI provider (or an Open States key for state legislators) to scout leads.');
@@ -494,6 +494,7 @@ queue.register('political.scout', {
       if (autoPackage) queue.enqueue('political.package', { prospectId: pr.id, name: pr.name }, { actor: job.createdBy, priority: 4, dedupeKey: `polpkg:${pr.id}` });
     }
     events.publish('prospects', {});
+    if (created.length) events.publish('notify', { title: `${created.length} new political lead${created.length === 1 ? '' : 's'}`, body: created.slice(0, 5).map((x) => x.name).join(', '), route: '/growth' });
     audit.log(job.createdBy || 'system', 'political.scouted', { query, count: created.length });
     return { added: created.length };
   },

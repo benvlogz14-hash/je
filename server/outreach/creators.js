@@ -14,6 +14,7 @@ const messaging = require('../automation/messaging');
 const { website, nameMatch } = require('../political/sources');
 const { withFooter, noDashes, isGov, excluded } = require('./common');
 const { now } = require('../core/util');
+const learning = require('./learning');
 
 const O = (k, d) => ctx.setting(`creatorOffers.${k}`, d);
 const EMAIL_RX = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
@@ -53,7 +54,7 @@ async function writeEmail(p, r, offer) {
   if (!ai.anyConnected()) return template();
   const recent = (r.stats?.recent || []).slice(0, 8).map((v) => `- ${v.title} (${v.views ?? '?'} views, ${v.kind || 'video'}${v.date ? `, ${v.date}` : ''})`).join('\n');
   let res;
-  try { res = await ai.ask({ role: 'writing', json: true, maxTokens: 1200, system: `You write first-touch emails for ${agency}, a Shorts and YouTube agency. Personal and specific to this creator's actual content, under 150 words, one clear ask (20 minutes), no hype, no invented numbers or results, no fake familiarity. Mention the offer in one or two plain lines. Never use em dashes. End with a simple opt-out line.${String(O('templates', '')).trim() ? `\nMatch the voice and structure of these house emails:\n${String(O('templates', '')).slice(0, 5000)}` : ''}`, prompt: `Creator: ${p.name} (${p.handle || ''}). Why they fit: ${p.why || 'n/a'}.\n${r.stats ? `YouTube: ${r.stats.followers ?? '?'} subscribers, ${r.stats.totalVideos ?? '?'} videos.\nRecent uploads:\n${recent}` : 'No YouTube channel found: pitch building one.'}\nOffer: ${offer.name}, ${offer.price}. ${offer.details}\n${booking ? `Booking link: ${booking}\n` : ''}Sign as: ${sender || agency}, ${agency}\nReturn {"subject":"≤8 words","body":"plain text"}` }); }
+  try { res = await ai.ask({ role: 'writing', json: true, maxTokens: 1200, system: `You write first-touch emails for ${agency}, a Shorts and YouTube agency. Personal and specific to this creator's actual content, under 150 words, one clear ask (20 minutes), no hype, no invented numbers or results, no fake familiarity. Mention the offer in one or two plain lines. Never use em dashes. End with a simple opt-out line.${learning.writerBlock('creators')}${String(O('templates', '')).trim() ? `\nMatch the voice and structure of these house emails:\n${String(O('templates', '')).slice(0, 5000)}` : ''}`, prompt: `Creator: ${p.name} (${p.handle || ''}). Why they fit: ${p.why || 'n/a'}.\n${r.stats ? `YouTube: ${r.stats.followers ?? '?'} subscribers, ${r.stats.totalVideos ?? '?'} videos.\nRecent uploads:\n${recent}` : 'No YouTube channel found: pitch building one.'}\nOffer: ${offer.name}, ${offer.price}. ${offer.details}\n${booking ? `Booking link: ${booking}\n` : ''}Sign as: ${sender || agency}, ${agency}\nReturn {"subject":"≤8 words","body":"plain text"}` }); }
   catch (e) { audit.log('system', 'creators.writer_fallback', { prospectId: p.id, error: e.message }, 'warn'); return { ...template(), note: `AI writer unavailable (${e.message.slice(0, 80)}); used your template` }; }
   if (!res.json?.subject || !res.json?.body) return template();
   return { subject: res.json.subject, body: res.json.body, agent: `${res.provider}:${res.model}` };
@@ -90,7 +91,7 @@ async function run(prospectId, h) {
     const m = messaging.createOutbound({ contactId: contact.id, channel: 'email', subject: noDashes(em.subject), body: withFooter(em.body), aiGenerated: true, agent: em.agent, category: 'prospecting', actor: 'system' });
     set({ status: 'ready', offer: offer.key, messageId: m.id, conversationId: m.conversationId, finishedAt: now(), agent: em.agent });
     if ((p.stage || 'new') === 'new') ctx.store.update('prospects', p.id, { stage: 'drafted' });
-    require('./autopilot').maybeAutoSend(p.id);
+    if (!require('./autopilot').maybeAutoSend(p.id)) events.publish('notify', { title: `Email ready: ${p.name}`, body: 'Waiting for your review in Growth → Creators.', route: '/growth' });
     return { status: 'ready' };
   } catch (e) { set({ status: 'failed', error: e.message }); throw e; }
 }
@@ -103,7 +104,7 @@ async function scout({ query, count = 15, autoPackage = true }, h, job) {
   if (ai.anyConnected()) {
     h.progress(0.4, 'Research agent searching');
     try {
-      const r = await ai.ask({ role: 'research', json: true, search: true, maxTokens: 3500, system: SCOUT_SYSTEM, prompt: `Find up to ${count} creators: ${query}` });
+      const r = await ai.ask({ role: 'research', json: true, search: true, maxTokens: 3500, system: SCOUT_SYSTEM + learning.scoutBlock('creators'), prompt: `Find up to ${count} creators: ${query}` });
       for (const c of r.json.creators || []) found.push({ name: c.name, platform: c.platform, handle: c.youtube || c.url || c.handle, followers: typeof c.followers === 'number' ? c.followers : null, why: c.why || '', publicContact: c.publicContact || '', confidence: c.confidence || 'medium', source: 'research', agent: `${r.provider}:${r.model}` });
     } catch (e) { h.log?.(`Research agent: ${e.message}`); }
   }
@@ -119,6 +120,7 @@ async function scout({ query, count = 15, autoPackage = true }, h, job) {
     if (autoPackage) require('../jobs/queue').enqueue('creator.outreach', { prospectId: pr.id, name: pr.name }, { actor: job?.createdBy || 'autopilot', priority: 5, dedupeKey: `crout:${pr.id}` });
   }
   events.publish('prospects', {});
+  if (created.length) events.publish('notify', { title: `${created.length} new creator lead${created.length === 1 ? '' : 's'}`, body: created.slice(0, 5).map((x) => x.name).join(', '), route: '/growth' });
   audit.log(job?.createdBy || 'system', 'creators.scouted', { query, count: created.length });
   return { added: created.length };
 }
