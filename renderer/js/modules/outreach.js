@@ -26,8 +26,8 @@ export function Autopilot({ lane }) {
     <div class="row wrap" style="gap:14px">
       <div class="avatar" style="background:var(--moss-soft);color:var(--moss-ink)"><${Icon} name="robot" size=${17} /></div>
       <div class="grow"><h4>Autopilot</h4><div class="faint" style="font-size:var(--fs-xs)">${s.lastScout ? `Last scout ${ago(s.lastScout.at)}: "${s.lastScout.query}"` : 'No daily scout yet'}</div></div>
-      <${Toggle} on=${!!v.scout} onChange=${(x) => flip('scout', x)} label="Daily scout" />
-      <${Toggle} on=${!!v.autoSend} onChange=${(x) => flip('autoSend', x)} label="Auto-send" />
+      <label class="row" style="gap:6px"><${Toggle} on=${!!v.scout} onChange=${(x) => flip('scout', x)} label="Daily scout" /><span>Daily scout</span></label>
+      <label class="row" style="gap:6px"><${Toggle} on=${!!v.autoSend} onChange=${(x) => flip('autoSend', x)} label="Auto-send" /><span>Auto-send</span></label>
       <${Button} size="sm" kind="ghost" onClick=${() => setOpen(!open)}>${open ? 'Hide settings' : 'Settings'}</${Button}>
     </div>
     <div class="grid c4" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
