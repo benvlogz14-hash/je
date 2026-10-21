@@ -21,6 +21,7 @@ const messaging = require('../automation/messaging');
 const sources = require('./sources');
 const render = require('../video/motion');
 const { now, safeJson } = require('../core/util');
+const { withFooter, isGov, excluded, noDashes } = require('../outreach/common');
 
 const STEPS = [
   ['research', 'Research public records'],
@@ -64,7 +65,8 @@ async function stepResearch(p, h) {
   if (!r.sources.length) throw Object.assign(new Error(`No public records found for "${p.name}". Check the spelling, or add their office and state to the prospect.`), { permanent: true });
   save(p.id, () => ({ profile: r.profile, sources: r.sources, facts: r.facts, text: r.text, researchErrors: r.errors }));
   const patch = {};
-  if (!p.publicContact && r.profile.contact) patch.publicContact = r.profile.contact;
+  if (!p.publicContact && r.profile.contact) { patch.publicContact = r.profile.contact; patch.contactVerified = true; }
+  else if (p.publicContact && (r.profile.emails || []).some((e) => e.email === String(p.publicContact).toLowerCase())) patch.contactVerified = true;
   if (!p.location && r.profile.office) patch.location = r.profile.office;
   if (Object.keys(patch).length) ctx.store.update('prospects', p.id, patch);
   return `${r.sources.length} sources${r.errors.length ? ` (${r.errors.length} unavailable)` : ''}`;
@@ -158,15 +160,6 @@ Return JSON: {"tone":"${contrast ? 'positive or contrast' : 'positive'}","short"
   out.email = { ...(c.email || {}), body: withFooter(c.email?.body || '') };
   save(p.id, () => ({ creative: out }));
   return `${short.length} + ${long.length} scenes${out.hasContrast ? ' (contrast)' : ''}, email and call script`;
-}
-
-/** Every email carries an opt-out line and the sender's postal address (CAN-SPAM). */
-function withFooter(body) {
-  let b = String(body || '').trim();
-  if (!/\bstop\b|unsubscribe|opt[\s-]?out|rather not hear/i.test(b)) b += `\n\nIf you'd rather not hear from us, just reply "stop" and we won't email again.`;
-  const addr = String(S('mailingAddress', '') || '').trim();
-  if (addr && !b.includes(addr.split('\n')[0])) b += `\n\n${ctx.setting('agency.name', 'Euclidean Media')} · ${addr.replace(/\n+/g, ', ')}`;
-  return b;
 }
 
 /** Keep the ads honest: drop quotes, numbers and claims that aren't in the research, and citations that don't exist. */
@@ -321,7 +314,9 @@ function stepEmail(p, actor) {
   const pkg = p.pkg; const c = pkg.creative; if (!c?.email) throw new Error('Run the storyboard step first.');
   const to = (p.publicContact && /@/.test(p.publicContact) ? p.publicContact : pkg.profile?.contact || '').trim().toLowerCase();
   if (!to) { save(p.id, () => ({ status: 'needs_contact' })); return { skip: true, note: 'No public campaign email found. Add one on the prospect, then re-run this step.' }; }
-  if (/\.gov$/.test(to) && !S('allowGov', false)) { save(p.id, () => ({ status: 'needs_contact' })); return { skip: true, note: `${to} is a government office address. Add a campaign or press email instead.` }; }
+  const ex = excluded({ name: p.name, email: to, handle: p.handle });
+  if (ex) { save(p.id, () => ({ status: 'excluded' })); return { skip: true, note: `On the exclusions list (${ex})` }; }
+  if (isGov(to) && !S('allowGov', false)) { save(p.id, () => ({ status: 'needs_contact' })); return { skip: true, note: `${to} is a government office address. Add a campaign or press email instead.` }; }
   let contact = p.contactId ? ctx.store.get('contacts', p.contactId) : ctx.store.find('contacts', (x) => (x.emails || []).includes(to));
   if (!contact) contact = ctx.store.insert('contacts', { name: p.name, phones: [], emails: [to], role: 'prospect', clientId: null, optedOut: {}, source: 'political' });
   else if (!(contact.emails || []).includes(to)) contact = ctx.store.update('contacts', contact.id, { emails: [...contact.emails, to] });
@@ -330,7 +325,7 @@ function stepEmail(p, actor) {
   // Replace an earlier unsent draft instead of stacking duplicates.
   if (pkg.messageId) { const old = ctx.store.get('messages', pkg.messageId); if (old?.status === 'pending_approval') messaging.rejectMessage(old.id, actor); }
   const att = attachmentsFor(pkg);
-  const m = messaging.createOutbound({ contactId: contact.id, channel: 'email', subject: c.email.subject, body: withFooter(c.email.body), aiGenerated: true, agent: c.agent, category: 'prospecting', actor, attachments: att });
+  const m = messaging.createOutbound({ contactId: contact.id, channel: 'email', subject: noDashes(c.email.subject), body: withFooter(c.email.body), aiGenerated: true, agent: c.agent, category: 'prospecting', actor, attachments: att });
   save(p.id, () => ({ messageId: m.id, conversationId: m.conversationId }));
   if ((p.stage || 'new') === 'new') ctx.store.update('prospects', p.id, { stage: 'drafted' });
   return { note: `${att.length} attachments (${(att.reduce((s2, a) => s2 + a.size, 0) / 1e6).toFixed(1)} MB)` };
@@ -383,10 +378,12 @@ async function run(prospectId, { from = 'research', only = null, actor = 'system
     }
   }
   p = ctx.store.get('prospects', prospectId);
-  if (p.pkg.status !== 'needs_contact') save(p.id, () => ({ status: 'ready', finishedAt: now() }));
+  if (!['needs_contact', 'excluded'].includes(p.pkg.status)) save(p.id, () => ({ status: 'ready', finishedAt: now() }));
+  if (!only || only === 'email') require('../outreach/autopilot').maybeAutoSend(prospectId);
   audit.log(actor, 'political.package_ready', { prospectId, name: p.name });
+  p = ctx.store.get('prospects', prospectId);
   if (!only && !p.pkg.autoSent) events.publish('notify', { title: `Package ready: ${p.name}`, body: p.pkg.status === 'needs_contact' ? 'Needs a campaign email before the draft can be made.' : 'Email with the ads is waiting for review.' });
   return { status: ctx.store.get('prospects', prospectId).pkg.status };
 }
 
-module.exports = { STEPS, VIDEOS, run, dirFor, fallbackCreative, vetStoryboard, material, withFooter, attachmentsFor, DEFAULT_PLAN };
+module.exports = { STEPS, VIDEOS, run, dirFor, fallbackCreative, vetStoryboard, material, attachmentsFor, DEFAULT_PLAN };

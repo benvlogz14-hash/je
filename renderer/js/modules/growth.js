@@ -4,6 +4,7 @@ import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { ago, providerLabel } from '../lib/format.js';
 import { Political } from './political.js';
+import { Autopilot, ReviewQueue, Leads, CreatorsLane } from './outreach.js';
 
 const STAGES = [['new', 'New'], ['drafted', 'Draft ready'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['meeting', 'Meeting'], ['proposal', 'Proposal'], ['won', 'Won'], ['lost', 'Lost']];
 
@@ -11,16 +12,22 @@ export function Growth() {
   const { data, loading, reload } = useApi('/api/prospects', ['prospects', 'job']);
   const { data: jobs } = useApi('/api/jobs?status=running,queued', ['job']);
   const [query, setQuery] = useState('');
-  const [view, setView] = useState('board');
+  const [view, setView] = useState(() => { try { return localStorage.getItem('eu.growthView') || 'creators'; } catch { return 'creators'; } });
+  const pickView = (v) => { setView(v); try { localStorage.setItem('eu.growthView', v); } catch { /* ignore */ } };
   const [open, setOpen] = useState(null);
   const researching = (jobs || []).filter((j) => j.type === 'prospect.research' || j.type === 'prospect.audit');
   const research = () => act(() => api.post('/api/command', { text: `/prospect ${query}` }), { ok: 'Research started. Results appear here.' }).then(() => setQuery(''));
   const cur = open && (data || []).find((p) => p.id === open);
   return html`<div class="page">
     <div class="page-head"><div class="grow"><h1>Growth</h1><div class="sub">Find political and creator clients. Agents research; you approve every first message.</div></div>
-      <${Seg} value=${view} onChange=${setView} options=${[{ value: 'board', label: 'Pipeline' }, { value: 'table', label: 'Table' }, { value: 'political', label: 'Political packages' }]} />
+      <${Seg} value=${view} onChange=${pickView} options=${[{ value: 'creators', label: 'Creators' }, { value: 'political', label: 'Politics' }, { value: 'board', label: 'Pipeline' }, { value: 'table', label: 'Table' }]} />
       <${Button} kind="ghost" icon="plus" onClick=${async () => { const name = await promptDialog({ title: 'Add prospect', label: 'Name or handle', confirm: 'Add' }); if (name) act(() => api.post('/api/prospects', { name }), { ok: 'Added' }).then(reload); }}>Add manually</${Button}></div>
-    ${view === 'political' ? html`<${Political} prospects=${data} reload=${reload} />` : html`<div class="panel pad row" style="gap:10px;margin-bottom:16px">
+    ${view === 'political' || view === 'creators' ? html`<div class="col" style="gap:16px">
+      <${Autopilot} lane=${view === 'political' ? 'political' : 'creators'} />
+      <${ReviewQueue} lane=${view === 'political' ? 'political' : 'creators'} />
+      <${Leads} lane=${view === 'political' ? 'political' : 'creators'} />
+      ${view === 'political' ? html`<${Political} prospects=${data} reload=${reload} />` : html`<${CreatorsLane} prospects=${data} reload=${reload} />`}
+    </div>` : html`<div class="panel pad row" style="gap:10px;margin-bottom:16px">
       <div class="avatar" style="background:var(--lav-soft);color:var(--lav-ink)"><${Icon} name="search" size=${17} /></div>
       <input class="input" id="prospect-query" placeholder="Who do you want? e.g. Connecticut state house candidates 2026 posting less than weekly on TikTok" value=${query} onInput=${(e) => setQuery(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && query.trim()) research(); }} />
       <${Button} kind="lav" icon="sparkle" disabled=${!query.trim()} onClick=${research}>Research</${Button}>

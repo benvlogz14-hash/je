@@ -499,6 +499,11 @@ queue.register('political.scout', {
   },
 });
 
+// ------------------------------------------------------------ creator outreach (email only, no sample videos)
+const creatorOutreach = require('../outreach/creators');
+queue.register('creator.outreach', { title: (p) => `Creator outreach: ${p.name || 'creator'}`, maxAttempts: 2, run: (job, h) => creatorOutreach.run(job.payload.prospectId, h) });
+queue.register('creator.scout', { title: (p) => `Scout creators: ${p.query}`, run: (job, h) => creatorOutreach.scout(job.payload, h, job) });
+
 // ------------------------------------------------------------ footage sources (creator channels)
 queue.register('source.check', {
   title: () => 'Check footage sources',

@@ -73,6 +73,7 @@ r.patch('/api/settings', (req, body) => {
   const clean = { ...body }; for (const k of Object.keys(clean)) if (k.startsWith('_')) delete clean[k];
   if (clean.environment && !['test', 'production'].includes(clean.environment)) throw new HttpError(400, 'Invalid environment');
   ctx.store.setSettings(clean);
+  if (clean.outreach) require('./outreach/autopilot').noteSettings(clean);
   if (clean.resources?.mode) resources.setMode(clean.resources.mode, actorOf(req));
   audit.log(actorOf(req), 'settings.updated', { keys: Object.keys(clean) });
   events.publish('settings', {});
@@ -501,6 +502,7 @@ r.post('/api/prospects/:id/package', (req, b, p) => {
   if (b.only && !steps.includes(b.only)) throw new HttpError(400, 'Unknown step');
   return queue.enqueue('political.package', { prospectId: pr.id, name: pr.name, from: b.from || 'research', only: b.only || null }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}` });
 });
+r.post('/api/political/approve', (req, b) => require('./outreach/autopilot').approve(b.ids, actorOf(req)), { roles: OWNER });
 r.get('/api/political/steps', () => polPkg.STEPS.map(([key, label]) => ({ key, label })));
 r.get('/api/prospects/:id/file/:kind', (req, res, p) => {
   const pr = ctx.store.get('prospects', p.id); if (!pr) return send(res, 404, { error: 'Not found' });
@@ -509,17 +511,29 @@ r.get('/api/prospects/:id/file/:kind', (req, res, p) => {
   if (req.query.reveal && ctx.revealFile) { ctx.revealFile(f); return send(res, 200, { ok: true }); }
   return serveFile(req, res, f, { download: req.query.download ? path.basename(f) : null });
 }, { stream: true });
-/** Founder approves several political drafts at once (each was reviewed in the list). */
-r.post('/api/political/approve', (req, b) => {
-  const done = []; const errors = [];
-  for (const id of (b.ids || []).slice(0, 200)) {
-    const pr = ctx.store.get('prospects', id); const mid = pr?.pkg?.messageId;
-    try { if (!mid) throw new Error('no draft'); messaging.approveMessage(mid, actorOf(req)); ctx.store.update('prospects', id, { stage: 'contacted' }); done.push(id); } catch (e) { errors.push(`${pr?.name || id}: ${e.message}`); }
-  }
-  audit.log(actorOf(req), 'political.batch_approved', { count: done.length });
-  events.publish('prospects', {});
-  return { approved: done.length, errors };
-}, { roles: OWNER });
+// ---- Outreach lanes (creators + political): autopilot status, review queue, approve/skip, leads in/out
+const autopilot = require('./outreach/autopilot');
+const leads = require('./outreach/leads');
+const laneOk = (l) => { if (!autopilot.LANES.includes(l)) throw new HttpError(400, 'Unknown lane'); return l; };
+r.get('/api/outreach/status', () => autopilot.status());
+r.get('/api/outreach/:lane/review', (req, b, p) => autopilot.reviewQueue(laneOk(p.lane)));
+r.post('/api/outreach/approve', (req, b) => autopilot.approve(b.ids, actorOf(req), b.edits || {}), { roles: OWNER });
+r.post('/api/outreach/skip', (req, b) => autopilot.skip(b.ids, actorOf(req)));
+r.post('/api/outreach/:lane/import', (req, b, p) => { try { return leads.importCsv({ lane: laneOk(p.lane), csv: b.csv, actor: actorOf(req) }); } catch (e) { throw new HttpError(400, e.message); } });
+r.post('/api/outreach/:lane/start', (req, b, p) => {
+  const lane = laneOk(p.lane); const ids = (b.ids && b.ids.length ? b.ids : ctx.store.all('prospects', (x) => autopilot.laneOf(x) === lane && (x.stage || 'new') === 'new' && !(lane === 'political' ? x.pkg : x.outreach)).map((x) => x.id)).slice(0, 500);
+  for (const id of ids) { const pr = ctx.store.get('prospects', id); if (!pr) continue; queue.enqueue(lane === 'political' ? 'political.package' : 'creator.outreach', { prospectId: id, name: pr.name }, { actor: actorOf(req), priority: 5, dedupeKey: `${lane === 'political' ? 'polpkg' : 'crout'}:${id}` }); }
+  return { started: ids.length };
+});
+r.post('/api/outreach/creators/scout', (req, b) => {
+  const query = String(b.query || '').trim(); if (query.length < 4) throw new HttpError(400, 'Describe who you want to find.');
+  return queue.enqueue('creator.scout', { query, count: Math.max(1, Math.min(100, Number(b.count) || 10)), autoPackage: b.autoPackage !== false }, { actor: actorOf(req) });
+});
+r.post('/api/prospects/:id/redo', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); return queue.enqueue(pr.type === 'political' ? 'political.package' : 'creator.outreach', { prospectId: pr.id, name: pr.name }, { actor: actorOf(req), dedupeKey: `${pr.type === 'political' ? 'polpkg' : 'crout'}:${pr.id}` }); });
+r.get('/api/outreach/:lane/export.csv', (req, res, p) => {
+  if (!autopilot.LANES.includes(p.lane)) return send(res, 404, { error: 'Unknown lane' });
+  return send(res, 200, leads.exportCsv(p.lane), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${p.lane === 'political' ? 'Political' : 'Creator'} leads.csv"` });
+}, { stream: true });
 
 r.post('/api/prospects/:id/convert', (req, b, p) => {
   const pr = must(ctx.store.get('prospects', p.id));

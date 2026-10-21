@@ -233,4 +233,4 @@ async function rosterSearch({ state, chamber, limit = 30 }) {
   return (r.results || []).map((p) => ({ name: p.name, office: p.current_role ? `${p.current_role.title}, district ${p.current_role.district}` : '', party: p.party, email: p.email || '', url: p.openstates_url }));
 }
 
-module.exports = { lookup, rosterSearch, bestContact, KEYS, nameMatch };
+module.exports = { lookup, rosterSearch, bestContact, website, KEYS, nameMatch };
