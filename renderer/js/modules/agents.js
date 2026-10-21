@@ -31,6 +31,7 @@ export function AgentConnections() {
   if (!data) return html`<${Loading} rows=${5} />`;
   const counts = data.agents.reduce((c, a) => ({ ...c, [a.health.state]: (c[a.health.state] || 0) + 1 }), {});
   return html`<div class="col" style="gap:14px">
+    <${SetupChecklist} />
     <div class="panel pad col" style="gap:10px;background:linear-gradient(135deg, var(--lav-soft), var(--teal-soft))">
       <div class="row wrap" style="gap:10px"><div class="grow" style="min-width:260px"><h3>Agent Connections</h3>
         <div class="muted" style="font-size:var(--fs-sm);margin-top:2px">Connect your AI agents so they can message each other, ask questions, critique work and hand off tasks as equals. No agent is in charge. Every message is logged, stays inside its workspace, and nothing reaches clients or accounts without your approval.</div></div>
@@ -301,4 +302,50 @@ function SidePanel({ agents, openThread }) {
         ${Object.entries(m.deliveries || {}).filter(([, d]) => d.status === 'failed').map(([id, d]) => html`<div style="font-size:var(--fs-xs);color:var(--coral-ink)">${agents.find((x) => x.id === id)?.name || id}: ${d.error}</div>`)}
         <div class="row" style="gap:6px"><${Button} size="sm" kind="soft" icon="refresh" onClick=${() => act(() => api.post(`/api/agentnet/messages/${m.id}/retry`, {}), { ok: 'Trying again' })}>Retry</${Button}><${Button} size="sm" kind="ghost" onClick=${() => openThread(m.threadId)}>View</${Button}></div></div>`)) : null}
     </div></div>`;
+}
+
+// ------------------------------------------------------------ everything the full process needs, with one-click fixes
+
+const GROUP_ICON = { AI: 'robot', Email: 'mail', 'Texts & calls': 'phone', Research: 'search', Video: 'film', Outreach: 'send' };
+export function SetupChecklist() {
+  const { data, reload } = useApi('/api/setup/checklist', ['connections', 'settings', 'job', 'agents']);
+  const { data: jobs } = useApi('/api/jobs?status=running,queued', ['job']);
+  const { data: failedJobs } = useApi('/api/jobs?status=failed&limit=20', ['job']);
+  const [open, setOpen] = useState(null);
+  useEffect(() => { const t = setInterval(reload, 8000); return () => clearInterval(t); }, []);
+  const lastError = (a) => { const j = (failedJobs || []).find((x) => x.type === `setup.${a}`); return j && Date.now() - new Date(j.finishedAt || j.updatedAt || 0).getTime() < 3600000 ? j.error : null; };
+  if (!data) return html`<${Loading} rows=${3} />`;
+  const items = data.items; const needed = items.filter((i) => i.level !== 'optional');
+  const ready = needed.filter((i) => i.ok).length; const pct = Math.round((ready / Math.max(1, needed.length)) * 100);
+  const groups = [...new Set(items.map((i) => i.group))];
+  const running = (a) => (jobs || []).find((j) => j.type === `setup.${a}`);
+  const fix = (f) => (f.type === 'goto' ? navigate(f.route) : act(() => api.post(`/api/setup/${f.action}`), { ok: f.action === 'ollama' ? 'Setting up Llama. This runs in the background.' : 'Installing…' }).then(reload));
+  const llama = items.find((i) => i.key === 'llama'); const lj = running('ollama');
+  return html`<div class="panel pad col" style="gap:14px;background:linear-gradient(135deg, var(--teal-soft), var(--sky-soft))">
+    <div class="row wrap" style="gap:14px">
+      <div style=${`width:64px;height:64px;border-radius:50%;flex:none;display:grid;place-items:center;background:conic-gradient(var(--moss) ${pct * 3.6}deg, var(--surface) 0);box-shadow:var(--shadow-2)`}><div style="width:50px;height:50px;border-radius:50%;background:var(--surface);display:grid;place-items:center;font:800 15px var(--font-display)">${pct}%</div></div>
+      <div class="grow" style="min-width:240px"><h3>Get everything connected</h3><div class="muted" style="font-size:var(--fs-sm)">${ready} of ${needed.length} essentials ready. Each item says why it matters, and the button fixes it or takes you to the right place.</div></div>
+    </div>
+    ${llama && !llama.ok ? html`<div class="panel pad row wrap" style="gap:12px;border-radius:22px">
+      <div class="avatar" style="background:var(--lav-soft);color:var(--lav-ink)"><${Icon} name="robot" size=${18} /></div>
+      <div class="grow" style="min-width:220px"><b>Turn on free AI (Llama)</b><div class="faint" style="font-size:var(--fs-sm)">${lj ? lj.note || 'Working…' : 'Downloads Ollama and the Llama model once (about 3 GB), starts it, and starts it again whenever Euclidean opens. No command line.'}</div>
+        ${!lj && lastError('ollama') ? html`<div class="notice coral" style="margin-top:6px;font-size:var(--fs-sm)">${lastError('ollama')}</div>` : null}
+        ${lj ? html`<div style="margin-top:6px;height:8px;border-radius:99px;background:var(--surface-3);overflow:hidden"><div style=${`height:100%;width:${Math.round((lj.progress || 0) * 100)}%;background:var(--lav);transition:width .4s`} /></div>` : null}</div>
+      <${Button} kind="lav" size="lg" icon="power" disabled=${!!lj} onClick=${() => fix({ type: 'action', action: 'ollama' })}>${lj ? 'Setting up…' : 'Turn on Llama'}</${Button}></div>` : null}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px">${groups.map((g) => {
+      const list = items.filter((i) => i.group === g); const done = list.filter((i) => i.ok).length;
+      return html`<div class="panel pad col" style="gap:8px;border-radius:22px">
+        <div class="row" style="gap:8px"><span class="stab-ic" style="--tone-soft:var(--sky-soft);--tone-ink:var(--sky-ink);width:28px;height:28px;border-radius:10px"><${Icon} name=${GROUP_ICON[g] || 'info'} size=${15} /></span><b class="grow">${g}</b><span class=${'badge ' + (done === list.length ? 'moss' : '')}>${done}/${list.length}</span></div>
+        ${list.map((i) => { const job = i.fix.type === 'action' && running(i.fix.action); return html`<div class="col" style="gap:4px;padding:8px 10px;border-radius:14px;background:${i.ok ? 'transparent' : i.level === 'required' ? 'var(--coral-soft)' : 'var(--surface-2)'}">
+          <div class="row" style="gap:8px;cursor:pointer" onClick=${() => setOpen(open === i.key ? null : i.key)}>
+            <span style=${`width:20px;height:20px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:12px;font-weight:800;color:#fff;background:${i.ok ? 'var(--moss)' : i.level === 'required' ? 'var(--coral)' : i.level === 'recommended' ? 'var(--gold)' : 'var(--slate)'}`}>${i.ok ? '✓' : '!'}</span>
+            <span class="grow" style="font-size:var(--fs-sm);font-weight:650">${i.label}</span>
+            ${i.level === 'optional' && !i.ok ? html`<span class="faint" style="font-size:var(--fs-xs)">optional</span>` : null}
+            ${!i.ok || i.fix.type === 'goto' ? html`<${Button} size="sm" kind=${i.ok ? 'ghost' : 'primary'} disabled=${!!job} onClick=${(e) => { e.stopPropagation(); fix(i.fix); }}>${job ? `${Math.round((job.progress || 0) * 100)}%` : i.fix.label}</${Button}>` : null}
+          </div>
+          ${open === i.key || !i.ok ? html`<div class="faint" style="font-size:var(--fs-xs);padding-left:28px">${job?.note || i.why}</div>` : null}
+          ${!job && i.fix.type === 'action' && lastError(i.fix.action) ? html`<div style="font-size:var(--fs-xs);padding-left:28px;color:var(--coral-ink)">${lastError(i.fix.action)}</div>` : null}
+        </div>`; })}
+      </div>`; })}</div>
+  </div>`;
 }

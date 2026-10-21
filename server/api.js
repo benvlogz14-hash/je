@@ -514,6 +514,12 @@ r.post('/api/political/approve', (req, b) => require('./outreach/autopilot').app
 r.post('/api/political/reference', (req, b) => { const src = String(b.src || '').trim(); if (!src) throw new HttpError(400, 'Paste a link to an ad you like.'); return queue.enqueue('political.reference', { src }, { actor: actorOf(req) }); });
 r.del('/api/political/reference', () => { ctx.store.setSettings({ political: { reference: null } }); return { ok: true }; });
 r.get('/api/political/reference/sheet', (req, res) => { const f = ctx.setting('political.reference', null)?.sheet; return f && fs.existsSync(f) ? serveFile(req, res, f) : send(res, 404, { error: 'No sheet' }); }, { stream: true });
+// One place that lists everything the full process needs, and one-click fixes.
+r.get('/api/setup/checklist', async () => ({ items: await require('./setup/checklist').build(), ollama: await require('./setup/ollama').status() }));
+r.post('/api/setup/:action', (req, b, p) => {
+  const job = { ollama: 'setup.ollama', rembg: 'setup.rembg' }[p.action]; if (!job) throw new HttpError(404, 'Unknown setup action');
+  return queue.enqueue(job, {}, { actor: actorOf(req), dedupeKey: job });
+}, { roles: OWNER });
 r.get('/api/political/steps', () => polPkg.STEPS.map(([key, label]) => ({ key, label })));
 r.get('/api/prospects/:id/file/:kind', (req, res, p) => {
   const pr = ctx.store.get('prospects', p.id); if (!pr) return send(res, 404, { error: 'Not found' });
