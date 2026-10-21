@@ -107,5 +107,7 @@ Built and tested end to end with sample data; live lookups were blocked in the c
   - Never pitch government addresses.
   - Never invent contacts.
 - **Leads:** `server/outreach/leads.js` imports any CSV and remembers its columns; the export writes leads back in the same layout. Ryan's brief and the 238-lead list (95 YouTube creators and 143 Connecticut Democrats) still need to be imported.
+- **Follow-ups** (`server/outreach/followups.js`, run from the autopilot tick every 10 minutes): off by default, switched on per lane (`outreach.<lane>.followUps`, `followUpDays` e.g. "4, 10"). Leads still at Contacted with no reply get a short follow-up in the same email thread; it sends on its own only when auto-send is on and the safety checks pass, otherwise it waits in Approvals.
+- **Free speech-to-text:** `server/setup/whisper.js` installs whisper.cpp and the base.en model from the setup checklist (job `setup.whisper`).
 - **Replies:** an email "stop" opts the contact out, and any reply moves the prospect to Replied (`messaging.receive`).
-- **Still to do:** the in-app Twilio dialer, recording a voice note, the phone-app Politics/Creators tabs, and a check of the Stringer contract terms against the signed agreement.
+- **Still to do:** a check of the Stringer contract terms against the signed agreement, importing Ryan's brief and lead list, and live testing on a real PC.

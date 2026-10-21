@@ -167,7 +167,9 @@ async function deliver(job, h) {
   let r;
   if (msg.channel === 'sms') r = await twilio.send({ to, body });
   else {
-    const prevIn = ctx.store.all('messages', (m) => m.conversationId === msg.conversationId && m.direction === 'in' && m.channel === 'email').pop();
+    // Thread under their last email, or under our own last one for follow-ups.
+    const prevIn = ctx.store.all('messages', (m) => m.conversationId === msg.conversationId && m.direction === 'in' && m.channel === 'email').pop()
+      || ctx.store.all('messages', (m) => m.conversationId === msg.conversationId && m.id !== msg.id && m.direction === 'out' && m.status === 'sent' && m.channel === 'email' && m.providerId).pop();
     const sig = ctx.setting('messaging.signature', '');
     r = await email.send({ to, subject: msg.subject, text: sig ? `${body}\n\n${sig}` : body, inReplyTo: prevIn?.providerId, references: prevIn?.providerId, attachments: (msg.attachments || []).filter((a) => a.path).map((a) => ({ filename: a.name, path: a.path })) });
   }

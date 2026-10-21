@@ -41,8 +41,8 @@ module.exports = {
   // Automatic outreach. Off until a founder switches it on; each lane has its own daily limits.
   outreach: {
     exclusions: '',            // names, organisations or email domains never to contact (one per line)
-    political: { autoGraduate: false, graduateAt: 0.9, graduateWindow: 25, scout: false, continuous: false, scoutEveryMin: 30, maxLeadsPerDay: 60, scoutQueries: '', scoutPerDay: 15, scoutHour: 7, autoSend: false, sendPerDay: 50, warmupStart: 15, warmupStep: 10, lessons: '' },
-    creators: { autoGraduate: false, graduateAt: 0.9, graduateWindow: 25, scout: false, continuous: false, scoutEveryMin: 30, maxLeadsPerDay: 60, scoutQueries: '', scoutPerDay: 15, scoutHour: 7, autoSend: false, sendPerDay: 50, warmupStart: 15, warmupStep: 10, lessons: '' },
+    political: { autoGraduate: false, graduateAt: 0.9, graduateWindow: 25, scout: false, continuous: false, scoutEveryMin: 30, maxLeadsPerDay: 60, scoutQueries: '', scoutPerDay: 15, scoutHour: 7, autoSend: false, sendPerDay: 50, warmupStart: 15, warmupStep: 10, followUps: false, followUpDays: '4, 10', lessons: '' },
+    creators: { autoGraduate: false, graduateAt: 0.9, graduateWindow: 25, scout: false, continuous: false, scoutEveryMin: 30, maxLeadsPerDay: 60, scoutQueries: '', scoutPerDay: 15, scoutHour: 7, autoSend: false, sendPerDay: 50, warmupStart: 15, warmupStep: 10, followUps: false, followUpDays: '4, 10', lessons: '' },
   },
   creatorOffers: {
     shorts: { name: 'Shorts package', price: '$1,200 a month', details: '6 Shorts a day, Sabbath and holiday Shorts delivered and scheduled ahead of time, 6+ thumbnails plus SEO titles, descriptions and tags for each long-form video. Month to month: cancel anytime. You own the work.' },
