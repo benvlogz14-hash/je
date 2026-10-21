@@ -517,7 +517,7 @@ r.get('/api/political/reference/sheet', (req, res) => { const f = ctx.setting('p
 // One place that lists everything the full process needs, and one-click fixes.
 r.get('/api/setup/checklist', async () => ({ items: await require('./setup/checklist').build(), ollama: await require('./setup/ollama').status() }));
 r.post('/api/setup/:action', (req, b, p) => {
-  const job = { ollama: 'setup.ollama', rembg: 'setup.rembg' }[p.action]; if (!job) throw new HttpError(404, 'Unknown setup action');
+  const job = { ollama: 'setup.ollama', rembg: 'setup.rembg', whisper: 'setup.whisper' }[p.action]; if (!job) throw new HttpError(404, 'Unknown setup action');
   return queue.enqueue(job, {}, { actor: actorOf(req), dedupeKey: job });
 }, { roles: OWNER });
 r.get('/api/political/steps', () => polPkg.STEPS.map(([key, label]) => ({ key, label })));

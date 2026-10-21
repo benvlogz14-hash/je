@@ -57,7 +57,7 @@ module.exports = {
       operations: { provider: 'anthropic', model: 'claude-sonnet-5-5', fallbacks: ['openai', 'xai'], description: 'Client communications, triage, command routing, quality control' },
       analysis: { provider: 'openai', model: 'gpt-5', fallbacks: ['anthropic', 'xai'], description: 'Transcript analysis, clip discovery, editing plans' },
       research: { provider: 'xai', model: 'grok-4', fallbacks: ['anthropic', 'openai'], description: 'Prospect research, social audits, trend discovery' },
-      writing: { provider: 'anthropic', model: 'claude-sonnet-5-5', fallbacks: ['openai'], description: 'Titles, captions, outreach drafts' },
+      writing: { provider: 'anthropic', model: 'claude-sonnet-5-5', fallbacks: ['openai', 'xai'], description: 'Titles, captions, outreach drafts' },
     },
     transcription: { provider: 'openai', model: 'whisper-1', localWhisperPath: '', localWhisperModel: '' },
     budgetsUsd: { anthropic: 60, openai: 60, xai: 30 },
