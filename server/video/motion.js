@@ -10,8 +10,9 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const ctx = require('../core/ctx');
-const ff = require('../video/ffmpeg');
+const ff = require('./ffmpeg');
 const { run } = require('../core/util');
+const campaign = require('./campaign');
 
 const FONTS = path.join(__dirname, '..', '..', 'renderer', 'assets', 'fonts');
 const FPS = 30;
@@ -67,8 +68,19 @@ const THEMES = {
   purple: { a: '#7a4dff', b: '#ff7a45', c: '#2fd3a7', ink: '#22124a', bg1: '#f3eeff', bg2: '#fff4ec', soft: '#e0d4ff' },
   green: { a: '#14a06f', b: '#ff6b6b', c: '#ffd23f', ink: '#0b3326', bg1: '#e9fbf3', bg2: '#fff4ef', soft: '#c8f1df' },
 };
+function mix(hex, to, t) {
+  const h = (x) => parseInt(x, 16); const c = hex.replace('#', ''); const d = to.replace('#', '');
+  const v = [0, 2, 4].map((i) => Math.round(h(c.substr(i, 2)) * (1 - t) + h(d.substr(i, 2)) * t));
+  return '#' + v.map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+/** A full palette from one brand colour (e.g. a client's highlight colour). */
+function themeFromColor(hex) {
+  const a = /^#[0-9a-f]{6}$/i.test(hex) ? hex : '#7a4dff';
+  return { a, b: '#ff5c8a', c: '#ffd23f', ink: mix(a, '#000000', 0.72), bg1: mix(a, '#ffffff', 0.9), bg2: '#fff3f7', soft: mix(a, '#ffffff', 0.72) };
+}
 function themeFor(party, override) {
   if (override && THEMES[override]) return THEMES[override];
+  if (override && /^#[0-9a-f]{6}$/i.test(override)) return themeFromColor(override);
   const p = String(party || '').toLowerCase();
   if (/democrat/.test(p)) return THEMES.blue;
   if (/republican/.test(p)) return THEMES.red;
@@ -179,6 +191,45 @@ function layout(scene, T, V, ctxInfo) {
       if (s.button) add(box([140, 1060, 800, 190], [510, 620, 900, 180]), pill(s.button, V ? 64 : 66, `linear-gradient(120deg,${T.a},${T.b})`), 'pop', 0.5);
       if (s.sub) add(box([90, 1300, 900, 160], [260, 840, 1400, 130]), big(s.sub, V ? 50 : 48), 'fade', 0.85);
       break;
+    case 'counter': {
+      // Count-up: each in-between value is its own frame, swapped in quick steps (ease-out).
+      if (s.kicker) add(box([190, 430, 700, 120], [610, 130, 700, 120]), pill(s.kicker, 46, T.c, T.ink), 'pop', 0.05);
+      const target = Number(s.to) || 0; const K = 16; const dur = 1.4; const from = 0.25;
+      for (let k = 0; k < K; k++) {
+        const p = (k + 1) / K; const v = target * (1 - Math.pow(1 - p, 3));
+        const b = box([40, 580, 1000, 420], [140, 270, 1640, 400]);
+        els.push({ x: b[0], y: b[1], w: b[2], h: b[3], html: `<div class="fit grad" style="font-size:${V ? 250 : 260}px;font-family:Tall,Pop;font-weight:400"><span>${esc((s.prefix || '') + compact(v, target) + (s.suffix || ''))}</span></div>`, anim: 'step', at: from + (dur * k) / K, until: k === K - 1 ? 999 : from + (dur * (k + 1)) / K });
+      }
+      add(box([70, 1020, 940, 300], [240, 690, 1440, 220]), card(big(s.label || '', V ? 62 : 64)), 'slide', 0.55);
+      break;
+    }
+    case 'chart': {
+      add(box([50, 260, 980, 260], [140, 70, 1640, 200]), big(s.headline || '', V ? 96 : 92), 'slide', 0.05);
+      const bars = (s.bars || []).slice(-8); const max = Math.max(1, ...bars.map((x) => Number(x.value) || 0));
+      const area = V ? [70, 600, 940, 980] : [160, 300, 1600, 640]; const n = Math.max(1, bars.length);
+      const gap = Math.round(area[2] * 0.04); const bw = Math.floor((area[2] - gap * (n - 1)) / n);
+      const colors = [T.a, T.b, T.c];
+      bars.forEach((x, k) => {
+        const hgt = Math.max(24, Math.round((area[3] - 150) * ((Number(x.value) || 0) / max)));
+        const bx = area[0] + k * (bw + gap); const by = area[1] + area[3] - 70 - hgt;
+        els.push({ x: bx, y: by, w: bw, h: hgt, html: `<div style="position:absolute;inset:0;border-radius:${Math.min(28, bw / 3) | 0}px ${Math.min(28, bw / 3) | 0}px 10px 10px;background:linear-gradient(180deg,${colors[k % 3]},${mix(colors[k % 3], '#ffffff', 0.35)});box-shadow:0 10px 0 ${T.soft}"></div>`, anim: 'grow', at: 0.35 + k * 0.12 });
+        els.push({ x: bx - 10, y: by - 70, w: bw + 20, h: 62, html: `<div class="fit hl" style="font-size:${V ? 40 : 38}px"><span>${esc(x.display || compact(Number(x.value) || 0))}</span></div>`, anim: 'fade', at: 0.8 + k * 0.12 });
+        els.push({ x: bx - 10, y: area[1] + area[3] - 62, w: bw + 20, h: 58, html: `<div class="fit" style="font-size:${V ? 34 : 32}px;color:${T.ink};opacity:.8;font-weight:600"><span>${esc(x.label || '')}</span></div>`, anim: 'fade', at: 0.3 });
+      });
+      break;
+    }
+    case 'gallery': {
+      add(box([50, 230, 980, 260], [140, 60, 1640, 190]), big(s.headline || '', V ? 100 : 92), 'slide', 0.05);
+      const imgs = (s.images || []).filter((f) => f && fs.existsSync(f)).slice(0, 6);
+      const cols = V ? 2 : 3; const rows = Math.ceil(imgs.length / cols) || 1;
+      const area = V ? [70, 540, 940, 1240] : [160, 280, 1600, 740];
+      const cw = Math.floor((area[2] - 30 * (cols - 1)) / cols); const ch = Math.floor((area[3] - 30 * (rows - 1)) / rows);
+      imgs.forEach((f, k) => {
+        const cx = area[0] + (k % cols) * (cw + 30); const cy = area[1] + Math.floor(k / cols) * (ch + 30);
+        els.push({ x: cx, y: cy, w: cw, h: ch, html: `<div style="position:absolute;inset:12px;border-radius:30px;background:#fff url('${fileUrl(f)}') center/cover;border:10px solid #fff;box-shadow:0 10px 0 ${T.soft},0 20px 40px rgba(0,0,0,.18);transform:rotate(${(k % 2 ? 1 : -1) * (1 + (k % 3))}deg)"></div>`, anim: 'pop', at: 0.3 + k * 0.18 });
+      });
+      break;
+    }
     case 'end':
       add(box([90, 640, 900, 420], [260, 250, 1400, 360]), big(s.headline || ctxInfo.name, V ? 120 : 120, 'hl grad'), 'pop', 0.05);
       if (s.sub) add(box([140, 1110, 800, 150], [460, 660, 1000, 150]), pill(s.sub, 52, T.ink), 'slide', 0.45);
@@ -192,9 +243,18 @@ function layout(scene, T, V, ctxInfo) {
   return { W, H, els };
 }
 
+/** 48213 → 48.2K (decimals follow the final value so the count lands exactly). */
+function compact(v, target = v) {
+  const big = Math.abs(target);
+  if (big >= 1e9) return (v / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+  if (big >= 1e6) return (v / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (big >= 1e4) return (v / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+  return Math.round(v).toLocaleString('en-US');
+}
+
 function initials(n) { return String(n || '?').split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase(); }
 
-const DEFAULT_SEC = { hook: 4.5, portrait: 4.5, stat: 4.5, issues: 6, quote: 6, cta: 5, end: 3.5 };
+const DEFAULT_SEC = { hook: 4.5, portrait: 4.5, stat: 4.5, counter: 4.5, chart: 6, gallery: 5.5, issues: 6, quote: 6, cta: 5, end: 3.5 };
 const TRANSITIONS = ['circleopen', 'slideleft', 'smoothup', 'zoomin', 'radial', 'slideup', 'circlecrop', 'smoothleft'];
 const XF = 0.4;
 
@@ -206,19 +266,27 @@ const XF = 0.4;
  */
 async function renderVideo({ scenes, info, vertical, out, work, music, narration, onProgress = () => {} }) {
   const T = themeFor(info.party, info.theme);
+  const camp = info.style === 'campaign' ? campaign.setup({ esc, fileUrl }) : null;
+  const P = camp ? campaign.PALETTES[info.tone === 'contrast' ? 'contrast' : 'positive'] : null;
+  if (camp) {
+    info = { citeText: () => '', ...info };
+    const disclaimer = info.disclaimer || 'Concept ad by Euclidean Media. Not paid for or authorized by any candidate or committee.';
+    if (!scenes.some((x) => x.type === 'disclaimer')) scenes = [...scenes, { type: 'disclaimer', text: disclaimer, sec: 2.5 }];
+  }
+  const baseCss = camp ? css(T) + camp.css(P) : css(T);
   fs.mkdirSync(work, { recursive: true });
   const clips = [];
   for (let i = 0; i < scenes.length; i++) {
     const s = scenes[i];
     const dur = Math.max(2.5, Math.min(20, Number(s.sec) || DEFAULT_SEC[s.type] || 4.5));
-    const { W, H, els } = layout(s, T, vertical, info);
-    els.unshift({ x: 0, y: 0, w: W, h: H, html: decoLayer(T, W, H, i), anim: 'drift', at: 0 });
+    const { W, H, els } = camp ? camp.layout(s, P, vertical, info) : layout(s, T, vertical, info);
+    els.unshift(camp ? { x: 0, y: 0, w: W, h: H, html: camp.deco(P, W, H), anim: 'sweep', at: 0 } : { x: 0, y: 0, w: W, h: H, html: decoLayer(T, W, H, i), anim: 'drift', at: 0 });
     // Sprite: background on top, then each element stacked below it.
     let off = H; const placed = els.map((e) => { const p = { ...e, off }; off += e.h; return p; });
     const PAD = 240; // the window's viewport is a little shorter than the window itself
-    const page = `<!doctype html><html><head><meta charset="utf-8"><style>${css(T)}</style></head><body style="width:${W}px;height:${off + PAD}px">
-<div class="slot" style="top:0;width:${W}px;height:${H}px;display:block">${background(T, W, H, i)}</div>
-${placed.map((e) => `<div class="slot" style="top:${e.off}px;width:${e.w}px;height:${e.h}px;${e.anim === 'drift' ? 'display:block' : ''}">${e.html}</div>`).join('\n')}
+    const page = `<!doctype html><html><head><meta charset="utf-8"><style>${baseCss}</style></head><body style="width:${W}px;height:${off + PAD}px">
+<div class="slot" style="top:0;width:${W}px;height:${H}px;display:block">${camp ? camp.background(P, W, H, s, info) : background(T, W, H, i)}</div>
+${placed.map((e) => `<div class="slot" style="top:${e.off}px;width:${e.w}px;height:${e.h}px;${e.anim === 'drift' || e.anim === 'sweep' ? 'display:block' : ''}">${e.html}</div>`).join('\n')}
 ${FIT}</body></html>`;
     const htmlFile = path.join(work, `s${i}.html`); fs.writeFileSync(htmlFile, page);
     const sprite = path.join(work, `s${i}.png`);
@@ -243,6 +311,17 @@ ${FIT}</body></html>`;
       } else if (e.anim === 'slide') {
         chain += `,fade=t=in:st=${at}:d=0.3:alpha=1`;
         y = `${e.y}+140*pow(1-${P},3)+${bob}`;
+      } else if (e.anim === 'grow') {
+        // Bars: grow up from their base with a little overshoot.
+        chain += `,scale=w=${e.w}:h='max(2,trunc(${e.h}*max(0.01,${back})/2)*2)':eval=frame`;
+        y = `${e.y}+${e.h}-overlay_h`;
+      } else if (e.anim === 'slideX') {
+        chain += `,fade=t=in:st=${at}:d=0.25:alpha=1`;
+        x = `${e.x}-180*pow(1-${P},3)`;
+      } else if (e.anim === 'sweep') {
+        x = `-${W}+${2 * W}*t/${dur}`;
+      } else if (e.anim === 'step') {
+        // Shown only inside its time window (count-up frames).
       } else if (e.anim === 'drift') {
         chain += `,fade=t=in:st=0:d=0.5:alpha=1`;
         x = `10*sin(2*PI*t/${dur})`; y = `-30*t/${dur}`;
@@ -250,7 +329,8 @@ ${FIT}</body></html>`;
         chain += `,fade=t=in:st=${at}:d=0.45:alpha=1`;
       }
       f.push(`${chain}[${L}s]`);
-      f.push(`[${last}][${L}s]overlay=x='${x}':y='${y}':eval=frame:shortest=1[${L}]`);
+      const enable = e.anim === 'step' ? `:enable='between(t,${at},${e.until})'` : e.anim === 'grow' ? `:enable='gte(t,${at})'` : '';
+      f.push(`[${last}][${L}s]overlay=x='${x}':y='${y}':eval=frame:shortest=1${enable}[${L}]`);
       last = L;
     });
     f.push(`[${last}]fps=${FPS},format=yuv420p[v]`);
@@ -265,14 +345,14 @@ ${FIT}</body></html>`;
   const W = vertical ? 1080 : 1920; const H = vertical ? 1920 : 1080;
   const tagFile = path.join(work, 'tag.png');
   const tagHtml = path.join(work, 'tag.html');
-  fs.writeFileSync(tagHtml, `<!doctype html><html><head><meta charset="utf-8"><style>${css(T)}</style></head><body style="width:460px;height:300px"><div style="position:relative;width:460px;height:84px"><div class="pill" style="inset:8px;background:rgba(255,255,255,.9);box-shadow:none;padding:0 26px"><div class="fit" style="font-size:24px;font-weight:600;color:${T.ink}"><span>${esc(info.tag || 'Concept by Euclidean Media')}</span></div></div></div>${FIT}</body></html>`);
+  fs.writeFileSync(tagHtml, `<!doctype html><html><head><meta charset="utf-8"><style>${css(T)}</style></head><body style="width:460px;height:300px"><div style="position:relative;width:460px;height:84px"><div class="pill" style="inset:8px;background:${camp ? 'rgba(0,0,0,.45)' : 'rgba(255,255,255,.9)'};box-shadow:none;padding:0 26px"><div class="fit" style="font-size:24px;font-weight:600;color:${camp ? '#fff' : T.ink}"><span>${esc(info.tag || 'Concept by Euclidean Media')}</span></div></div></div>${FIT}</body></html>`);
   await screenshot(tagHtml, tagFile, 460, 300, work);
 
   const inputs = []; const f = [];
   clips.forEach((c) => inputs.push('-i', c.file));
   let cur = '[0:v]'; let offset = clips[0].dur;
   for (let i = 1; i < clips.length; i++) {
-    const t = TRANSITIONS[(i - 1) % TRANSITIONS.length];
+    const t = camp ? ['fade', 'wipeleft', 'fadeblack', 'slideleft', 'smoothleft', 'fade'][(i - 1) % 6] : TRANSITIONS[(i - 1) % TRANSITIONS.length];
     f.push(`${cur}[${i}:v]xfade=transition=${t}:duration=${XF}:offset=${(offset - XF).toFixed(3)}[x${i}]`);
     cur = `[x${i}]`; offset += clips[i].dur - XF;
   }
@@ -292,4 +372,4 @@ ${FIT}</body></html>`;
   return { file: out, duration: total };
 }
 
-module.exports = { findBrowser, screenshot, printPdf, renderVideo, themeFor, THEMES, esc, css, fileUrl, FIT, initials };
+module.exports = { compact, themeFromColor, findBrowser, screenshot, printPdf, renderVideo, themeFor, THEMES, esc, css, fileUrl, FIT, initials };

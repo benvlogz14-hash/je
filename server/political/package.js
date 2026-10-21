@@ -19,18 +19,22 @@ const ai = require('../integrations/ai');
 const ff = require('../video/ffmpeg');
 const messaging = require('../automation/messaging');
 const sources = require('./sources');
-const render = require('./render');
+const render = require('../video/motion');
 const { now, safeJson } = require('../core/util');
 
 const STEPS = [
   ['research', 'Research public records'],
   ['brief', 'Write the brief'],
-  ['creative', 'Storyboard, email and call script'],
-  ['video_v', 'Vertical video'],
-  ['video_h', 'Horizontal video'],
+  ['opponent', 'Research the opponent'],
+  ['creative', 'Ad scripts, email and call script'],
+  ['video_v', 'Short vertical ad'],
+  ['video_h', 'Short horizontal ad'],
+  ['video_hl', 'Long horizontal ad'],
   ['sheet', 'One-page sheet'],
-  ['email', 'Email draft for approval'],
+  ['email', 'Email ready'],
 ];
+const VIDEOS = { v: { step: 'video_v', vertical: true, board: 'short', label: 'short vertical' }, h: { step: 'video_h', vertical: false, board: 'short', label: 'short horizontal' }, hl: { step: 'video_hl', vertical: false, board: 'long', label: 'long horizontal' } };
+const DEFAULT_PLAN = '12 posts a week for $949';
 
 const S = (k, d) => ctx.setting(`political.${k}`, d);
 function dirFor(p) { const d = path.join(paths.root, 'political', p.id); fs.mkdirSync(d, { recursive: true }); return d; }
@@ -45,10 +49,11 @@ function setStep(id, step, st) { return save(id, (pkg) => ({ steps: { ...(pkg.st
 function material(pkg) {
   const src = (pkg.sources || []).map((s) => `[${s.n}] ${s.title} — ${s.url}`).join('\n');
   const facts = (pkg.facts || []).map((f) => `- (${f.topic}) ${f.text} [${f.src}]`).join('\n');
+  const opp = pkg.opp ? `\nOPPONENT: ${pkg.opp.name}${pkg.opp.profile?.office ? `, ${pkg.opp.profile.office}` : ''}${pkg.opp.profile?.party ? ` (${pkg.opp.profile.party})` : ''}. Facts about the opponent are marked (opponent:...).` : '';
   const text = (pkg.text || []).map((t) => `--- from [${t.src}] ---\n${t.text}`).join('\n\n').slice(0, 24000);
   const pr = pkg.profile || {};
   const head = [`Name: ${pr.name}`, pr.office && `Office: ${pr.office}`, pr.party && `Party: ${pr.party}`, pr.sites?.length && `Websites: ${pr.sites.join(', ')}`, pr.socials?.length && `Social accounts: ${pr.socials.join(', ')}`, pr.contact && `Public contact email: ${pr.contact}`].filter(Boolean).join('\n');
-  return `${head}\n\nSOURCES\n${src}\n\nFACTS\n${facts}\n\nSOURCE TEXT\n${text}`;
+  return `${head}${opp}\n\nSOURCES\n${src}\n\nFACTS\n${facts}\n\nSOURCE TEXT\n${text}`;
 }
 const norm = (s) => String(s || '').toLowerCase().replace(/[“”"'’‘]/g, '').replace(/[^a-z0-9$%]+/g, ' ').trim();
 
@@ -68,7 +73,7 @@ async function stepResearch(p, h) {
 async function stepBrief(p) {
   const pkg = p.pkg;
   if (!ai.anyConnected()) { save(p.id, () => ({ brief: fallbackBrief(pkg) })); return 'Basic brief (connect an AI provider for a full one)'; }
-  const r = await ai.ask({ role: 'research', json: true, maxTokens: 3000, system: `You are a political research analyst for ${ctx.setting('agency.name', 'Euclidean Media')}, a short-form video agency. Write a briefing on a public official or candidate using ONLY the material provided. After every factual claim put its source number in brackets like [3]. If the material doesn't support something, leave it out. Public, professional information only: never include home addresses, family members, health or other personal details. Be neutral and factual.`, prompt: `${material(pkg)}\n\nReturn JSON: {"headline":"one line: who they are","summary":"2-3 sentences with citations","sections":[{"title":"Office & district","points":["... [n]"]},{"title":"Record & priorities","points":[]},{"title":"Fundraising","points":[]},{"title":"In the news","points":[]},{"title":"Online presence","points":[]}],"themes":["3-5 issues they clearly care about, short phrases"],"contentGaps":["2-4 observations about their video/social presence an agency could help with; say 'unverified' when unsure"],"angle":"one sentence: the most natural reason they'd want our videos"}` });
+  const r = await ai.ask({ role: 'research', json: true, maxTokens: 3000, system: `You are a political research analyst for ${ctx.setting('agency.name', 'Euclidean Media')}, a short-form video agency. Write a briefing on a public official or candidate using ONLY the material provided. After every factual claim put its source number in brackets like [3]. If the material doesn't support something, leave it out. Public, professional information only: never include home addresses, family members, health or other personal details. Be neutral and factual.`, prompt: `${material(pkg)}\n\nReturn JSON: {"headline":"one line: who they are","summary":"2-3 sentences with citations","sections":[{"title":"Office & district","points":["... [n]"]},{"title":"Record & priorities","points":[]},{"title":"Fundraising","points":[]},{"title":"In the news","points":[]},{"title":"Online presence","points":[]}],"themes":["3-5 issues they clearly care about, short phrases"],"contentGaps":["2-4 observations about their video/social presence an agency could help with; say 'unverified' when unsure"],"angle":"one sentence: the most natural reason they'd want our videos","keyPoints":["3-5 campaign key points voters should hear, each with [n]"],"election":"the next election they're on the ballot for, with its date, only if stated in the material, else empty","opponent":{"name":"their main opponent in that race, ONLY if the material names one, else empty","src":[0]}}` });
   const b = r.json || {};
   b.agent = `${r.provider}:${r.model}`;
   save(p.id, () => ({ brief: b }));
@@ -85,89 +90,179 @@ function fallbackBrief(pkg) {
   };
 }
 
-const SCENE_DOC = `Scene types (fields; keep text SHORT, it's on-screen):
+const POP_DOC = `Scene types (fields; keep text SHORT, it's on-screen):
 - {"type":"hook","headline":"≤8 words, wrap 1-2 key words in *asterisks* for colour","sub":"≤10 words","badge":"optional ≤2 words"}
-- {"type":"portrait","headline":"their name","sub":"their office ≤8 words","badge":"optional"}
-- {"type":"stat","kicker":"≤4 words","value":"≤10 characters, e.g. $2.4M or 14 BILLS","label":"≤10 words"}
+- {"type":"portrait","headline":"their name","sub":"their office ≤8 words"}
+- {"type":"stat","kicker":"≤4 words","value":"≤10 characters","label":"≤10 words","cite":[n]}
 - {"type":"issues","headline":"≤6 words with *highlight*","items":["2-4 items, ≤5 words each"]}
-- {"type":"quote","quote":"≤25 words, VERBATIM from the source text","source":"who/where, ≤8 words"}
-- {"type":"cta","headline":"≤6 words","button":"their website or a short call to action","sub":"≤8 words"}
-- {"type":"end","headline":"their name or slogan","sub":"≤6 words"}
-Optional "sec" per scene (seconds, 3-8).`;
+- {"type":"quote","quote":"≤25 words, VERBATIM from the source text","source":"who/where","cite":[n]}
+- {"type":"cta","headline":"≤6 words","button":"their website","sub":"≤8 words"}
+- {"type":"end","headline":"their name or slogan","sub":"≤6 words"}`;
 
-async function stepCreative(p) {
-  const pkg = p.pkg; const seconds = Math.max(15, Math.min(240, Number(S('videoSeconds', 40)) || 40));
-  const nScenes = Math.max(5, Math.min(45, Math.round(seconds / 5)));
-  const offer = S('offer', '');
-  const booking = S('bookingUrl', '');
-  const sender = S('senderName', '') || ctx.setting('agency.founders', [])[0]?.name || '';
-  if (!ai.anyConnected()) { save(p.id, () => ({ creative: fallbackCreative(p, pkg, { nScenes, booking, sender }) })); return 'Template creative (connect an AI provider for tailored work)'; }
-  const templates = String(S('templates', '') || '').trim();
-  const r = await ai.ask({ role: 'writing', json: true, maxTokens: 4000, system: `You create outreach for ${ctx.setting('agency.name', 'Euclidean Media')}, a short-form video agency for political campaigns. You make a sample ad concept for the official/candidate, written as if for THEIR audience (constituents/voters), positive and upbeat, in a bubbly, poppy style. Rules: use only facts in the material; numbers and quotes must appear in the material (quotes word for word) or be left out; no attacks on opponents; never claim endorsements or results you can't show; no personal details. The email is personal, specific and short (under 170 words), offers the two attached videos free to use whether or not they talk to us, asks for 20 minutes, and ends with a simple opt-out line.`, prompt: `${material(pkg)}\n\nBRIEF\n${JSON.stringify(pkg.brief || {}).slice(0, 6000)}\n\n${templates ? `HOUSE EMAIL TEMPLATES (match this voice and structure):\n${templates.slice(0, 6000)}\n\n` : ''}OFFER: ${offer || 'Two free tailored videos (vertical and horizontal) they can use free of charge whether or not they talk to us. Ask for 20 minutes.'}\n${booking ? `Booking link: ${booking}\n` : ''}${sender ? `Sign as: ${sender}, ${ctx.setting('agency.name', 'Euclidean Media')}\n` : ''}
-Make a storyboard of about ${nScenes} scenes (~${seconds} seconds) that starts with a hook, includes a portrait scene, and ends with a cta then an end scene.
-${SCENE_DOC}
+const CAMPAIGN_DOC = `This is a modern political ad (TV/online campaign spot): bold, emotional, punchy lines, ALL-CAPS headlines on screen, the way real campaign ads look before an election.
+Scene types (fields; keep on-screen text SHORT):
+- {"type":"photo","who":"candidate","headline":"≤7 words, *highlight* 1-2 words","sub":"≤6 words"}  (full-screen photo of the candidate)
+- {"type":"headline","outlet":"news outlet from the sources","date":"its date","title":"the real headline, *highlight* key words","sub":"≤6 words takeaway","cite":[n]}  (a news clipping; only real headlines from the sources)
+- {"type":"stat","value":"≤8 characters","label":"≤8 words","cite":[n]}
+- {"type":"issues","headline":"≤5 words","items":["2-4 key points, ≤5 words each"]}
+- {"type":"quote","quote":"≤22 words, VERBATIM from the sources","source":"who/where","cite":[n]}
+- {"type":"vote","headline":"VOTE <NAME> or a ≤5 word slogan","date":"election date only if in the material","button":"their website"}
+Every factual scene needs "cite" with the source numbers it relies on. Optional "sec" per scene (2.5-6).`;
 
-Return JSON: {"storyboard":[...scenes],"email":{"subject":"≤8 words, specific to them","body":"plain text"},"callScript":"a 60-second script for a person calling their campaign office: intro, why them, the free videos, the 20-minute ask, handling 'send me an email'","voiceNote":"a 20-second friendly voice note from the sender saying what's in the email","narration":"an optional upbeat voiceover for the ad, one line per scene, from a narrator (not the official)"}` });
-  const c = r.json || {};
-  c.storyboard = vetStoryboard(c.storyboard, pkg, p);
-  c.agent = `${r.provider}:${r.model}`;
-  save(p.id, () => ({ creative: c }));
-  return `${c.storyboard.length} scenes, email and call script`;
+const CONTRAST_DOC = `Contrast scenes (allowed because an opponent is researched):
+- {"type":"contrast","headline":"≤5 words","left":{"label":"candidate name","items":["2-3 sourced points"]},"right":{"label":"opponent name","items":["2-3 sourced points about the opponent's public record"]},"cite":[n,...]}
+- {"type":"photo","who":"opponent","headline":"≤7 words about the opponent's public record","sub":"≤6 words, e.g. the bill or vote","cite":[n]}
+Contrast claims must be specific public-record facts (votes, bills, filings, statements, news reports) that appear in the opponent sources, cited. No insults, no claims about character or private life, nothing unsourced.`;
+
+async function stepOpponent(p, h) {
+  const pkg = p.pkg; const name = pkg.brief?.opponent?.name && String(pkg.brief.opponent.name).trim();
+  if (!S('contrastAds', false)) { save(p.id, () => ({ opp: null })); return { skip: true, note: 'Contrast ads are off (Package settings)' }; }
+  if (!name) { save(p.id, () => ({ opp: null })); return { skip: true, note: 'No opponent named in the research' }; }
+  const dir = path.join(dirFor(p), 'opponent'); fs.mkdirSync(dir, { recursive: true });
+  const r = await sources.lookup({ name, hint: pkg.profile?.office || '', dir, onStep: (x) => h.progress(0.1, `Opponent: ${x}`) });
+  if (r.sources.length < 2) { save(p.id, () => ({ opp: null })); return { skip: true, note: `Too little public record found for ${name}` }; }
+  // Renumber the opponent's sources after the candidate's so every citation stays unique.
+  const base = Math.max(0, ...(pkg.sources || []).filter((x) => !x.opponent).map((x) => x.n));
+  const srcs = r.sources.map((x) => ({ ...x, n: x.n + base, opponent: true }));
+  const facts = r.facts.map((f) => ({ ...f, topic: `opponent:${f.topic}`, src: f.src + base }));
+  const text = r.text.map((t) => ({ ...t, src: t.src + base }));
+  save(p.id, (pk) => ({
+    sources: [...(pk.sources || []).filter((x) => !x.opponent), ...srcs], facts: [...(pk.facts || []).filter((f) => !String(f.topic).startsWith('opponent:')), ...facts],
+    text: [...(pk.text || []).filter((t) => t.src <= base), ...text], opp: { name, profile: { office: r.profile.office, party: r.profile.party, photo: r.profile.photo, photoCredit: r.profile.photoCredit } },
+  }));
+  return { note: `${name}: ${r.sources.length} sources` };
 }
 
-/** Keep the storyboard honest: drop quotes and numbers that aren't in the research. */
-function vetStoryboard(list, pkg, p) {
+async function stepCreative(p) {
+  const pkg = p.pkg;
+  const shortSec = Math.max(10, Math.min(90, Number(S('shortSeconds', 20)) || 20));
+  const longSec = Math.max(30, Math.min(240, Number(S('videoSeconds', 60)) || 60));
+  const style = S('videoStyle', 'campaign');
+  const offer = S('offer', '') || `Three free ads (a short vertical, a short horizontal and a longer horizontal cut) they can use free of charge whether or not they talk to us. Our political plan: ${S('plan', DEFAULT_PLAN)}. Ask for 20 minutes.`;
+  const booking = S('bookingUrl', '');
+  const sender = S('senderName', '') || ctx.setting('agency.founders', [])[0]?.name || '';
+  const contrast = !!(S('contrastAds', false) && pkg.opp);
+  if (!ai.anyConnected()) { save(p.id, () => ({ creative: fallbackCreative(p, pkg, { booking, sender, style }) })); return 'Template scripts (connect an AI provider for tailored ads)'; }
+  const templates = String(S('templates', '') || '').trim();
+  const r = await ai.ask({ role: 'writing', json: true, maxTokens: 6000, system: `You create outreach for ${ctx.setting('agency.name', 'Euclidean Media')}, a video agency for political campaigns. You write sample campaign ads for the candidate, aimed at THEIR voters, that make the case for them on their key points (lower costs, schools, safety, jobs... whatever the material supports). Rules: use only facts in the material; numbers, headlines and quotes must appear in the material (quotes word for word) or be left out; cite source numbers on factual scenes; never claim endorsements or results you can't show; no personal details; ${contrast ? 'contrast with the opponent is allowed ONLY on specific, cited public-record facts' : 'do not mention or attack any opponent'}. The email is personal, specific and short (under 170 words): it says what we made for them, that the attached ads are theirs to use free of charge whether or not they talk to us, mentions the plan in one line, asks for 20 minutes, and ends with an opt-out line.`, prompt: `${material(pkg)}\n\nBRIEF\n${JSON.stringify(pkg.brief || {}).slice(0, 6000)}\n\n${templates ? `HOUSE EMAIL TEMPLATES (match this voice and structure):\n${templates.slice(0, 6000)}\n\n` : ''}OFFER: ${offer}\n${booking ? `Booking link: ${booking}\n` : ''}${sender ? `Sign as: ${sender}, ${ctx.setting('agency.name', 'Euclidean Media')}\n` : ''}
+Write two ads from the same campaign: "short" (about ${shortSec} seconds, ${Math.max(4, Math.round(shortSec / 3.5))} scenes, used for both the vertical and the horizontal short) and "long" (about ${longSec} seconds, ${Math.max(6, Math.round(longSec / 4))} scenes). Each should open with a strong hook and end with a ${style === 'campaign' ? 'vote' : 'cta then end'} scene.
+${style === 'campaign' ? CAMPAIGN_DOC : POP_DOC}
+${contrast ? CONTRAST_DOC : ''}
+
+Return JSON: {"tone":"${contrast ? 'positive or contrast' : 'positive'}","short":[...scenes],"long":[...scenes],"email":{"subject":"≤8 words, specific to them","body":"plain text"},"callScript":"a 60-second script for a person calling their campaign office: intro, why them, the free ads, the 20-minute ask, handling 'send me an email'","voiceNote":"a 20-second friendly voice note from the sender","narration":"an upbeat voiceover for the long ad from a narrator (never the candidate's voice)"}` });
+  const c = r.json || {};
+  const short = vetStoryboard(c.short || c.storyboard, pkg, p, { style, contrast });
+  const long = vetStoryboard(c.long || c.short || c.storyboard, pkg, p, { style, contrast });
+  const out = { ...c, style, short, long, storyboard: short, hasContrast: [...short, ...long].some((x) => x.type === 'contrast' || x.who === 'opponent'), agent: `${r.provider}:${r.model}` };
+  out.tone = out.hasContrast ? 'contrast' : 'positive';
+  out.email = { ...(c.email || {}), body: withFooter(c.email?.body || '') };
+  save(p.id, () => ({ creative: out }));
+  return `${short.length} + ${long.length} scenes${out.hasContrast ? ' (contrast)' : ''}, email and call script`;
+}
+
+/** Every email carries an opt-out line and the sender's postal address (CAN-SPAM). */
+function withFooter(body) {
+  let b = String(body || '').trim();
+  if (!/\bstop\b|unsubscribe|opt[\s-]?out|rather not hear/i.test(b)) b += `\n\nIf you'd rather not hear from us, just reply "stop" and we won't email again.`;
+  const addr = String(S('mailingAddress', '') || '').trim();
+  if (addr && !b.includes(addr.split('\n')[0])) b += `\n\n${ctx.setting('agency.name', 'Euclidean Media')} · ${addr.replace(/\n+/g, ', ')}`;
+  return b;
+}
+
+/** Keep the ads honest: drop quotes, numbers and claims that aren't in the research, and citations that don't exist. */
+function vetStoryboard(list, pkg, p, { style = 'pop', contrast = false } = {}) {
   const all = [...(pkg.facts || []).map((f) => f.text), ...(pkg.text || []).map((t) => t.text)].join(' ');
   const corpus = norm(all); const numbers = all.toLowerCase().replace(/(\d),(?=\d{3})/g, '$1');
+  const srcN = new Set((pkg.sources || []).map((x) => x.n)); const oppN = new Set((pkg.sources || []).filter((x) => x.opponent).map((x) => x.n));
+  const TYPES = style === 'campaign' ? ['photo', 'headline', 'stat', 'issues', 'quote', 'contrast', 'vote', 'counter', 'chart'] : ['hook', 'portrait', 'stat', 'issues', 'quote', 'cta', 'end', 'counter', 'chart'];
+  const numbersOk = (txt) => (String(txt || '').replace(/(\d),(?=\d{3})/g, '$1').match(/\d+(?:\.\d+)?/g) || []).every((d) => d.length < 2 && !/\$/.test(txt) ? true : new RegExp(`(^|[^\\d.])${d.replace('.', '\\.')}(?![\\d])`).test(numbers));
   const ok = [];
   for (const s of Array.isArray(list) ? list : []) {
     if (!s || typeof s !== 'object') continue;
-    const type = ['hook', 'portrait', 'stat', 'issues', 'quote', 'cta', 'end'].includes(s.type) ? s.type : 'hook';
+    const type = TYPES.includes(s.type) ? s.type : TYPES[0];
+    const cite = [].concat(s.cite || []).map(Number).filter((n) => srcN.has(n));
+    const x = { ...s, type, cite: cite.length ? cite : undefined };
     if (type === 'quote' && !(s.quote && corpus.includes(norm(s.quote).slice(0, 80)))) continue;
-    if (type === 'stat') { const digits = String(s.value || '').replace(/(\d),(?=\d{3})/g, '$1').match(/\d+(?:\.\d+)?/g) || []; if (digits.some((d) => !new RegExp(`(^|[^\\d.])${d.replace('.', '\\.')}(?![\\d])`).test(numbers))) continue; }
-    ok.push({ ...s, type });
+    if (type === 'stat' && !numbersOk(s.value)) continue;
+    if (type === 'headline' && !(s.title && corpus.includes(norm(String(s.title).replace(/\*/g, '')).slice(0, 50)))) continue;
+    if (type === 'contrast' || s.who === 'opponent') {
+      if (!contrast || !cite.some((n) => oppN.has(n))) continue;
+      const items = [...(s.left?.items || []), ...(s.right?.items || []), s.headline, s.sub].filter(Boolean);
+      if (!items.every(numbersOk)) continue;
+    }
+    if (['headline', 'stat', 'quote'].includes(type) && !cite.length && style === 'campaign') continue;
+    ok.push(x);
   }
-  if (!ok.some((s) => s.type === 'portrait')) ok.splice(Math.min(1, ok.length), 0, { type: 'portrait', headline: p.name, sub: pkg.profile?.office || '' });
-  if (!ok.length || ok[ok.length - 1].type !== 'end') ok.push({ type: 'end', headline: p.name, sub: pkg.profile?.office ? shortOffice(pkg.profile.office) : '' });
-  return ok.slice(0, 50);
+  if (style === 'campaign') {
+    if (!ok.some((s) => s.type === 'photo' && s.who !== 'opponent')) ok.unshift({ type: 'photo', who: 'candidate', headline: p.name, sub: shortOffice(pkg.profile?.office || '') });
+    if (ok[ok.length - 1]?.type !== 'vote') ok.push({ type: 'vote', headline: `Vote ${p.name}`, button: siteOf(pkg) });
+  } else {
+    if (!ok.some((s) => s.type === 'portrait')) ok.splice(Math.min(1, ok.length), 0, { type: 'portrait', headline: p.name, sub: pkg.profile?.office || '' });
+    if (ok[ok.length - 1]?.type !== 'end') ok.push({ type: 'end', headline: p.name, sub: pkg.profile?.office ? shortOffice(pkg.profile.office) : '' });
+  }
+  return ok.slice(0, 60);
 }
+const siteOf = (pkg) => (pkg.profile?.sites?.[0] || '').replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '');
 const shortOffice = (o) => String(o).replace(/United States/i, 'U.S.').slice(0, 40);
 
-function fallbackCreative(p, pkg, { booking, sender }) {
+function fallbackCreative(p, pkg, { booking, sender, style = 'campaign' }) {
   const pr = pkg.profile || {}; const first = p.name.split(/\s+/)[0];
+  const moneySrc = (pkg.facts || []).find((f) => f.topic === 'money')?.src;
   const money = pr.money?.raised ? `$${(pr.money.raised / 1e6).toFixed(1)}M` : null;
-  const sb = [
-    { type: 'hook', headline: `Meet *${p.name}*`, sub: shortOffice(pr.office || ''), badge: pr.party ? pr.party.split(' ')[0] : '' },
+  const sb = style === 'campaign' ? [
+    { type: 'photo', who: 'candidate', headline: `${p.name} *for you*`, sub: shortOffice(pr.office || '') },
+    money && moneySrc ? { type: 'stat', value: money, label: `raised from supporters in ${pr.money.cycle}`, cite: [moneySrc] } : null,
+    { type: 'vote', headline: `Vote ${p.name}`, button: siteOf(pkg) },
+  ] : [
+    { type: 'hook', headline: `Meet *${p.name}*`, sub: shortOffice(pr.office || '') },
     { type: 'portrait', headline: p.name, sub: shortOffice(pr.office || '') },
     money ? { type: 'stat', kicker: `${pr.money.cycle} cycle`, value: money, label: 'raised from supporters' } : null,
-    { type: 'cta', headline: `Stand with *${first}*`, button: (pr.sites?.[0] || '').replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '') || 'Learn more', sub: '' },
+    { type: 'cta', headline: `Stand with *${first}*`, button: siteOf(pkg) || 'Learn more', sub: '' },
     { type: 'end', headline: p.name, sub: shortOffice(pr.office || '') },
-  ].filter(Boolean);
+  ];
+  const board = sb.filter(Boolean);
   const agency = ctx.setting('agency.name', 'Euclidean Media');
   return {
-    storyboard: sb,
-    email: { subject: `Two free videos for ${p.name}`, body: `Hi ${first} team,\n\nWe made two short videos for ${p.name}: one vertical for Reels/TikTok/Shorts and one horizontal for YouTube and the web. They're attached, and they're yours to use free of charge, whether or not you decide to talk with us.\n\nWe're ${agency}, a short-form video team for campaigns. Could you give us 20 minutes to show what a month of this could look like?${booking ? `\n\nPick a time: ${booking}` : ''}\n\nThanks,\n${sender || agency}\n\nIf you'd rather not hear from us, just reply "stop" and we won't email again.` },
-    callScript: `Hi, this is ${sender || 'a producer'} with ${agency}. We make short videos for campaigns, and we put together two free sample videos for ${p.name} — one vertical, one horizontal. They're free to use either way. Who's the best person to send them to? And could we get 20 minutes with whoever handles digital?`,
-    voiceNote: `Hey, it's ${sender || 'the team'} from ${agency}. We made two quick videos for ${p.name} — they're attached and free to use. If you've got 20 minutes this week, we'd love to show you more.`,
+    style, tone: 'positive', hasContrast: false, short: board, long: board, storyboard: board,
+    email: { subject: `Three free ads for ${p.name}`, body: withFooter(`Hi ${first} team,\n\nWe made three short campaign ads for ${p.name}: a vertical one for Reels/TikTok/Shorts, a horizontal one for YouTube and the web, and a longer cut. They're attached, and they're yours to use free of charge, whether or not you decide to talk with us.\n\nWe're ${agency}. Our political plan is ${S('plan', DEFAULT_PLAN)}. Could you give us 20 minutes?${booking ? `\n\nPick a time: ${booking}` : ''}\n\nThanks,\n${sender || agency}`) },
+    callScript: `Hi, this is ${sender || 'a producer'} with ${agency}. We make campaign videos, and we put together three free sample ads for ${p.name}. They're free to use either way. Who's the best person to send them to? And could we get 20 minutes with whoever handles digital?`,
+    voiceNote: `Hey, it's ${sender || 'the team'} from ${agency}. We made three quick ads for ${p.name}, attached and free to use. If you've got 20 minutes this week, we'd love to show you more.`,
     narration: '', agent: 'template',
   };
 }
 
-async function stepVideo(p, h, vertical) {
-  const c = p.pkg.creative; if (!c?.storyboard?.length) throw new Error('Run the storyboard step first.');
-  const dir = dirFor(p); const out = path.join(dir, `${slugName(p.name)} - ${vertical ? 'vertical' : 'horizontal'}.mp4`);
+/** "Source: Texas Tribune; FEC" from citation numbers. */
+function citeText(pkg) {
+  return (ns) => {
+    const names = [...new Set([].concat(ns || []).map((n) => (pkg.sources || []).find((x) => x.n === Number(n))).filter(Boolean).map((x) => String(x.title).split(/:\s/)[0].replace(/^Website$|^Campaign site$/, new URL(x.url).hostname.replace(/^www\./, ''))))];
+    return names.length ? `Source: ${names.join('; ')}` : '';
+  };
+}
+
+async function stepVideo(p, h, kind) {
+  const K = VIDEOS[kind]; const c = p.pkg.creative; const board = c?.[K.board] || c?.storyboard;
+  if (!board?.length) throw new Error('Run the ad scripts step first.');
+  const dir = dirFor(p); const out = path.join(dir, `${slugName(p.name)} - ${K.label} ad.mp4`);
   const music = pickMusic();
   let narration = null;
-  if (S('narration', false) && c.narration && ai.connected('openai')) {
+  if (kind === 'hl' && S('narration', false) && c.narration && ai.connected('openai')) {
     narration = path.join(dir, 'narration.mp3');
     if (!fs.existsSync(narration)) { try { await tts(c.narration, narration); } catch (e) { narration = null; audit.log('system', 'political.tts_failed', { prospectId: p.id, error: e.message }, 'warn'); } }
   }
-  const res = await render.renderVideo({ scenes: c.storyboard, info: { name: p.name, photo: p.pkg.profile?.photo, party: p.pkg.profile?.party, theme: S('theme', 'auto') === 'auto' ? null : S('theme') }, vertical, out, work: path.join(dir, vertical ? 'work_v' : 'work_h'), music, narration, onProgress: (f, t) => h.progress(f, t) });
-  const poster = path.join(dir, vertical ? 'poster_v.jpg' : 'poster_h.jpg');
-  await ff.thumbnail(out, poster, Math.min(5, res.duration / 3), vertical ? 540 : 960).catch(() => {});
-  fs.rmSync(path.join(dir, vertical ? 'work_v' : 'work_h'), { recursive: true, force: true });
-  save(p.id, (pkg) => ({ files: { ...(pkg.files || {}), [vertical ? 'v' : 'h']: out, [vertical ? 'posterV' : 'posterH']: poster } }));
-  return `${Math.round(res.duration)}s · ${(fs.statSync(out).size / 1e6).toFixed(1)} MB`;
+  const style = c.style || S('videoStyle', 'campaign');
+  const info = { name: p.name, photo: p.pkg.profile?.photo, oppPhoto: p.pkg.opp?.profile?.photo, party: p.pkg.profile?.party, style, tone: c.tone, citeText: citeText(p.pkg), theme: S('theme', 'auto') === 'auto' ? null : S('theme') };
+  const work = path.join(dir, `work_${kind}`);
+  const res = await render.renderVideo({ scenes: board, info, vertical: K.vertical, out, work, music, narration, onProgress: (f, t) => h.progress(f * 0.92, t) });
+  fs.rmSync(work, { recursive: true, force: true });
+  // Small copy for email attachments (720p), the full-quality file stays in the folder.
+  h.progress(0.94, 'Making the email-sized copy');
+  const mail = path.join(dir, `${slugName(p.name)} - ${K.label} ad (email).mp4`);
+  await ff.ffmpegWithProgress(['-i', out, '-vf', K.vertical ? 'scale=720:-2' : 'scale=-2:720', '-c:v', 'libx264', '-preset', 'medium', '-crf', '27', '-maxrate', '1800k', '-bufsize', '3600k', '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', mail], { totalSec: res.duration });
+  const poster = path.join(dir, `poster_${kind}.jpg`);
+  await ff.thumbnail(out, poster, Math.min(3, res.duration / 4), K.vertical ? 540 : 960).catch(() => {});
+  const posterKey = { v: 'posterV', h: 'posterH', hl: 'posterHL' }[kind];
+  save(p.id, (pkg) => ({ files: { ...(pkg.files || {}), [kind]: out, [`${kind}Mail`]: mail, [posterKey]: poster } }));
+  return `${Math.round(res.duration)}s · email copy ${(fs.statSync(mail).size / 1e6).toFixed(1)} MB`;
 }
 
 function pickMusic() {
@@ -204,15 +299,15 @@ h1{font:800 34px/1.05 Pop;color:${T.ink};letter-spacing:-.02em} h1 b{color:${T.a
 .dot{position:absolute;border-radius:50%}
 </style></head><body>
 <div class="dot" style="right:.5in;top:.45in;width:90px;height:90px;background:${T.c}"></div><div class="dot" style="right:1.35in;top:.3in;width:34px;height:34px;background:${T.b}"></div>
-<h1>Two free videos for<br><b>${e(p.name)}</b></h1>
-<div class="lead">${e(cap(pr.office || ''))}${pr.office ? '. ' : ''}We made a vertical and a horizontal video from your public record. They're attached to our email and <b style="color:${T.a}">yours to use free of charge</b>, whether or not you decide to talk with us.</div>
+<h1>Three free ads for<br><b>${e(p.name)}</b></h1>
+<div class="lead">${e(cap(pr.office || ''))}${pr.office ? '. ' : ''}We made three campaign ads from your public record: a short vertical, a short horizontal and a longer cut. They're attached to our email and <b style="color:${T.a}">yours to use free of charge</b>, whether or not you decide to talk with us.</div>
 <div class="vids">
   ${img(pkg.files?.posterV) ? `<div class="v"><img src="${img(pkg.files.posterV)}" style="width:2.1in;height:3.73in"><div>Vertical · Reels, TikTok, Shorts</div></div>` : ''}
   ${img(pkg.files?.posterH) ? `<div class="v" style="flex:1"><img src="${img(pkg.files.posterH)}" style="width:100%;height:2.3in"><div>Horizontal · YouTube, web, email</div></div>` : ''}
 </div>
-<div class="box"><h3>What we do</h3><ul><li>Bubbly, scroll-stopping short videos about your work, made from your public record and your footage</li><li>Ready for every platform, vertical and horizontal</li><li>Fast turnaround, and you approve everything before it posts</li></ul></div>
+<div class="box"><h3>The political plan</h3><p style="font:800 22px Pop;color:${T.a};margin:2px 0 8px">${e(S('plan', DEFAULT_PLAN))}</p><ul><li>Campaign ads and short videos about your record and your key issues</li><li>Ready for every platform, vertical and horizontal</li><li>Fast turnaround, and you approve everything before it posts</li></ul></div>
 <div class="ask">Could you give us 20 minutes?</div>
-<div class="foot"><span>${e(sender)}${sender ? ' · ' : ''}${e(agency)}${booking ? ` · ${e(booking)}` : ''}</span><span>Concept videos. Not authorized by or affiliated with ${e(p.name)}.${pr.photoCredit ? ` Photo: ${e(pr.photoCredit)}.` : ''}</span></div>
+<div class="foot"><span>${e(sender)}${sender ? ' · ' : ''}${e(agency)}${booking ? ` · ${e(booking)}` : ''}</span><span>Concept ads. Not paid for or authorized by any candidate or committee.${pr.photoCredit ? ` Photo: ${e(pr.photoCredit)}.` : ''}</span></div>
 </body></html>`;
   const hf = path.join(dir, 'sheet.html'); fs.writeFileSync(hf, html);
   const out = path.join(dir, `${slugName(p.name)} - Euclidean Media.pdf`);
@@ -234,11 +329,21 @@ function stepEmail(p, actor) {
   ctx.store.update('prospects', p.id, { contactId: contact.id });
   // Replace an earlier unsent draft instead of stacking duplicates.
   if (pkg.messageId) { const old = ctx.store.get('messages', pkg.messageId); if (old?.status === 'pending_approval') messaging.rejectMessage(old.id, actor); }
-  const att = [pkg.files?.v, pkg.files?.h, pkg.files?.sheet].filter((f) => f && fs.existsSync(f)).map((f) => ({ name: path.basename(f), path: f, size: fs.statSync(f).size }));
-  const m = messaging.createOutbound({ contactId: contact.id, channel: 'email', subject: c.email.subject, body: c.email.body, aiGenerated: true, agent: c.agent, category: 'prospecting', actor, attachments: att });
+  const att = attachmentsFor(pkg);
+  const m = messaging.createOutbound({ contactId: contact.id, channel: 'email', subject: c.email.subject, body: withFooter(c.email.body), aiGenerated: true, agent: c.agent, category: 'prospecting', actor, attachments: att });
   save(p.id, () => ({ messageId: m.id, conversationId: m.conversationId }));
   if ((p.stage || 'new') === 'new') ctx.store.update('prospects', p.id, { stage: 'drafted' });
-  return { note: `Waiting for approval · ${att.length} attachments (${(att.reduce((s, a) => s + a.size, 0) / 1e6).toFixed(1)} MB)` };
+  return { note: `${att.length} attachments (${(att.reduce((s2, a) => s2 + a.size, 0) / 1e6).toFixed(1)} MB)` };
+}
+
+/** Email-sized ads plus the sheet, kept under the attachment limit (the long ad is dropped first). */
+function attachmentsFor(pkg) {
+  const f = pkg.files || {}; const limit = Number(S('maxAttachMB', 20)) * 1e6;
+  const pick = (a, b) => (a && fs.existsSync(a) ? a : b && fs.existsSync(b) ? b : null);
+  let list = [pick(f.vMail, f.v), pick(f.hMail, f.h), f.sheet, pick(f.hlMail, f.hl)].filter((x) => x && fs.existsSync(x));
+  const size = (l) => l.reduce((s2, x) => s2 + fs.statSync(x).size, 0);
+  while (list.length > 1 && size(list) > limit) list = list.slice(0, -1);
+  return list.map((x) => ({ name: path.basename(x).replace(' (email)', ''), path: x, size: fs.statSync(x).size }));
 }
 
 const cap = (t) => String(t).charAt(0).toUpperCase() + String(t).slice(1);
@@ -263,9 +368,11 @@ async function run(prospectId, { from = 'research', only = null, actor = 'system
       let note;
       if (step === 'research') note = await stepResearch(p, sub);
       else if (step === 'brief') note = await stepBrief(p);
+      else if (step === 'opponent') { const r = await stepOpponent(p, sub); note = r.note; if (r.skip) { setStep(p.id, step, { status: 'skipped', note }); continue; } }
       else if (step === 'creative') note = await stepCreative(p);
-      else if (step === 'video_v') note = await stepVideo(p, sub, true);
-      else if (step === 'video_h') note = await stepVideo(p, sub, false);
+      else if (step === 'video_v') note = await stepVideo(p, sub, 'v');
+      else if (step === 'video_h') note = await stepVideo(p, sub, 'h');
+      else if (step === 'video_hl') { if (S('longVideo', true)) note = await stepVideo(p, sub, 'hl'); else { setStep(p.id, step, { status: 'skipped', note: 'Long ad is off' }); continue; } }
       else if (step === 'sheet') note = await stepSheet(p);
       else if (step === 'email') { const r = stepEmail(p, actor); note = r.note; if (r.skip) { setStep(p.id, step, { status: 'skipped', note }); continue; } }
       setStep(p.id, step, { status: 'done', note });
@@ -278,8 +385,8 @@ async function run(prospectId, { from = 'research', only = null, actor = 'system
   p = ctx.store.get('prospects', prospectId);
   if (p.pkg.status !== 'needs_contact') save(p.id, () => ({ status: 'ready', finishedAt: now() }));
   audit.log(actor, 'political.package_ready', { prospectId, name: p.name });
-  if (!only) events.publish('notify', { title: `Package ready: ${p.name}`, body: p.pkg.status === 'needs_contact' ? 'Needs a campaign email before the draft can be made.' : 'Email with both videos is waiting in Approvals.' });
+  if (!only && !p.pkg.autoSent) events.publish('notify', { title: `Package ready: ${p.name}`, body: p.pkg.status === 'needs_contact' ? 'Needs a campaign email before the draft can be made.' : 'Email with the ads is waiting for review.' });
   return { status: ctx.store.get('prospects', prospectId).pkg.status };
 }
 
-module.exports = { STEPS, run, dirFor, fallbackCreative, vetStoryboard, material };
+module.exports = { STEPS, VIDEOS, run, dirFor, fallbackCreative, vetStoryboard, material, withFooter, attachmentsFor, DEFAULT_PLAN };

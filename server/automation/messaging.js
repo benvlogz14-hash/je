@@ -197,6 +197,16 @@ function receive(m) {
     events.publish('contacts', contact);
   }
   const conv = ensureConversation(contact);
+  // Email opt-out: "stop"/"unsubscribe" as the first line (or the subject) of a reply.
+  const firstLine = String(m.body || '').split(/\r?\n/).find((l) => l.trim()) || '';
+  if (m.channel === 'email' && (STOP_WORDS.test(firstLine) || STOP_WORDS.test(String(m.subject || '').replace(/^re:\s*/i, '')))) {
+    ctx.store.update('contacts', contact.id, (c) => ({ optedOut: { ...(c.optedOut || {}), email: true } }));
+    audit.log('system', 'contact.opted_out', { contactId: contact.id, clientId: contact.clientId, channel: 'email' }, 'warn');
+  }
+  // A reply from a prospect moves them to "Replied" and stops automatic follow-up.
+  for (const pr of ctx.store.all('prospects', (x) => x.contactId === contact.id && ['new', 'drafted', 'contacted'].includes(x.stage || 'new'))) {
+    ctx.store.update('prospects', pr.id, { stage: 'replied', repliedAt: now() }); events.publish('prospects', { id: pr.id });
+  }
   if (m.channel === 'sms' && STOP_WORDS.test(m.body || '')) {
     ctx.store.update('contacts', contact.id, (c) => ({ optedOut: { ...(c.optedOut || {}), sms: true } }));
     audit.log('system', 'contact.opted_out', { contactId: contact.id, clientId: contact.clientId, channel: 'sms' }, 'warn');

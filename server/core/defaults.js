@@ -13,16 +13,35 @@ module.exports = {
     timezone: 'America/New_York',
   },
   political: {
-    videoSeconds: 40,          // length of each sample video (15 to 240)
+    videoStyle: 'campaign',    // 'campaign' (modern political ad look) or 'pop' (bubbly)
+    shortSeconds: 20,          // the short vertical and short horizontal ads
+    videoSeconds: 60,          // the long horizontal ad (30 to 240)
+    longVideo: true,           // make the long horizontal ad
+    contrastAds: false,        // allow contrast ads that compare with a researched opponent (never auto-sent)
+    plan: '12 posts a week for $949',
     bookingUrl: '',            // e.g. a Calendly link, shown in the email and on the sheet
     senderName: '',            // who signs the email; defaults to the first founder
     offer: '',                 // your offer in your own words; a sensible default is used when empty
     templates: '',             // paste your best outreach emails here; the writer matches their voice
-    theme: 'auto',             // auto (by party), blue, red, purple, green
-    narration: false,          // AI narrator voice (OpenAI) over the videos
+    mailingAddress: '',        // required by CAN-SPAM in every commercial email; autopilot will not send without it
+    theme: 'auto',             // pop style colours: auto (by party), blue, red, purple, green
+    narration: false,          // AI narrator voice (OpenAI) over the long ad
     voice: 'alloy',
     musicDir: '',              // folder of music tracks; one is picked per video
+    maxAttachMB: 20,           // total attachment size per email; the long ad is dropped first
     allowGov: false,           // allow drafts to official .gov addresses
+  },
+  // Automatic outreach. Off until a founder switches it on; each lane has its own daily limits.
+  outreach: {
+    exclusions: '',            // names, organisations or email domains never to contact (one per line)
+    political: { scout: false, scoutQueries: '', scoutPerDay: 15, autoSend: false, sendPerDay: 50, warmupStart: 15, warmupStep: 10, scoutHour: 7 },
+    creators: { scout: false, scoutQueries: '', scoutPerDay: 15, autoSend: false, sendPerDay: 50, warmupStart: 15, warmupStep: 10, scoutHour: 7 },
+  },
+  creatorOffers: {
+    shorts: { name: 'Shorts package', price: '$1,200 a month', details: '6 Shorts a day, Sabbath and holiday Shorts delivered and scheduled ahead of time, 6+ thumbnails plus SEO titles, descriptions and tags for each long-form video. Month to month: cancel anytime. You own the work.' },
+    youtube: { name: 'Full YouTube management', price: '$2,200 a month', details: 'We build and run your YouTube channel end to end: Shorts, long-form packaging, thumbnails, SEO, uploads and scheduling.' },
+    lead: 'shorts',            // which offer emails lead with
+    senderName: '', bookingUrl: '', templates: '',
   },
   environment: 'test', // 'test' redirects all outbound messages to the sandbox recipients and keeps publishing in Manual Pack mode
   sandbox: { phone: '', email: '' },
