@@ -17,7 +17,7 @@ export function Autopilot({ lane }) {
   const [open, setOpen] = useState(false);
   const s = st?.[lane] || {};
   // Pick up changes made elsewhere (the scout chat, another window) unless the settings form is open.
-  useEffect(() => { if (st?.[lane] && !open) setV((cur) => ({ ...cur, ...Object.fromEntries(Object.entries(st[lane]).filter(([k]) => k in cur || ['continuous', 'scoutEveryMin', 'maxLeadsPerDay', 'lessons'].includes(k))) })); }, [st, open]);
+  useEffect(() => { if (st?.[lane] && !open) setV((cur) => ({ ...cur, ...Object.fromEntries(Object.entries(st[lane]).filter(([k]) => k in cur || ['continuous', 'scoutEveryMin', 'maxLeadsPerDay', 'lessons'].includes(k))) })); }, [st, open, lane]);
   const save = (next = v) => act(() => api.patch('/api/settings', { outreach: { [lane]: next, ...rules } }), { ok: 'Saved' }).then((set) => { const b = store.get().boot; if (b && set) store.set({ boot: { ...b, settings: set } }); reload(); });
   const flip = async (k, on) => {
     if (k === 'autoSend' && on && !(await confirmDialog({ title: 'Turn on auto-send?', text: `Finished ${lane === 'political' ? 'packages' : 'emails'} that pass every safety check will send without review, up to ${Math.min(v.sendPerDay, v.warmupStart)} today and rising by ${v.warmupStep} a day to ${v.sendPerDay}. Anything that fails a check (no confirmed email, government address, contrast ad, exclusions, no mailing address) still waits for you. In Test mode emails go to your sandbox address.`, confirm: 'Turn on', kind: 'moss' }))) return;

@@ -22,7 +22,7 @@ export function Growth() {
     <div class="page-head"><div class="grow"><h1>Growth</h1><div class="sub">Find political and creator clients. Agents research; you approve every first message.</div></div>
       <${Seg} value=${view} onChange=${pickView} options=${[{ value: 'creators', label: 'Creators' }, { value: 'political', label: 'Politics' }, { value: 'board', label: 'Pipeline' }, { value: 'table', label: 'Table' }]} />
       <${Button} kind="ghost" icon="plus" onClick=${async () => { const name = await promptDialog({ title: 'Add prospect', label: 'Name or handle', confirm: 'Add' }); if (name) act(() => api.post('/api/prospects', { name }), { ok: 'Added' }).then(reload); }}>Add manually</${Button}></div>
-    ${view === 'political' || view === 'creators' ? html`<div class="col" style="gap:16px">
+    ${view === 'political' || view === 'creators' ? html`<div class="col" style="gap:16px" key=${view}>
       <${Autopilot} lane=${view === 'political' ? 'political' : 'creators'} />
       <${ScoutChat} lane=${view === 'political' ? 'political' : 'creators'} />
       <${ReviewQueue} lane=${view === 'political' ? 'political' : 'creators'} />
