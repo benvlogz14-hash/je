@@ -1,6 +1,6 @@
 // Studio: Euclidean's built-in editor. Same project model as Velo (projects open in either),
 // Premiere-style layout: project bin + effects, program monitor, effect controls, multi-track timeline.
-import { html, useState, useEffect, useRef, useMemo, useCallback, useStore, useApi, navigate, Button, Seg, Toggle, Empty, Loading, Modal, Field, act, toast, openMenu, confirmDialog, promptDialog, useEvent } from '../lib/ui.js';
+import { html, useRoute, useState, useEffect, useRef, useMemo, useCallback, useStore, useApi, navigate, Button, Seg, Toggle, Empty, Loading, Modal, Field, act, toast, openMenu, confirmDialog, promptDialog, useEvent } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { play as sfx } from '../lib/sound.js';
@@ -161,7 +161,7 @@ function revertLive() { for (const { obj, key, orig } of live.values()) obj[key]
 const HEAD_W = 132;
 
 export function Studio() {
-  const route = useStore((s) => s.route);
+  const route = useRoute();
   const id = route.path.split('/')[2];
   const clipId = route.query.clip;
   useEffect(() => { if (clipId && !id) act(() => api.post(`/api/clips/${clipId}/studio`), { sound: 'open' }).then((p) => navigate(`/studio/${p.id}`)).catch(() => {}); }, [clipId]);
@@ -274,7 +274,7 @@ function Editor({ id }) {
   }, [id]);
   useEffect(() => {
     const over = (e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); };
-    const drop = (e) => { if (e.defaultPrevented || !e.dataTransfer?.files?.length) return; e.preventDefault(); importFiles(e.dataTransfer.files); };
+    const drop = (e) => { if (document.body.dataset.screen && document.body.dataset.screen !== '/studio') return; if (e.defaultPrevented || !e.dataTransfer?.files?.length) return; e.preventDefault(); importFiles(e.dataTransfer.files); };
     window.addEventListener('dragover', over); window.addEventListener('drop', drop);
     return () => { window.removeEventListener('dragover', over); window.removeEventListener('drop', drop); };
   }, [id]);
@@ -475,7 +475,7 @@ function Editor({ id }) {
       else if (key === '=' || key === '+') setZoom((z) => Math.min(600, z * 1.25));
       else if (key === '-') setZoom((z) => Math.max(4, z / 1.25));
     };
-    window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k);
+    const k0 = k; const kk = (e) => { if (document.body.dataset.screen && document.body.dataset.screen !== '/studio') return; k0(e); }; window.addEventListener('keydown', kk); return () => window.removeEventListener('keydown', kk);
   }, [sel, t, duration, seq, data]);
 
   if (!data || !seq) return html`<div class="page"><${Loading} /></div>`;

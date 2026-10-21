@@ -1,5 +1,5 @@
 // Messages: unified SMS + email inbox and the Euclidean command thread.
-import { html, useState, useEffect, useRef, useMemo, useStore, useApi, useEvent, navigate, Button, HoldButton, Avatar, Seg, Empty, Loading, Modal, Field, act, toast, openMenu, store, promptDialog, gcls, cmdGroup } from '../lib/ui.js';
+import { html, useRoute, useState, useEffect, useRef, useMemo, useStore, useApi, useEvent, navigate, Button, HoldButton, Avatar, Seg, Empty, Loading, Modal, Field, act, toast, openMenu, store, promptDialog, gcls, cmdGroup } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon, BrandMark } from '../lib/icons.js';
 import { play } from '../lib/sound.js';
@@ -7,7 +7,7 @@ import { ago, time, day, dateTime, providerLabel, actorName } from '../lib/forma
 import { Card, QuotaBar } from './cards.js';
 
 export function Messages() {
-  const route = useStore((s) => s.route);
+  const route = useRoute();
   const convId = route.path.split('/')[2] || null;
   const { data: convs, loading, reload } = useApi('/api/conversations', ['conversation', 'message', 'contacts']);
   const [filter, setFilter] = useState('all');

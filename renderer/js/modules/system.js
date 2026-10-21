@@ -1,5 +1,5 @@
 // System: agents, job queue, health, resources (power modes) and the audit log.
-import { html, useState, useEffect, useStore, useApi, useEvent, navigate, Button, HoldButton, Seg, Tabs, Toggle, Field, StatusBadge, Progress, Loading, Empty, Sparkline, act, toast } from '../lib/ui.js';
+import { html, useRoute, useState, useEffect, useStore, useApi, useEvent, navigate, Button, HoldButton, Seg, Tabs, Toggle, Field, StatusBadge, Progress, Loading, Empty, Sparkline, act, toast } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { money, ago, actorName, dateTime } from '../lib/format.js';
@@ -7,7 +7,7 @@ import { JobRow } from './cards.js';
 import { AgentConversations } from './agents.js';
 
 export function System() {
-  const route = useStore((s) => s.route);
+  const route = useRoute();
   const [tab, setTab] = useState(route.query.tab || 'agents');
   useEffect(() => { if (route.query.tab) setTab(route.query.tab); }, [route.query.tab]);
   const { data: q } = useApi('/api/queue/stats', ['job', 'queue']);

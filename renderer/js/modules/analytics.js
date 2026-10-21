@@ -1,12 +1,12 @@
 // Analytics: performance of published shorts, by day, platform and client, plus tracked creators
 // (search any creator and follow their public numbers).
-import { html, useApi, useState, useStore, Empty, Loading, BarChart, Button, Tabs, Seg, Avatar, Drawer, Modal, Field, Sparkline, act, toast, navigate, openMenu, confirmDialog, promptDialog } from '../lib/ui.js';
+import { html, useRoute, useApi, useState, useStore, Empty, Loading, BarChart, Button, Tabs, Seg, Avatar, Drawer, Modal, Field, Sparkline, act, toast, navigate, openMenu, confirmDialog, promptDialog } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { num, ago, PLATFORM_LABEL } from '../lib/format.js';
 
 export function Analytics() {
-  const route = useStore((s) => s.route);
+  const route = useRoute();
   const { data, loading } = useApi('/api/analytics', ['posts']);
   const [tab, setTab] = useState(route.query.tab || null);
   if (loading) return html`<div class="page"><${Loading} /></div>`;

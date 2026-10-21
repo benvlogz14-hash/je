@@ -1,6 +1,6 @@
 // Shared components and hooks.
-import { h, render } from '../../vendor/preact.mjs';
-import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } from '../../vendor/hooks.mjs';
+import { h, render, createContext } from '../../vendor/preact.mjs';
+import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useContext } from '../../vendor/hooks.mjs';
 import htm from '../../vendor/htm.mjs';
 import { api } from './api.js';
 import { play } from './sound.js';
@@ -8,6 +8,10 @@ import { Icon } from './icons.js';
 
 export const html = htm.bind(h);
 export { h, render, useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect };
+
+/** Each open screen tab gets its own route, so a hidden screen keeps its place while you work in another. */
+export const RouteContext = createContext(null);
+export function useRoute() { const own = useContext(RouteContext); const global = useStore((s) => s.route); return own || global; }
 
 // ------------------------------------------------------------ global store
 const state = { boot: null, route: { path: '/messages', query: {} }, toasts: [], online: true, typing: {}, modal: null };

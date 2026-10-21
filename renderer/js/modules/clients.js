@@ -1,12 +1,12 @@
 // Clients: CRM and each client's isolated workspace (profile, memory, style, schedule, footage, billing, portal).
-import { html, useState, useEffect, useStore, useApi, navigate, Button, Toggle, Seg, Tabs, Field, Empty, Loading, Avatar, StatusBadge, Modal, act, toast, confirmDialog, promptDialog } from '../lib/ui.js';
+import { html, useRoute, useState, useEffect, useStore, useApi, navigate, Button, Toggle, Seg, Tabs, Field, Empty, Loading, Avatar, StatusBadge, Modal, act, toast, confirmDialog, promptDialog } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { money, dateTime, ago, dur, PLATFORM_LABEL } from '../lib/format.js';
 import { QuotaBar } from './cards.js';
 
 export function Clients() {
-  const route = useStore((s) => s.route);
+  const route = useRoute();
   const id = route.path.split('/')[2];
   return id ? html`<${ClientWorkspace} key=${id} id=${id} />` : html`<${ClientList} />`;
 }

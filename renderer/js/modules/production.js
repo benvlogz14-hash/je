@@ -1,5 +1,5 @@
 // Production: footage intake and the clip board, per client.
-import { html, useState, useEffect, useRef, useStore, useApi, navigate, Button, Empty, Loading, StatusBadge, Progress, act, toast, promptDialog, Avatar } from '../lib/ui.js';
+import { html, useRoute, useState, useEffect, useRef, useStore, useApi, navigate, Button, Empty, Loading, StatusBadge, Progress, act, toast, promptDialog, Avatar } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { play } from '../lib/sound.js';
@@ -23,7 +23,7 @@ const LANES = [
 ];
 
 export function Production() {
-  const route = useStore((s) => s.route);
+  const route = useRoute();
   const { data: clients } = useApi('/api/clients', ['clients']);
   const [clientId, setClientId] = useState(() => { try { return localStorage.getItem('eu.prodClient') || ''; } catch { return ''; } });
   useEffect(() => { try { localStorage.setItem('eu.prodClient', clientId); } catch { /* ignore */ } }, [clientId]);

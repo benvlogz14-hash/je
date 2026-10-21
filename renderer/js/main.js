@@ -1,5 +1,5 @@
 // Euclidean desktop shell.
-import { html, render, useState, useEffect, useRef, useStore, store, navigate, Toasts, ModalHost, Button, HoldButton, Seg, Avatar, act, toast, useEvent } from './lib/ui.js';
+import { html, render, useState, useEffect, useRef, useStore, store, navigate, RouteContext, Toasts, ModalHost, Button, HoldButton, Seg, Avatar, act, toast, useEvent } from './lib/ui.js';
 import { api } from './lib/api.js';
 import { Icon, BrandMark } from './lib/icons.js';
 import { play, setSound, soundOn } from './lib/sound.js';
@@ -119,12 +119,65 @@ function StatusBar() {
   </footer>`;
 }
 
+
+// ------------------------------------------------------------ screen tabs (keep several screens open)
+const TAB_KEY = 'eu.tabs';
+const navOf = (base) => NAV.find((n) => n !== 'sep' && n.path === base) || (base === '/settings' ? { path: '/settings', tone: 'slate', icon: 'settings', label: 'Settings' } : null);
+function loadTabs() { try { const t = JSON.parse(localStorage.getItem(TAB_KEY) || '[]'); return Array.isArray(t) ? t.filter((x) => x && ROUTES[x.base]) : []; } catch { return []; } }
+function saveTabs(t) { try { localStorage.setItem(TAB_KEY, JSON.stringify(t)); } catch { /* ignore */ } }
+const fullPath = (r) => r.path + (r.query && Object.keys(r.query).length ? `?${new URLSearchParams(r.query)}` : '');
+
+function useTabs(route) {
+  const base = '/' + route.path.split('/')[1];
+  const [tabs, setTabs] = useState(loadTabs);
+  useEffect(() => {
+    if (!ROUTES[base]) return;
+    setTabs((cur) => {
+      const i = cur.findIndex((t) => t.base === base);
+      const next = i >= 0 ? cur.map((t, j) => (j === i ? { ...t, path: fullPath(route) } : t)) : [...cur, { base, path: fullPath(route) }].slice(-10);
+      saveTabs(next); return next;
+    });
+  }, [route.path, JSON.stringify(route.query || {})]);
+  useEffect(() => { document.body.dataset.screen = base; }, [base]);
+  const close = (b) => setTabs((cur) => {
+    const i = cur.findIndex((t) => t.base === b); const next = cur.filter((t) => t.base !== b); saveTabs(next);
+    if (b === base) { const go = next[Math.min(i, next.length - 1)]; navigate(go ? go.path : '/messages'); }
+    return next;
+  });
+  const cycle = (dir) => { const i = tabs.findIndex((t) => t.base === base); const t = tabs[(i + dir + tabs.length) % tabs.length]; if (t && t.base !== base) { play('tap'); navigate(t.path); } };
+  return { base, tabs: tabs.length ? tabs : [{ base, path: fullPath(route) }], close, cycle };
+}
+
+/** Gives a screen the live route while it's visible, and its own last route while hidden. */
+function FrozenRoute({ on, path, children }) {
+  const live = useStore((s) => s.route);
+  const kept = useRef(live);
+  if (on) kept.current = live;
+  else if (!kept.current || '/' + kept.current.path.split('/')[1] !== '/' + path.split('?')[0].split('/')[1]) { const [p, q] = path.split('?'); kept.current = { path: p, query: Object.fromEntries(new URLSearchParams(q || '')) }; }
+  return html`<${RouteContext.Provider} value=${kept.current}>${children}</${RouteContext.Provider}>`;
+}
+
+function TabBar({ tabs, base, close }) {
+  if (tabs.length < 2) return null;
+  return html`<div class="tabbar" role="tablist">${tabs.map((t) => {
+    const n = navOf(t.base); if (!n) return null; const on = t.base === base;
+    return html`<div class=${'stab' + (on ? ' on' : '')} role="tab" aria-selected=${on} style=${{ '--tone': `var(--${n.tone})`, '--tone-soft': `var(--${n.tone}-soft)`, '--tone-ink': `var(--${n.tone}-ink)` }}
+      onClick=${() => { if (!on) { play('tap'); navigate(t.path); } }} onAuxClick=${(e) => { if (e.button === 1) close(t.base); }} title=${`${n.label}  (Ctrl+Tab to switch, Ctrl+W to close)`}>
+      <span class="stab-ic"><${Icon} name=${n.icon} size=${14} /></span><span class="stab-l">${n.label}</span>
+      <button class="stab-x" aria-label=${`Close ${n.label}`} onClick=${(e) => { e.stopPropagation(); play('tap'); close(t.base); }}>×</button></div>`;
+  })}</div>`;
+}
+
 function App() {
   const route = useStore((s) => s.route);
   const boot = useStore((s) => s.boot);
   const [palette, setPalette] = useState(false);
+  const tabsApi = useTabs(route);
+  const tabsRef = useRef(tabsApi); tabsRef.current = tabsApi;
   useEffect(() => {
     const k = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Tab') { e.preventDefault(); tabsRef.current.cycle(e.shiftKey ? -1 : 1); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'w' && tabsRef.current.tabs.length > 1) { e.preventDefault(); tabsRef.current.close(tabsRef.current.base); return; }
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); play('open'); setPalette((v) => !v); }
       else if (mod && e.key === ',') { e.preventDefault(); navigate('/settings'); }
@@ -150,7 +203,11 @@ function App() {
   const Page = ROUTES[base] || Messages;
   return html`<div class="app">
     <${TitleBar} onPalette=${() => { play('open'); setPalette(true); }} />
-    <div class="body"><${Rail} /><main class="main"><${Page} key=${base} /></main></div>
+    <div class="body"><${Rail} /><main class="main tabbed">
+      <${TabBar} tabs=${tabsApi.tabs} base=${base} close=${tabsApi.close} />
+      <div class="screens">${tabsApi.tabs.filter((t) => ROUTES[t.base]).map((t) => { const P = ROUTES[t.base]; const on = t.base === base; return html`<div key=${t.base} class=${'screen' + (on ? ' on' : '')} aria-hidden=${!on}><${FrozenRoute} on=${on} path=${t.path}><${P} /></${FrozenRoute}></div>`; })}
+        ${!tabsApi.tabs.some((t) => t.base === base) ? html`<div class="screen on"><${Page} key=${base} /></div>` : null}</div>
+    </main></div>
     <${MobileNav} />
     <${StatusBar} />
     ${palette ? html`<${Palette} onClose=${() => setPalette(false)} />` : null}

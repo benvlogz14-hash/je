@@ -36,7 +36,7 @@ export function Approvals() {
       else if (e.key === 'x') { e.preventDefault(); cur.kind === 'clip' ? decideClip('reject') : discardMsg(); }
       else if (e.key === ' ' && cur.kind === 'clip') { e.preventDefault(); const v = document.querySelector('.stage video'); if (v) v.paused ? v.play() : v.pause(); }
     };
-    window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k);
+    const k0 = k; const kk = (e) => { if (document.body.dataset.screen && document.body.dataset.screen !== '/approvals') return; k0(e); }; window.addEventListener('keydown', kk); return () => window.removeEventListener('keydown', kk);
   }, [cur?.id, items.length]);
 
   if (data && !data.length) return html`<div class="page"><div class="page-head"><div class="grow"><h1>Approvals</h1></div></div><div class="panel"><${Empty} icon="approvals" title="You're all caught up">New clips and AI-drafted messages land here when they need a decision. Political content and first-touch outreach always do.</${Empty}></div></div>`;
