@@ -28,6 +28,7 @@ function check() {
   add('ytdlp', 'Link downloads (yt-dlp)', caps.ytdlp ? 'ok' : 'setup', caps.ytdlp ? `yt-dlp ${caps.ytdlpVersion}` : 'Not installed: YouTube/Drive/Twitch links cannot be downloaded', 'winget install yt-dlp.yt-dlp');
   for (const [k, p] of Object.entries(ai.PROVIDERS)) {
     const st = ai.agentStatus().providers[k];
+    if (k === 'ollama') { add('ai.ollama', 'Llama on this computer (Ollama)', st.connected ? 'ok' : 'setup', st.connected ? `Running · free · models: ${(st.health?.models || []).join(', ')}` : st.health?.error || 'Not running', 'Install Ollama from ollama.com, then run: ollama pull llama3.2'); continue; }
     if (!st.connected) add(`ai.${k}`, `${p.label} (${p.vendor})`, 'setup', 'Not connected', 'Add an API key in Settings → Connections');
     else if (st.health && !st.health.ok) add(`ai.${k}`, `${p.label} (${p.vendor})`, 'error', st.health.error, 'Check or replace the API key');
     else if (st.overBudget) add(`ai.${k}`, `${p.label} (${p.vendor})`, 'warn', `Monthly budget reached ($${st.spendUsd} of $${st.budgetUsd}); using fallbacks`, 'Raise the budget in Settings → AI');

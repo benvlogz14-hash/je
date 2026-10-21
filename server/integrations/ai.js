@@ -19,14 +19,36 @@ const PROVIDERS = {
   anthropic: { label: 'Claude', vendor: 'Anthropic', keyName: 'global.anthropic.apiKey', base: 'https://api.anthropic.com/v1' },
   openai: { label: 'GPT', vendor: 'OpenAI', keyName: 'global.openai.apiKey', base: 'https://api.openai.com/v1' },
   xai: { label: 'Grok', vendor: 'xAI', keyName: 'global.xai.apiKey', base: 'https://api.x.ai/v1' },
+  ollama: { label: 'Llama (local)', vendor: 'Ollama', keyName: null, local: true },
 };
+
+// ------------------------------------------------------------ Ollama (free, runs on this computer)
+const ollamaState = { ok: false, at: 0, models: [], error: null };
+const ollamaBase = () => String(ctx.setting('ai.ollama.url', 'http://127.0.0.1:11434') || '').replace(/\/$/, '');
+const ollamaModel = () => ctx.setting('ai.ollama.model', 'llama3.2');
+/** Check (at most every 30 s) whether Ollama is running and has the chosen model. */
+async function pingOllama(force = false) {
+  if (!force && Date.now() - ollamaState.at < 30000) return ollamaState.ok;
+  ollamaState.at = Date.now();
+  if (ctx.setting('ai.ollama.enabled', true) === false) { ollamaState.ok = false; ollamaState.error = 'Turned off'; return false; }
+  try {
+    const res = await fetch(`${ollamaBase()}/api/tags`, { signal: AbortSignal.timeout(2500) });
+    const j = await res.json(); ollamaState.models = (j.models || []).map((m) => m.name);
+    const want = ollamaModel();
+    ollamaState.ok = ollamaState.models.some((m) => m === want || m.split(':')[0] === want.split(':')[0]);
+    ollamaState.error = ollamaState.ok ? null : `Model "${want}" isn't downloaded. In a terminal run: ollama pull ${want}`;
+  } catch { ollamaState.ok = false; ollamaState.error = 'Ollama is not running'; }
+  return ollamaState.ok;
+}
+setInterval(() => { pingOllama().catch(() => {}); }, 30000).unref?.();
+setTimeout(() => { pingOllama(true).catch(() => {}); }, 1500).unref?.();
 
 const health = {}; // provider -> { ok, at, error }
 const inflight = {}; // provider -> count
 
 class AIError extends Error { constructor(msg, { provider, status, retryable } = {}) { super(msg); this.provider = provider; this.status = status; this.retryable = retryable; } }
 
-function connected(provider) { return secrets.has(PROVIDERS[provider].keyName); }
+function connected(provider) { return PROVIDERS[provider]?.local ? ollamaState.ok : secrets.has(PROVIDERS[provider].keyName); }
 function anyConnected() { return Object.keys(PROVIDERS).some(connected); }
 
 function monthSpend(provider) {
@@ -66,6 +88,12 @@ async function httpJson(url, opts, provider) {
 
 /** Low-level provider call. messages: [{role:'user'|'assistant', content:string}] */
 async function callProvider(provider, { model, system, messages, json, maxTokens = 2000, temperature, search }) {
+  if (provider === 'ollama') {
+    const msgs = [...(system ? [{ role: 'system', content: system + (json ? '\n\nRespond with a single valid JSON object only.' : '') }] : []), ...messages];
+    const r = await httpJson(`${ollamaBase()}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, timeoutMs: 600000,
+      body: JSON.stringify({ model: model || ollamaModel(), messages: msgs, stream: false, format: json ? 'json' : undefined, options: { num_ctx: Number(ctx.setting('ai.ollama.context', 16384)), num_predict: maxTokens, ...(temperature != null ? { temperature } : {}) } }) }, provider);
+    return { text: r.message?.content || '', inTok: r.prompt_eval_count || 0, outTok: r.eval_count || 0, model: r.model || model };
+  }
   const key = secrets.get(PROVIDERS[provider].keyName);
   if (!key) throw new AIError(`${PROVIDERS[provider].label} is not connected (add an API key in Settings → Connections)`, { provider });
   if (provider === 'anthropic') {
@@ -128,14 +156,25 @@ function clientContext(clientId) {
  */
 async function ask({ role = 'operations', system, prompt, messages, json = false, clientId, jobId, maxTokens, search, provider: forceProvider }) {
   const cfg = ctx.setting(`ai.roles.${role}`) || ctx.setting('ai.roles.operations');
-  const chain = forceProvider ? [forceProvider] : [cfg.provider, ...(cfg.fallbacks || [])].filter((p, i, a) => PROVIDERS[p] && a.indexOf(p) === i);
+  await pingOllama();
+  // Local-first: "all" sends every task to Llama on this computer; "most" keeps only emails/ad writing on the paid
+  // provider; "off" uses Llama only as a last resort. Llama is always the final fallback when it's running.
+  const local = ctx.setting('ai.local', 'most');
+  const useLocalFirst = local === 'all' || (local === 'most' && role !== 'writing');
+  let chain = forceProvider ? [forceProvider] : [cfg.provider, ...(cfg.fallbacks || [])];
+  if (!forceProvider) chain = useLocalFirst ? ['ollama', ...chain] : [...chain, 'ollama'];
+  chain = chain.filter((p, i, a) => PROVIDERS[p] && a.indexOf(p) === i);
+  // Free web search for providers without built-in search (everything except Grok): results go in as context.
+  if (search && !(chain.find((p) => connected(p) && !overBudget(p)) === 'xai')) {
+    try { const ws = await require('./websearch').forPrompt(prompt || (messages || []).slice(-1)[0]?.content || ''); if (ws) system = `${system || ''}\n\n${ws}`; } catch { /* search unavailable */ }
+  }
   const sys = [system, clientContext(clientId)].filter(Boolean).join('\n\n');
   const msgs = messages || [{ role: 'user', content: prompt }];
   const errors = [];
   for (const provider of chain) {
     if (!connected(provider)) { errors.push(`${PROVIDERS[provider].label}: not connected`); continue; }
     if (overBudget(provider)) { errors.push(`${PROVIDERS[provider].label}: monthly budget reached`); continue; }
-    const model = provider === cfg.provider ? cfg.model : (ctx.setting(`ai.defaultModels.${provider}`) || defaultModelFor(provider));
+    const model = provider === 'ollama' ? ollamaModel() : provider === cfg.provider ? cfg.model : (ctx.setting(`ai.defaultModels.${provider}`) || defaultModelFor(provider));
     inflight[provider] = (inflight[provider] || 0) + 1;
     events.publish('agents', agentStatus(), { coalesceKey: 'agents' });
     try {
@@ -166,10 +205,11 @@ async function ask({ role = 'operations', system, prompt, messages, json = false
   throw err;
 }
 
-function defaultModelFor(p) { return { anthropic: 'claude-sonnet-5-5', openai: 'gpt-5', xai: 'grok-4' }[p]; }
+function defaultModelFor(p) { return { anthropic: 'claude-sonnet-5-5', openai: 'gpt-5', xai: 'grok-4', ollama: 'llama3.2' }[p]; }
 
 /** Verify a key with a cheap models-list call. */
 async function test(provider) {
+  if (provider === 'ollama') { const ok = await pingOllama(true); return ok ? { ok: true, models: ollamaState.models } : { ok: false, error: ollamaState.error }; }
   const key = secrets.get(PROVIDERS[provider].keyName);
   if (!key) return { ok: false, error: 'No API key saved' };
   try {
@@ -209,7 +249,7 @@ function agentStatus() {
   const roles = ctx.setting('ai.roles', {});
   return {
     providers: Object.fromEntries(Object.entries(PROVIDERS).map(([k, p]) => [k, {
-      ...p, keyName: undefined, connected: connected(k), busy: inflight[k] || 0, health: health[k] || null,
+      ...p, keyName: undefined, connected: connected(k), busy: inflight[k] || 0, health: k === 'ollama' ? { ok: ollamaState.ok, error: ollamaState.error, models: ollamaState.models } : health[k] || null,
       spendUsd: Math.round(monthSpend(k) * 100) / 100, budgetUsd: ctx.setting(`ai.budgetsUsd.${k}`, 0), overBudget: overBudget(k),
     }])),
     roles,
@@ -217,4 +257,4 @@ function agentStatus() {
   };
 }
 
-module.exports = { PROVIDERS, ask, test, transcribeOpenAI, connected, anyConnected, agentStatus, recordUsage, clientContext, AIError, monthSpend, callProvider, overBudget, defaultModelFor };
+module.exports = { pingOllama, ollamaState, PROVIDERS, ask, test, transcribeOpenAI, connected, anyConnected, agentStatus, recordUsage, clientContext, AIError, monthSpend, callProvider, overBudget, defaultModelFor };

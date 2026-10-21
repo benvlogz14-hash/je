@@ -101,6 +101,7 @@ function Connections() {
   const row = (label, ok) => html`<span class=${'badge ' + (ok ? 'moss' : '')}>${ok ? 'Connected' : 'Not connected'}</span>`;
   return html`
     <div class="notice" style="margin-bottom:14px"><${Icon} name="lock" size=${16} />Credentials are encrypted on this computer (sealed with Windows DPAPI in the desktop app) and are never shown again or sent anywhere except the service they belong to.</div>
+    <${LocalAI} st=${st} test=${test} />
     <${Section} title="AI providers" sub="Claude, GPT and Grok. Each role in System → Agents picks one, with fallbacks." action=${html`${row('', st?.ai?.anthropic || st?.ai?.openai || st?.ai?.xai)}`}>
       <div class="form-grid">${[['global.anthropic.apiKey', 'Anthropic (Claude) API key', 'anthropic'], ['global.openai.apiKey', 'OpenAI (GPT + Whisper) API key', 'openai'], ['global.xai.apiKey', 'xAI (Grok) API key', 'xai']].map(([k, l, p]) => html`<div class="col" style="gap:6px"><${SecretInput} k=${k} label=${l} status=${status} value=${v} onChange=${setV} /><div class="row"><${Button} size="sm" kind="soft" onClick=${() => saveKeys([k], p)}>Save & test</${Button}>${status[k] ? html`<${Button} size="sm" kind="ghost" onClick=${() => test(p)}>Test</${Button}>` : null}</div></div>`)}</div>
     </${Section}>
@@ -237,5 +238,26 @@ function Appearance() {
     <div class="row"><span class="label" style="width:120px">Sounds</span><${Toggle} on=${snd} label="Sounds" onChange=${(v) => { setSound(v); setSnd(v); }} /><span class="muted" style="font-size:var(--fs-sm)">Soft clicks, send and receive tones</span></div>
     <div class="divider" /><div class="eyebrow">Keyboard</div>
     <div class="grid c2" style="font-size:var(--fs-sm)">${[['Ctrl K', 'Search and commands'], ['Ctrl 1–0', 'Switch module'], ['Ctrl ,', 'Settings'], ['/', 'Commands in any composer'], ['A / R / X', 'Approve, request changes, reject'], ['J / K', 'Next / previous in Approvals'], ['Space', 'Play / pause'], ['S', 'Split in Studio']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="muted">${d}</span></div>`)}</div>
+  </${Section}>`;
+}
+
+/** Free AI on this computer (Ollama) and free web search, so paid keys are only used where they matter. */
+function LocalAI({ st, test }) {
+  const boot = useStore((s) => s.boot);
+  const init = boot.settings?.ai || {};
+  const [o, setO] = useState({ enabled: init.ollama?.enabled !== false, url: init.ollama?.url || 'http://127.0.0.1:11434', model: init.ollama?.model || 'llama3.2', local: init.local || 'most', searxngUrl: init.searxngUrl || '' });
+  const on = !!st?.ai?.ollama;
+  const save = () => act(() => api.patch('/api/settings', { ai: { ollama: { enabled: o.enabled, url: o.url, model: o.model }, local: o.local, searxngUrl: o.searxngUrl } }), { ok: 'Saved' }).then(() => test('ollama'));
+  return html`<${Section} title="Free AI on this computer (Ollama)" sub="Runs Llama on your own PC at no cost. Euclidean uses it automatically whenever Ollama is open, so your paid keys are only used where they matter." action=${html`<span class=${'badge ' + (on ? 'moss' : '')}>${on ? 'Running' : 'Not running'}</span>`}>
+    <div class="form-grid">
+      <${Field} label="Use the free local AI for" id="loc-mode"><select id="loc-mode" class="input" value=${o.local} onChange=${(e) => setO({ ...o, local: e.target.value })}>
+        <option value="most">Everything except emails and ad scripts (recommended)</option><option value="all">Everything (cheapest)</option><option value="off">Only when no paid AI works</option></select></${Field}>
+      <${Field} label="Model" hint="Download it once: ollama pull llama3.2" id="loc-model"><input id="loc-model" class="input" value=${o.model} onInput=${(e) => setO({ ...o, model: e.target.value })} /></${Field}>
+      <${Field} label="Ollama address" id="loc-url"><input id="loc-url" class="input" value=${o.url} onInput=${(e) => setO({ ...o, url: e.target.value })} /></${Field}>
+      <${Field} label="Your own search server (optional)" hint="Leave empty to use free DuckDuckGo search" id="loc-sx"><input id="loc-sx" class="input" placeholder="http://127.0.0.1:8888" value=${o.searxngUrl} onInput=${(e) => setO({ ...o, searxngUrl: e.target.value })} /></${Field}>
+    </div>
+    <label class="row" style="gap:8px"><${Toggle} on=${o.enabled} onChange=${(x) => setO({ ...o, enabled: x })} label="Use Ollama" /><span>Use Ollama when it's running</span></label>
+    <div class="faint" style="font-size:var(--fs-xs)">Set up once: install Ollama from ollama.com, then open a terminal and run <code class="selectable">ollama pull llama3.2</code>. Web research works without any key (free DuckDuckGo search, Wikipedia, public records, Jina Reader). Grok's built-in search is only used if you add an xAI key.</div>
+    <div class="row"><${Button} kind="primary" onClick=${save}>Save & check</${Button}></div>
   </${Section}>`;
 }
