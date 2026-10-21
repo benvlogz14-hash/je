@@ -6,6 +6,7 @@ import { play } from '../lib/sound.js';
 import { ago, dur } from '../lib/format.js';
 import { ClipDrawer } from './clip.js';
 import { QuotaBar } from './cards.js';
+import { ReverseReel } from './reverse.js';
 
 /** Quick "new client" so Production works on a fresh install; the full profile lives in Clients. */
 async function quickClient() {
@@ -41,6 +42,7 @@ export function Production() {
     </div>
     ${client?.quota ? html`<${QuotaStrip} client=${client} />` : null}
     <${Intake} clients=${clients || []} clientId=${clientId} setClientId=${setClientId} assets=${assets || []} jobs=${jobs || []} />
+    <${ReverseReel} clients=${clients || []} clientId=${clientId} />
     <div class="row" style="margin:22px 0 10px"><h3 class="grow">Clips</h3><span class="faint" style="font-size:var(--fs-sm)">${(clips || []).length} total</span></div>
     ${loading ? html`<${Loading} />` : !(clips || []).length ? html`<div class="panel"><${Empty} icon="film" title="No clips yet">Drop footage above. Euclidean transcribes it, finds the strongest moments and renders vertical shorts with captions.</${Empty}></div>` : html`
       <div class="board">${LANES.map((l) => {

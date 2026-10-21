@@ -40,4 +40,4 @@ async function analyze(src, dir, onStep = () => {}) {
   };
 }
 
-module.exports = { analyze };
+module.exports = { analyze, fetchSource };

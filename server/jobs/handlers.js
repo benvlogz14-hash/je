@@ -502,6 +502,16 @@ queue.register('political.reference', {
   },
 });
 
+queue.register('video.reverse', {
+  title: (p) => `Reverse-engineer ${String(p.src || 'a video').replace(/^https?:\/\/(www\.)?/, '').slice(0, 50)}`, heavy: true, maxAttempts: 1,
+  async run(job, h) {
+    const r = await require('../video/reverse').study(job.payload.src, { jobId: job.id, onProgress: (f, t) => h.progress(f, t) });
+    events.publish('settings', {});
+    events.publish('notify', { title: 'Recipe ready', body: r.recipe?.summary?.slice(0, 160) || 'The breakdown is ready.', route: '/production' });
+    return { id: r.id };
+  },
+});
+
 queue.register('setup.ollama', { title: () => 'Turn on Ollama', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setup(h) });
 queue.register('setup.vision', { title: () => 'Download free video vision (Llama vision)', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setupVision(h) });
 queue.register('setup.whisper', { title: () => 'Install free speech-to-text (Whisper)', maxAttempts: 1, run: (job, h) => require('../setup/whisper').install(h) });
