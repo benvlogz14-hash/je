@@ -89,6 +89,49 @@ function SecretInput({ k, label, status, value, onChange, type = 'password', pla
   return html`<${Field} label=${html`${label} ${status?.[k] ? html`<span class="badge moss" style="margin-left:4px">Saved</span>` : null}`} id=${k}><input id=${k} class="input" type=${type} placeholder=${status?.[k] ? '•••••••• (saved; type to replace)' : placeholder || ''} value=${value[k] || ''} onInput=${(e) => onChange({ ...value, [k]: e.target.value })} autocomplete="off" /></${Field}>`;
 }
 
+/** Clone your voice, hear it, and switch on voice notes and the callback assistant. */
+function VoiceSetup() {
+  const { data: vs, reload } = useApi('/api/voice', ['settings', 'notify']);
+  const [rec, setRec] = useState(null); const [busy, setBusy] = useState(''); const [ok, setOk] = useState(false); const [secs, setSecs] = useState(0);
+  const [audio, setAudio] = useState(null);
+  const upload = async (blob) => {
+    setBusy('Cloning your voice (about a minute)…');
+    try {
+      const res = await fetch(api.url('/api/voice/clone'), { method: 'POST', headers: { 'content-type': blob.type || 'audio/webm' }, body: blob });
+      const j = await res.json().catch(() => ({})); if (!res.ok) throw new Error(j.error || `Failed (${res.status})`);
+      toast('Your voice is ready', { kind: 'ok' }); reload();
+    } catch (e) { toast(e.message, { kind: 'error' }); }
+    setBusy('');
+  };
+  const start = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream); const chunks = []; const t0 = Date.now(); const iv = setInterval(() => setSecs(Math.round((Date.now() - t0) / 1000)), 500);
+      mr.ondataavailable = (e) => chunks.push(e.data);
+      mr.onstop = () => { clearInterval(iv); stream.getTracks().forEach((t) => t.stop()); upload(new Blob(chunks, { type: mr.mimeType || 'audio/webm' })); };
+      mr.start(); setRec(mr); setSecs(0);
+    } catch { toast('Microphone not available. Upload a recording instead.', { kind: 'warn' }); }
+  };
+  const pick = (e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; };
+  const preview = () => act(async () => { await api.post('/api/voice/preview', {}); setAudio(api.url('/api/voice/preview.mp3') + `&t=${Date.now()}`); }, { ok: 'Here it is' });
+  const flipNote = (on) => act(() => api.patch('/api/settings', { voice: { autoVoiceNote: on } }), { ok: on ? 'Voice notes on' : 'Voice notes off' }).then(reload);
+  const flipCalls = (on) => act(() => api.post('/api/voice/callbacks', { on }), { ok: on ? 'Your callback assistant is answering your Twilio number' : 'Callback assistant off' }).then(reload);
+  if (!vs) return html`<${Loading} />`;
+  if (busy) return html`<div class="faint"><span class="spinner" /> ${busy}</div>`;
+  return html`<div class="col" style="gap:10px">
+    ${!vs.cloned ? html`<div class="panel pad col" style="gap:8px;background:var(--surface-2)">
+      <b>Clone your voice</b>
+      <div class="faint" style="font-size:var(--fs-sm)">Talk naturally for one to two minutes in a quiet room (read an old email out loud, or talk about what Euclidean does). Only clone your own voice.</div>
+      <label class="row" style="gap:8px"><input type="checkbox" checked=${ok} onChange=${(e) => setOk(e.target.checked)} /><span>This is my own voice and I agree to it being cloned for Euclidean outreach.</span></label>
+      ${rec ? html`<${Button} kind="coral" icon="stop" onClick=${() => { rec.stop(); setRec(null); }}>Stop and clone (${secs}s)</${Button}>` : html`<div class="row" style="gap:6px"><${Button} kind="primary" icon="mic" disabled=${!ok} onClick=${start}>Record now</${Button}><label class=${'btn ghost' + (ok ? '' : ' disabled')} style="cursor:pointer">Upload a recording<input type="file" accept="audio/*,video/*" style="display:none" disabled=${!ok} onChange=${pick} /></label></div>`}
+    </div>` : html`<div class="row wrap" style="gap:8px"><span class="badge moss">Voice cloned${vs.clonedAt ? ` ${ago(vs.clonedAt)}` : ''}</span><${Button} size="sm" kind="ghost" icon="play" onClick=${preview}>Hear it</${Button}>${audio ? html`<audio src=${audio} controls autoplay />` : null}</div>
+    <label class="row" style="gap:8px"><${Toggle} on=${vs.autoVoiceNote} onChange=${flipNote} label="Voice notes" /><span>Attach a short voice note in my voice to every new outreach email (you can still change or remove it in the review queue)</span></label>
+    <label class="row" style="gap:8px;align-items:flex-start"><${Toggle} on=${vs.callbacks} onChange=${flipCalls} label="Callbacks" /><span>Answer my Twilio number with an AI assistant in my voice. It says it's an AI assistant, answers simple questions about our offers and takes a message. It only answers incoming calls; it never calls anyone.</span></label>
+    ${vs.calls?.length ? html`<div class="col" style="gap:6px"><b>Recent callbacks</b>${vs.calls.map((c) => html`<div class="panel pad" style="padding:8px 12px"><div class="row" style="gap:8px"><b>${c.name || c.from || 'Caller'}</b><span class="faint" style="font-size:var(--fs-xs)">${ago(c.at)} · ${Math.round(c.seconds / 60 * 10) / 10} min</span>${c.prospectId ? html`<span class="badge sky">Lead moved to Replied</span>` : null}</div><div style="font-size:var(--fs-sm)">${c.summary || 'Message taken.'}</div></div>`)}</div>` : null}
+    <div class="row"><${Button} size="sm" kind="ghost" onClick=${() => act(() => api.patch('/api/settings', { voice: { voiceId: '', callbacks: false } }), { ok: 'Removed. Record again to re-clone.' }).then(() => (vs.callbacks ? flipCalls(false) : reload()))}>Re-record my voice</${Button}></div>`}
+  </div>`;
+}
+
 function Connections() {
   const boot = useStore((s) => s.boot);
   const { data: st, reload } = useApi('/api/secrets/status', ['connections']);
@@ -109,6 +152,11 @@ function Connections() {
       <div class="form-grid">${[['global.twilio.accountSid', 'Account SID', 'text'], ['global.twilio.authToken', 'Auth token', 'password'], ['global.twilio.fromNumber', 'From number', 'text'], ['global.twilio.messagingServiceSid', 'Messaging service SID (optional)', 'text']].map(([k, l, t]) => html`<${SecretInput} k=${k} label=${l} type=${t} status=${status} value=${v} onChange=${setV} />`)}</div>
       <div class="row"><${Button} kind="primary" onClick=${() => saveKeys(['global.twilio.accountSid', 'global.twilio.authToken', 'global.twilio.fromNumber', 'global.twilio.messagingServiceSid'], 'twilio')}>Save & test</${Button}>${st?.twilio ? html`<${Button} kind="ghost" onClick=${() => test('twilio')}>Test</${Button}>` : null}</div>
     </${Section}>
+    <${Section} title="Your voice (ElevenLabs)" sub="Clone your own voice once. Then Euclidean can attach a voice note in your voice to outreach emails, and an AI assistant in your voice can answer people who call your Twilio number back. It never places calls itself." action=${row('', st?.secrets?.['global.elevenlabs.apiKey'])}>
+      <div class="form-grid"><${SecretInput} k="global.elevenlabs.apiKey" label="ElevenLabs API key (elevenlabs.io → Profile → API keys)" status=${status} value=${v} onChange=${setV} /></div>
+      <div class="row"><${Button} kind="primary" onClick=${() => saveKeys(['global.elevenlabs.apiKey'], 'elevenlabs')}>Save & test</${Button}></div>
+      ${status['global.elevenlabs.apiKey'] ? html`<${VoiceSetup} />` : null}
+    </${Section}>
     <${Section} title="Email" sub="Any mailbox with SMTP and IMAP. For Gmail or Google Workspace, turn on 2-step verification and create an app password." action=${row('', st?.email)}>
       <div class="row wrap"><span class="label">Presets</span>${Object.keys(ep).map((n) => html`<button class="chip" onClick=${() => preset(n)}>${n[0].toUpperCase() + n.slice(1)}</button>`)}</div>
       <div class="form-grid">${[['global.email.address', 'Email address', 'text'], ['global.email.displayName', 'Display name', 'text'], ['global.email.password', 'App password', 'password'], ['global.email.username', 'Username (if not the address)', 'text'], ['global.email.smtpHost', 'SMTP host', 'text'], ['global.email.smtpPort', 'SMTP port', 'text'], ['global.email.imapHost', 'IMAP host', 'text'], ['global.email.imapPort', 'IMAP port', 'text']].map(([k, l, t]) => html`<${SecretInput} k=${k} label=${l} type=${t} status=${status} value=${v} onChange=${setV} />`)}</div>
@@ -120,7 +168,7 @@ function Connections() {
     </${Section}>
     <${Section} title="Political research data" sub="Free keys that make political packages more complete. Open States covers every state legislator; api.data.gov unlocks Congress.gov and FEC fundraising at full speed. Both are optional.">
       <div class="form-grid"><${SecretInput} k="global.political.openStatesKey" label="Open States API key (open.pluralpolicy.com)" status=${status} value=${v} onChange=${setV} /><${SecretInput} k="global.political.dataGovKey" label="api.data.gov key (api.data.gov/signup)" status=${status} value=${v} onChange=${setV} /><${SecretInput} k="global.removebg.apiKey" label="remove.bg key (photo cut-outs, optional)" status=${status} value=${v} onChange=${setV} /><${SecretInput} k="global.pexels.apiKey" label="Pexels key (more background photos, free, optional)" status=${status} value=${v} onChange=${setV} /></div>
-      <div class="faint" style="font-size:var(--fs-xs)">No remove.bg key? Install the free cut-out tool once instead: open PowerShell and run <code class="selectable">pip install "rembg[cli]"</code>. Euclidean finds it automatically.</div>
+      <div class="faint" style="font-size:var(--fs-xs)">No remove.bg key? Use the free cut-out tool instead: Agent Connections → setup checklist → Photo background removal → Install free tool.</div>
       <div class="row"><${Button} kind="primary" onClick=${() => saveKeys(['global.political.openStatesKey', 'global.political.dataGovKey', 'global.removebg.apiKey', 'global.pexels.apiKey'])}>Save</${Button}></div>
     </${Section}>
     <${Section} title="YouTube direct upload (Google)" sub="Optional. Create an OAuth client of type Desktop app in Google Cloud Console with the YouTube Data API enabled." action=${row('', st?.google)}>
@@ -252,12 +300,12 @@ function LocalAI({ st, test }) {
     <div class="form-grid">
       <${Field} label="Use the free local AI for" id="loc-mode"><select id="loc-mode" class="input" value=${o.local} onChange=${(e) => setO({ ...o, local: e.target.value })}>
         <option value="most">Everything except emails and ad scripts (recommended)</option><option value="all">Everything (cheapest)</option><option value="off">Only when no paid AI works</option></select></${Field}>
-      <${Field} label="Model" hint="Download it once: ollama pull llama3.2" id="loc-model"><input id="loc-model" class="input" value=${o.model} onInput=${(e) => setO({ ...o, model: e.target.value })} /></${Field}>
+      <${Field} label="Model" hint="Downloaded for you by the Turn on Ollama button" id="loc-model"><input id="loc-model" class="input" value=${o.model} onInput=${(e) => setO({ ...o, model: e.target.value })} /></${Field}>
       <${Field} label="Ollama address" id="loc-url"><input id="loc-url" class="input" value=${o.url} onInput=${(e) => setO({ ...o, url: e.target.value })} /></${Field}>
       <${Field} label="Your own search server (optional)" hint="Leave empty to use free DuckDuckGo search" id="loc-sx"><input id="loc-sx" class="input" placeholder="http://127.0.0.1:8888" value=${o.searxngUrl} onInput=${(e) => setO({ ...o, searxngUrl: e.target.value })} /></${Field}>
     </div>
     <label class="row" style="gap:8px"><${Toggle} on=${o.enabled} onChange=${(x) => setO({ ...o, enabled: x })} label="Use Ollama" /><span>Use Ollama when it's running</span></label>
-    <div class="faint" style="font-size:var(--fs-xs)">Set up once: install Ollama from ollama.com, then open a terminal and run <code class="selectable">ollama pull llama3.2</code>. Web research works without any key (free DuckDuckGo search, Wikipedia, public records, Jina Reader). Grok's built-in search is only used if you add an xAI key.</div>
+    <div class="faint" style="font-size:var(--fs-xs)">Set up once with the <b>Turn on Ollama</b> button in Agent Connections. It installs Ollama and downloads the model for you. Web research works without any key (free DuckDuckGo search, Wikipedia, public records, Jina Reader). Grok's built-in search is only used if you add an xAI key.</div>
     <div class="row"><${Button} kind="primary" onClick=${save}>Save & check</${Button}></div>
   </${Section}>`;
 }

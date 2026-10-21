@@ -377,7 +377,7 @@ h1{font:800 34px/1.05 Pop;color:${T.ink};letter-spacing:-.02em} h1 b{color:${T.a
   return 'Sheet ready';
 }
 
-function stepEmail(p, actor) {
+async function stepEmail(p, actor) {
   const pkg = p.pkg; const c = pkg.creative; if (!c?.email) throw new Error('Run the storyboard step first.');
   const to = (p.publicContact && /@/.test(p.publicContact) ? p.publicContact : pkg.profile?.contact || '').trim().toLowerCase();
   if (!to) { save(p.id, () => ({ status: 'needs_contact' })); return { skip: true, note: 'No public campaign email found. Add one on the prospect, then re-run this step.' }; }
@@ -396,7 +396,8 @@ function stepEmail(p, actor) {
   const m = messaging.createOutbound({ contactId: contact.id, channel: 'email', subject: noDashes(c.email.subject), body: withFooter(c.email.body), aiGenerated: true, agent: c.agent, category: 'prospecting', actor, attachments: att });
   save(p.id, () => ({ messageId: m.id, conversationId: m.conversationId }));
   if ((p.stage || 'new') === 'new') ctx.store.update('prospects', p.id, { stage: 'drafted' });
-  return { note: `${att.length} attachments (${(att.reduce((s2, a) => s2 + a.size, 0) / 1e6).toFixed(1)} MB)` };
+  const vn = !p.voiceNote && await require('../outreach/voicenote').auto(p);
+  return { note: `${att.length} attachments (${(att.reduce((s2, a) => s2 + a.size, 0) / 1e6).toFixed(1)} MB)${vn ? ' + voice note in your voice' : ''}` };
 }
 
 /** Email-sized ads plus the sheet, kept under the attachment limit (the long ad is dropped first). */
@@ -439,7 +440,7 @@ async function run(prospectId, { from = 'research', only = null, actor = 'system
       else if (step === 'video_h') note = await stepVideo(p, sub, 'h');
       else if (step === 'video_hl') { if (S('longVideo', true)) note = await stepVideo(p, sub, 'hl'); else { setStep(p.id, step, { status: 'skipped', note: 'Long ad is off' }); continue; } }
       else if (step === 'sheet') note = await stepSheet(p);
-      else if (step === 'email') { const r = stepEmail(p, actor); note = r.note; if (r.skip) { setStep(p.id, step, { status: 'skipped', note }); continue; } }
+      else if (step === 'email') { const r = await stepEmail(p, actor); note = r.note; if (r.skip) { setStep(p.id, step, { status: 'skipped', note }); continue; } }
       setStep(p.id, step, { status: 'done', note });
     } catch (e) {
       setStep(p.id, step, { status: 'failed', error: e.message });

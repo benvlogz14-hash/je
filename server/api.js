@@ -42,7 +42,7 @@ const SECRET_KEYS = new Set([
   'global.anthropic.apiKey', 'global.openai.apiKey', 'global.xai.apiKey',
   ...Object.values(twilio.K), ...Object.values(email.K),
   'global.ayrshare.apiKey', 'global.google.clientId', 'global.google.clientSecret',
-  ...Object.values(require('./political/sources').KEYS), require('./video/cutout').KEY, require('./political/images').PEXELS,
+  ...Object.values(require('./political/sources').KEYS), require('./video/cutout').KEY, require('./political/images').PEXELS, require('./integrations/elevenlabs').KEY,
 ]);
 
 // ------------------------------------------------------------ bootstrap & settings
@@ -98,6 +98,7 @@ r.post('/api/connections/test/:name', async (req, b, p) => {
   if (n === 'twilio') return twilio.test();
   if (n === 'email') return email.test();
   if (n === 'ayrshare') return publishing.ayrTest();
+  if (n === 'elevenlabs') return require('./integrations/elevenlabs').test();
   throw new HttpError(404, 'Unknown connection');
 }, { roles: OWNER });
 
@@ -572,15 +573,46 @@ r.post('/api/prospects/:id/voicenote', async (req, res, p) => {
   const raw = path.join(dir, `raw.${ext}`);
   await new Promise((ok, bad) => { const w = fs.createWriteStream(raw); let n = 0; req.on('data', (c) => { n += c.length; if (n > 25e6) { req.destroy(); bad(new Error('Too long')); } }); req.pipe(w); w.on('finish', ok); w.on('error', bad); });
   // Normalise to a small MP3 that every mail client plays.
-  const out = path.join(dir, `Voice note from ${String(ctx.setting('political.senderName', '') || ctx.setting('agency.name', 'Euclidean Media')).replace(/[^\w .-]/g, '')}.mp3`);
-  try { await require('./core/util').run(ff.bin('ffmpeg'), ['-y', '-i', raw, '-vn', '-ac', '1', '-ar', '44100', '-b:a', '96k', '-af', 'loudnorm=I=-16:TP=-1.5', out], { timeoutMs: 120000 }); }
+  let out;
+  try { out = await require('./outreach/voicenote').attach(pr, raw); }
   catch (e) { return send(res, 400, { error: `Couldn't read that recording: ${e.message.slice(0, 120)}` }); }
-  const att = [...(msg.attachments || []).filter((a) => !/^Voice note/.test(a.name)), { name: path.basename(out), path: out, size: fs.statSync(out).size }];
-  ctx.store.update('messages', msg.id, { attachments: att });
-  ctx.store.update('prospects', pr.id, { voiceNote: out });
   events.publish('prospects', { id: pr.id });
   return send(res, 200, { ok: true, name: path.basename(out) });
 }, { stream: true, raw: true });
+// Voice note in the founder's cloned voice (ElevenLabs), from the lead's voice-note script.
+r.post('/api/prospects/:id/voicenote-ai', async (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id));
+  const out = await require('./outreach/voicenote').fromScript(pr, String(b.text || '').trim() || undefined);
+  events.publish('prospects', { id: pr.id });
+  return { ok: true, name: path.basename(out) };
+});
+// Your voice: clone it, voice notes, and the callback assistant.
+r.get('/api/voice', () => require('./integrations/elevenlabs').status(), { roles: OWNER });
+r.post('/api/voice/clone', async (req, res) => {
+  const dir = path.join(paths.root, 'voice-samples'); fs.mkdirSync(dir, { recursive: true });
+  const ct = req.headers['content-type'] || ''; const ext = /mp4|m4a/.test(ct) ? 'm4a' : /mpeg|mp3/.test(ct) ? 'mp3' : /wav/.test(ct) ? 'wav' : 'webm';
+  const raw = path.join(dir, `sample-${Date.now()}.${ext}`);
+  try { await new Promise((ok, bad) => { const w = fs.createWriteStream(raw); let n = 0; req.on('data', (c) => { n += c.length; if (n > 50e6) { req.destroy(); bad(new Error('That recording is too big (50 MB max).')); } }); req.pipe(w); w.on('finish', ok); w.on('error', bad); }); }
+  catch (e) { return send(res, 400, { error: e.message }); }
+  const mp3 = raw.replace(/\.[^.]+$/, '.mp3');
+  try {
+    const info = await ff.probe(raw);
+    if ((info.duration || 0) < 30) return send(res, 400, { error: 'Record at least 30 seconds (a minute or two of natural talking works best).' });
+    await require('./core/util').run(ff.bin('ffmpeg'), ['-y', '-i', raw, '-vn', '-ac', '1', '-ar', '44100', '-b:a', '128k', mp3], { timeoutMs: 120000 });
+    const id = await require('./integrations/elevenlabs').cloneVoice([mp3], String(req.headers['x-voice-name'] || '').slice(0, 60));
+    return send(res, 200, { ok: true, voiceId: id });
+  } catch (e) { return send(res, 400, { error: e.message }); }
+}, { stream: true, raw: true, roles: OWNER });
+r.post('/api/voice/callbacks', async (req, b) => {
+  const el = require('./integrations/elevenlabs');
+  return b.on ? el.enableCallbacks() : el.disableCallbacks();
+}, { roles: OWNER });
+r.post('/api/voice/preview', async (req, b) => {
+  const out = path.join(paths.root, 'voice-samples', 'preview.mp3');
+  await require('./integrations/elevenlabs').speak(String(b.text || 'Hey, it\'s me from Euclidean Media. Could you give us 20 minutes this week?').slice(0, 400), out);
+  return { ok: true };
+}, { roles: OWNER });
+r.get('/api/voice/preview.mp3', (req, res) => serveFile(req, res, path.join(paths.root, 'voice-samples', 'preview.mp3')), { stream: true, roles: OWNER });
 // Notes, revisions and versions for one lead.
 r.post('/api/prospects/:id/revise', (req, b, p) => {
   const pr = must(ctx.store.get('prospects', p.id)); const note = String(b.note || '').trim();

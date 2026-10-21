@@ -39,6 +39,7 @@ module.exports = {
     allowGov: false,           // allow drafts to official .gov addresses
   },
   // Automatic outreach. Off until a founder switches it on; each lane has its own daily limits.
+  voice: { voiceId: '', autoVoiceNote: false, callbacks: false, model: 'eleven_multilingual_v2' },  // your cloned voice (ElevenLabs): voice notes + inbound callback assistant
   video: { lookThrough: true },  // look through footage shot by shot (FFmpeg stills + faces + an AI that can see, when connected)
   outreach: {
     exclusions: '',            // names, organisations or email domains never to contact (one per line)

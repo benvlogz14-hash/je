@@ -93,6 +93,7 @@ async function run(prospectId, h) {
     const m = messaging.createOutbound({ contactId: contact.id, channel: 'email', subject: noDashes(em.subject), body: withFooter(em.body), aiGenerated: true, agent: em.agent, category: 'prospecting', actor: 'system', attachments: att });
     set({ email: { subject: em.subject, body: em.body }, status: 'ready', offer: offer.key, messageId: m.id, conversationId: m.conversationId, finishedAt: now(), agent: em.agent });
     if ((p.stage || 'new') === 'new') ctx.store.update('prospects', p.id, { stage: 'drafted' });
+    if (!p.voiceNote) await require('./voicenote').auto(p);
     if (!require('./autopilot').maybeAutoSend(p.id)) events.publish('notify', { title: `Email ready: ${p.name}`, body: 'Waiting for your review in Growth → Creators.', route: '/growth' });
     return { status: 'ready' };
   } catch (e) { set({ status: 'failed', error: e.message }); throw e; }

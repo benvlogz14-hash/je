@@ -33,6 +33,7 @@ async function build() {
     // Texting and calls
     item('Texts & calls', 'twilio', 'Twilio (texting and one-click calling)', twilio.configured(), 'Texts with clients, and the Call button that rings your phone and connects you to a lead.', go('/settings?tab=connections', 'Connect Twilio'), 'recommended'),
     item('Texts & calls', 'phone', 'Your phone number for calls', !!S('outreach.callerPhone', ''), 'The number Twilio rings first when you press Call on a lead.', go('/growth', 'Add in Autopilot settings'), 'recommended'),
+    item('Texts & calls', 'voice', 'Your cloned voice (ElevenLabs)', require('../integrations/elevenlabs').cloned(), require('../integrations/elevenlabs').cloned() ? `Cloned. Voice notes ${ctx.setting('voice.autoVoiceNote', false) ? 'on' : 'off'}, callback assistant ${ctx.setting('voice.callbacks', false) ? 'on' : 'off'}.` : 'Voice notes in your own voice on outreach emails, and an AI assistant in your voice that answers people calling back.', go('/settings?tab=connections', 'Set up'), 'optional'),
     // Research data
     item('Research', 'openstates', 'Open States key (state legislators, free)', secrets.has('global.political.openStatesKey'), 'Finds and checks state and local legislators. Free sign-up.', go('/settings?tab=connections', 'Add key'), 'recommended'),
     item('Research', 'datagov', 'api.data.gov key (Congress and FEC money, free)', secrets.has('global.political.dataGovKey'), 'Full-speed fundraising and Congress data. Works slowly without it.', go('/settings?tab=connections', 'Add key'), 'optional'),

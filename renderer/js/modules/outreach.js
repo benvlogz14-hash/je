@@ -251,7 +251,9 @@ function VoiceNote({ id, has }) {
   const pick = async (e) => { const f = e.target.files?.[0]; if (!f) return; setBusy(true); try { await uploadVoice(id, f); toast('Voice note attached', { kind: 'ok' }); } catch (err) { toast(err.message, { kind: 'error' }); } setBusy(false); e.target.value = ''; };
   if (busy) return html`<span class="faint"><span class="spinner" /> Attaching…</span>`;
   if (rec) return html`<${Button} kind="coral" icon="stop" onClick=${stop}>Stop recording</${Button}>`;
-  return html`<span class="row" style="gap:4px"><${Button} kind="ghost" icon="mic" onClick=${start}>${has ? 'Re-record voice note' : 'Voice note'}</${Button}><label class="btn ghost sm" style="cursor:pointer" title="Upload a recording">Upload<input type="file" accept="audio/*" style="display:none" onChange=${pick} /></label></span>`;
+  const mine = store.get().boot?.settings?.voice?.voiceId;
+  const ai = async () => { setBusy(true); try { await api.post(`/api/prospects/${id}/voicenote-ai`, {}); toast('Voice note in your voice attached', { kind: 'ok' }); } catch (e) { toast(e.message, { kind: 'error' }); } setBusy(false); };
+  return html`<span class="row" style="gap:4px">${mine ? html`<${Button} kind="ghost" icon="sparkle" title="Read the voice-note script in your cloned voice" onClick=${ai}>In my voice</${Button}>` : null}<${Button} kind="ghost" icon="mic" onClick=${start}>${has ? 'Re-record voice note' : 'Voice note'}</${Button}><label class="btn ghost sm" style="cursor:pointer" title="Upload a recording">Upload<input type="file" accept="audio/*" style="display:none" onChange=${pick} /></label></span>`;
 }
 
 function CallButton({ id, name }) {

@@ -76,12 +76,7 @@ Built and tested end to end with sample data; live lookups were blocked in the c
 - UI: Growth → **Political packages** (`renderer/js/modules/political.js`). The Open States and api.data.gov keys are in Settings → Connections.
 - Settings live under `political.*` in `server/core/defaults.js`.
 
-**Not built yet:**
-- Twilio click-to-dial (calls are currently a tel: link plus a script and outcome logging).
-- Recording and attaching the voice note.
-- Cloned-voice answering of inbound calls.
-- A Political tab in the phone app (its email drafts already show in Approvals there).
-- Reply tracking that moves the prospect's stage automatically.
+**Calls and voice (built):** Twilio click-to-call (`twilio.bridgeCall`, rings the founder first), recorded voice notes, and `server/integrations/elevenlabs.js`: clone the founder's own voice (Settings → Connections → Your voice), voice notes read in that voice (`server/outreach/voicenote.js`, per lead or automatically with `voice.autoVoiceNote`), and an inbound-only ElevenLabs callback assistant on the Twilio number that says it's an AI and takes messages (`voice.callbacks`; calls are polled into Recent callbacks and move known leads to Replied). Nothing places outbound AI calls.
 
 ## Outreach lanes (Growth → Creators | Politics)
 - **Creators** get an email only, never sample videos. Offers (`creatorOffers.*` in defaults):
