@@ -28,6 +28,7 @@ const STEPS = [
   ['research', 'Research public records'],
   ['brief', 'Write the brief'],
   ['images', 'Find photos and backgrounds'],
+  ['footage', 'Find speech clips and B-roll'],
   ['opponent', 'Research the opponent'],
   ['creative', 'Ad scripts, email and call script'],
   ['video_v', 'Short vertical ad'],
@@ -95,6 +96,21 @@ async function stepImages(p, h) {
   save(p.id, () => ({ backgrounds, backgroundErrors: errors.slice(0, 5) }));
   return `${backgrounds.length} background photo${backgrounds.length === 1 ? '' : 's'}`;
 }
+/** Real clips of them speaking (Facebook, YouTube, their sites) for the "their own speeches" ad style. */
+async function stepFootage(p, h) {
+  if (S('videoStyle', 'campaign') !== 'speech') return { skip: true, note: 'Only used for the "Their own speeches" ad style' };
+  const pkg = p.pkg; const pr = pkg.profile || {};
+  const links = [].concat(p.footageLinks || []).flatMap((x) => String(x).split(/\s+/)).filter((x) => /^https?:\/\//.test(x));
+  const r = await require('./footage').prepare({
+    name: p.name, office: shortOffice(pr.office || ''), socials: pr.socials || [], sites: pr.sites || [], links, dir: dirFor(p), themes: pkg.brief?.themes || [],
+    shortSec: Number(S('shortSeconds', 20)) || 20, longSec: Number(S('videoSeconds', 60)) || 60, contrast: !!S('contrastAds', false),
+    notes: (pkg.notes || []).filter((n) => n.target !== 'email').map((n) => n.text).join(' | '), want: Number(S('footageClips', 4)) || 4, onStep: (x) => h.progress(0.3, x),
+  });
+  save(p.id, () => ({ footage: r }));
+  if ((r.bites.short || []).length < 2) return { note: `Not enough usable speech found, so the graphic ads will be used. ${r.errors.slice(-1)[0] || ''}`.trim() };
+  return { note: `${r.clips.length} video${r.clips.length === 1 ? '' : 's'} · ${r.bites.short.length} + ${r.bites.long.length} lines picked` };
+}
+
 const STATES = { AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming' };
 
 async function stepBrief(p) {
@@ -168,7 +184,8 @@ async function stepCreative(p) {
   const pkg = p.pkg;
   const shortSec = Math.max(10, Math.min(90, Number(S('shortSeconds', 20)) || 20));
   const longSec = Math.max(30, Math.min(240, Number(S('videoSeconds', 60)) || 60));
-  const style = S('videoStyle', 'campaign');
+  const speech = S('videoStyle', 'campaign') === 'speech' && (pkg.footage?.bites?.short || []).length >= 2;
+  const style = S('videoStyle', 'campaign') === 'pop' ? 'pop' : 'campaign';
   const hasPhoto = pkg.profile?.photoFound !== false && !!pkg.profile?.photo;
   const offer = hasPhoto
     ? (S('offer', '') || `Three free ads (a short vertical, a short horizontal and a longer horizontal cut) they can use free of charge whether or not they talk to us. Our political plan: ${S('plan', DEFAULT_PLAN)}. Ask for 20 minutes.`)
@@ -176,9 +193,10 @@ async function stepCreative(p) {
   const booking = S('bookingUrl', '');
   const sender = S('senderName', '') || ctx.setting('agency.founders', [])[0]?.name || '';
   const contrast = !!(S('contrastAds', false) && pkg.opp);
+  const footageNote = speech ? `The ads are cut from ${p.name}'s own public speeches and videos (${[...new Set(pkg.footage.clips.map((c) => c.platform))].join(', ')}), with captions, B-roll and campaign graphics. Mention that in one short line.${pkg.footage.clips.some((c) => !c.own) ? ' Some clips come from news coverage they may not own, so call the ads concepts made from public footage rather than promising every clip is cleared to post.' : ''}\n` : '';
   if (!ai.anyConnected()) { save(p.id, () => ({ creative: fallbackCreative(p, pkg, { booking, sender, style }) })); return 'Template scripts (connect an AI provider for tailored ads)'; }
   const templates = String(S('templates', '') || '').trim();
-  const r = await ai.ask({ role: 'writing', json: true, maxTokens: 6000, system: `You create outreach for ${ctx.setting('agency.name', 'Euclidean Media')}, a video agency for political campaigns. You write sample campaign ads for the candidate, aimed at THEIR voters, that make the case for them on their key points (lower costs, schools, safety, jobs... whatever the material supports). Rules: use only facts in the material; numbers, headlines and quotes must appear in the material (quotes word for word) or be left out; cite source numbers on factual scenes; never claim endorsements or results you can't show; no personal details; ${contrast ? 'contrast with the opponent is allowed ONLY on specific, cited public-record facts' : 'do not mention or attack any opponent'}. The email is personal, specific and short (under 170 words): it says what we made for them, that the attached ads are theirs to use free of charge whether or not they talk to us, mentions the plan in one line, asks for 20 minutes, and ends with an opt-out line. Never use em dashes.${learning.writerBlock('political')}`, prompt: `${material(pkg)}\n\nBRIEF\n${JSON.stringify(pkg.brief || {}).slice(0, 6000)}\n\n${templates ? `HOUSE EMAIL TEMPLATES (match this voice and structure):\n${templates.slice(0, 6000)}\n\n` : ''}OFFER: ${offer}\n${booking ? `Booking link: ${booking}\n` : ''}${sender ? `Sign as: ${sender}, ${ctx.setting('agency.name', 'Euclidean Media')}\n` : ''}
+  const r = await ai.ask({ role: 'writing', json: true, maxTokens: 6000, system: `You create outreach for ${ctx.setting('agency.name', 'Euclidean Media')}, a video agency for political campaigns. You write sample campaign ads for the candidate, aimed at THEIR voters, that make the case for them on their key points (lower costs, schools, safety, jobs... whatever the material supports). Rules: use only facts in the material; numbers, headlines and quotes must appear in the material (quotes word for word) or be left out; cite source numbers on factual scenes; never claim endorsements or results you can't show; no personal details; ${contrast ? 'contrast with the opponent is allowed ONLY on specific, cited public-record facts' : 'do not mention or attack any opponent'}. The email is personal, specific and short (under 170 words): it says what we made for them, that the attached ads are theirs to use free of charge whether or not they talk to us, mentions the plan in one line, asks for 20 minutes, and ends with an opt-out line. Never use em dashes.${learning.writerBlock('political')}`, prompt: `${material(pkg)}\n\nBRIEF\n${JSON.stringify(pkg.brief || {}).slice(0, 6000)}\n\n${templates ? `HOUSE EMAIL TEMPLATES (match this voice and structure):\n${templates.slice(0, 6000)}\n\n` : ''}OFFER: ${offer}\n${footageNote}${booking ? `Booking link: ${booking}\n` : ''}${sender ? `Sign as: ${sender}, ${ctx.setting('agency.name', 'Euclidean Media')}\n` : ''}
 ${notesBlock(pkg)}${S('reference', null)?.avgShot ? `PACING: match a reference ad the founders like: about ${S('reference').avgShot} seconds per scene (${S('reference').cutsPerMinute} cuts a minute). Set "sec" on each scene accordingly.\n` : ''}Write two ads from the same campaign: "short" (about ${shortSec} seconds, ${Math.max(4, Math.round(shortSec / 3.5))} scenes, used for both the vertical and the horizontal short) and "long" (about ${longSec} seconds, ${Math.max(6, Math.round(longSec / 4))} scenes). Each should open with a strong hook and end with a ${style === 'campaign' ? 'vote' : 'cta then end'} scene.
 ${style === 'campaign' ? CAMPAIGN_DOC : POP_DOC}
 ${contrast ? CONTRAST_DOC : ''}
@@ -287,7 +305,10 @@ async function stepVideo(p, h, kind) {
   const work = path.join(dir, `work_${kind}`);
   const ref = S('reference', null);
   const paced = ref?.avgShot ? board.map((x) => (x.sec ? x : { ...x, sec: Math.max(2.5, Math.min(7, ref.avgShot * (['issues', 'checklist', 'chart', 'contrast'].includes(x.type) ? 1.6 : 1))) })) : board;
-  const res = await render.renderVideo({ scenes: paced, info, vertical: K.vertical, out, work, music, narration, onProgress: (f, t) => h.progress(f * 0.92, t) });
+  const ft = p.pkg.footage; const bites = ft?.bites?.[K.board] || [];
+  const res = S('videoStyle', 'campaign') === 'speech' && bites.length >= 2 && ft.clips.every((x) => fs.existsSync(x.file))
+    ? await require('./footage').renderSpeechAd({ bites, footage: ft, info, vertical: K.vertical, out, work, music, tagline: ft.tagline || `${p.name} is *fighting for you*`, office: shortOffice(pr.office || ''), site: siteOf(p.pkg), onProgress: (f, t) => h.progress(f * 0.92, t) })
+    : await render.renderVideo({ scenes: paced, info, vertical: K.vertical, out, work, music, narration, onProgress: (f, t) => h.progress(f * 0.92, t) });
   fs.rmSync(work, { recursive: true, force: true });
   // Small copy for email attachments (720p), the full-quality file stays in the folder.
   h.progress(0.94, 'Making the email-sized copy');
@@ -411,6 +432,7 @@ async function run(prospectId, { from = 'research', only = null, actor = 'system
       if (step === 'research') note = await stepResearch(p, sub);
       else if (step === 'brief') note = await stepBrief(p);
       else if (step === 'images') { const r = await stepImages(p, sub); if (r?.skip) { setStep(p.id, step, { status: 'skipped', note: r.note }); continue; } note = r; }
+      else if (step === 'footage') { const r = await stepFootage(p, sub); note = r.note; if (r.skip) { setStep(p.id, step, { status: 'skipped', note }); continue; } }
       else if (step === 'opponent') { const r = await stepOpponent(p, sub); note = r.note; if (r.skip) { setStep(p.id, step, { status: 'skipped', note }); continue; } }
       else if (step === 'creative') note = await stepCreative(p);
       else if (step === 'video_v') note = await stepVideo(p, sub, 'v');

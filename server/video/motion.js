@@ -271,7 +271,7 @@ async function renderVideo({ scenes, info, vertical, out, work, music, narration
   if (camp) {
     info = { citeText: () => '', ...info };
     const disclaimer = info.disclaimer || 'Concept ad by Euclidean Media. Not paid for or authorized by any candidate or committee.';
-    if (!scenes.some((x) => x.type === 'disclaimer')) scenes = [...scenes, { type: 'disclaimer', text: disclaimer, sec: 2.5 }];
+    if (!info.noDisclaimer && !scenes.some((x) => x.type === 'disclaimer')) scenes = [...scenes, { type: 'disclaimer', text: disclaimer, sec: 2.5 }];
   }
   const baseCss = camp ? css(T) + camp.css(P) : css(T);
   fs.mkdirSync(work, { recursive: true });
@@ -358,7 +358,7 @@ ${FIT}</body></html>`;
   }
   const total = offset;
   const ti = clips.length; inputs.push('-i', tagFile);
-  f.push(`[${ti}:v]crop=460:84:0:0[tg];${cur}[tg]overlay=x=${W - 460 - 24}:y=${H - 84 - (vertical ? 60 : 24)}[vt]`);
+  f.push(info.noTag ? `${cur}null[vt]` : `[${ti}:v]crop=460:84:0:0[tg];${cur}[tg]overlay=x=${W - 460 - 24}:y=${H - 84 - (vertical ? 60 : 24)}[vt]`);
   // Audio: narration and/or music bed, else silence so every player accepts the file.
   const ai = ti + 1; const audio = [];
   if (narration && fs.existsSync(narration)) { inputs.push('-i', narration); audio.push(`[${ai}:a]aresample=48000,apad[na]`); }

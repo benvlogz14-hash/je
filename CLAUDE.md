@@ -91,6 +91,11 @@ Built and tested end to end with sample data; live lookups were blocked in the c
   - Style: `political.videoStyle = 'campaign'` is the modern campaign-ad look in `server/video/campaign.js`; 'pop' is the bubbly look.
   - Factual scenes show their sources on screen.
   - Contrast ads are off by default (`political.contrastAds`). They need a researched opponent and cited facts, and are never auto-sent.
+- **Speech ads** (`political.videoStyle = 'speech'`, `server/political/footage.js`, package step `footage`):
+  - Finds public videos of the candidate with no login: links pasted on the lead (`prospect.footageLinks`), public Facebook videos/reels found through web search and their sites, their YouTube channel and YouTube search. Downloads the first 10 minutes of up to `political.footageClips` with yt-dlp.
+  - Transcribes (OpenAI Whisper or local whisper.cpp), then AI picks whole sentences the candidate says (never cut inside a sentence or splice words), with short issue titles and a tagline.
+  - Each line: face-following crop, B-roll (quiet parts of other videos, background and candidate photos) laid over part of it while their voice continues, word captions, issue title pill, name lower third, footage credit. Campaign-graphics opening title and vote card, music ducked under the voice.
+  - Falls back to the graphic ads when fewer than two usable lines are found. Clips not posted by the candidate are marked `own: false` and the email then calls the ads concepts.
 - **Autopilot** (`server/outreach/autopilot.js`, ticked by the scheduler):
   - Daily scout rotates through saved searches.
   - Auto-send has a daily cap with a warm-up ramp.

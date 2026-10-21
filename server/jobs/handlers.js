@@ -483,7 +483,7 @@ queue.register('political.reference', {
   },
 });
 
-queue.register('setup.ollama', { title: () => 'Turn on Llama', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setup(h) });
+queue.register('setup.ollama', { title: () => 'Turn on Ollama', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setup(h) });
 queue.register('setup.rembg', { title: () => 'Install the free photo cut-out tool', maxAttempts: 1, run: (job, h) => require('../setup/rembg').install(h) });
 
 queue.register('political.scout', {

@@ -82,7 +82,7 @@ function PackageSettings() {
   const save = () => act(() => api.patch('/api/settings', { political: v }), { ok: 'Saved' }).then((s) => { const b = store.get().boot; if (b && s) store.set({ boot: { ...b, settings: s } }); });
   return html`<div class="col" style="gap:12px">
     <div class="form-grid">
-      <${Field} label="Ad style" id="pol-style"><select id="pol-style" class="input" value=${v.videoStyle} onChange=${set('videoStyle')}><option value="campaign">Campaign ad (like real political ads)</option><option value="pop">Bubbly and poppy</option></select></${Field}>
+      <${Field} label="Ad style" id="pol-style"><select id="pol-style" class="input" value=${v.videoStyle} onChange=${set('videoStyle')}><option value="campaign">Campaign ad (like real political ads)</option><option value="speech">Their own speeches, with B-roll and captions</option><option value="pop">Bubbly and poppy</option></select></${Field}>
       <${Field} label="Short ads (seconds)" hint="Vertical and horizontal, 10 to 90" id="pol-short"><input id="pol-short" class="input" type="number" min="10" max="90" value=${v.shortSeconds} onInput=${set('shortSeconds')} /></${Field}>
       <${Field} label="Long ad (seconds)" hint="Horizontal, 30 to 240" id="pol-len"><input id="pol-len" class="input" type="number" min="30" max="240" value=${v.videoSeconds} onInput=${set('videoSeconds')} /></${Field}>
       <${Field} label="Your political plan (one line)" id="pol-plan"><input id="pol-plan" class="input" value=${v.plan} onInput=${set('plan')} placeholder="12 posts a week for $949 a month" /></${Field}>
@@ -123,6 +123,8 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
           ${pkg.files?.v ? html`<div class="col" style="gap:6px;width:200px"><video src=${file('v')} poster=${pkg.files?.posterV ? file('posterV') : undefined} controls playsinline style="width:200px;border-radius:12px;background:#000" /><a class="faint" href=${file('v') + '&download=1'}>Download vertical</a></div>` : null}
           ${pkg.files?.h ? html`<div class="col grow" style="gap:6px"><video src=${file('h')} poster=${pkg.files?.posterH ? file('posterH') : undefined} controls playsinline style="width:100%;border-radius:12px;background:#000" /><a class="faint" href=${file('h') + '&download=1'}>Download horizontal</a></div>` : null}
         </div>` : html`<div class="faint">Videos appear here when the package is made.</div>`}
+        ${pkg.files?.hl ? html`<div class="col" style="gap:6px"><video src=${file('hl')} poster=${pkg.files?.posterHL ? file('posterHL') : undefined} controls playsinline style="width:100%;border-radius:12px;background:#000" /><a class="faint" href=${file('hl') + '&download=1'}>Download long horizontal</a></div>` : null}
+        <${FootageLinks} p=${p} pkg=${pkg} run=${run} busy=${!!job} reload=${reload} />
         ${pkg.files?.sheet ? html`<div class="row" style="gap:8px"><${Icon} name="film" size=${16} /><a href=${file('sheet')} target="_blank">Open the one-page sheet (PDF)</a></div>` : null}
         ${c.storyboard?.length ? html`<details><summary class="muted">Storyboard (${c.storyboard.length} scenes)</summary><ol style="padding-left:18px;font-size:var(--fs-sm)">${c.storyboard.map((s) => html`<li><b>${s.type}</b> · ${[s.headline, s.value, s.label, s.quote, (s.items || []).join(', '), s.sub].filter(Boolean).join(' · ')}</li>`)}</ol></details>` : null}
       </div>` : null}
@@ -150,6 +152,23 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
       ${tab === 'sources' ? html`<ol class="selectable" style="padding-left:22px;font-size:var(--fs-sm);line-height:1.6">${(pkg.sources || []).map((s) => html`<li value=${s.n}><a href=${s.url} target="_blank" rel="noreferrer">${s.title}</a></li>`)}${pkg.researchErrors?.length ? html`<div class="faint" style="margin-top:8px;font-size:var(--fs-xs)">Unavailable: ${pkg.researchErrors.join(' · ')}</div>` : null}</ol>` : null}
       <div class="faint" style="font-size:var(--fs-xs)">${pkg.finishedAt ? `Made ${ago(pkg.finishedAt)}` : ''}</div>
     </div></${Drawer}>`;
+}
+
+/** Speech clips used for "their own speeches" ads, and a box to paste more (Facebook, YouTube, X...). */
+function FootageLinks({ p, pkg, run, busy, reload }) {
+  const [links, setLinks] = useState([].concat(p.footageLinks || []).join('\n'));
+  const ft = pkg.footage;
+  const save = () => act(() => api.patch(`/api/prospects/${p.id}`, { footageLinks: links.split(/\s+/).filter((x) => /^https?:\/\//.test(x)) }), { ok: 'Saved' }).then(reload);
+  return html`<details class="panel pad" open=${!!ft}>
+    <summary><b>Speech clips</b> <span class="faint">${ft ? `${ft.clips?.length || 0} videos · ${ft.bites?.short?.length || 0} + ${ft.bites?.long?.length || 0} lines` : 'for the "Their own speeches" ad style'}</span></summary>
+    <div class="col" style="gap:8px;margin-top:8px">
+      ${(ft?.clips || []).length ? html`<ul style="padding-left:18px;font-size:var(--fs-sm)">${ft.clips.map((c) => html`<li><a href=${c.url} target="_blank" rel="noreferrer">${c.title || c.url}</a> <span class="faint">${c.platform}${c.uploader ? ` · ${c.uploader}` : ''}</span></li>`)}</ul>` : null}
+      ${(ft?.bites?.short || []).length ? html`<div class="col" style="gap:4px;font-size:var(--fs-sm)"><b>Lines in the short ads</b>${ft.bites.short.map((b) => html`<div>${b.label ? html`<span class="badge lav">${b.label}</span> ` : null}"${b.text}"</div>`)}</div>` : null}
+      ${ft?.errors?.length ? html`<div class="faint" style="font-size:var(--fs-xs)">${ft.errors.slice(-3).join(' · ')}</div>` : null}
+      <textarea class="input" rows="3" placeholder="Paste links to their videos, one per line (Facebook, YouTube, X, Instagram). Public videos only." value=${links} onInput=${(e) => setLinks(e.target.value)} />
+      <div class="row" style="gap:6px"><${Button} size="sm" kind="ghost" onClick=${save}>Save links</${Button}><${Button} size="sm" kind="primary" disabled=${busy} onClick=${() => save().then(() => run({ from: 'footage' }, 'Finding clips and remaking the ads'))}>Save and remake the ads</${Button}></div>
+      <div class="faint" style="font-size:var(--fs-xs)">It uses whole sentences exactly as they said them, never stitched words. Only public posts are used, with no Facebook login.</div>
+    </div></details>`;
 }
 
 /** Paste an ad you like; Euclidean measures how fast it cuts and paces the ads to match. */

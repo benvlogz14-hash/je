@@ -21,7 +21,7 @@ async function build() {
   const prod = S('environment', 'test') === 'production';
   return [
     // The brain
-    item('AI', 'llama', 'Free AI on this computer (Llama)', ollama.running && ollama.modelReady, ollama.running ? (ollama.modelReady ? 'Running. Research, scouting and the chat use it for free.' : `Running, but the ${ollama.model} model isn't downloaded yet.`) : ollama.installed ? 'Installed but not running.' : 'Not installed. Does most of the thinking for free.', act('ollama', ollama.running && ollama.modelReady ? 'Running' : 'Turn on Llama'), 'recommended'),
+    item('AI', 'llama', 'Free AI on this computer (Ollama)', ollama.running && ollama.modelReady, ollama.running ? (ollama.modelReady ? 'Running. Research, scouting and the chat use it for free.' : `Running, but the ${ollama.model} model isn't downloaded yet.`) : ollama.installed ? 'Installed but not running.' : 'Not installed. Does most of the thinking for free.', act('ollama', ollama.running && ollama.modelReady ? 'Running' : 'Turn on Ollama'), 'recommended'),
     item('AI', 'claude', 'Claude (best writing for emails and ads)', ai.connected('anthropic'), 'Writes the emails, ad scripts and briefs. Llama can stand in, with weaker writing.', go('/settings?tab=connections', 'Add key'), 'recommended'),
     item('AI', 'grok', 'Grok web search (optional)', ai.connected('xai'), 'Live web search for scouting. Free DuckDuckGo search is used without it.', go('/settings?tab=connections', 'Add key'), 'optional'),
     // Email

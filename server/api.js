@@ -463,7 +463,7 @@ r.get('/api/workers', () => ctx.store.all('workers').map((w) => ({ ...w, online:
 // ------------------------------------------------------------ prospects (growth)
 r.get('/api/prospects', () => ctx.store.all('prospects').reverse());
 r.post('/api/prospects', (req, b) => ctx.store.insert('prospects', { name: b.name, type: b.type || 'creator', handle: b.handle || '', platforms: b.platforms || [], why: b.why || '', angle: b.angle || '', publicContact: b.publicContact || '', stage: 'new', verified: true, source: 'manual' }));
-r.patch('/api/prospects/:id', (req, b, p) => { must(ctx.store.get('prospects', p.id)); const patch = {}; for (const k of ['name', 'type', 'handle', 'stage', 'why', 'angle', 'publicContact', 'verified', 'notes', 'followers', 'location']) if (b[k] !== undefined) patch[k] = b[k]; events.publish('prospects', {}); return ctx.store.update('prospects', p.id, patch); });
+r.patch('/api/prospects/:id', (req, b, p) => { must(ctx.store.get('prospects', p.id)); const patch = {}; for (const k of ['name', 'type', 'handle', 'stage', 'why', 'angle', 'publicContact', 'verified', 'notes', 'followers', 'location', 'footageLinks']) if (b[k] !== undefined) patch[k] = b[k]; events.publish('prospects', {}); return ctx.store.update('prospects', p.id, patch); });
 r.del('/api/prospects/:id', (req, b, p) => ({ ok: ctx.store.remove('prospects', p.id) }));
 r.post('/api/prospects/:id/audit', (req, b, p) => queue.enqueue('prospect.audit', { prospectId: must(ctx.store.get('prospects', p.id)).id }, { actor: actorOf(req) }));
 r.post('/api/prospects/:id/outreach', async (req, b, p) => {

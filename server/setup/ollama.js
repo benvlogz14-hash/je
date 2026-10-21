@@ -39,12 +39,12 @@ async function install(onStep) {
     }
   } else if (process.platform === 'darwin') {
     const brew = tools.findExecutable(['brew']);
-    if (!brew) throw new Error('Download Ollama for Mac from ollama.com, open it once, then click "Turn on Llama" again.');
+    if (!brew) throw new Error('Download Ollama for Mac from ollama.com, open it once, then click "Turn on Ollama" again.');
     await tools.exec(brew, ['install', 'ollama'], { timeoutMs: 30 * 60000 });
   } else {
-    throw new Error('On Linux, install Ollama with: curl -fsSL https://ollama.com/install.sh | sh  (it needs your password), then click "Turn on Llama" again.');
+    throw new Error('On Linux, install Ollama with: curl -fsSL https://ollama.com/install.sh | sh  (it needs your password), then click "Turn on Ollama" again.');
   }
-  if (!find()) throw new Error('Ollama was installed. Restart Euclidean once so it can be found, then click "Turn on Llama" again.');
+  if (!find()) throw new Error('Ollama was installed. Restart Euclidean once so it can be found, then click "Turn on Ollama" again.');
 }
 
 async function start(onStep) {
@@ -73,10 +73,10 @@ async function pull(onStep, onProgress) {
       if (j.total && j.completed) onProgress(j.completed / j.total, `${j.status || 'Downloading'} ${(j.completed / 1e9).toFixed(2)} of ${(j.total / 1e9).toFixed(2)} GB`);
     }
   }
-  if (!hasModel((await running()).models)) throw new Error('The model download did not finish. Click "Turn on Llama" to resume.');
+  if (!hasModel((await running()).models)) throw new Error('The model download did not finish. Click "Turn on Ollama" to resume.');
 }
 
-/** The whole thing, for the "Turn on Llama" button. */
+/** The whole thing, for the "Turn on Ollama" button. */
 async function setup(h) {
   await install((t) => h.progress(0.05, t));
   await start((t) => h.progress(0.3, t));

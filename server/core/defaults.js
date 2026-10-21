@@ -13,7 +13,8 @@ module.exports = {
     timezone: 'America/New_York',
   },
   political: {
-    videoStyle: 'campaign',    // 'campaign' (modern political ad look) or 'pop' (bubbly)
+    videoStyle: 'campaign',    // 'campaign' (modern political ad look), 'speech' (their own speeches + B-roll, graphics as fallback) or 'pop' (bubbly)
+    footageClips: 4,           // public videos downloaded per lead for 'speech' ads
     shortSeconds: 20,          // the short vertical and short horizontal ads
     videoSeconds: 60,          // the long horizontal ad (30 to 240)
     longVideo: true,           // make the long horizontal ad

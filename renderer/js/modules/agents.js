@@ -319,7 +319,7 @@ export function SetupChecklist() {
   const ready = needed.filter((i) => i.ok).length; const pct = Math.round((ready / Math.max(1, needed.length)) * 100);
   const groups = [...new Set(items.map((i) => i.group))];
   const running = (a) => (jobs || []).find((j) => j.type === `setup.${a}`);
-  const fix = (f) => (f.type === 'goto' ? navigate(f.route) : act(() => api.post(`/api/setup/${f.action}`), { ok: f.action === 'ollama' ? 'Setting up Llama. This runs in the background.' : 'Installing…' }).then(reload));
+  const fix = (f) => (f.type === 'goto' ? navigate(f.route) : act(() => api.post(`/api/setup/${f.action}`), { ok: f.action === 'ollama' ? 'Setting up Ollama. This runs in the background.' : 'Installing…' }).then(reload));
   const llama = items.find((i) => i.key === 'llama'); const lj = running('ollama');
   return html`<div class="panel pad col" style="gap:14px;background:linear-gradient(135deg, var(--teal-soft), var(--sky-soft))">
     <div class="row wrap" style="gap:14px">
@@ -328,10 +328,10 @@ export function SetupChecklist() {
     </div>
     ${llama && !llama.ok ? html`<div class="panel pad row wrap" style="gap:12px;border-radius:22px">
       <div class="avatar" style="background:var(--lav-soft);color:var(--lav-ink)"><${Icon} name="robot" size=${18} /></div>
-      <div class="grow" style="min-width:220px"><b>Turn on free AI (Llama)</b><div class="faint" style="font-size:var(--fs-sm)">${lj ? lj.note || 'Working…' : 'Downloads Ollama and the Llama model once (about 3 GB), starts it, and starts it again whenever Euclidean opens. No command line.'}</div>
+      <div class="grow" style="min-width:220px"><b>Turn on free AI (Ollama, running the Llama model)</b><div class="faint" style="font-size:var(--fs-sm)">${lj ? lj.note || 'Working…' : 'Downloads Ollama and the Llama model once (about 3 GB), starts it, and starts it again whenever Euclidean opens. No command line.'}</div>
         ${!lj && lastError('ollama') ? html`<div class="notice coral" style="margin-top:6px;font-size:var(--fs-sm)">${lastError('ollama')}</div>` : null}
         ${lj ? html`<div style="margin-top:6px;height:8px;border-radius:99px;background:var(--surface-3);overflow:hidden"><div style=${`height:100%;width:${Math.round((lj.progress || 0) * 100)}%;background:var(--lav);transition:width .4s`} /></div>` : null}</div>
-      <${Button} kind="lav" size="lg" icon="power" disabled=${!!lj} onClick=${() => fix({ type: 'action', action: 'ollama' })}>${lj ? 'Setting up…' : 'Turn on Llama'}</${Button}></div>` : null}
+      <${Button} kind="lav" size="lg" icon="power" disabled=${!!lj} onClick=${() => fix({ type: 'action', action: 'ollama' })}>${lj ? 'Setting up…' : 'Turn on Ollama'}</${Button}></div>` : null}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px">${groups.map((g) => {
       const list = items.filter((i) => i.group === g); const done = list.filter((i) => i.ok).length;
       return html`<div class="panel pad col" style="gap:8px;border-radius:22px">
