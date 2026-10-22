@@ -98,6 +98,8 @@ async function execute(job) {
         ? { status: 'queued', runAt: new Date(Date.now() + delay).toISOString(), error: e.message, note: `Retrying in ${Math.round(delay / 1000)}s` }
         : { status: 'failed', error: e.message, finishedAt: now(), note: e.notConnected ? 'Integration not connected' : 'Failed', needsIntegration: !!e.notConnected });
       // Footage that failed to import or process shows the reason on its row (with a Retry button).
+      // A clip whose render failed leaves "In production" and shows why.
+      if (job.payload?.clipId && !willRetry) { try { ctx.store.update('clips', job.payload.clipId, { status: 'failed', error: e.message }); require('../core/events').publish('clips', { id: job.payload.clipId }); } catch { /* clip gone */ } }
       if (job.payload?.assetId) { try { ctx.store.update('assets', job.payload.assetId, { error: willRetry ? null : e.message, errorAt: willRetry ? null : now() }); require('../core/events').publish('assets', { id: job.payload.assetId }); } catch { /* asset gone */ } }
       if (!willRetry) {
         audit.log('system', 'job.failed', { jobId: job.id, type: job.type, clientId: job.clientId, error: e.message }, 'error');

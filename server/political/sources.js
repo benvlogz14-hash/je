@@ -243,7 +243,8 @@ async function lookup({ name, hint, campaignSite, dir, onStep = () => {} }) {
       if (await tryStep('Photo', () => download(u, file))) { photos.push({ file, credit, url: u }); if (!photo) { photo = file; photoCredit = credit; } }
     }
   }
-  const ranked = bestContact(dedupe(emails, (e) => e.email));
+  // Only real addresses: Wikidata and some sites list a contact-form link where an email should be.
+  const ranked = bestContact(dedupe(emails.filter((e) => /^[^\s@<>()",;:\/]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/.test(e.email || '')), (e) => e.email));
   const profile = {
     name, office: cong?.office || os?.office || wd?.positions?.[0] || wp?.description || hint || '', party: cong?.party || os?.party || wd?.party || '',
     state: cong?.state || null, district: cong?.district ?? null, level: cong ? 'federal' : os ? 'state' : 'unknown',

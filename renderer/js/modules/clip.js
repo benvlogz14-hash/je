@@ -6,7 +6,7 @@ import { dateTime, dur, providerLabel, actorName } from '../lib/format.js';
 
 export function ClipPlayer({ clip, version }) {
   const v = version || clip.currentVersion;
-  if (!v) return html`<div class="phone" style="display:grid;place-items:center;color:#8a929b"><div class="col" style="align-items:center"><span class="spinner" /><span style="font-size:12px">${clip.status === 'rendering' ? 'Rendering…' : 'Not rendered yet'}</span></div></div>`;
+  if (!v) return html`<div class="phone" style="display:grid;place-items:center;color:#8a929b"><div class="col" style="align-items:center"><span class="spinner" /><span style="font-size:12px">${clip.status === 'rendering' ? `Rendering… ${clip.renderProgress ? `${clip.renderProgress}%` : 'waiting its turn'}` : clip.status === 'failed' ? `Couldn't render: ${clip.error || 'see the job list'}` : 'Not rendered yet'}</span></div></div>`;
   return html`<div class="phone"><video key=${clip.id + ':' + v} src=${api.url(`/api/clips/${clip.id}/video?v=${v}`)} poster=${api.url(`/api/clips/${clip.id}/thumb?v=${v}`)} controls playsinline preload="metadata" /></div>`;
 }
 

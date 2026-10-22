@@ -582,7 +582,7 @@ h4 { font-weight: 750; letter-spacing: -0.01em; }
 .notice { border-radius: var(--r-lg); }
 .tabs .tab { border-radius: var(--r-pill); }
 @keyframes pop-in { 0% { opacity: 0; transform: translateY(8px) scale(.97); } 70% { opacity: 1; transform: translateY(-2px) scale(1.01); } 100% { transform: none; } }
-.page > * { animation: pop-in 380ms var(--spring) both; }
+.page > * { animation: pop-in 380ms var(--spring) backwards; } /* backwards, not both: a leftover transform would trap drawers inside the page */
 .page > *:nth-child(2) { animation-delay: 40ms; } .page > *:nth-child(3) { animation-delay: 80ms; } .page > *:nth-child(4) { animation-delay: 120ms; } .page > *:nth-child(5) { animation-delay: 160ms; }
 .screen:not(.on) * { animation: none !important; }
 @media (prefers-reduced-motion: reduce) { .page > *, .btn, .chip, .rail-btn, .clip-card { animation: none !important; transition: none !important; } }

@@ -180,7 +180,9 @@ queue.register('render.short', {
     const clip = ctx.store.get('clips', job.payload.clipId);
     if (!clip) throw permanent('Clip no longer exists');
     const asset = ctx.store.get('assets', clip.assetId); const client = ctx.store.get('clients', clip.clientId);
+    if (asset?.info && !asset.info.hasVideo) throw permanent('This clip comes from an audio-only file (no picture). Delete it and upload the video (.mp4).');
     if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
+    ctx.store.update('clips', clip.id, { renderProgress: 0, error: null });
     if (!ctx.capabilities.libass) h.log('Warning: this FFmpeg build lacks libass; captions cannot be burned in.');
     const transcript = loadTranscript(asset);
     const n = (clip.versions || []).length + 1;
@@ -192,7 +194,7 @@ queue.register('render.short', {
       source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], style: client.style, hook: clip.hook,
       reframe: clip.reframe, focusX: clip.focusX, plan: { silenceCut: clip.silenceCut && !!transcript, retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
       outPath, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal,
-      onProgress: (p) => h.progress(0.12 + p * 0.7, `Rendering v${n}`),
+      onProgress: (p) => { h.progress(0.12 + p * 0.7, `Rendering v${n}`); const pct = Math.round((0.12 + p * 0.7) * 100); if (pct - (ctx.store.get('clips', clip.id)?.renderProgress || 0) >= 4) { ctx.store.update('clips', clip.id, { renderProgress: pct }); events.publish('clips', { id: clip.id }); } },
     });
     h.progress(0.85, 'Quality check');
     const qc = await ff.qualityCheck(outPath, { expectWidth: 1080, expectHeight: 1920, minSec: 5, maxSec: 180 });
@@ -533,21 +535,30 @@ queue.register('political.scout', {
       try { for (const x of await polSources.rosterSearch({ state: st[1], chamber: /senate/i.test(query) ? 'upper' : /house|assembly|representative|delegate/i.test(query) ? 'lower' : '', limit: count * 2 })) found.push({ name: x.name, type: 'political', location: x.office, publicContact: x.email && !/\.gov$/.test(x.email) ? x.email : '', why: `${x.party || ''} ${x.office}`.trim(), source: 'openstates', confidence: 'high', handle: x.url || '' }); }
       catch (e) { h.log(`Open States: ${e.message}`); }
     }
-    if (found.length < count && ai.anyConnected()) {
+    // Free public lists next (Ballotpedia candidates, Wikidata office-holders): no API keys, no AI.
+    const known = (n) => ctx.store.find('prospects', (y) => polSources.nameMatch(y.name, n) && polSources.nameMatch(n, y.name));
+    if (found.filter((x) => !known(x.name)).length < count) {
+      h.progress(0.3, 'Checking free candidate lists (Ballotpedia, Wikidata)');
+      try { const fr = await require('../political/freescout').scout(query, { count, log: (m) => h.log(m) }); if (fr.note) h.log(fr.note); for (const x of fr.leads) if (!found.some((y) => y.name === x.name)) found.push({ name: x.name, type: 'political', location: x.office, why: x.why, handle: x.url, source: x.source.toLowerCase(), confidence: 'high', publicContact: '' }); }
+      catch (e) { h.log(`Free lists: ${e.message}`); }
+    }
+    if (found.filter((x) => !known(x.name)).length < count && ai.anyConnected()) {
       h.progress(0.4, 'Research agent searching');
       const r = await ai.ask({ role: 'research', json: true, jobId: job.id, search: true, maxTokens: 3500, system: PROSPECT_SYSTEM + '\nOnly return real, currently active political officials, candidates or campaigns. Never make up contact details; only give an email that is publicly listed. No government emails. No em dashes.' + require('../outreach/learning').scoutBlock('political'), prompt: `Find up to ${count - found.length} political prospects: ${query}` });
       for (const x of (r.json.prospects || [])) found.push({ ...x, type: 'political', agent: `${r.provider}:${r.model}`, source: 'research' });
     }
-    if (!found.length) throw permanent(ai.anyConnected() ? 'No prospects found. Try a broader description.' : 'Connect an AI provider (or an Open States key for state legislators) to scout leads.');
+    if (!found.length) throw permanent('No prospects found. Name a state and office (for example "Connecticut Democrats running for state house in 2026"), or turn on Ollama for free AI searching.');
     const created = [];
-    for (const x of found.slice(0, Math.max(1, Math.min(100, count)))) {
-      if (ctx.store.find('prospects', (y) => polSources.nameMatch(y.name, x.name) && polSources.nameMatch(x.name, y.name))) continue;
-      const pr = ctx.store.insert('prospects', { name: x.name, type: 'political', handle: x.handle || '', platforms: x.platforms || [], why: x.why || '', angle: x.angle || '', publicContact: x.publicContact || '', location: x.location || '', followers: x.followers || null, confidence: x.confidence || 'medium', stage: 'new', verified: x.source === 'openstates', source: x.source, agent: x.agent, query });
+    for (const x of found) {
+      if (created.length >= Math.max(1, Math.min(100, count))) break;
+      if (known(x.name)) continue;
+      if (require('../outreach/common').excluded({ name: x.name, email: x.publicContact, handle: x.handle })) continue;
+      const pr = ctx.store.insert('prospects', { triage: autoPackage ? 'approved' : 'pending', name: x.name, type: 'political', handle: x.handle || '', platforms: x.platforms || [], why: x.why || '', angle: x.angle || '', publicContact: x.publicContact || '', location: x.location || '', followers: x.followers || null, confidence: x.confidence || 'medium', stage: 'new', verified: x.source === 'openstates', source: x.source, agent: x.agent, query });
       created.push(pr);
       if (autoPackage) queue.enqueue('political.package', { prospectId: pr.id, name: pr.name }, { actor: job.createdBy, priority: 4, dedupeKey: `polpkg:${pr.id}` });
     }
     events.publish('prospects', {});
-    if (created.length) events.publish('notify', { title: `${created.length} new political lead${created.length === 1 ? '' : 's'}`, body: created.slice(0, 5).map((x) => x.name).join(', '), route: '/growth' });
+    if (created.length) events.publish('notify', { title: `${created.length} new political lead${created.length === 1 ? '' : 's'}`, route: '/politics', body: autoPackage ? `Making packages: ${created.slice(0, 5).map((x) => x.name).join(', ')}` : `Waiting in New prospects: ${created.slice(0, 5).map((x) => x.name).join(', ')}` });
     audit.log(job.createdBy || 'system', 'political.scouted', { query, count: created.length });
     return { added: created.length };
   },

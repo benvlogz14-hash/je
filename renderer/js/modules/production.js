@@ -16,7 +16,7 @@ async function quickClient() {
 }
 
 const LANES = [
-  { key: 'production', label: 'In production', statuses: ['queued', 'rendering', 'revising'], color: 'var(--slate)' },
+  { key: 'production', label: 'In production', statuses: ['queued', 'rendering', 'revising', 'failed'], color: 'var(--slate)' },
   { key: 'review', label: 'Founder review', statuses: ['review'], color: 'var(--gold)' },
   { key: 'client', label: 'Client review', statuses: ['client_review'], color: 'var(--lav)' },
   { key: 'scheduled', label: 'Approved & scheduled', statuses: ['approved', 'scheduled'], color: 'var(--moss)' },
@@ -172,6 +172,6 @@ function ClipCard({ c, showClient }) {
     <div class="th" style=${thumb ? { backgroundImage: `url(${thumb})` } : null}>${!thumb ? (c.status === 'rendering' ? html`<span class="spinner" />` : html`<${Icon} name="film" size=${16} />`) : null}</div>
     <div style="min-width:0"><div class="t">${c.title}</div>
       <div class="m"><span class="tnum">#${c.ref}</span><span>${Math.round(c.end - c.start)}s</span>${showClient ? html`<span class="ellipsis">${c.client}</span>` : null}</div>
-      <div class="m">${c.current?.qc && !c.current.qc.passed ? html`<span class="badge coral">QC</span>` : null}${c.status === 'revising' ? html`<span class="badge teal">Revising</span>` : null}${c.current?.n > 1 ? html`<span class="badge outline">v${c.current.n}</span>` : null}${c.method === 'ai' ? html`<span class="badge lav">AI</span>` : null}${c.post?.scheduledAt && c.status === 'scheduled' ? html`<span class="faint">${new Date(c.post.scheduledAt).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>` : null}</div>
+      <div class="m">${c.status === 'rendering' ? html`<span class="badge sky tnum">${c.renderProgress ? `${c.renderProgress}%` : 'Waiting'}</span>` : null}${c.status === 'failed' ? html`<span class="badge coral" title=${c.error || ''}>Failed: open for why</span>` : null}${c.current?.qc && !c.current.qc.passed ? html`<span class="badge coral">QC</span>` : null}${c.status === 'revising' ? html`<span class="badge teal">Revising</span>` : null}${c.current?.n > 1 ? html`<span class="badge outline">v${c.current.n}</span>` : null}${c.method === 'ai' ? html`<span class="badge lav">AI</span>` : null}${c.post?.scheduledAt && c.status === 'scheduled' ? html`<span class="faint">${new Date(c.post.scheduledAt).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>` : null}</div>
     </div></div>`;
 }

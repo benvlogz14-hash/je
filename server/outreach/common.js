@@ -21,7 +21,14 @@ function withFooter(body) {
 }
 
 /** Government addresses (federal, state, local) are never pitched. */
-const isGov = (email) => /\.gov$|\.gov\.|\.state\.[a-z]{2}\.us$|\.[a-z]{2}\.us$|\.mil$/i.test(String(email || '').split('@')[1] || '');
+/** A real email address (not a contact-form link or a phone number). */
+const isEmail = (e) => /^[^\s@<>()",;:\/]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/.test(String(e || '').trim());
+/** Government addresses, and government websites given in place of an email. */
+function isGov(email) {
+  const s = String(email || '').trim(); let host = s.includes('@') ? s.split('@').pop() : '';
+  if (!host) { try { host = new URL(/^https?:/i.test(s) ? s : `https://${s}`).hostname; } catch { host = s; } }
+  return /\.gov$|\.gov\.|\.state\.[a-z]{2}\.us$|\.[a-z]{2}\.us$|\.mil$/i.test(host.replace(/[/?#].*$/, ''));
+}
 
 /** Names, organisations or email domains on the exclusions list are never contacted. */
 function excluded({ name, email, handle } = {}) {
@@ -31,4 +38,4 @@ function excluded({ name, email, handle } = {}) {
   return lines.find((l) => hay.some((h) => h === l || h.includes(l))) || null;
 }
 
-module.exports = { noDashes, withFooter, isGov, excluded, mailingAddress };
+module.exports = { noDashes, withFooter, isGov, isEmail, excluded, mailingAddress };

@@ -63,7 +63,7 @@ function checks(p, { ignoreCap = false } = {}) {
   if (!mailingAddress()) why.push('Add your mailing address (Outreach settings); the law requires it in every email');
   const contact = msg && ctx.store.get('contacts', msg.contactId);
   const to = contact?.emails?.[0] || '';
-  if (!to) why.push('No email address');
+  if (!to || !require('./common').isEmail(to)) why.push('No real email address (only a website or contact form)');
   if (to && isGov(to)) why.push('Government address');
   if (contact?.optedOut?.email) why.push('Opted out');
   const ex = excluded({ name: p.name, email: to, handle: p.handle }); if (ex) why.push(`On the exclusions list (${ex})`);
@@ -165,7 +165,7 @@ function tick() {
       const queries = String(l.scoutQueries || '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
       if (queries.length) {
         const i = ((last[lane]?.i ?? -1) + 1) % queries.length;
-        queue.enqueue(lane === 'political' ? 'political.scout' : 'creator.scout', { query: queries[i], count: Math.max(1, Math.min(100, Number(l.scoutPerDay) || 15)), autoPackage: true, daily: true }, { actor: 'autopilot', dedupeKey: `scout:${lane}:${c.day}` });
+        queue.enqueue(lane === 'political' ? 'political.scout' : 'creator.scout', { query: queries[i], count: Math.max(1, Math.min(100, Number(l.scoutPerDay) || 15)), autoPackage: !!l.autoPackage, daily: true }, { actor: 'autopilot', dedupeKey: `scout:${lane}:${c.day}` });
         last[lane] = { day: c.day, i, query: queries[i], at: now() };
         ctx.store.settings._outreachScout = last; ctx.store.touch();
         c.scouted[lane] = (c.scouted[lane] || 0) + 1;
@@ -180,7 +180,7 @@ function tick() {
         if (queries.length) {
           const i = ((prev?.i ?? -1) + 1) % queries.length;
           const room = (Number(l.maxLeadsPerDay) || 60) - leadsToday(lane);
-          queue.enqueue(lane === 'political' ? 'political.scout' : 'creator.scout', { query: queries[i], count: Math.max(1, Math.min(room, Number(l.scoutPerDay) || 15, 25)), autoPackage: true, continuous: true }, { actor: 'autopilot', dedupeKey: `cscout:${lane}:${Math.floor(Date.now() / every)}` });
+          queue.enqueue(lane === 'political' ? 'political.scout' : 'creator.scout', { query: queries[i], count: Math.max(1, Math.min(room, Number(l.scoutPerDay) || 15, 25)), autoPackage: !!l.autoPackage, continuous: true }, { actor: 'autopilot', dedupeKey: `cscout:${lane}:${Math.floor(Date.now() / every)}` });
           ctx.store.settings._outreachCont = { ...(ctx.store.settings._outreachCont || {}), [lane]: { at: now(), i, query: queries[i] } }; ctx.store.touch();
           c.scouted[lane] = (c.scouted[lane] || 0) + 1;
         }

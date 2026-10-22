@@ -17,7 +17,7 @@ export function Autopilot({ lane }) {
   const [open, setOpen] = useState(false);
   const s = st?.[lane] || {};
   // Pick up changes made elsewhere (the scout chat, another window) unless the settings form is open.
-  useEffect(() => { if (st?.[lane] && !open) setV((cur) => ({ ...cur, ...Object.fromEntries(Object.entries(st[lane]).filter(([k]) => k in cur || ['continuous', 'scoutEveryMin', 'maxLeadsPerDay', 'lessons', 'followUps', 'followUpDays'].includes(k))) })); }, [st, open, lane]);
+  useEffect(() => { if (st?.[lane] && !open) setV((cur) => ({ ...cur, ...Object.fromEntries(Object.entries(st[lane]).filter(([k]) => k in cur || ['continuous', 'scoutEveryMin', 'maxLeadsPerDay', 'lessons', 'followUps', 'followUpDays', 'autoPackage'].includes(k))) })); }, [st, open, lane]);
   const save = (next = v) => act(() => api.patch('/api/settings', { outreach: { [lane]: next, ...rules } }), { ok: 'Saved' }).then((set) => { const b = store.get().boot; if (b && set) store.set({ boot: { ...b, settings: set } }); reload(); });
   const flip = async (k, on) => {
     if (k === 'autoSend' && on && !(await confirmDialog({ title: 'Turn on auto-send?', text: `Finished ${lane === 'political' ? 'packages' : 'emails'} that pass every safety check will send without review, up to ${Math.min(v.sendPerDay, v.warmupStart)} today and rising by ${v.warmupStep} a day to ${v.sendPerDay}. Anything that fails a check (no confirmed email, government address, contrast ad, exclusions, no mailing address) still waits for you. In Test mode emails go to your sandbox address.`, confirm: 'Turn on', kind: 'moss' }))) return;
@@ -34,11 +34,12 @@ export function Autopilot({ lane }) {
       <${Button} size="sm" kind="ghost" onClick=${() => setOpen(!open)}>${open ? 'Hide settings' : 'Settings'}</${Button}>
     </div>
     <div class="grid c4" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
-      ${[['Sent today', `${s.sentToday ?? 0} / ${s.capToday ?? '–'}`], ['Waiting for you', s.waiting ?? 0], ['New leads today', `${s.leadsToday ?? 0}${v.continuous ? ` / ${v.maxLeadsPerDay ?? 60}` : ''}`], ['Auto-send', v.autoSend ? (s.autoSendSince ? `on since ${new Date(s.autoSendSince).toLocaleDateString()}` : 'on') : s.graduated ? 'earned (auto-graduated)' : v.autoGraduate ? `${s.learning?.unchangedRate == null ? 0 : Math.round(s.learning.unchangedRate * 100)}% of ${Math.round((v.graduateAt ?? 0.9) * 100)}% needed` : 'off']].map(([k, val]) => html`<div class="panel pad" style="padding:10px 12px"><div class="faint" style="font-size:var(--fs-xs)">${k}</div><b style="font-size:18px">${val}</b></div>`)}
+      ${[['Sent today', `${s.sentToday ?? 0} / ${s.capToday ?? '–'}`, null], ['Waiting for you', s.waiting ?? 0, `review-${lane}`], ['New leads today', `${s.leadsToday ?? 0}${v.continuous ? ` / ${v.maxLeadsPerDay ?? 60}` : ''}`, `new-${lane}`], ['Auto-send', v.autoSend ? (s.autoSendSince ? `on since ${new Date(s.autoSendSince).toLocaleDateString()}` : 'on') : s.graduated ? 'earned (auto-graduated)' : v.autoGraduate ? `${s.learning?.unchangedRate == null ? 0 : Math.round(s.learning.unchangedRate * 100)}% of ${Math.round((v.graduateAt ?? 0.9) * 100)}% needed` : 'off']].map(([k, val, to]) => html`<div class="panel pad" style=${{ padding: '10px 12px', cursor: to ? 'pointer' : 'default' }} title=${to ? 'Show them' : ''} onClick=${() => to && document.getElementById(to)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><div class="faint" style="font-size:var(--fs-xs)">${k}${to ? ' ›' : ''}</div><b style="font-size:18px">${val}</b></div>`)}
     </div>
     ${!rules.mailingAddress ? html`<div class="notice gold"><${Icon} name="info" size=${16} />Add your mailing address in Settings below. The law (CAN-SPAM) requires it in every outreach email, and auto-send stays paused without it.</div>` : null}
     ${open ? html`<div class="col" style="gap:12px">
       <${Field} label="Saved searches (one per line; the daily scout uses the next one each day)" id=${`q-${lane}`}><textarea id=${`q-${lane}`} class="input" style="height:110px;font-family:inherit" value=${v.scoutQueries} onInput=${set('scoutQueries')} placeholder=${lane === 'political' ? 'Connecticut Democrats running for state house 2026\nConnecticut town council candidates 2026' : 'Political commentary YouTubers under 500K subscribers\nNews TikTok creators with no YouTube channel'} /></${Field}>
+      <label class="row" style="gap:8px"><${Toggle} on=${!!v.autoPackage} onChange=${(x) => setV({ ...v, autoPackage: x })} label="Skip New prospects" /><span>Send new finds straight to ${lane === 'political' ? 'packages' : 'emails'} (skip the New prospects step)</span></label>
       <label class="row" style="gap:8px"><${Toggle} on=${!!v.continuous} onChange=${(x) => setV({ ...v, continuous: x })} label="Keep scouting" /><span>Keep scouting all day while the computer is on (not just once each morning)</span></label>
       <div class="form-grid">
         <${Field} label="Scout every (minutes)" id=${`se-${lane}`}><input id=${`se-${lane}`} class="input" type="number" min="10" max="1440" value=${v.scoutEveryMin ?? 30} onInput=${set('scoutEveryMin')} /></${Field}>
@@ -62,6 +63,34 @@ export function Autopilot({ lane }) {
 }
 
 // ------------------------------------------------------------------ review bubbles
+
+/** Scouted leads land here with a short blurb; approve to make their package (or email), or skip. */
+export function NewProspects({ lane }) {
+  const { data, reload } = useApi(`/api/outreach/${lane}/new`, ['prospects']);
+  const [picked, setPicked] = useState({}); const [open, setOpen] = useState(null);
+  const list = data || []; const ids = Object.keys(picked).filter((k) => picked[k]);
+  const go = (path, which, ok) => act(() => api.post(`/api/outreach/${lane}/new/${path}`, { ids: which }), { ok }).then(() => { setPicked({}); reload(); });
+  const pol = lane === 'political';
+  return html`<div class="col" style="gap:10px" id=${`new-${lane}`}>
+    <div class="row wrap" style="gap:8px"><h4 class="grow">New prospects <span class="faint">${list.length}</span></h4>
+      ${list.length ? html`<${Button} size="sm" kind="ghost" onClick=${() => setPicked(ids.length === list.length ? {} : Object.fromEntries(list.map((x) => [x.id, true])))}>${ids.length === list.length ? 'Clear' : 'Select all'}</${Button}>
+      <${Button} size="sm" kind="ghost" disabled=${!ids.length} onClick=${() => go('skip', ids, 'Skipped')}>Skip</${Button}>
+      <${Button} size="sm" kind="primary" icon="check" disabled=${!ids.length} onClick=${() => go('approve', ids, pol ? 'Making their packages' : 'Writing their emails')}>${pol ? 'Make packages' : 'Write emails'} (${ids.length})</${Button}>` : null}</div>
+    ${!list.length ? html`<div class="panel pad faint">No new prospects. Scout finds land here with a short blurb, and you choose who gets a ${pol ? 'package' : 'pitch email'}.</div>` : html`<div class="grid c2" style="gap:10px">${list.map((x) => html`<div class="panel pad col" style=${{ gap: '6px', outline: picked[x.id] ? '2px solid var(--moss)' : 'none' }}>
+      <div class="row" style="gap:8px"><input type="checkbox" checked=${!!picked[x.id]} onChange=${(e) => setPicked({ ...picked, [x.id]: e.target.checked })} aria-label=${`Select ${x.name}`} />
+        <b class="grow" style="cursor:pointer" onClick=${() => setOpen(open === x.id ? null : x.id)}>${x.name}</b>${x.confidence ? html`<span class=${'badge ' + (x.confidence === 'high' ? 'moss' : '')}>${x.confidence}</span>` : null}</div>
+      ${x.office ? html`<div class="faint" style="font-size:var(--fs-xs)">${x.office}</div>` : null}
+      <div style="font-size:var(--fs-sm);line-height:1.45">${x.why || x.angle || 'No notes from the scout.'}</div>
+      ${open === x.id ? html`<div class="col" style="gap:4px;font-size:var(--fs-xs)">
+        ${x.angle && x.why ? html`<div><b>Angle:</b> ${x.angle}</div>` : null}
+        <div><b>Contact:</b> ${x.contact || 'not found yet (research looks for it)'}</div>
+        ${x.handle ? html`<div><b>Link:</b> <a href=${/^https?:/.test(x.handle) ? x.handle : '#'} target="_blank" rel="noreferrer">${x.handle}</a></div>` : null}
+        ${x.followers ? html`<div><b>Followers:</b> ${Number(x.followers).toLocaleString()}</div>` : null}
+        <div class="faint">Found by ${x.source || 'the scout'}${x.query ? ` for "${x.query}"` : ''}</div></div>` : null}
+      <div class="row" style="gap:6px"><${Button} size="sm" kind="primary" onClick=${() => go('approve', [x.id], pol ? 'Making the package' : 'Writing the email')}>${pol ? 'Make package' : 'Write email'}</${Button}><${Button} size="sm" kind="ghost" onClick=${() => go('skip', [x.id], 'Skipped')}>Skip</${Button}><span class="grow" /><button class="chip" onClick=${() => setOpen(open === x.id ? null : x.id)}>${open === x.id ? 'Less' : 'More'}</button></div>
+    </div>`)}</div>`}
+  </div>`;
+}
 
 export function ReviewQueue({ lane }) {
   const { data, reload } = useApi(`/api/outreach/${lane}/review`, ['prospects', 'message', 'approval']);

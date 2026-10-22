@@ -43,7 +43,7 @@ module.exports = {
   video: { lookThrough: true },  // look through footage shot by shot (FFmpeg stills + faces + an AI that can see, when connected)
   outreach: {
     exclusions: '',            // names, organisations or email domains never to contact (one per line)
-    political: { autoGraduate: false, graduateAt: 0.9, graduateWindow: 25, scout: false, continuous: false, scoutEveryMin: 30, maxLeadsPerDay: 60, scoutQueries: '', scoutPerDay: 15, scoutHour: 7, autoSend: false, sendPerDay: 50, warmupStart: 15, warmupStep: 10, followUps: false, followUpDays: '4, 10', lessons: '' },
+    political: { autoGraduate: false, graduateAt: 0.9, graduateWindow: 25, scout: false, continuous: false, scoutEveryMin: 30, maxLeadsPerDay: 60, scoutQueries: '', scoutPerDay: 15, scoutHour: 7, autoSend: false, sendPerDay: 50, warmupStart: 15, warmupStep: 10, followUps: false, followUpDays: '4, 10', autoPackage: false, lessons: '' },
     creators: { autoGraduate: false, graduateAt: 0.9, graduateWindow: 25, scout: false, continuous: false, scoutEveryMin: 30, maxLeadsPerDay: 60, scoutQueries: '', scoutPerDay: 15, scoutHour: 7, autoSend: false, sendPerDay: 50, warmupStart: 15, warmupStep: 10, followUps: false, followUpDays: '4, 10', lessons: '' },
   },
   creatorOffers: {

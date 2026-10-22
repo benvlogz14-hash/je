@@ -76,7 +76,7 @@ async function run(prospectId, h) {
     if (Object.keys(patch).length) p = ctx.store.update('prospects', p.id, patch);
     set({ research: r });
     const to = String(p.publicContact || '').trim().toLowerCase();
-    if (!/@/.test(to)) { set({ status: 'needs_contact', note: 'No public business email found. Add one (or import it), then redo.' }); return { status: 'needs_contact' }; }
+    if (!require('./common').isEmail(to)) { set({ status: 'needs_contact', note: 'No public business email found. Add one (or import it), then redo.' }); return { status: 'needs_contact' }; }
     if (isGov(to)) { set({ status: 'needs_contact', note: 'Government address; not contacted.' }); return { status: 'needs_contact' }; }
     const ex = excluded({ name: p.name, email: to, handle: p.handle }); if (ex) { set({ status: 'excluded', note: `On the exclusions list (${ex})` }); return { status: 'excluded' }; }
     h.progress(0.6, 'Writing the email');
@@ -118,7 +118,7 @@ async function scout({ query, count = 15, autoPackage = true }, h, job) {
     if (!c.name || ctx.store.find('prospects', (y) => nameMatch(y.name, c.name) && nameMatch(c.name, y.name))) continue;
     if (excluded({ name: c.name, email: c.publicContact, handle: c.handle })) continue;
     // A contact suggested by the agent is only a hint; research must confirm it before autopilot uses it.
-    const pr = ctx.store.insert('prospects', { name: c.name, type: 'creator', handle: c.handle || '', platforms: [c.platform].filter(Boolean), why: c.why, angle: '', publicContact: isGov(c.publicContact) ? '' : c.publicContact, followers: c.followers, confidence: c.confidence, stage: 'new', verified: c.source === 'youtube', contactVerified: false, source: c.source, agent: c.agent, query });
+    const pr = ctx.store.insert('prospects', { triage: autoPackage ? 'approved' : 'pending', name: c.name, type: 'creator', handle: c.handle || '', platforms: [c.platform].filter(Boolean), why: c.why, angle: '', publicContact: isGov(c.publicContact) ? '' : c.publicContact, followers: c.followers, confidence: c.confidence, stage: 'new', verified: c.source === 'youtube', contactVerified: false, source: c.source, agent: c.agent, query });
     created.push(pr);
     if (autoPackage) require('../jobs/queue').enqueue('creator.outreach', { prospectId: pr.id, name: pr.name }, { actor: job?.createdBy || 'autopilot', priority: 5, dedupeKey: `crout:${pr.id}` });
   }

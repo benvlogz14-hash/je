@@ -5,7 +5,7 @@ import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { ago, providerLabel } from '../lib/format.js';
 import { Political } from './political.js';
-import { Autopilot, ReviewQueue, Leads, CreatorsLane, ScoutChat, Learning } from './outreach.js';
+import { Autopilot, NewProspects, ReviewQueue, Leads, CreatorsLane, ScoutChat, Learning } from './outreach.js';
 
 const STAGES = [['new', 'New'], ['drafted', 'Draft ready'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['meeting', 'Meeting'], ['proposal', 'Proposal'], ['won', 'Won'], ['lost', 'Lost']];
 
@@ -31,7 +31,8 @@ export function Growth({ only = null } = {}) {
     ${view === 'political' || view === 'creators' ? html`<div class="col" style="gap:16px" key=${view}>
       <${Autopilot} lane=${view === 'political' ? 'political' : 'creators'} />
       <${ScoutChat} lane=${view === 'political' ? 'political' : 'creators'} />
-      <${ReviewQueue} lane=${view === 'political' ? 'political' : 'creators'} />
+      <${NewProspects} lane=${view === 'political' ? 'political' : 'creators'} />
+      <div id=${`review-${view === 'political' ? 'political' : 'creators'}`}><${ReviewQueue} lane=${view === 'political' ? 'political' : 'creators'} /></div>
       <${Leads} lane=${view === 'political' ? 'political' : 'creators'} />
       <${Learning} lane=${view === 'political' ? 'political' : 'creators'} />
       ${view === 'political' ? html`<${Political} prospects=${data} reload=${reload} />` : html`<${CreatorsLane} prospects=${data} reload=${reload} />`}

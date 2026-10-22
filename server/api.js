@@ -273,6 +273,31 @@ r.get('/api/bridge/:site/history', (req, b, p) => require('./integrations/bridge
 r.post('/api/bridge/:site/open', (req, b, p) => { const br = require('./integrations/bridge'); if (!br.available()) throw new HttpError(400, 'This works in the Euclidean desktop app.'); return ctx.bridge.open(p.site); });
 r.post('/api/bridge/:site/ask', async (req, b, p) => { const text = String(b.text || '').trim(); if (!text) throw new HttpError(400, 'Type a message first.'); try { return await require('./integrations/bridge').ask(p.site, text, { newChat: !!b.newChat, actor: actorOf(req) }); } catch (e) { throw new HttpError(400, e.message); } });
 r.del('/api/bridge/:site/history', (req, b, p) => { const all = ctx.store.settings._bridgeChats || {}; delete all[p.site]; ctx.store.settings._bridgeChats = all; ctx.store.touch(); return { ok: true }; });
+// New prospects: scouted leads wait here with a short blurb until a founder sends them on to packages (or skips them).
+r.get('/api/outreach/:lane/new', (req, b, p) => ctx.store.all('prospects', (x) => (p.lane === 'political' ? x.type === 'political' : x.type !== 'political') && x.triage === 'pending').reverse().map((x) => ({ id: x.id, name: x.name, type: x.type, office: x.location || '', why: x.why || '', angle: x.angle || '', contact: x.publicContact || '', handle: x.handle || '', followers: x.followers || null, platforms: x.platforms || [], confidence: x.confidence || '', source: x.source || '', query: x.query || '', createdAt: x.createdAt })));
+r.post('/api/outreach/:lane/new/approve', (req, b, p) => {
+  let n = 0;
+  for (const id of [].concat(b.ids || []).slice(0, 500)) {
+    const x = ctx.store.get('prospects', id); if (!x || x.triage !== 'pending') continue;
+    ctx.store.update('prospects', id, { triage: 'approved' });
+    if (x.type === 'political') queue.enqueue('political.package', { prospectId: id, name: x.name }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${id}` });
+    else queue.enqueue('creator.outreach', { prospectId: id, name: x.name }, { actor: actorOf(req), priority: 5, dedupeKey: `crout:${id}` });
+    n++;
+  }
+  events.publish('prospects', {});
+  return { ok: true, started: n };
+});
+r.post('/api/outreach/:lane/new/skip', (req, b, p) => {
+  let n = 0;
+  for (const id of [].concat(b.ids || []).slice(0, 500)) {
+    const x = ctx.store.get('prospects', id); if (!x) continue;
+    ctx.store.update('prospects', id, { triage: 'skipped', stage: 'lost', skippedAt: new Date().toISOString() });
+    try { require('./outreach/learning').record('skipped', { lane: p.lane === 'political' ? 'political' : 'creators', prospectId: id, name: x.name, reason: String(b.reason || 'skipped at triage').slice(0, 200) }); } catch { /* best effort */ }
+    n++;
+  }
+  events.publish('prospects', {});
+  return { ok: true, skipped: n };
+});
 r.get('/api/production/health', (req) => require('./setup/production').health(req.query.clientId || null));
 // Everything about one footage file: its steps, jobs, clips and any error.
 r.get('/api/assets/:id/detail', (req, b, p) => {

@@ -42,8 +42,8 @@ function apply(lane, actions, actor) {
     else if (a.type === 'add_search' && a.search) { queries.push(String(a.search).trim()); done.push(`Added search: ${a.search}`); }
     else if (a.type === 'remove_search' && a.search) { const before = queries.length; queries = queries.filter((q) => q.toLowerCase() !== String(a.search).toLowerCase()); if (queries.length < before) done.push(`Removed search: ${a.search}`); }
     else if (a.type === 'scout_now' && a.query) {
-      queue.enqueue(lane === 'political' ? 'political.scout' : 'creator.scout', { query: String(a.query), count: Math.max(1, Math.min(50, Number(a.count) || 10)), autoPackage: true }, { actor });
-      done.push(`Scouting now: ${a.query}`);
+      queue.enqueue(lane === 'political' ? 'political.scout' : 'creator.scout', { query: String(a.query), count: Math.max(1, Math.min(50, Number(a.count) || 10)), autoPackage: !!cur.autoPackage }, { actor });
+      done.push(`Scouting now: ${a.query}. New finds appear under New prospects in a minute or two.`);
     } else if (a.type === 'set' && a.key in SETTABLE) {
       const rule = SETTABLE[a.key];
       cur[a.key] = rule === 'bool' ? !!a.value : Math.max(rule[0], Math.min(rule[1], Number(a.value) || rule[0]));
@@ -82,10 +82,13 @@ async function send(lane, text, actor) {
     const convo = history(lane, 20).map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }));
     try {
       const r = await ai.ask({ role: 'research', json: true, maxTokens: 1500, system: `You manage lead scouting for ${ctx.setting('agency.name', 'Euclidean Media')}'s ${lane} lane: ${who}. Talk with the founders in plain, short sentences (no em dashes). Turn what they want into actions. Current state:\n${JSON.stringify(snapshot(lane))}\n\nActions you can take:\n- {"type":"set_searches","searches":["..."]} replace the saved searches (each a specific, plain-English description of who to find)\n- {"type":"add_search","search":"..."} / {"type":"remove_search","search":"..."}\n- {"type":"scout_now","query":"...","count":10}\n- {"type":"set","key":"scoutPerDay|maxLeadsPerDay|scoutEveryMin|scoutHour|continuous|scout","value":...}\n- {"type":"add_exclusion","value":"name, organisation or email domain"} / {"type":"remove_exclusion","value":"..."}\n- {"type":"add_lesson","text":"a rule for writing or scouting"} / {"type":"remove_lesson","text":"..."}\nYou cannot turn auto-send on or off; tell them to use the Auto-send switch. Never invent contact details. Return JSON {"reply":"...","actions":[...]}`, messages: convo });
-      out = { reply: r.json?.reply || 'Done.', actions: r.json?.actions || [] };
+      out = { reply: r.json?.reply || '', actions: r.json?.actions || [] };
+      // The AI answered but didn't act: fall back to the plain commands ("find …", "remember …").
+      if (!out.actions.length) { const off = offline(lane, msg); if (off.actions.length) out = { reply: out.reply || off.reply, actions: off.actions }; }
     } catch (e) { out = { ...offline(lane, msg), reply: `I couldn't reach the AI (${e.message.slice(0, 80)}). ${offline(lane, msg).reply}` }; }
   }
   const done = apply(lane, out.actions, actor);
+  if (!out.reply || /^done\.?$/i.test(out.reply.trim())) out.reply = done.length ? `Done: ${done.join('; ')}.` : 'I didn\'t change anything. Try "find …" to scout now, "add search …", "never contact …" or "remember …".';
   const reply = ctx.store.insert('outreachChat', { lane, role: 'assistant', text: noDashes(out.reply), changes: done, at: now() });
   const all = ctx.store.data.outreachChat; if (all.length > 2000) all.splice(0, all.length - 1500);
   events.publish('outreachChat', { lane });

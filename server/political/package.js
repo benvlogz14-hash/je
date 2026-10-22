@@ -21,7 +21,7 @@ const messaging = require('../automation/messaging');
 const sources = require('./sources');
 const render = require('../video/motion');
 const { now, safeJson } = require('../core/util');
-const { withFooter, isGov, excluded, noDashes } = require('../outreach/common');
+const { withFooter, isGov, isEmail, excluded, noDashes } = require('../outreach/common');
 const learning = require('../outreach/learning');
 
 const STEPS = [
@@ -207,9 +207,25 @@ Return JSON: {"tone":"${contrast ? 'positive or contrast' : 'positive'}","short"
   const long = vetStoryboard(c.long || c.short || c.storyboard, pkg, p, { style, contrast });
   const out = { ...c, style, short, long, storyboard: short, hasContrast: [...short, ...long].some((x) => x.type === 'contrast' || x.who === 'opponent'), agent: `${r.provider}:${r.model}` };
   out.tone = out.hasContrast ? 'contrast' : 'positive';
-  out.email = { ...(c.email || {}), body: withFooter(c.email?.body || '') };
+  out.email = vetEmail(c.email, pkg, p, { booking, noPhoto: !hasPhoto });
   save(p.id, () => ({ creative: out }));
   return `${short.length} + ${long.length} scenes${out.hasContrast ? ' (contrast)' : ''}, email and call script`;
+}
+
+/**
+ * House rules for the email the AI wrote: a real subject (not just a copied news headline),
+ * no phone numbers except ours (the AI tends to copy the candidate's own office number),
+ * the booking link when there is one, and the opt-out footer.
+ */
+function vetEmail(email, pkg, p, { booking = '', noPhoto = false } = {}) {
+  let subject = noDashes(String(email?.subject || '').trim()); let body = String(email?.body || '').trim();
+  const titles = (pkg.sources || []).map((s) => norm(String(s.title || '').replace(/\s+-\s+[^-]+$/, ''))).filter((t) => t.length > 12);
+  const ns = norm(subject);
+  if (!subject || subject.length > 70 || titles.some((t) => t && (ns === t || ns.includes(t) || t.includes(ns)))) subject = noPhoto ? `Ad concepts for ${p.name}` : `Three free ads for ${p.name}`;
+  const ours = String(ctx.setting('outreach.callerPhone', '') || '').replace(/\D/g, '').slice(-10);
+  body = String(email?.body || '').split('\n').map((line) => line.split(/(?<=[.!?])\s+/).filter((sent) => (sent.match(/\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g) || []).every((n) => ours && n.replace(/\D/g, '').slice(-10) === ours)).join(' ')).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (booking && !body.includes(booking)) { const k = body.lastIndexOf('\n\n'); body = k > 0 ? `${body.slice(0, k)}\n\nPick a time: ${booking}${body.slice(k)}` : `${body}\n\nPick a time: ${booking}`; }
+  return { ...email, subject, body: withFooter(noDashes(body)) };
 }
 
 /** Keep the ads honest: drop quotes, numbers and claims that aren't in the research, and citations that don't exist. */
@@ -379,7 +395,7 @@ h1{font:800 34px/1.05 Pop;color:${T.ink};letter-spacing:-.02em} h1 b{color:${T.a
 
 async function stepEmail(p, actor) {
   const pkg = p.pkg; const c = pkg.creative; if (!c?.email) throw new Error('Run the storyboard step first.');
-  const to = (p.publicContact && /@/.test(p.publicContact) ? p.publicContact : pkg.profile?.contact || '').trim().toLowerCase();
+  const to = [p.publicContact, pkg.profile?.contact, ...(pkg.profile?.emails || []).map((e) => e.email)].map((x) => String(x || '').trim().toLowerCase()).find((x) => isEmail(x) && !isGov(x)) || '';
   if (!to) { save(p.id, () => ({ status: 'needs_contact' })); return { skip: true, note: 'No public campaign email found. Add one on the prospect, then re-run this step.' }; }
   const ex = excluded({ name: p.name, email: to, handle: p.handle });
   if (ex) { save(p.id, () => ({ status: 'excluded' })); return { skip: true, note: `On the exclusions list (${ex})` }; }
@@ -486,7 +502,7 @@ async function reviseEmail(p) {
   const notes = (pkg.notes || []).map((n, i) => `${i + 1}. ${n.text}`).join('\n');
   if (!ai.anyConnected()) throw new Error('Connect an AI provider to revise with notes.');
   const r = await ai.ask({ role: 'writing', json: true, maxTokens: 1500, system: `You revise outreach emails for ${ctx.setting('agency.name', 'Euclidean Media')}. Apply the founder notes to the current email. Keep facts accurate to the brief, keep the free-ads offer, the 20-minute ask and the opt-out line. Never use em dashes.${learning.writerBlock('political')}`, prompt: `BRIEF\n${JSON.stringify(pkg.brief || {}).slice(0, 4000)}\n\nCURRENT EMAIL\nSubject: ${c.email.subject}\n${c.email.body}\n\nFOUNDER NOTES (latest wins)\n${notes}\n\nReturn {"subject":"...","body":"..."}` });
-  save(p.id, (pk) => ({ creative: { ...pk.creative, email: { subject: r.json.subject, body: withFooter(r.json.body) } } }));
+  save(p.id, (pk) => ({ creative: { ...pk.creative, email: vetEmail(r.json, pkg, p, { booking: S('bookingUrl', '') }) } }));
 }
 
 /**
@@ -528,4 +544,4 @@ function restore(prospectId, n, actor = 'user') {
   return { restored: v.n };
 }
 
-module.exports = { revise, restore, STEPS, VIDEOS, run, dirFor, fallbackCreative, vetStoryboard, material, attachmentsFor, DEFAULT_PLAN };
+module.exports = { vetEmail, revise, restore, STEPS, VIDEOS, run, dirFor, fallbackCreative, vetStoryboard, material, attachmentsFor, DEFAULT_PLAN };
