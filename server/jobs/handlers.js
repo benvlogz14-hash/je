@@ -32,6 +32,7 @@ queue.register('ingest.file', {
     h.progress(0.1, 'Reading media');
     const info = await ff.probe(asset.path);
     if (!info.hasVideo && !info.hasAudio) throw permanent('File has no audio or video streams');
+    if (!info.hasVideo) { ctx.store.update('assets', asset.id, { info, status: 'ready', error: `This is an audio-only file (${path.extname(asset.path) || 'no picture'}). Shorts need video: upload the .mp4 instead.` }); events.publish('assets', { id: asset.id }); return { audioOnly: true }; }
     h.progress(0.4, 'Generating thumbnails');
     const thumb = path.join(asset.workDir, 'thumb.jpg');
     if (info.hasVideo) await ff.thumbnail(asset.path, thumb, Math.min(3, info.duration / 3));

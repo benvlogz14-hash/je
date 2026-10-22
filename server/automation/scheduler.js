@@ -28,7 +28,7 @@ function feedClient(client) {
   const need = q.open - pipelineCount;
   if (need <= 0) return { client: client.name, need: 0 };
   if (activeJob((j) => j.clientId === client.id && ['discover', 'transcribe', 'analyze', 'ingest.file', 'ingest.url'].includes(j.type))) return { client: client.name, need, waiting: 'intake in progress' };
-  const assets = ctx.store.all('assets', (a) => a.clientId === client.id && a.status === 'ready' && !a.exhausted).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const assets = ctx.store.all('assets', (a) => a.clientId === client.id && a.status === 'ready' && !a.exhausted && a.info?.hasVideo !== false).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const untranscribed = assets.find((a) => a.info?.hasAudio && !a.transcript);
   if (untranscribed) {
     queue.enqueue('transcribe', { assetId: untranscribed.id, thenDiscover: true }, { clientId: client.id, dedupeKey: `transcribe:${untranscribed.id}`, title: `Transcribe ${untranscribed.name}` });

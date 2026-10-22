@@ -17,17 +17,29 @@ async function analyze(asset, { onProgress, signal } = {}) {
   const result = { scenes: [], energy: [], peaks: [], duration: dur };
   if (asset.info?.hasVideo) {
     // Scene changes on a small, low-fps proxy: cheap even for multi-hour streams.
-    const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-i', asset.path, '-an', '-vf', "fps=6,scale=256:-2,select='gt(scene\\,0.32)',showinfo", '-f', 'null', '-'], {
+    const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-stats_period', '1', '-i', asset.path, '-an', '-vf', "fps=6,scale=256:-2,select='gt(scene\\,0.32)',showinfo", '-f', 'null', '-'], {
       timeoutMs: 4 * 3600000, priority: ff.priorityValue(), signal,
-      onStderrLine: (l) => { const m = /pts_time:([\d.]+)/.exec(l); if (m) { result.scenes.push(Math.round(Number(m[1]) * 100) / 100); if (onProgress && dur) onProgress(Math.min(0.6, (Number(m[1]) / dur) * 0.6)); } },
+      onStderrLine: (l) => {
+        const m = /pts_time:([\d.]+)/.exec(l); if (m) result.scenes.push(Math.round(Number(m[1]) * 100) / 100);
+        // FFmpeg's own "time=" status line gives smooth progress even when there are few cuts.
+        const tm = /time=(\d+):(\d+):([\d.]+)/.exec(l); if (tm && onProgress && dur) onProgress(Math.min(0.6, ((+tm[1] * 3600 + +tm[2] * 60 + +tm[3]) / dur) * 0.6));
+      },
     });
     void r;
   }
   if (asset.info?.hasAudio) {
     // Short-term loudness once per second; peaks are moments well above the clip's median.
-    const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-i', asset.path, '-vn', '-af', 'ebur128=framelog=info', '-f', 'null', '-'], { timeoutMs: 4 * 3600000, priority: ff.priorityValue(), signal });
-    const pts = [...r.err.matchAll(/t:\s*([\d.]+)\s+TARGET:.*?M:\s*-?[\d.]+\s+S:\s*(-?[\d.]+)/g)].map((m) => ({ t: Number(m[1]), s: Number(m[2]) }));
-    const perSec = []; for (const p of pts) { const k = Math.floor(p.t); if (!perSec[k] || p.s > perSec[k].s) perSec[k] = { t: k, s: p.s }; }
+    // Read loudness line by line (long files print millions of lines), keeping the loudest value per second, with progress.
+    const perSec = []; const base = asset.info?.hasVideo ? 0.6 : 0; let lastPct = 0;
+    await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-i', asset.path, '-vn', '-af', 'ebur128=framelog=info', '-f', 'null', '-'], {
+      timeoutMs: 4 * 3600000, priority: ff.priorityValue(), signal,
+      onStderrLine: (l) => {
+        const m = /t:\s*([\d.]+)\s+TARGET:.*?M:\s*-?[\d.]+\s+S:\s*(-?[\d.]+)/.exec(l); if (!m) return;
+        const t = Number(m[1]); const s = Number(m[2]); const k = Math.floor(t);
+        if (!perSec[k] || s > perSec[k].s) perSec[k] = { t: k, s };
+        if (onProgress && dur) { const pct = base + (1 - base) * Math.min(1, t / dur) * 0.98; if (pct - lastPct > 0.01) { lastPct = pct; onProgress(pct); } }
+      },
+    });
     result.energy = perSec.filter(Boolean).filter((p) => p.s > -70).map((p) => ({ t: p.t, lufs: Math.round(p.s * 10) / 10 }));
     const sorted = result.energy.map((e) => e.lufs).sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)] ?? -30;
