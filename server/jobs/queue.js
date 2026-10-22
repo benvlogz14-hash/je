@@ -90,10 +90,17 @@ async function execute(job) {
     else if (e.canceled || cur.status === 'canceled') ctx.store.update('jobs', job.id, { status: 'canceled', finishedAt: now() });
     else if (e.deferUntil) ctx.store.update('jobs', job.id, { status: 'queued', runAt: e.deferUntil, attempts: Math.max(0, cur.attempts - 1), note: e.message });
     else {
+      // Errors that won't fix themselves by retrying; and a short plain-English message instead of an FFmpeg dump.
+      const raw = String(e.message || '');
+      const plain = /matches no streams|does not contain any stream|Invalid data found|moov atom not found/i.test(raw) ? "The video file can't be read as video (it may be audio only, damaged or still downloading). Upload the .mp4 again."
+        : /No such file or directory/i.test(raw) ? 'A file it needs is missing (moved or deleted). Upload it again.'
+        : /No space left on device/i.test(raw) ? 'The disk is full. Free some space, then Retry.'
+        : /exited with code/i.test(raw) && raw.length > 300 ? `The video tool stopped: ${raw.split('|').map((x) => x.trim()).filter((x) => x && !/^\[|Metadata|encoder|Stream #|Duration|configuration|built with|lib\w+\s+\d/i.test(x)).slice(-1)[0] || 'unknown error'}`.slice(0, 220) : null;
+      if (plain) e = Object.assign(new Error(plain), { permanent: e.permanent || /can't be read|missing|disk is full/.test(plain), notConnected: e.notConnected, detail: raw.slice(0, 2000) });
       const permanent = e.permanent || e.notConnected;
       const willRetry = !permanent && cur.attempts < cur.maxAttempts;
       const delay = Math.min(30 * 60, 20 * 2 ** (cur.attempts - 1)) * 1000;
-      cur.log.push({ at: now(), msg: `Error: ${e.message}` });
+      cur.log.push({ at: now(), msg: `Error: ${e.message}` }); if (e.detail) cur.log.push({ at: now(), msg: `Details: ${e.detail}` });
       ctx.store.update('jobs', job.id, willRetry
         ? { status: 'queued', runAt: new Date(Date.now() + delay).toISOString(), error: e.message, note: `Retrying in ${Math.round(delay / 1000)}s` }
         : { status: 'failed', error: e.message, finishedAt: now(), note: e.notConnected ? 'Integration not connected' : 'Failed', needsIntegration: !!e.notConnected });

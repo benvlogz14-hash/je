@@ -180,7 +180,16 @@ queue.register('render.short', {
     const clip = ctx.store.get('clips', job.payload.clipId);
     if (!clip) throw permanent('Clip no longer exists');
     const asset = ctx.store.get('assets', clip.assetId); const client = ctx.store.get('clients', clip.clientId);
-    if (asset?.info && !asset.info.hasVideo) throw permanent('This clip comes from an audio-only file (no picture). Delete it and upload the video (.mp4).');
+    // Check the file itself (not just what import recorded): no picture means no short, so stop here with a clear reason.
+    const live = asset && fs.existsSync(asset.path) ? await ff.probe(asset.path).catch(() => null) : null;
+    if (!asset || !fs.existsSync(asset.path)) throw permanent("The original video file is missing (moved or deleted). Upload it again.");
+    if (!live?.hasVideo) {
+      ctx.store.update('assets', asset.id, { info: { ...(asset.info || {}), ...(live || {}), hasVideo: false }, error: 'Audio only: this file has no picture, so it can\'t make shorts. Upload the .mp4 video instead.' });
+      for (const j of ctx.store.all('jobs', (x) => x.type === 'render.short' && x.id !== job.id && ['queued'].includes(x.status) && ctx.store.get('clips', x.payload?.clipId)?.assetId === asset.id)) queue.cancel(j.id, 'system');
+      for (const c of ctx.store.all('clips', (x) => x.assetId === asset.id && ['queued', 'rendering'].includes(x.status))) ctx.store.update('clips', c.id, { status: 'failed', error: 'Comes from an audio-only file (no picture). Delete these clips and upload the .mp4.' });
+      events.publish('clips', {});
+      throw permanent('This clip comes from an audio-only file (no picture). Delete it and upload the video (.mp4).');
+    }
     if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
     ctx.store.update('clips', clip.id, { renderProgress: 0, error: null });
     if (!ctx.capabilities.libass) h.log('Warning: this FFmpeg build lacks libass; captions cannot be burned in.');
