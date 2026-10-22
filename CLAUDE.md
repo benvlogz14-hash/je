@@ -9,6 +9,7 @@ Desktop app for Euclidean Media (founders Ryan Rosario and Ben Gingold), a short
   - Audit log: `server/core/audit.js`.
   - Server-sent events: `server/core/events.js`.
 - **Jobs:** `server/jobs/queue.js` and `server/jobs/handlers.js`. Every automated step is a `queue.register(name, { title, run(job, h) })` handler; `h.progress(frac, text)` reports progress.
+- **AI cost order (default, set once on existing installs via `_costModeV1`):** `ai.local = 'all'` and `ai.bridge.use = 'first'`: the founder's own Grok/Claude/ChatGPT login (rate-limited, only once logged in on the AI apps page), then free Llama, then paid API keys.
 - **AI:** `server/integrations/ai.js`. Use `ai.ask({ role, system, prompt, json, search, clientId, jobId })`; it routes by role to Anthropic, OpenAI or xAI with fallback, budgets and usage tracking. `search: true` gives live web search on xAI only.
 - **Messaging:** `server/automation/messaging.js`.
   - `createOutbound(...)` puts AI drafts and first contact with prospects into Approvals.

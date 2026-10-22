@@ -176,7 +176,7 @@ async function ask({ role = 'operations', system, prompt, messages, json = false
   await pingOllama();
   // Local-first: "all" sends every task to Llama on this computer; "most" keeps only emails/ad writing on the paid
   // provider; "off" uses Llama only as a last resort. Llama is always the final fallback when it's running.
-  const local = ctx.setting('ai.local', 'most');
+  const local = ctx.setting('ai.local', 'all');
   const useLocalFirst = local === 'all' || (local === 'most' && role !== 'writing');
   let chain = forceProvider ? [forceProvider] : [cfg.provider, ...(cfg.fallbacks || [])];
   if (!forceProvider) chain = useLocalFirst ? ['ollama', ...chain] : [...chain, 'ollama'];

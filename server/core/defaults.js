@@ -55,6 +55,9 @@ module.exports = {
   environment: 'test', // 'test' redirects all outbound messages to the sandbox recipients and keeps publishing in Manual Pack mode
   sandbox: { phone: '', email: '' },
   ai: {
+    // Lowest cost first: your own AI account (no API key, rate-limited), then free Llama on this PC, then paid keys.
+    local: 'all',
+    bridge: { use: 'first', site: 'grok', perHour: 20 },
     roles: {
       operations: { provider: 'anthropic', model: 'claude-sonnet-5-5', fallbacks: ['openai', 'xai'], description: 'Client communications, triage, command routing, quality control' },
       analysis: { provider: 'openai', model: 'gpt-5', fallbacks: ['anthropic', 'xai'], description: 'Transcript analysis, clip discovery, editing plans' },

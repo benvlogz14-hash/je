@@ -293,7 +293,7 @@ function Appearance() {
 function LocalAI({ st, test }) {
   const boot = useStore((s) => s.boot);
   const init = boot.settings?.ai || {};
-  const [o, setO] = useState({ enabled: init.ollama?.enabled !== false, url: init.ollama?.url || 'http://127.0.0.1:11434', model: init.ollama?.model || 'llama3.2', local: init.local || 'most', searxngUrl: init.searxngUrl || '' });
+  const [o, setO] = useState({ enabled: init.ollama?.enabled !== false, url: init.ollama?.url || 'http://127.0.0.1:11434', model: init.ollama?.model || 'llama3.2', local: init.local || 'all', searxngUrl: init.searxngUrl || '' });
   const on = !!st?.ai?.ollama;
   const save = () => act(() => api.patch('/api/settings', { ai: { ollama: { enabled: o.enabled, url: o.url, model: o.model }, local: o.local, searxngUrl: o.searxngUrl } }), { ok: 'Saved' }).then(() => test('ollama'));
   return html`<${Section} title="Free AI on this computer (Ollama)" sub="Runs Llama on your own PC at no cost. Euclidean uses it automatically whenever Ollama is open, so your paid keys are only used where they matter." action=${html`<span class=${'badge ' + (on ? 'moss' : '')}>${on ? 'Running' : 'Not running'}</span>`}>

@@ -139,6 +139,8 @@ async function start(opts = {}) {
   require('./automation/scheduler').start();
   messaging.startPollers();
   require('./agents/broker').start();
+  // One-time switch to the lowest-cost AI order for installs made before it was the default.
+  if (!ctx.store.settings._costModeV1) { ctx.store.setSettings({ ai: { local: 'all', bridge: { use: 'first', site: ctx.setting('ai.bridge.site', 'grok'), perHour: 20 } } }); ctx.store.settings._costModeV1 = true; ctx.store.touch(); }
   setTimeout(() => { require('./setup/ollama').autostart().catch(() => {}); try { require('./setup/whisper').adopt(); } catch { /* later */ } }, 3000);
   audit.log('system', 'engine.started', { version: ctx.version, port: ctx.port, lan: !!lan, host: os.hostname() });
   console.log(`[euclidean] engine ${ctx.version} on http://${lan ? (ctx.lanAddress || '0.0.0.0') : '127.0.0.1'}:${ctx.port} · data ${paths.root}`);

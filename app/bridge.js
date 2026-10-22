@@ -54,14 +54,14 @@ async function status(site) {
 async function open(site) { win(site, { show: true }); return status(site); }
 
 /** Send one message and wait for the whole reply. */
-async function ask(site, text, { newChat = false, timeoutMs = 240000 } = {}) {
+async function ask(site, text, { newChat = false, timeoutMs = 240000, quiet = false } = {}) {
   const s = SITES[site];
   const w = win(site);
   if (newChat) { w.loadURL(s.url); }
   await loaded(w); await sleep(800);
   const page = w.webContents;
   const ok = await page.executeJavaScript(`!!${FIND_INPUT}`).catch(() => false);
-  if (!ok) { win(site, { show: true }); throw Object.assign(new Error(`Log in to ${s.label} in the window that just opened, then try again.`), { needsLogin: true }); }
+  if (!ok) { if (!quiet) win(site, { show: true }); throw Object.assign(new Error(`Log in to ${s.label} in the window that just opened, then try again.`), { needsLogin: true }); }
   const before = await page.executeJavaScript(`({ n: Math.max(0, ...${JSON.stringify(s.reply)}.map((q) => document.querySelectorAll(q).length)), text: (document.querySelector('main') || document.body).innerText })`);
   // Type the message like a person: focus the box, insert the text, press Enter (or click send).
   await page.executeJavaScript(`(() => { const el = ${FIND_INPUT}; el.focus(); if (el.tagName === 'TEXTAREA') { const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(el, ${JSON.stringify(text)}); el.dispatchEvent(new Event('input', { bubbles: true })); } else { document.execCommand('selectAll', false); document.execCommand('insertText', false, ${JSON.stringify(text)}); } })()`);
