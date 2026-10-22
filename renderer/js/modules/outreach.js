@@ -112,7 +112,7 @@ export function ReviewQueue({ lane }) {
   };
   return html`<div class="col" style="gap:10px">
     <div class="row" style="gap:8px"><h4 class="grow">Waiting for review <span class="faint">${items.length}</span></h4>
-      ${items.length ? html`<${Button} size="sm" kind="ghost" onClick=${() => setPicked(new Set(items.filter((x) => !x.hasContrast).map((x) => x.id)))}>Select all</${Button}>` : null}
+      ${items.length ? html`<${Button} size="sm" kind="ghost" onClick=${() => setPicked(new Set(items.filter((x) => !x.hasContrast && !x.needsContact).map((x) => x.id)))}>Select all</${Button}>` : null}
       <${Button} size="sm" kind="ghost" disabled=${!picked.size} onClick=${() => skip([...picked])}>Skip</${Button}>
       <${Button} size="sm" kind="moss" icon="check" disabled=${!picked.size} onClick=${() => approve([...picked])}>Approve & send ${picked.size || ''}</${Button}></div>
     ${!items.length ? html`<div class="panel pad faint">Nothing waiting. New ${lane === 'political' ? 'packages' : 'emails'} appear here as bubbles to approve.</div>` : null}
@@ -122,14 +122,26 @@ export function ReviewQueue({ lane }) {
   </div>`;
 }
 
+/** A lead that only lacks a real email: type one (or pick one found on their pages) and the draft is remade to it. */
+function AddEmail({ it }) {
+  const [email, setEmail] = useState(it.suggestions?.[0] || '');
+  const save = () => act(() => api.post(`/api/prospects/${it.id}/contact`, { email: email.trim() }), { ok: 'Saved. Remaking the email draft to that address.' });
+  return html`<div class="panel pad col" style="gap:8px;background:var(--gold-soft)">
+    <b>Add their campaign or press email</b>
+    ${it.govFound?.length ? html`<div class="faint" style="font-size:var(--fs-xs)">Found only a government address (${it.govFound.join(', ')}). We never pitch those; look on their campaign site or social pages for a press or info@ address.</div>` : null}
+    ${it.suggestions?.length ? html`<div class="row wrap" style="gap:6px">${it.suggestions.map((e) => html`<button class="chip" onClick=${() => setEmail(e)}>${e}</button>`)}</div>` : null}
+    <div class="row" style="gap:6px"><input class="input grow" type="email" placeholder="press@theircampaign.com" value=${email} onInput=${(e) => setEmail(e.target.value)} onKeyDown=${(e) => e.key === 'Enter' && email.trim() && save()} /><${Button} kind="primary" disabled=${!email.trim()} onClick=${save}>Save and make the draft</${Button}></div>
+  </div>`;
+}
+
 function Bubble({ it, lane, picked, toggle, edit, setEdit, onApprove, onSkip, onPreview }) {
   const [editing, setEditing] = useState(false);
   const file = (k) => api.url(`/api/prospects/${it.id}/file/${k}`);
   const vids = lane === 'political' ? [['v', 'posterV', 'Short vertical', 120], ['h', 'posterH', 'Short horizontal', 214], ['hl', 'posterHL', 'Long horizontal', 214]].filter(([k]) => it.files.includes(k)) : [];
   return html`<div class="panel pad col" style=${`gap:10px;border-radius:22px;${picked ? 'outline:2px solid var(--moss)' : ''}`}>
     <div class="row" style="gap:10px">
-      ${!it.hasContrast ? html`<input type="checkbox" checked=${picked} onChange=${toggle} />` : null}
-      <div class="grow"><b>${it.name}</b> <span class="faint">${it.office || it.handle || ''}${it.followers ? ` · ${fmtN(it.followers)} followers` : ''}</span><div class="faint" style="font-size:var(--fs-xs)">To ${it.to} · ${ago(it.createdAt)}</div></div>
+      ${!it.hasContrast && !it.needsContact ? html`<input type="checkbox" checked=${picked} onChange=${toggle} />` : null}
+      <div class="grow"><b>${it.name}</b> <span class="faint">${it.office || it.handle || ''}${it.followers ? ` · ${fmtN(it.followers)} followers` : ''}</span><div class="faint" style="font-size:var(--fs-xs)">${it.needsContact ? html`<span class="badge gold">Needs an email</span>` : `To ${it.to}`} · ${ago(it.createdAt)}</div></div>
       ${it.hasContrast ? html`<span class="badge coral">Contrast ad: review required</span>` : null}
     </div>
     ${vids.length ? html`<div class="row wrap" style="gap:10px;align-items:flex-end">${vids.map(([k, pk, label, w]) => html`<button class="col" style="gap:4px;background:none;border:0;padding:0;cursor:pointer;text-align:left" onClick=${() => onPreview(file(k))}>
@@ -139,8 +151,9 @@ function Bubble({ it, lane, picked, toggle, edit, setEdit, onApprove, onSkip, on
     ${editing ? html`<div class="col" style="gap:6px"><input class="input" value=${edit?.subject ?? it.subject} onInput=${(e) => setEdit({ subject: e.target.value })} /><textarea class="input" style="height:200px;font-family:inherit;line-height:1.5" value=${edit?.body ?? it.body} onInput=${(e) => setEdit({ body: e.target.value })} /></div>`
       : html`<div class="panel pad" style="background:var(--bg,#fafbfc)"><b>${edit?.subject ?? it.subject}</b><div class="selectable" style="white-space:pre-wrap;font-size:var(--fs-sm);line-height:1.55;margin-top:6px;max-height:220px;overflow:auto">${edit?.body ?? it.body}</div>${it.attachments.length ? html`<div class="faint" style="font-size:var(--fs-xs);margin-top:6px">📎 ${it.attachments.map((a) => a.name).join(' · ')}</div>` : null}</div>`}
     ${it.why.length ? html`<div class="row wrap" style="gap:6px">${it.why.map((w) => html`<span class="badge gold" title="Why autopilot held this">${w}</span>`)}</div>` : null}
+    ${it.needsContact ? html`<${AddEmail} it=${it} />` : null}
     <${Notes} id=${it.id} lane=${lane} />
-    <div class="row wrap" style="gap:8px"><${Button} kind="moss" icon="check" onClick=${onApprove}>Approve & send</${Button}><${Button} kind="ghost" icon="edit" onClick=${() => setEditing(!editing)}>${editing ? 'Done editing' : 'Edit'}</${Button}><${Button} kind="ghost" onClick=${onSkip}>Skip</${Button}>
+    <div class="row wrap" style="gap:8px"><${Button} kind="moss" icon="check" disabled=${it.needsContact} title=${it.needsContact ? 'Add a campaign or press email first' : ''} onClick=${onApprove}>Approve & send</${Button}><${Button} kind="ghost" icon="edit" onClick=${() => setEditing(!editing)}>${editing ? 'Done editing' : 'Edit'}</${Button}><${Button} kind="ghost" onClick=${onSkip}>Skip</${Button}>
       <${VoiceNote} id=${it.id} has=${it.attachments.some((a) => /^Voice note/.test(a.name))} /><${CallButton} id=${it.id} name=${it.name} />
       <div class="spacer" /><${Button} size="sm" kind="ghost" onClick=${() => act(() => api.post(`/api/prospects/${it.id}/redo`), { ok: 'Remaking' })}>Remake</${Button}></div>
   </div>`;

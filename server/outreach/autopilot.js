@@ -18,7 +18,7 @@ const audit = require('../core/audit');
 const events = require('../core/events');
 const queue = require('../jobs/queue');
 const messaging = require('../automation/messaging');
-const { isGov, excluded, mailingAddress, noDashes, withFooter } = require('./common');
+const { isGov, isEmail, excluded, mailingAddress, noDashes, withFooter } = require('./common');
 const { now } = require('../core/util');
 const learning = require('./learning');
 
@@ -101,6 +101,8 @@ function approve(ids, actor, edits = {}) {
     const p = ctx.store.get('prospects', id); const msg = p && draftOf(p);
     try {
       if (!msg || msg.status !== 'pending_approval') throw new Error('no draft waiting');
+      const to = ctx.store.get('contacts', msg.contactId)?.emails?.[0] || '';
+      if (!isEmail(to) || isGov(to)) throw new Error(`needs a real campaign or press email (it's addressed to ${to || 'nothing'})`);
       const ed = edits[id];
       const changed = ed && ((ed.subject && ed.subject !== msg.subject) || (ed.body && ed.body.trim() !== String(msg.body).trim()));
       learning.record(changed ? 'edited' : 'approved', { lane: laneOf(p), prospectId: id, name: p.name, before: { subject: msg.subject, body: msg.body }, after: changed ? { subject: ed.subject || msg.subject, body: ed.body || msg.body } : null });
@@ -130,10 +132,17 @@ function skip(ids, actor, reason = '') {
 
 /** Everything waiting for a founder, newest first, with why autopilot held it. */
 function reviewQueue(lane) {
-  return ctx.store.all('prospects', (p) => laneOf(p) === lane && draftOf(p)?.status === 'pending_approval').map((p) => {
+  // Finished leads that only lack a usable email (none found, or only a government address): shown so you can add one.
+  const needs = ctx.store.all('prospects', (p) => laneOf(p) === lane && !['lost', 'replied', 'meeting', 'won', 'client'].includes(p.stage) && (p.type === 'political' ? p.pkg?.status : p.outreach?.status) === 'needs_contact' && draftOf(p)?.status !== 'pending_approval').map((p) => {
+    const found = [...(p.pkg?.profile?.emails || []).map((e) => e.email), ...(p.outreach?.research?.emails || []).map((e) => e.email), p.publicContact].filter(Boolean).map(String);
+    const gov = found.filter((e) => isGov(e)); const usable = [...new Set(found.filter((e) => isEmail(e) && !isGov(e)))];
+    return { id: p.id, name: p.name, type: p.type, office: p.pkg?.profile?.office || p.location || '', handle: p.handle, followers: p.followers, needsContact: true, to: '', suggestions: usable.slice(0, 6), govFound: gov.slice(0, 3), subject: p.pkg?.creative?.email?.subject || p.outreach?.email?.subject || '', body: p.pkg?.creative?.email?.body || p.outreach?.email?.body || '', attachments: [], files: p.pkg?.files ? Object.keys(p.pkg.files) : [], hasContrast: !!p.pkg?.creative?.hasContrast, why: [gov.length ? `Only a government address was found (${gov[0]}). Add their campaign or press email.` : 'No public campaign or press email found yet. Add one.'], createdAt: p.pkg?.finishedAt || p.updatedAt || p.createdAt };
+  });
+  return [...needs, ...ctx.store.all('prospects', (p) => laneOf(p) === lane && draftOf(p)?.status === 'pending_approval').map((p) => {
     const msg = draftOf(p); const contact = ctx.store.get('contacts', msg.contactId);
-    return { id: p.id, name: p.name, type: p.type, office: p.pkg?.profile?.office || p.location || '', handle: p.handle, followers: p.followers, to: contact?.emails?.[0] || '', subject: msg.subject, body: msg.body, messageId: msg.id, attachments: (msg.attachments || []).map((a) => ({ name: a.name, size: a.size })), files: p.pkg?.files ? Object.keys(p.pkg.files) : [], hasContrast: !!p.pkg?.creative?.hasContrast, why: checks(p, { ignoreCap: true }).filter((w) => !/^Auto-send (is off|not earned)/.test(w)), createdAt: msg.createdAt };
-  }).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    const bad = !isEmail(contact?.emails?.[0]) || isGov(contact?.emails?.[0]);
+    return { needsContact: bad, suggestions: bad ? [...new Set([...(p.pkg?.profile?.emails || []).map((e) => e.email)].filter((e) => isEmail(e) && !isGov(e)))].slice(0, 6) : [], id: p.id, name: p.name, type: p.type, office: p.pkg?.profile?.office || p.location || '', handle: p.handle, followers: p.followers, to: contact?.emails?.[0] || '', subject: msg.subject, body: msg.body, messageId: msg.id, attachments: (msg.attachments || []).map((a) => ({ name: a.name, size: a.size })), files: p.pkg?.files ? Object.keys(p.pkg.files) : [], hasContrast: !!p.pkg?.creative?.hasContrast, why: checks(p, { ignoreCap: true }).filter((w) => !/^Auto-send (is off|not earned)/.test(w)), createdAt: msg.createdAt };
+  })].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 
 function status() {

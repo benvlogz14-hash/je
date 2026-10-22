@@ -406,14 +406,15 @@ async function stepEmail(p, actor) {
   if (isGov(to) && !S('allowGov', false)) { save(p.id, () => ({ status: 'needs_contact' })); return { skip: true, note: `${to} is a government office address. Add a campaign or press email instead.` }; }
   let contact = p.contactId ? ctx.store.get('contacts', p.contactId) : ctx.store.find('contacts', (x) => (x.emails || []).includes(to));
   if (!contact) contact = ctx.store.insert('contacts', { name: p.name, phones: [], emails: [to], role: 'prospect', clientId: null, optedOut: {}, source: 'political' });
-  else if (!(contact.emails || []).includes(to)) contact = ctx.store.update('contacts', contact.id, { emails: [...contact.emails, to] });
+  else if ((contact.emails || [])[0] !== to) contact = ctx.store.update('contacts', contact.id, { emails: [to, ...(contact.emails || []).filter((e) => e !== to && isEmail(e) && !isGov(e))] }); // this address first; drop links and .gov
   if (contact.optedOut?.email) return { skip: true, note: `${p.name} opted out of email.` };
   ctx.store.update('prospects', p.id, { contactId: contact.id });
   // Replace an earlier unsent draft instead of stacking duplicates.
   if (pkg.messageId) { const old = ctx.store.get('messages', pkg.messageId); if (old?.status === 'pending_approval') messaging.rejectMessage(old.id, actor); }
   const att = attachmentsFor(pkg);
   if (p.voiceNote && fs.existsSync(p.voiceNote)) att.push({ name: path.basename(p.voiceNote), path: p.voiceNote, size: fs.statSync(p.voiceNote).size });
-  const m = messaging.createOutbound({ contactId: contact.id, channel: 'email', subject: noDashes(c.email.subject), body: withFooter(c.email.body), aiGenerated: true, agent: c.agent, category: 'prospecting', actor, attachments: att });
+  const em = vetEmail(c.email, pkg, p, { booking: S('bookingUrl', ''), noPhoto: pkg.profile?.photoFound === false || !pkg.profile?.photo }); // house rules, also for drafts written before they existed
+  const m = messaging.createOutbound({ contactId: contact.id, channel: 'email', subject: noDashes(em.subject), body: em.body, aiGenerated: true, agent: c.agent, category: 'prospecting', actor, attachments: att });
   save(p.id, () => ({ messageId: m.id, conversationId: m.conversationId }));
   if ((p.stage || 'new') === 'new') ctx.store.update('prospects', p.id, { stage: 'drafted' });
   const vn = !p.voiceNote && await require('../outreach/voicenote').auto(p);

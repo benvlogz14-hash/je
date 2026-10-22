@@ -84,6 +84,7 @@ async function run(prospectId, h) {
     const em = await writeEmail(p, r, offer, p.outreach?.notes || []);
     let contact = p.contactId ? ctx.store.get('contacts', p.contactId) : ctx.store.find('contacts', (x) => (x.emails || []).includes(to));
     if (!contact) contact = ctx.store.insert('contacts', { name: p.name, phones: [], emails: [to], role: 'prospect', clientId: null, optedOut: {}, source: 'creator outreach' });
+    else if ((contact.emails || [])[0] !== to) contact = ctx.store.update('contacts', contact.id, { emails: [to, ...(contact.emails || []).filter((e) => e !== to && require('./common').isEmail(e) && !isGov(e))] });
     if (contact.optedOut?.email) { set({ status: 'excluded', note: 'Opted out' }); return { status: 'opted_out' }; }
     ctx.store.update('prospects', p.id, { contactId: contact.id });
     const old = p.outreach?.messageId && ctx.store.get('messages', p.outreach.messageId);

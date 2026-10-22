@@ -584,6 +584,16 @@ r.post('/api/political/scout', (req, b) => {
   const query = String(b.query || '').trim(); if (query.length < 4) throw new HttpError(400, 'Describe who you want to find.');
   return queue.enqueue('political.scout', { query, count: Math.max(1, Math.min(100, Number(b.count) || 10)), autoPackage: !!b.autoPackage }, { actor: actorOf(req) });
 });
+// Add or fix a lead's email (a founder-entered address counts as confirmed), then remake the draft to it.
+r.post('/api/prospects/:id/contact', (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id)); const email = String(b.email || '').trim().toLowerCase();
+  const { isEmail, isGov } = require('./outreach/common');
+  if (!isEmail(email)) throw new HttpError(400, 'That is not an email address. Use something like press@theircampaign.com.');
+  if (isGov(email)) throw new HttpError(400, 'That is a government address; we never pitch those. Use their campaign or press email.');
+  ctx.store.update('prospects', pr.id, { publicContact: email, contactVerified: true });
+  if (pr.type === 'political') return queue.enqueue('political.package', { prospectId: pr.id, name: pr.name, only: 'email' }, { actor: actorOf(req), priority: 3, dedupeKey: `polpkg:${pr.id}:email:${Date.now()}` });
+  return queue.enqueue('creator.outreach', { prospectId: pr.id, name: pr.name }, { actor: actorOf(req), priority: 3, dedupeKey: `crout:${pr.id}:${Date.now()}` });
+});
 r.post('/api/prospects/:id/package', (req, b, p) => {
   const pr = must(ctx.store.get('prospects', p.id));
   const steps = polPkg.STEPS.map((s) => s[0]);
