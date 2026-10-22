@@ -765,6 +765,9 @@ r.patch('/api/invoices/:id', (req, b, p) => { must(ctx.store.get('invoices', p.i
 r.get('/api/expenses', () => ctx.store.all('expenses').reverse(), { roles: OWNER });
 r.post('/api/expenses', (req, b) => ctx.store.insert('expenses', { label: b.label, amount: Number(b.amount) || 0, category: b.category || 'other', date: b.date || now().slice(0, 10), recurring: !!b.recurring, clientId: b.clientId || null }), { roles: OWNER });
 r.del('/api/expenses/:id', (req, b, p) => ({ ok: ctx.store.remove('expenses', p.id) }), { roles: OWNER });
+r.patch('/api/expenses/:id', (req, b, p) => { must(ctx.store.get('expenses', p.id)); const patch = {}; for (const k of ['label', 'category', 'date', 'clientId']) if (b[k] !== undefined) patch[k] = b[k]; if (b.amount !== undefined) patch.amount = Number(b.amount) || 0; if (b.recurring !== undefined) patch.recurring = !!b.recurring; return ctx.store.update('expenses', p.id, patch); }, { roles: OWNER });
+r.get('/api/timelogs', (req) => ctx.store.all('timelogs', (t) => !req.query.month || String(t.date || '').startsWith(req.query.month)).slice(-200).reverse(), { roles: OWNER });
+r.del('/api/timelogs/:id', (req, b, p) => ({ ok: ctx.store.remove('timelogs', p.id) }), { roles: OWNER });
 r.post('/api/timelogs', (req, b) => ctx.store.insert('timelogs', { userId: actorOf(req), clientId: b.clientId || null, minutes: Number(b.minutes) || 0, note: b.note || '', date: b.date || now().slice(0, 10) }));
 r.post('/api/analytics/sync', () => queue.enqueue('analytics.sync', {}, { dedupeKey: `analytics:manual:${Math.floor(Date.now() / 60000)}` }));
 // ------------------------------------------------------------ tracked creators (Analytics → Creators)

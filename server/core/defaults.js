@@ -4,8 +4,8 @@ module.exports = {
   agency: {
     name: 'Euclidean Media',
     founders: [
-      { id: 'ryan', name: 'Ryan Rosario', ownershipPct: 50, distributionPct: 50 },
-      { id: 'ben', name: 'Ben Gingold', ownershipPct: 50, distributionPct: 50 },
+      { id: 'ryan', name: 'Ryan Rosario', ownershipPct: 30, distributionPct: 30 },
+      { id: 'ben', name: 'Ben Gingold', ownershipPct: 70, distributionPct: 70 },
     ],
     taxReservePct: 30,
     retainedEarningsPct: 10,
