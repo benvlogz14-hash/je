@@ -95,6 +95,9 @@ Built and tested end to end with sample data; live lookups were blocked in the c
   - Style: `political.videoStyle = 'campaign'` is the modern campaign-ad look in `server/video/campaign.js`; 'pop' is the bubbly look.
   - Factual scenes show their sources on screen.
   - Contrast ads are off by default (`political.contrastAds`). They need a researched opponent and cited facts, and are never auto-sent.
+- **Music** (`server/video/music.js`, `political.musicOn`): one track per package, matched to mood (positive, contrast, speech): the founders' folder first, else a free CC0/CC BY library downloaded once from Openverse (credit added to the end card), else a bed generated with FFmpeg.
+- **New prospects** (`triage: 'pending'` on scouted prospects, `/api/outreach/:lane/new[/approve|/skip]`): scout finds wait with a blurb until approved to packages/emails, unless `outreach.<lane>.autoPackage` is on.
+- **Free scouting** (`server/political/freescout.js`): Ballotpedia election pages and Wikidata office-holders, no keys or AI; runs before the AI search in `political.scout`.
 - **Speech ads** (`political.videoStyle = 'speech'`, `server/political/footage.js`, package step `footage`):
   - Finds public videos of the candidate with no login: links pasted on the lead (`prospect.footageLinks`), public Facebook videos/reels found through web search and their sites, their YouTube channel and YouTube search. Downloads the first 10 minutes of up to `political.footageClips` with yt-dlp.
   - Transcribes (OpenAI Whisper or local whisper.cpp), then AI picks whole sentences the candidate says (never cut inside a sentence or splice words), with short issue titles and a tagline.

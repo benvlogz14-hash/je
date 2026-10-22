@@ -306,7 +306,11 @@ async function stepVideo(p, h, kind) {
   const K = VIDEOS[kind]; const c = p.pkg.creative; const board = c?.[K.board] || c?.storyboard;
   if (!board?.length) throw new Error('Run the ad scripts step first.');
   const dir = dirFor(p); const out = path.join(dir, `${slugName(p.name)} - ${K.label} ad.mp4`);
-  const music = pickMusic(c.tone);
+  // One track for the whole package, matched to the ad's mood (own folder, free licensed library, or generated).
+  const mood = S('videoStyle', 'campaign') === 'speech' && (p.pkg.footage?.bites?.short || []).length >= 2 ? 'speech' : c.tone === 'contrast' ? 'contrast' : 'positive';
+  let track = p.pkg.music && p.pkg.music.mood === mood && fs.existsSync(p.pkg.music.file) ? p.pkg.music : null;
+  if (!track) { const m = await require('../video/music').pick(mood).catch(() => null); if (m) { track = { ...m, mood }; save(p.id, () => ({ music: track })); } }
+  const music = track?.file || null;
   let narration = null;
   if (kind === 'hl' && S('narration', false) && c.narration && ai.connected('openai')) {
     narration = path.join(dir, 'narration.mp3');
@@ -317,7 +321,7 @@ async function stepVideo(p, h, kind) {
   const pr = p.pkg.profile || {};
   const silhouette = mode === 'silhouette' || !pr.photo;
   const backgrounds = S('backgrounds', 'photo') === 'photo' ? (p.pkg.backgrounds || []).map((b) => b.file).filter((f) => fs.existsSync(f)) : [];
-  const info = { backgrounds, brand: S('brandColors', true) ? pr.brand : null, name: p.name, silhouette, cutout: !silhouette && mode !== 'full' && pr.cutout && fs.existsSync(pr.cutout) ? pr.cutout : null, photo: silhouette ? null : pr.photo, oppPhoto: p.pkg.opp?.profile?.photo, party: p.pkg.profile?.party, style, tone: c.tone, citeText: citeText(p.pkg), theme: S('theme', 'auto') === 'auto' ? null : S('theme') };
+  const info = { backgrounds, brand: S('brandColors', true) ? pr.brand : null, name: p.name, silhouette, cutout: !silhouette && mode !== 'full' && pr.cutout && fs.existsSync(pr.cutout) ? pr.cutout : null, photo: silhouette ? null : pr.photo, oppPhoto: p.pkg.opp?.profile?.photo, party: p.pkg.profile?.party, style, tone: c.tone, citeText: citeText(p.pkg), theme: S('theme', 'auto') === 'auto' ? null : S('theme'), musicCredit: track?.credit || '', disclaimer: `Concept ad by Euclidean Media. Not paid for or authorized by any candidate or committee.${track?.credit ? ` ${track.credit}.` : ''}` };
   const work = path.join(dir, `work_${kind}`);
   const ref = S('reference', null);
   const paced = ref?.avgShot ? board.map((x) => (x.sec ? x : { ...x, sec: Math.max(2.5, Math.min(7, ref.avgShot * (['issues', 'checklist', 'chart', 'contrast'].includes(x.type) ? 1.6 : 1))) })) : board;

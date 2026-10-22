@@ -329,7 +329,7 @@ async function renderSpeechAd({ bites, footage, info, vertical, out, work, music
   onProgress(0.03, 'Drawing the opening title');
   const gInfo = { ...info, style: 'campaign', noTag: true };
   const intro = await motion.renderVideo({ scenes: [{ type: 'photo', who: 'candidate', headline: tagline, sub: office || '', sec: 2.8 }], info: { ...gInfo, noDisclaimer: true }, vertical, out: path.join(work, 'intro.mp4'), work: path.join(work, 'g1') });
-  const outro = await motion.renderVideo({ scenes: [{ type: 'vote', headline: `Vote ${info.name}`, button: site || '', sec: 3 }, { type: 'disclaimer', text: `Concept ad by Euclidean Media using public footage of ${info.name}. Not paid for or authorized by any candidate or committee.`, sec: 2.5 }], info: gInfo, vertical, out: path.join(work, 'outro.mp4'), work: path.join(work, 'g2') });
+  const outro = await motion.renderVideo({ scenes: [{ type: 'vote', headline: `Vote ${info.name}`, button: site || '', sec: 3 }, { type: 'disclaimer', text: `Concept ad by Euclidean Media using public footage of ${info.name}. Not paid for or authorized by any candidate or committee.${info.musicCredit ? ` ${info.musicCredit}.` : ''}`, sec: 2.5 }], info: gInfo, vertical, out: path.join(work, 'outro.mp4'), work: path.join(work, 'g2') });
 
   const parts = [];
   for (let k = 0; k < bites.length; k++) {
