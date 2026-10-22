@@ -50,8 +50,8 @@ if not exist "node_modules\electron\dist\electron.exe" (
   )
 )
 
-rem Desktop shortcut so next time it is one click.
-if not exist "%USERPROFILE%\Desktop\Euclidean.lnk" (
+rem Desktop shortcut so next time it is one click (always pointed at this copy, so an old copy never opens by mistake).
+(
   powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\Euclidean.lnk'); $s.TargetPath='%~dp0Start Euclidean.bat'; $s.WorkingDirectory='%~dp0'; $s.IconLocation='%~dp0build\icon.ico'; $s.WindowStyle=7; $s.Save()" >nul 2>nul
 )
 

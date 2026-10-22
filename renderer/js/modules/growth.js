@@ -8,19 +8,23 @@ import { Autopilot, ReviewQueue, Leads, CreatorsLane, ScoutChat, Learning } from
 
 const STAGES = [['new', 'New'], ['drafted', 'Draft ready'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['meeting', 'Meeting'], ['proposal', 'Proposal'], ['won', 'Won'], ['lost', 'Lost']];
 
-export function Growth() {
+/** Politics gets its own page: targeting, packages, autopilot and review, without the creator lane. */
+export function Politics() { return Growth({ only: 'political' }); }
+
+export function Growth({ only = null } = {}) {
   const { data, loading, reload } = useApi('/api/prospects', ['prospects', 'job']);
   const { data: jobs } = useApi('/api/jobs?status=running,queued', ['job']);
   const [query, setQuery] = useState('');
-  const [view, setView] = useState(() => { try { return localStorage.getItem('eu.growthView') || 'creators'; } catch { return 'creators'; } });
+  const [saved, setView] = useState(() => { try { const v = localStorage.getItem('eu.growthView') || 'creators'; return v === 'political' ? 'creators' : v; } catch { return 'creators'; } });
+  const view = only || saved;
   const pickView = (v) => { setView(v); try { localStorage.setItem('eu.growthView', v); } catch { /* ignore */ } };
   const [open, setOpen] = useState(null);
   const researching = (jobs || []).filter((j) => j.type === 'prospect.research' || j.type === 'prospect.audit');
   const research = () => act(() => api.post('/api/command', { text: `/prospect ${query}` }), { ok: 'Research started. Results appear here.' }).then(() => setQuery(''));
   const cur = open && (data || []).find((p) => p.id === open);
   return html`<div class="page">
-    <div class="page-head"><div class="grow"><h1>Growth</h1><div class="sub">Find political and creator clients. Agents research; you approve every first message.</div></div>
-      <${Seg} value=${view} onChange=${pickView} options=${[{ value: 'creators', label: 'Creators' }, { value: 'political', label: 'Politics' }, { value: 'board', label: 'Pipeline' }, { value: 'table', label: 'Table' }]} />
+    <div class="page-head"><div class="grow"><h1>${only ? 'Politics' : 'Creator outreach'}</h1><div class="sub">${only ? 'Find candidates, make their ad packages and email them. Turn on Autopilot to run it without you.' : 'Find creator clients and track every lead. Politics has its own page in the sidebar.'}</div></div>
+      ${only ? null : html`<${Seg} value=${view} onChange=${pickView} options=${[{ value: 'creators', label: 'Creators' }, { value: 'board', label: 'Pipeline' }, { value: 'table', label: 'Table' }]} />`}
       <${Button} kind="ghost" icon="plus" onClick=${async () => { const name = await promptDialog({ title: 'Add prospect', label: 'Name or handle', confirm: 'Add' }); if (name) act(() => api.post('/api/prospects', { name }), { ok: 'Added' }).then(reload); }}>Add manually</${Button}></div>
     ${view === 'political' || view === 'creators' ? html`<div class="col" style="gap:16px" key=${view}>
       <${Autopilot} lane=${view === 'political' ? 'political' : 'creators'} />

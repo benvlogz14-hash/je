@@ -47,7 +47,7 @@
   --font-mono: "Cascadia Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
 
   --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 15px; --fs-xl: 18px; --fs-2xl: 24px; --fs-3xl: 30px;
-  --titlebar: 42px; --rail: 60px;
+  --titlebar: 42px; --rail: 78px;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --t-fast: 110ms; --t-med: 180ms;
 
@@ -586,3 +586,9 @@ h4 { font-weight: 750; letter-spacing: -0.01em; }
 .page > *:nth-child(2) { animation-delay: 40ms; } .page > *:nth-child(3) { animation-delay: 80ms; } .page > *:nth-child(4) { animation-delay: 120ms; } .page > *:nth-child(5) { animation-delay: 160ms; }
 .screen:not(.on) * { animation: none !important; }
 @media (prefers-reduced-motion: reduce) { .page > *, .btn, .chip, .rail-btn, .clip-card { animation: none !important; transition: none !important; } }
+
+/* Sidebar labels under each icon, so every section is findable at a glance. */
+.rail { overflow-y: auto; }
+.rail-btn { width: 66px; height: auto; min-height: 50px; padding: 6px 2px 5px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+.rail-l { font: 600 10.5px/1.1 var(--font-ui); letter-spacing: .01em; text-align: center; }
+.rail-btn.on::before { left: -6px; }

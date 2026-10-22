@@ -9,7 +9,7 @@ import { Approvals } from './modules/approvals.js';
 import { Studio } from './modules/studio.js';
 import { Clients } from './modules/clients.js';
 import { Calendar } from './modules/calendar.js';
-import { Growth } from './modules/growth.js';
+import { Growth, Politics } from './modules/growth.js';
 import { Analytics } from './modules/analytics.js';
 import { Finance } from './modules/finance.js';
 import { System } from './modules/system.js';
@@ -24,13 +24,14 @@ const NAV = [
   { path: '/studio', tone: 'sky', icon: 'studio', label: 'Studio', key: '4' },
   { path: '/clients', tone: 'gold', icon: 'clients', label: 'Clients', key: '5' },
   { path: '/calendar', tone: 'moss', icon: 'calendar', label: 'Publishing', key: '6' },
-  { path: '/growth', tone: 'sky', icon: 'growth', label: 'Growth', key: '7' },
+  { path: '/politics', tone: 'rose', icon: 'target', label: 'Politics', hint: 'Find candidates, make their ads, email them, autopilot' },
+  { path: '/growth', tone: 'sky', icon: 'growth', label: 'Outreach', hint: 'Creator outreach, lead pipeline and table', key: '7' },
   'sep',
   { path: '/analytics', tone: 'slate', icon: 'analytics', label: 'Analytics', key: '8' },
   { path: '/finance', tone: 'rose', icon: 'finance', label: 'Finance', key: '9', owner: true },
   { path: '/system', tone: 'slate', icon: 'system', label: 'System', key: '0' },
 ];
-const ROUTES = { '/messages': Messages, '/production': Production, '/approvals': Approvals, '/studio': Studio, '/clients': Clients, '/calendar': Calendar, '/growth': Growth, '/analytics': Analytics, '/finance': Finance, '/system': System, '/settings': Settings, '/lite': Lite };
+const ROUTES = { '/messages': Messages, '/production': Production, '/approvals': Approvals, '/studio': Studio, '/clients': Clients, '/calendar': Calendar, '/growth': Growth, '/politics': Politics, '/analytics': Analytics, '/finance': Finance, '/system': System, '/settings': Settings, '/lite': Lite };
 
 function useCounts() {
   const [counts, setCounts] = useState({ approvals: 0, unread: 0 });
@@ -53,11 +54,11 @@ function Rail() {
     if (n.owner && boot?.user?.role !== 'owner') return null;
     const on = route.path.startsWith(n.path);
     const badge = n.badge ? counts[n.badge] : n.path === '/messages' ? counts.unread : 0;
-    return html`<button class=${'rail-btn' + (on ? ' on' : '')} style=${{ '--tone': `var(--${n.tone})`, '--tone-soft': `var(--${n.tone}-soft)`, '--tone-ink': `var(--${n.tone}-ink)` }} title=${`${n.label}  (Ctrl+${n.key})`} aria-label=${n.label} onClick=${() => { play('tap'); navigate(n.path); }}>
-      <${Icon} name=${n.icon} size=${20} />${badge ? html`<span class="dot">${badge > 99 ? '99+' : badge}</span>` : null}</button>`;
+    return html`<button class=${'rail-btn' + (on ? ' on' : '')} style=${{ '--tone': `var(--${n.tone})`, '--tone-soft': `var(--${n.tone}-soft)`, '--tone-ink': `var(--${n.tone}-ink)` }} title=${`${n.hint || n.label}${n.key ? `  (Ctrl+${n.key})` : ''}`} aria-label=${n.label} onClick=${() => { play('tap'); navigate(n.path); }}>
+      <${Icon} name=${n.icon} size=${20} /><span class="rail-l">${n.label}</span>${badge ? html`<span class="dot">${badge > 99 ? '99+' : badge}</span>` : null}</button>`;
   };
   return html`<nav class="rail">${NAV.map(item)}<div class="spacer" />
-    <button class=${'rail-btn' + (route.path.startsWith('/settings') ? ' on' : '')} title="Settings  (Ctrl+,)" aria-label="Settings" onClick=${() => { play('tap'); navigate('/settings'); }}><${Icon} name="settings" size=${20} /></button></nav>`;
+    <button class=${'rail-btn' + (route.path.startsWith('/settings') ? ' on' : '')} title="Settings  (Ctrl+,)" aria-label="Settings" onClick=${() => { play('tap'); navigate('/settings'); }}><${Icon} name="settings" size=${20} /><span class="rail-l">Settings</span></button></nav>`;
 }
 
 function MobileNav() {
