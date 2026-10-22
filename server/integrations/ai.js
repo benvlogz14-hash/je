@@ -20,6 +20,8 @@ const PROVIDERS = {
   openai: { label: 'GPT', vendor: 'OpenAI', keyName: 'global.openai.apiKey', base: 'https://api.openai.com/v1' },
   xai: { label: 'Grok', vendor: 'xAI', keyName: 'global.xai.apiKey', base: 'https://api.x.ai/v1' },
   ollama: { label: 'Llama (local)', vendor: 'Ollama', keyName: null, local: true },
+  // Your own Grok/Claude/ChatGPT login through the desktop app (no API key); off unless a founder turns it on.
+  bridge: { label: 'Your AI account', vendor: 'Your account', keyName: null, bridge: true },
 };
 
 // ------------------------------------------------------------ Ollama (free, runs on this computer)
@@ -48,7 +50,7 @@ const inflight = {}; // provider -> count
 
 class AIError extends Error { constructor(msg, { provider, status, retryable } = {}) { super(msg); this.provider = provider; this.status = status; this.retryable = retryable; } }
 
-function connected(provider) { return PROVIDERS[provider]?.local ? ollamaState.ok : secrets.has(PROVIDERS[provider].keyName); }
+function connected(provider) { if (PROVIDERS[provider]?.bridge) return require('./bridge').usable(); return PROVIDERS[provider]?.local ? ollamaState.ok : secrets.has(PROVIDERS[provider].keyName); }
 function anyConnected() { return Object.keys(PROVIDERS).some(connected); }
 
 function monthSpend(provider) {
@@ -101,6 +103,7 @@ const hasVisionModel = () => (ollamaState.models || []).some((m) => m === vision
 
 /** Low-level provider call. messages: [{role:'user'|'assistant', content:string}] */
 async function callProvider(provider, { model, system, messages, json, maxTokens = 2000, temperature, search, images }) {
+  if (provider === 'bridge') return { ...(await require('./bridge').complete({ system, prompt: (messages || []).map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n\n'), json })), inTok: 0, outTok: 0 };
   if (images?.length) messages = withImages(provider, messages, images);
   if (provider === 'ollama') {
     const msgs = [...(system ? [{ role: 'system', content: system + (json ? '\n\nRespond with a single valid JSON object only.' : '') }] : []), ...messages];
@@ -177,9 +180,13 @@ async function ask({ role = 'operations', system, prompt, messages, json = false
   const useLocalFirst = local === 'all' || (local === 'most' && role !== 'writing');
   let chain = forceProvider ? [forceProvider] : [cfg.provider, ...(cfg.fallbacks || [])];
   if (!forceProvider) chain = useLocalFirst ? ['ollama', ...chain] : [...chain, 'ollama'];
+  // Your own AI account (no API key): first in line, or just before the free local AI, when switched on.
+  const viaAccount = ctx.setting('ai.bridge.use', 'off');
+  if (!forceProvider && viaAccount === 'first') chain = ['bridge', ...chain];
+  else if (!forceProvider && viaAccount === 'fallback') chain = chain[chain.length - 1] === 'ollama' ? [...chain.slice(0, -1), 'bridge', 'ollama'] : [...chain, 'bridge'];
   chain = chain.filter((p, i, a) => PROVIDERS[p] && a.indexOf(p) === i);
   // Looking at pictures: the local AI only when its vision model is downloaded.
-  if (images?.length) chain = chain.filter((p) => p !== 'ollama' || hasVisionModel());
+  if (images?.length) chain = chain.filter((p) => (p !== 'ollama' || hasVisionModel()) && p !== 'bridge');
   // Free web search for providers without built-in search (everything except Grok): results go in as context.
   if (search && !(chain.find((p) => connected(p) && !overBudget(p)) === 'xai')) {
     try { const ws = await require('./websearch').forPrompt(prompt || (messages || []).slice(-1)[0]?.content || ''); if (ws) system = `${system || ''}\n\n${ws}`; } catch { /* search unavailable */ }
@@ -190,7 +197,7 @@ async function ask({ role = 'operations', system, prompt, messages, json = false
   for (const provider of chain) {
     if (!connected(provider)) { errors.push(`${PROVIDERS[provider].label}: not connected`); continue; }
     if (overBudget(provider)) { errors.push(`${PROVIDERS[provider].label}: monthly budget reached`); continue; }
-    const model = provider === 'ollama' ? (images?.length ? visionModel() : ollamaModel()) : provider === cfg.provider ? cfg.model : (ctx.setting(`ai.defaultModels.${provider}`) || defaultModelFor(provider));
+    const model = provider === 'bridge' ? 'account' : provider === 'ollama' ? (images?.length ? visionModel() : ollamaModel()) : provider === cfg.provider ? cfg.model : (ctx.setting(`ai.defaultModels.${provider}`) || defaultModelFor(provider));
     inflight[provider] = (inflight[provider] || 0) + 1;
     events.publish('agents', agentStatus(), { coalesceKey: 'agents' });
     try {

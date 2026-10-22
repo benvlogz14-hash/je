@@ -4,7 +4,7 @@ import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { play } from '../lib/sound.js';
 
-const PLACES = [['Messages', '/messages', 'messages'], ['Production', '/production', 'production'], ['Approvals', '/approvals', 'approvals'], ['Studio', '/studio', 'studio'], ['Clients', '/clients', 'clients'], ['Publishing calendar', '/calendar', 'calendar'], ['Growth', '/growth', 'growth'], ['Analytics', '/analytics', 'analytics'], ['Finance', '/finance', 'finance'], ['Agents', '/system?tab=agents', 'robot'], ['Job queue', '/system?tab=queue', 'layers'], ['Health', '/system?tab=health', 'target'], ['Resources & power mode', '/system?tab=resources', 'cpu'], ['Activity log', '/system?tab=logs', 'info'], ['Settings', '/settings', 'settings'], ['Connections', '/settings?tab=connections', 'key']];
+const PLACES = [['Messages', '/messages', 'messages'], ['Production', '/production', 'production'], ['Approvals', '/approvals', 'approvals'], ['Studio', '/studio', 'studio'], ['Clients', '/clients', 'clients'], ['Publishing calendar', '/calendar', 'calendar'], ['Growth', '/growth', 'growth'], ['Analytics', '/analytics', 'analytics'], ['Finance', '/finance', 'finance'], ['Agents', '/system?tab=agents', 'robot'], ['Job queue', '/system?tab=queue', 'layers'], ['Health', '/system?tab=health', 'target'], ['Resources & power mode', '/system?tab=resources', 'cpu'], ['Activity log', '/system?tab=logs', 'info'], ['AI apps: Grok, Claude, ChatGPT', '/bridge', 'sparkle'], ['Settings', '/settings', 'settings'], ['Connections', '/settings?tab=connections', 'key']];
 
 export function Palette({ onClose }) {
   const commands = useStore((s) => s.boot?.commands || []);
@@ -27,6 +27,7 @@ export function Palette({ onClose }) {
       for (const c of data.clips.filter((c) => m(c.title) || m(`#${c.ref}`)).slice(0, 6)) items.push({ group: 'Clips', icon: 'film', label: `#${c.ref} ${c.title}`, desc: c.client, run: () => navigate(`/production?clip=${c.id}`) });
       for (const c of data.convs.filter((c) => c.kind === 'contact' && m(c.title)).slice(0, 5)) items.push({ group: 'Conversations', icon: 'messages', label: c.title, desc: c.preview, run: () => navigate(`/messages/${c.id}`) });
       for (const c of commands.filter((c) => m(c.name) || m(c.description)).slice(0, 5)) items.push({ group: 'Commands', cg: c.group, icon: 'slash', label: c.usage, desc: c.description, run: () => { setQ(`/${c.name} `); return 'keep'; } });
+      for (const [site, name] of [['grok', 'Grok'], ['claude', 'Claude'], ['chatgpt', 'ChatGPT']].sort((x, y) => (s.startsWith(`@${y[0]}`) ? 1 : 0) - (s.startsWith(`@${x[0]}`) ? 1 : 0))) items.push({ group: 'Ask your AI apps (no API keys)', icon: 'sparkle', label: `Ask ${name}: "${q.replace(/^@(grok|claude|chatgpt)\s*/i, '')}"`, desc: 'Your own account, back and forth', run: () => navigate(`/bridge?site=${site}&q=${encodeURIComponent(q.replace(/^@(grok|claude|chatgpt)\s*/i, ''))}`) });
       items.push({ group: 'Ask Euclidean', icon: 'sparkle', label: `Ask: "${q}"`, desc: 'Routed to the operations agent', run: () => runCmd(q) });
     }
   }

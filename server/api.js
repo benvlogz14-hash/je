@@ -267,6 +267,12 @@ r.post('/api/assets', (req, b) => {
   if (b.autoProcess) { const j = ctx.store.find('jobs', (x) => x.dedupeKey === `ingest:${a.id}`); if (j) ctx.store.update('jobs', j.id, (x) => ({ payload: { ...x.payload, autoProcess: true } })); }
   return a;
 });
+// Your own Grok / Claude / ChatGPT accounts through the desktop app (no API keys).
+r.get('/api/bridge', () => require('./integrations/bridge').status());
+r.get('/api/bridge/:site/history', (req, b, p) => require('./integrations/bridge').history(p.site));
+r.post('/api/bridge/:site/open', (req, b, p) => { const br = require('./integrations/bridge'); if (!br.available()) throw new HttpError(400, 'This works in the Euclidean desktop app.'); return ctx.bridge.open(p.site); });
+r.post('/api/bridge/:site/ask', async (req, b, p) => { const text = String(b.text || '').trim(); if (!text) throw new HttpError(400, 'Type a message first.'); try { return await require('./integrations/bridge').ask(p.site, text, { newChat: !!b.newChat, actor: actorOf(req) }); } catch (e) { throw new HttpError(400, e.message); } });
+r.del('/api/bridge/:site/history', (req, b, p) => { const all = ctx.store.settings._bridgeChats || {}; delete all[p.site]; ctx.store.settings._bridgeChats = all; ctx.store.touch(); return { ok: true }; });
 r.get('/api/production/health', (req) => require('./setup/production').health(req.query.clientId || null));
 // Everything about one footage file: its steps, jobs, clips and any error.
 r.get('/api/assets/:id/detail', (req, b, p) => {

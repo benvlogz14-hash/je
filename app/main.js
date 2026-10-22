@@ -99,6 +99,7 @@ app.whenReady().then(async () => {
         relaunch: () => { quitting = true; app.relaunch(); app.quit(); },
         pickFolder: async (o = {}) => { const res = await dialog.showOpenDialog(win || undefined, { title: o.title || 'Choose a folder', defaultPath: o.defaultPath, properties: ['openDirectory', 'createDirectory'] }); return res.canceled ? null : res.filePaths[0]; },
         pickFiles: async (o = {}) => { const res = await dialog.showOpenDialog(win || undefined, { properties: ['openFile', ...(o.multi !== false ? ['multiSelections'] : [])], filters: o.filters }); return res.canceled ? [] : res.filePaths; },
+        bridge: require('./bridge'),
         uiMemoryMb: () => { try { return Math.round(app.getAppMetrics().filter((m) => m.type !== 'Browser').reduce((t, m) => t + (m.memory?.workingSetSize || 0), 0) / 1024); } catch { return null; } },
       },
     });
@@ -125,6 +126,6 @@ app.whenReady().then(async () => {
 });
 
 app.on('second-instance', () => createWindow({ lite: false }));
-app.on('before-quit', () => { quitting = true; });
+app.on('before-quit', () => { quitting = true; try { require('./bridge').closeAll(); } catch { /* none open */ } });
 app.on('window-all-closed', () => { /* stay alive in the tray */ });
 app.on('will-quit', async (e) => { if (engine && !app.__stopped) { e.preventDefault(); app.__stopped = true; await engine.stop(); app.quit(); } });
