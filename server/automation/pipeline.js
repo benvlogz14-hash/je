@@ -194,7 +194,7 @@ function remember(clientId, items, { source = 'feedback', actor = 'system' } = {
   return added;
 }
 
-const STYLE_KEYS = { preset: 's', font: 's', size: 'n', uppercase: 'b', wordsPerLine: 'n', primary: 'c', highlight: 'c', outline: 'c', outlineWidth: 'n', position: 's', animation: 's', highlightMode: 's', box: 'b', hook: 'b', hookBg: 'c', hookColor: 'c', punctuation: 'b' };
+const STYLE_KEYS = { hookSeconds: 'n', preset: 's', font: 's', size: 'n', uppercase: 'b', wordsPerLine: 'n', primary: 'c', highlight: 'c', outline: 'c', outlineWidth: 'n', position: 's', animation: 's', highlightMode: 's', box: 'b', hook: 'b', hookBg: 'c', hookColor: 'c', punctuation: 'b' };
 function sanitizeStyle(s) {
   const o = {};
   for (const [k, t] of Object.entries(STYLE_KEYS)) {
@@ -207,6 +207,8 @@ function sanitizeStyle(s) {
   }
   if (o.wordsPerLine) o.wordsPerLine = Math.max(1, Math.min(8, Math.round(o.wordsPerLine)));
   if (o.size) o.size = Math.max(30, Math.min(160, o.size));
+  if (o.hookSeconds != null) o.hookSeconds = Math.max(0, Math.min(15, o.hookSeconds));
+  if (o.outlineWidth != null) o.outlineWidth = Math.max(0, Math.min(30, o.outlineWidth));
   return o;
 }
 

@@ -333,6 +333,19 @@ r.get('/api/assets/:id/waveform', (req, b, p) => { const a = must(ctx.store.get(
 r.get('/api/assets/:id/shots', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); const v = require('./video/vision').cached(a.path, a.workDir); return v ? { engine: v.engine, at: v.at, shots: v.shots.map(({ frame, ...x }, i) => ({ ...x, n: i + 1, hasFrame: !!frame && fs.existsSync(frame) })) } : { shots: [] }; });
 r.get('/api/assets/:id/shot/:n', (req, res, p) => { const a = must(ctx.store.get('assets', p.id)); const v = require('./video/vision').cached(a.path, a.workDir); const f = v?.shots?.[Number(p.n) - 1]?.frame; return f && paths.inside(a.workDir, f) ? serveFile(req, res, f, { cache: true }) : send(res, 404, {}); }, { stream: true });
 r.post('/api/assets/:id/look', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); return queue.enqueue('video.look', { assetId: a.id }, { actor: actorOf(req), dedupeKey: `look:${a.id}` }); });
+// Full transcript as plain text or subtitles (.srt), to read, copy or download.
+r.get('/api/assets/:id/transcript-file/:fmt', (req, res, p) => {
+  const a = must(ctx.store.get('assets', p.id)); const t = require('./jobs/handlers').loadTranscript(a);
+  if (!t) return send(res, 404, { error: 'No transcript yet. Press "Make transcript" on the video.' });
+  const base = String(a.name).replace(/\.[^.]+$/, '').replace(/[^\w .()-]/g, '').slice(0, 80) || 'transcript';
+  const stamp = (s) => { const h = Math.floor(s / 3600); const m = Math.floor((s % 3600) / 60); const x = Math.floor(s % 60); return `${h ? `${h}:` : ''}${String(m).padStart(h ? 2 : 1, '0')}:${String(x).padStart(2, '0')}`; };
+  let body; let type;
+  if (p.fmt === 'srt') { body = captions.buildSrt({ words: t.words || [], range: { start: 0, end: a.info?.duration || 1e9 }, style: { uppercase: false, punctuation: true, wordsPerLine: 8 } }); type = 'application/x-subrip'; }
+  else { body = (t.segments || []).map((s) => `[${stamp(s.s)}] ${s.t}`).join('\n') || t.text || ''; type = 'text/plain; charset=utf-8'; }
+  res.writeHead(200, { 'Content-Type': type, 'Content-Disposition': `${req.query.download ? 'attachment' : 'inline'}; filename="${base}.${p.fmt === 'srt' ? 'srt' : 'txt'}"`, 'Cache-Control': 'no-store' });
+  return res.end(body);
+}, { stream: true });
+r.post('/api/assets/:id/transcribe', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); if (a.info && !a.info.hasAudio) throw new HttpError(400, 'This video has no sound to transcribe.'); return queue.enqueue('transcribe', { assetId: a.id }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `transcribe:${a.id}:${Date.now()}` }); });
 r.get('/api/assets/:id/transcript', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); return require('./jobs/handlers').loadTranscript(a) || { words: [], segments: [] }; });
 r.del('/api/assets/:id', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); ctx.store.remove('assets', a.id); audit.log(actorOf(req), 'footage.removed', { clientId: a.clientId, assetId: a.id }); return { ok: true }; }, { roles: OWNER });
 
@@ -346,6 +359,7 @@ r.get('/api/clips/:id', (req, b, p) => clipView(must(ctx.store.get('clips', p.id
 r.patch('/api/clips/:id', (req, b, p) => {
   const c = must(ctx.store.get('clips', p.id)); const patch = {};
   for (const k of ['title', 'hook', 'caption', 'hashtags', 'start', 'end', 'reframe', 'focusX', 'silenceCut', 'retakeCut', 'punchIns']) if (b[k] !== undefined) patch[k] = b[k];
+  if (b.style !== undefined) patch.style = b.style ? pipeline.sanitizeStyle(b.style) : null; // this clip's own caption look (over the client's)
   const u = ctx.store.update('clips', c.id, patch);
   if (c.postId && (patch.title || patch.caption || patch.hashtags)) ctx.store.update('posts', c.postId, { title: u.title, caption: u.caption, hashtags: u.hashtags });
   events.publish('clips', { id: c.id });

@@ -52,6 +52,9 @@ if not exist "%DEST%\Start Euclidean.bat" (
   exit /b 1
 )
 
+rem Free speech-to-text (Whisper) for transcripts and captions: small, skipped if already installed.
+call "%DEST%\Install Extras.bat" whisper
+
 echo   Done. Starting Euclidean ...
 echo.
 call "%DEST%\Start Euclidean.bat"

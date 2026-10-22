@@ -69,6 +69,7 @@ export function ClipDetail({ clip, reload, compact }) {
         <div class="col grow" style="gap:5px;min-width:160px"><span class="label">${f.reframe === 'face' ? 'Focus when no face is found' : 'Horizontal focus'}</span><input class="range" type="range" min="0" max="1" step="0.01" value=${f.focusX} onInput=${(e) => setF({ ...f, focusX: e.target.value })} aria-label="Horizontal focus" /></div>
         <div class="col" style="gap:5px"><span class="label">Jump cuts</span><div class="row"><${Toggle} on=${f.silenceCut} onChange=${(x) => setF({ ...f, silenceCut: x })} label="Remove pauses" /><span class="muted" style="font-size:var(--fs-sm)">Remove pauses</span></div></div>
       </div>
+      <${CaptionStyle} clip=${clip} reload=${reload} />
       <div class="row wrap">
         <${Button} kind="primary" icon="refresh" disabled=${!dirty} onClick=${() => save(true)}>Save and re-render</${Button}>
         <${Button} kind="ghost" disabled=${!dirty} onClick=${() => save(false)}>Save copy only</${Button}>
@@ -90,4 +91,47 @@ function openFile(clip, v, kind) {
   const url = api.url(`/api/clips/${clip.id}/download/${kind}?v=${v}`);
   if (api.demo) return toast('Downloads are available in the desktop app.', { kind: 'info' });
   const a = document.createElement('a'); a.href = url; a.download = ''; document.body.appendChild(a); a.click(); a.remove();
+}
+
+const FONTS = ['Montserrat', 'Anton', 'Arial', 'Arial Black', 'Impact', 'Verdana', 'Georgia', 'Trebuchet MS', 'Comic Sans MS'];
+const STYLE_DEFAULTS = { font: 'Montserrat', size: 84, uppercase: true, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#F2C14E', outline: '#111111', outlineWidth: 7, position: 'lower', animation: 'pop', highlightMode: 'word', box: false, hook: true, hookSeconds: 3.2, hookBg: '#FFFFFF', hookColor: '#111111' };
+
+/** Caption look for this clip: font, size, box, outline, colours, position, and how long the opening text stays up. */
+function CaptionStyle({ clip, reload }) {
+  const { data: client } = useApi(`/api/clients/${clip.clientId}`, ['clients']);
+  const base = { ...STYLE_DEFAULTS, ...(client?.style || {}) };
+  const [s, setS] = useState({ ...base, ...(clip.style || {}) });
+  useEffect(() => setS({ ...base, ...(clip.style || {}) }), [client?.id, clip.id, clip.updatedAt]);
+  const set = (k) => (e) => setS({ ...s, [k]: e?.target ? (e.target.type === 'range' || e.target.type === 'number' ? Number(e.target.value) : e.target.value) : e });
+  const thisClip = () => act(async () => { await api.patch(`/api/clips/${clip.id}`, { style: s }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: 'Saved; re-rendering with the new captions' }).then(reload);
+  const allClips = () => act(async () => { await api.patch(`/api/clients/${clip.clientId}`, { style: s }); await api.patch(`/api/clips/${clip.id}`, { style: null }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: `Saved for every ${client?.name || 'client'} clip; re-rendering this one` }).then(reload);
+  const reset = () => act(async () => { await api.patch(`/api/clips/${clip.id}`, { style: null }); }, { ok: 'Back to the client style' }).then(reload);
+  const words = ['THIS', 'IS', 'HOW'].slice(0, Math.max(1, Math.min(3, s.wordsPerLine)));
+  const txt = (w) => (s.uppercase ? w : w.toLowerCase());
+  return html`<details class="panel pad" open=${!clip.versions?.[clip.versions.length - 1]?.captioned}>
+    <summary><b>Captions and text</b> <span class="faint" style="font-size:var(--fs-xs)">${clip.style ? 'custom for this clip' : `using ${client?.name || 'the client'}'s style`}</span></summary>
+    <div class="row wrap" style="gap:16px;margin-top:10px;align-items:flex-start">
+      <div style=${{ width: '150px', height: '266px', borderRadius: '14px', background: 'linear-gradient(160deg,#5b6b7c,#2b3440)', position: 'relative', overflow: 'hidden', flex: 'none' }}>
+        ${s.hook && s.hookSeconds > 0 ? html`<div style=${{ position: 'absolute', top: '22px', left: '10px', right: '10px', textAlign: 'center', background: s.hookBg, color: s.hookColor, fontFamily: s.font, fontWeight: 800, fontSize: '11px', padding: '4px 6px', borderRadius: '4px' }}>${txt('OPENING TEXT')}</div>` : null}
+        <div style=${{ position: 'absolute', left: '6px', right: '6px', textAlign: 'center', fontFamily: `'${s.font}', sans-serif`, fontWeight: 800, fontSize: `${Math.round(s.size / 6.5)}px`, lineHeight: 1.1, ...(s.position === 'upper' ? { top: '60px' } : s.position === 'center' ? { top: '45%' } : { bottom: '50px' }) }}>
+          ${words.map((w, i) => html`<span style=${{ color: i === 1 && s.highlightMode === 'word' ? s.highlight : s.primary, WebkitTextStroke: !s.box && s.outlineWidth ? `${Math.max(0.5, s.outlineWidth / 6)}px ${s.outline}` : '0', background: s.box ? s.outline : 'none', padding: s.box ? '1px 3px' : 0, marginRight: '3px', display: 'inline-block' }}>${txt(w)}</span>`)}</div>
+      </div>
+      <div class="col grow" style="gap:10px;min-width:260px">
+        <div class="col" style="gap:4px"><span class="label">Opening text on screen: <b class="tnum">${s.hook ? `${s.hookSeconds}s` : 'off'}</b></span><div class="row" style="gap:8px"><${Toggle} on=${!!s.hook} onChange=${set('hook')} label="Opening text" /><input class="range grow" type="range" min="0.5" max="10" step="0.5" value=${s.hookSeconds} disabled=${!s.hook} onInput=${set('hookSeconds')} /></div></div>
+        <div class="form-grid">
+          <${Field} label="Font" id="cs-font"><select id="cs-font" class="select" value=${s.font} onChange=${set('font')}>${FONTS.map((f) => html`<option value=${f} style=${{ fontFamily: f }}>${f}</option>`)}</select></${Field}>
+          <${Field} label=${`Size: ${s.size}`} id="cs-size"><input id="cs-size" class="range" type="range" min="40" max="140" step="2" value=${s.size} onInput=${set('size')} /></${Field}>
+          <${Field} label=${`Words per line: ${s.wordsPerLine}`} id="cs-wpl"><input id="cs-wpl" class="range" type="range" min="1" max="6" step="1" value=${s.wordsPerLine} onInput=${set('wordsPerLine')} /></${Field}>
+          <${Field} label=${s.box ? `Box padding: ${s.outlineWidth}` : `Outline thickness: ${s.outlineWidth}`} id="cs-ow"><input id="cs-ow" class="range" type="range" min="0" max="20" step="1" value=${s.outlineWidth} onInput=${set('outlineWidth')} /></${Field}>
+        </div>
+        <div class="row wrap" style="gap:12px">
+          <div class="col" style="gap:4px"><span class="label">Position</span><${Seg} value=${s.position} onChange=${set('position')} options=${[{ value: 'upper', label: 'Top' }, { value: 'center', label: 'Middle' }, { value: 'lower', label: 'Bottom' }]} /></div>
+          ${[['box', 'Background box'], ['uppercase', 'CAPITALS'], ['pop', 'Pop-in']].map(([k, l]) => html`<label class="row" style="gap:6px"><${Toggle} on=${k === 'pop' ? s.animation === 'pop' : !!s[k]} onChange=${(x) => setS({ ...s, ...(k === 'pop' ? { animation: x ? 'pop' : 'none' } : { [k]: x }) })} label=${l} /><span style="font-size:var(--fs-sm)">${l}</span></label>`)}
+          <label class="row" style="gap:6px"><${Toggle} on=${s.highlightMode === 'word'} onChange=${(x) => setS({ ...s, highlightMode: x ? 'word' : 'none' })} label="Highlight the spoken word" /><span style="font-size:var(--fs-sm)">Highlight spoken word</span></label>
+        </div>
+        <div class="row wrap" style="gap:12px">${[['primary', 'Text'], ['highlight', 'Highlight'], ['outline', s.box ? 'Box colour' : 'Outline'], ['hookBg', 'Opening box'], ['hookColor', 'Opening text']].map(([k, l]) => html`<label class="col" style="gap:3px;font-size:var(--fs-xs)"><span class="faint">${l}</span><input type="color" value=${s[k]} onInput=${set(k)} style="width:44px;height:30px;border:none;background:none;padding:0" /></label>`)}</div>
+        <div class="row wrap" style="gap:6px"><${Button} kind="primary" icon="refresh" onClick=${thisClip}>Apply to this clip</${Button}><${Button} kind="soft" onClick=${allClips}>Use for all ${client?.name || 'client'} clips</${Button}>${clip.style ? html`<${Button} kind="ghost" onClick=${reset}>Reset</${Button}>` : null}</div>
+        ${!clip.versions?.[clip.versions.length - 1]?.captioned ? html`<div class="faint" style="font-size:var(--fs-xs)">No captions yet because this video hasn't been turned into text. Euclidean installs the free speech-to-text tool by itself and adds captions to this clip when it's done; or press "Make transcript" on the video in the Footage list.</div>` : null}
+      </div>
+    </div></details>`;
 }

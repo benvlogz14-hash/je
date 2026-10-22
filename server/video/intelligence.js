@@ -104,7 +104,9 @@ Return JSON: {"clips":[{"start":sec,"end":sec,"title":"<=60 chars, curiosity-dri
 ${TASTE_RULES}`;
 
 async function discoverClips(asset, transcript, { count = 6, jobId, exclude = [], analysis = null, vision = null } = {}) {
-  const minSec = ctx.setting('production.minClipSec', 20), maxSec = ctx.setting('production.maxClipSec', 59);
+  // Clip length: the client's own setting (the sliders by the upload box), else the global default.
+  const prod = ctx.store.get('clients', asset.clientId)?.production || {};
+  const minSec = Number(prod.minClipSec) || ctx.setting('production.minClipSec', 20); const maxSec = Math.max(minSec + 5, Number(prod.maxClipSec) || ctx.setting('production.maxClipSec', 59));
   const duration = asset.info?.duration || 0;
   const words = transcript?.words || [];
   if (transcript && ai.anyConnected()) {

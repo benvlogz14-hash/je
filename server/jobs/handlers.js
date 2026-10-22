@@ -96,11 +96,20 @@ queue.register('transcribe', {
     if (!asset.info.hasAudio) { ctx.store.update('assets', asset.id, { status: 'ready', transcript: null }); if (job.payload.thenDiscover) h.enqueue('discover', { assetId: asset.id }, { dedupeKey: `discover:${asset.id}:${Date.now()}` }); return { skipped: 'no audio' }; }
     ctx.store.update('assets', asset.id, { status: 'transcribing' }); events.publish('assets', { id: asset.id });
     h.progress(0.05, 'Extracting audio');
+    // No speech-to-text yet: install the free one (Whisper) right here, once, instead of making clips without captions.
+    if (!ai.connected('openai') && !require('../setup/whisper').status().ready && !job.payload.noInstall) {
+      try { await require('../setup/whisper').install({ progress: (f, t) => h.progress(0.02 + f * 0.08, `Installing free speech-to-text (one time): ${t || ''}`) }); }
+      catch (e) { h.log(`Couldn't install speech-to-text: ${e.message}`); }
+    }
     try {
       const t = await intel.transcribe(asset, { jobId: job.id, onProgress: (p) => h.progress(0.1 + p * 0.85, 'Transcribing') });
       ctx.store.update('assets', asset.id, { status: 'ready', transcript: { engine: t.engine, words: t.words.length, language: t.language || null, preview: t.text.slice(0, 280) } });
       events.publish('assets', { id: asset.id });
       if (job.payload.thenDiscover) h.enqueue('analyze', { assetId: asset.id, thenDiscover: true }, { title: `Analyze ${asset.name}`, dedupeKey: `analyze:${asset.id}` });
+      // Clips already made from this video without captions: render them again, now with captions.
+      for (const c of ctx.store.all('clips', (x) => x.assetId === asset.id && ['review', 'client_review'].includes(x.status) && x.versions?.length && !x.versions[x.versions.length - 1].captioned)) {
+        try { pipeline.requestRender(c, { reason: 'captions added' }); } catch { /* already queued */ }
+      }
       return { engine: t.engine, words: t.words.length };
     } catch (e) {
       ctx.store.update('assets', asset.id, { status: 'ready' });
@@ -200,7 +209,7 @@ queue.register('render.short', {
     const facePath = await faceTrackFor(clip, asset, h);
     h.progress(0.12, `Rendering v${n}`);
     const r = await render.renderShort({ facePath, graphics: client.graphics,
-      source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], style: client.style, hook: clip.hook,
+      source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook,
       reframe: clip.reframe, focusX: clip.focusX, plan: { silenceCut: clip.silenceCut && !!transcript, retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
       outPath, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal,
       onProgress: (p) => { h.progress(0.12 + p * 0.7, `Rendering v${n}`); const pct = Math.round((0.12 + p * 0.7) * 100); if (pct - (ctx.store.get('clips', clip.id)?.renderProgress || 0) >= 4) { ctx.store.update('clips', clip.id, { renderProgress: pct }); events.publish('clips', { id: clip.id }); } },
@@ -211,7 +220,7 @@ queue.register('render.short', {
     await ff.thumbnail(outPath, thumb, Math.min(1.5, r.duration / 2), 405);
     // Interchange files so a human can finish the edit in Velo or Premiere.
     const velo = path.join(outDir, `v${n}.velo`);
-    fs.writeFileSync(velo, JSON.stringify(exporters.toVelo({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], style: client.style, hook: clip.hook, focusX: clip.focusX }), null, 1));
+    fs.writeFileSync(velo, JSON.stringify(exporters.toVelo({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, focusX: clip.focusX }), null, 1));
     const xml = path.join(outDir, `v${n}.premiere.xml`);
     fs.writeFileSync(xml, exporters.toFcpXml({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end } }));
     const version = { n, path: outPath, thumb, duration: r.duration, renderedAt: now(), encoder: r.encoder, qc: { passed: qc.passed, issues: qc.issues }, srt: r.srtPath, velo, xml, changes: clip.pendingChanges || null, captioned: !!transcript };

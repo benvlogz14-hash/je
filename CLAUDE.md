@@ -38,6 +38,12 @@ Desktop app for Euclidean Media (founders Ryan Rosario and Ben Gingold), a short
 - `server/setup/production.js`: `health()` lists blockers (paused queue, Lite mode, remote-only, FFmpeg/yt-dlp missing, no speech-to-text, no AI, jobs waiting, last failure) with one-click fixes; shown by `renderer/js/modules/health.js` on Production and Politics. `installFfmpeg` (job `setup.ffmpeg`) installs FFmpeg + yt-dlp via winget and restarts stuck imports. `ff.detect()` re-scans for tools.
 - Every footage row opens a panel (`/api/assets/:id/detail`) with its steps, jobs, clips, Retry (`/process`), Cancel and Delete (`/cancel`). Failed jobs write `asset.error`.
 
+## Captions and transcripts
+- The `transcribe` job installs the free Whisper itself when no speech-to-text exists; the app-only bat also installs it (`Install Extras.bat whisper`). After a transcript arrives, clips in review that were rendered without captions are re-rendered.
+- Full transcript per video: Production → footage panel → Transcript (copy, `.txt`, `.srt` via `/api/assets/:id/transcript-file/:fmt`), `POST /api/assets/:id/transcribe`.
+- Caption look per clip (`clip.style`, over `client.style`; sanitized by `pipeline.sanitizeStyle`, now incl. `hookSeconds`): clip panel → "Captions and text" with live preview, apply to this clip or the whole client.
+- Clip length per client (`client.production.minClipSec/maxClipSec`): sliders by the upload box; used by `discoverClips`.
+
 ## Run and test
 - `npm start` runs the Electron app; `npm run engine` runs the engine only (`--data <dir> --port <n>`). The login link with its token is printed in the log.
 - To test the UI, drive the engine's web UI with Playwright (Chromium is at `/opt/pw-browsers/chromium` in cloud sessions).

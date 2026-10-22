@@ -14,6 +14,14 @@ rem   Visual C++ runtime            (needed by whisper.cpp)
 set "PATH=%PATH%;%ProgramFiles%\nodejs;%LOCALAPPDATA%\Microsoft\WinGet\Links;%APPDATA%\npm;%LOCALAPPDATA%\Programs\Ollama;%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python312\Scripts"
 set "W=winget install -e --accept-package-agreements --accept-source-agreements --silent --id"
 
+rem "Install Extras.bat whisper" installs only the free speech-to-text tool (used by the app-only bat).
+if /i "%~1"=="whisper" (
+  echo.
+  echo   Installing free speech-to-text ^(Whisper, about 150 MB, one time^)...
+  call :whisper
+  exit /b 0
+)
+
 echo.
 echo   Euclidean extras
 echo   ----------------
@@ -67,7 +75,16 @@ if errorlevel 1 (
 )
 echo   [ok] Llama 3.2 Vision
 
+call :whisper
+
+echo.
+echo   All set. Anything marked [!!] can be retried from Settings, Agent Connections in the app.
+echo.
+exit /b 0
+
+:whisper
 rem ---- whisper.cpp and the English model, next to the app (Euclidean finds them on start)
+%W% Microsoft.VCRedist.2015+.x64 >nul 2>nul
 set "WH=%~dp0tools\whisper"
 if not exist "%WH%" mkdir "%WH%"
 dir /s /b "%WH%\whisper-cli.exe" >nul 2>nul
@@ -82,9 +99,6 @@ if not exist "%WH%\ggml-base.en.bin" (
 dir /s /b "%WH%\whisper-cli.exe" >nul 2>nul
 if errorlevel 1 (echo   [!!] Speech-to-text tool didn't install. The app's checklist has a button to retry.) else (if exist "%WH%\ggml-base.en.bin" (echo   [ok] Speech-to-text) else (echo   [!!] Speech model didn't download. The app's checklist has a button to retry.))
 
-echo.
-echo   All set. Anything marked [!!] can be retried from Settings, Agent Connections in the app.
-echo.
 exit /b 0
 
 :tool

@@ -110,6 +110,7 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
       <div class="avatar lg" style="background:var(--teal-soft);color:var(--teal-ink)"><${Icon} name="upload" size=${20} /></div>
       <div class="grow"><b>Drop footage here</b><div class="muted" style="font-size:var(--fs-sm)">${target ? `For ${clients.find((c) => c.id === target)?.name}. Transcription and clip discovery start automatically.` : clients.length ? 'Choose the client in the menu at the top right, then drop footage.' : 'Footage is filed under a client. Create your first one (just a name) and drop away.'}</div>
         ${!clients.length ? html`<div style="margin-top:8px"><${Button} size="sm" kind="soft" icon="plus" onClick=${async () => { const c = await quickClient().catch(() => null); if (c) setClientId(c.id); }}>Create your first client</${Button}></div>` : null}
+        ${target ? html`<${ClipLength} client=${clients.find((c) => c.id === target)} />` : null}
         ${uploads.map((u) => html`<div style="margin-top:8px"><div class="row" style="font-size:var(--fs-sm)"><span class="grow ellipsis">${u.name}</span><span class="tnum faint">${Math.round(u.p * 100)}%</span></div><${Progress} value=${u.p} /></div>`)}</div>
       <div class="col" style="gap:6px"><${Button} size="sm" kind="primary" icon="upload" onClick=${() => input.current.click()}>Upload</${Button}><${Button} size="sm" kind="ghost" icon="folder" onClick=${addPath}>From disk</${Button}><${Button} size="sm" kind="ghost" icon="link" onClick=${addLink}>From link</${Button}></div>
       <input ref=${input} type="file" accept="video/*,audio/*" multiple hidden onChange=${(e) => { upload([...e.target.files]); e.target.value = ''; }} />
@@ -123,6 +124,20 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
           ${!j && (a.status === 'importing' || a.error) && a.status !== 'ready' ? html`<${Button} size="sm" kind="primary" icon="refresh" onClick=${() => act(() => api.post(`/api/assets/${a.id}/process`, {}), { ok: 'Trying again' })}>Retry</${Button}>` : null}
           ${a.status === 'ready' && !j ? html`<${Button} size="sm" kind="ghost" icon="sparkle" onClick=${() => act(() => api.post(`/api/assets/${a.id}/process`, {}), { ok: 'Finding clips' })}>${a.transcript ? 'More clips' : 'Process'}</${Button}>` : html`<${StatusBadge} status=${a.status} />`}</div>`;
       }) : html`<div class="list-row faint">No footage yet</div>`}</div></div>
+  </div>`;
+}
+
+/** How long the clips should be, per client: two sliders with the numbers shown. */
+function ClipLength({ client }) {
+  const p = client?.production || {};
+  const [r, setR] = useState({ min: p.minClipSec || 20, max: p.maxClipSec || 59 });
+  useEffect(() => setR({ min: p.minClipSec || 20, max: p.maxClipSec || 59 }), [client?.id]);
+  const save = (next) => act(() => api.patch(`/api/clients/${client.id}`, { production: { minClipSec: next.min, maxClipSec: next.max } }), { ok: `Clips will be ${next.min} to ${next.max} seconds`, sound: 'tap' });
+  const set = (k) => (e) => { const v = Number(e.target.value); setR(k === 'min' ? { min: v, max: Math.max(r.max, v + 5) } : { max: v, min: Math.min(r.min, v - 5) }); };
+  return html`<div class="col" style="gap:4px;margin-top:10px;max-width:420px" onClick=${(e) => e.stopPropagation()}>
+    <span class="label">Clip length: <b class="tnum">${r.min}s to ${r.max}s</b></span>
+    <div class="row" style="gap:8px;font-size:var(--fs-xs)"><span class="faint" style="width:56px">Shortest</span><input class="range grow" type="range" min="5" max="175" step="1" value=${r.min} onInput=${set('min')} onChange=${() => save(r)} aria-label="Shortest clip in seconds" /><b class="tnum" style="width:34px">${r.min}s</b></div>
+    <div class="row" style="gap:8px;font-size:var(--fs-xs)"><span class="faint" style="width:56px">Longest</span><input class="range grow" type="range" min="10" max="180" step="1" value=${r.max} onInput=${set('max')} onChange=${() => save(r)} aria-label="Longest clip in seconds" /><b class="tnum" style="width:34px">${r.max}s</b></div>
   </div>`;
 }
 
@@ -144,6 +159,7 @@ function FootageDrawer({ id, onClose, onShots }) {
         ${a.status === 'ready' ? html`<${Button} kind="ghost" icon="eye" onClick=${() => onShots(a)}>Shots</${Button}>` : null}
         <span class="grow" /><${Button} kind="ghost" icon="trash" onClick=${() => cancel(true)}>Delete</${Button}>
       </div>
+      <${Transcript} a=${a} />
       <div><h4>Clips from this video</h4>${data.clips.length ? html`<div class="list">${data.clips.map((c) => html`<div class="list-row" style="cursor:pointer" onClick=${() => { onClose(); navigate(`/production?clip=${c.id}`); }}><b class="grow">${c.title}</b><span class="faint tnum">${dur(c.end - c.start)}</span><${StatusBadge} status=${c.status} /></div>`)}</div>` : html`<div class="faint">No clips yet. They appear here and on the board below as they're made.</div>`}</div>
       ${data.jobs.length ? html`<details><summary class="faint">History</summary><div class="col" style="gap:4px;font-size:var(--fs-xs);margin-top:6px">${data.jobs.slice().reverse().map((j) => html`<div><b>${j.title}</b> · ${j.status}${j.error ? `: ${j.error}` : ''}</div>`)}</div></details>` : null}
     </div></${Drawer}>`;
@@ -152,6 +168,22 @@ function FootageDrawer({ id, onClose, onShots }) {
 /** Which of the five footage steps a job is. */
 const STEP_NAME = { 'ingest.url': 'Downloading', 'ingest.file': 'Importing', transcribe: 'Turning speech into text', analyze: 'Looking through it', 'video.look': 'Looking through it', discover: 'Finding clips', 'render.short': 'Making the short' };
 const STEP_OF = { 'ingest.url': 1, 'ingest.file': 1, transcribe: 2, analyze: 3, 'video.look': 3, discover: 4, 'render.short': 5 };
+
+/** The full transcript of a video: read it, copy it, download it as text or subtitles. */
+function Transcript({ a }) {
+  const { data: t, reload } = useApi(`/api/assets/${a.id}/transcript`, ['assets', 'job']);
+  const segs = t?.segments || [];
+  const stamp = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  const text = segs.map((s) => `[${stamp(s.s)}] ${s.t}`).join('\n');
+  const copy = () => navigator.clipboard?.writeText(segs.map((s) => s.t).join(' ')).then(() => toast('Transcript copied', { kind: 'ok' })).catch(() => toast('Select the text and copy it instead.', { kind: 'warn' }));
+  return html`<details class="panel pad" open=${!!segs.length}>
+    <summary><b>Transcript</b> <span class="faint" style="font-size:var(--fs-xs)">${segs.length ? `${(t.words || []).length} words` : 'not made yet'}</span></summary>
+    <div class="col" style="gap:8px;margin-top:8px">
+      ${segs.length ? html`<div class="selectable" style="max-height:260px;overflow:auto;white-space:pre-wrap;font-size:var(--fs-sm);line-height:1.6;background:var(--surface-2);border-radius:10px;padding:10px 12px">${text}</div>
+        <div class="row wrap" style="gap:6px"><${Button} size="sm" kind="primary" onClick=${copy}>Copy text</${Button}><a class="btn ghost sm" href=${api.url(`/api/assets/${a.id}/transcript-file/txt`) + '&download=1'}>Download .txt</a><a class="btn ghost sm" href=${api.url(`/api/assets/${a.id}/transcript-file/srt`) + '&download=1'}>Download subtitles (.srt)</a></div>`
+      : html`<div class="row wrap" style="gap:8px"><span class="faint grow" style="font-size:var(--fs-sm)">Turns everything said in the video into text with timestamps. Uses the free speech-to-text tool (installed automatically the first time).</span><${Button} size="sm" kind="primary" onClick=${() => act(() => api.post(`/api/assets/${a.id}/transcribe`, {}), { ok: 'Making the transcript' }).then(reload)}>Make transcript</${Button}></div>`}
+    </div></details>`;
+}
 
 const KIND_TONE = { speaker: 'sky', interview: 'sky', crowd: 'lav', broll: 'moss', graphic: 'gold', text: 'gold', other: '' };
 /** What Euclidean saw in a video: one still per shot with its description, kind and quality. */
