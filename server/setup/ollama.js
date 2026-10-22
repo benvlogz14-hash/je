@@ -102,7 +102,8 @@ async function visionReady() { const r = await running(); return r.ok && hasMode
 
 /** On engine start: if the user turned Llama on before and it's installed, start it quietly. */
 async function autostart() {
-  if (!ctx.setting('ai.ollama.autostart', false) || ctx.setting('ai.ollama.enabled', true) === false || !find()) return;
+  // Installed by the installer (or by hand) and never switched off here: start it.
+  if (ctx.setting('ai.ollama.autostart', null) === false || ctx.setting('ai.ollama.enabled', true) === false || !find()) return;
   try { await start(() => {}); await require('../integrations/ai').pingOllama(true); } catch { /* user can press the button */ }
 }
 

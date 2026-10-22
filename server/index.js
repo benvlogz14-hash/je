@@ -139,7 +139,7 @@ async function start(opts = {}) {
   require('./automation/scheduler').start();
   messaging.startPollers();
   require('./agents/broker').start();
-  setTimeout(() => { require('./setup/ollama').autostart().catch(() => {}); }, 3000);
+  setTimeout(() => { require('./setup/ollama').autostart().catch(() => {}); try { require('./setup/whisper').adopt(); } catch { /* later */ } }, 3000);
   audit.log('system', 'engine.started', { version: ctx.version, port: ctx.port, lan: !!lan, host: os.hostname() });
   console.log(`[euclidean] engine ${ctx.version} on http://${lan ? (ctx.lanAddress || '0.0.0.0') : '127.0.0.1'}:${ctx.port} · data ${paths.root}`);
   return { port: ctx.port, ownerToken: ctx.store.get('users', 'ryan')?.token, store: ctx.store };

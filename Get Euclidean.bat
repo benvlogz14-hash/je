@@ -48,6 +48,9 @@ if not exist "%DEST%\Start Euclidean.bat" (
   exit /b 1
 )
 
+echo   Installing everything Euclidean uses (skips anything you already have)...
+call "%DEST%\Install Extras.bat"
+
 echo   Done. Starting Euclidean (the first start installs what it needs and takes a few minutes)...
 echo.
 call "%DEST%\Start Euclidean.bat"

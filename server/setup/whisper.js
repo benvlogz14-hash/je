@@ -23,7 +23,17 @@ function findBin(dir) {
   return walk(dir, 0);
 }
 
+/** Whisper installed next to the app by "Install Extras.bat": use it without a button press. */
+function adopt() {
+  if (ctx.setting('ai.transcription.localWhisperPath', '')) return;
+  for (const dir of [path.join(__dirname, '..', '..', 'tools', 'whisper'), path.join(require('../core/paths').root, 'tools', 'whisper')]) {
+    const bin = findBin(dir); const model = path.join(dir, 'ggml-base.en.bin');
+    if (bin && fs.existsSync(model)) { ctx.store.setSettings({ ai: { transcription: { localWhisperPath: bin, localWhisperModel: model } } }); return; }
+  }
+}
+
 function status() {
+  try { adopt(); } catch { /* not ready */ }
   const bin = ctx.setting('ai.transcription.localWhisperPath', ''); const model = ctx.setting('ai.transcription.localWhisperModel', '');
   return { ready: !!(bin && model && fs.existsSync(bin) && fs.existsSync(model)), bin, model };
 }
@@ -62,4 +72,4 @@ async function install(h) {
   return { ok: true, bin, model };
 }
 
-module.exports = { install, status };
+module.exports = { install, status, adopt };
