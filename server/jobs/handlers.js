@@ -38,10 +38,11 @@ queue.register('ingest.file', {
     if (info.hasVideo && ctx.setting('resources.mode') !== 'lite') { try { await ff.filmstrip(asset.path, strip, info.duration, 24, 54); } catch (e) { h.log(`Filmstrip skipped: ${e.message}`); } }
     h.progress(0.75, 'Analyzing audio');
     if (info.hasAudio) { try { fs.writeFileSync(path.join(asset.workDir, 'waveform.json'), JSON.stringify(await ff.waveform(asset.path, 1200))); } catch (e) { h.log(`Waveform skipped: ${e.message}`); } }
-    ctx.store.update('assets', asset.id, { info, status: 'ready', thumb: fs.existsSync(thumb) ? thumb : null, filmstrip: fs.existsSync(strip) ? strip : null });
+    ctx.store.update('assets', asset.id, { error: null, info, status: 'ready', thumb: fs.existsSync(thumb) ? thumb : null, filmstrip: fs.existsSync(strip) ? strip : null });
     events.publish('assets', ctx.store.get('assets', asset.id));
     const client = ctx.store.get('clients', asset.clientId);
-    if (job.payload.autoProcess !== false && (client?.schedule?.autopilot || job.payload.autoProcess)) {
+    const pay = ctx.store.get('jobs', job.id)?.payload || job.payload; // autoProcess can be set just after the job is queued
+    if (pay.autoProcess !== false && (client?.schedule?.autopilot || pay.autoProcess)) {
       h.enqueue('transcribe', { assetId: asset.id, thenDiscover: true }, { title: `Transcribe ${asset.name}`, dedupeKey: `transcribe:${asset.id}` });
     }
     return { duration: info.duration, width: info.width, height: info.height };

@@ -109,7 +109,8 @@ async function thumbnail(file, out, atSec = 1, width = 360) {
 /** Filmstrip sprite for the Studio timeline: N frames side by side. */
 async function filmstrip(file, out, duration, frames = 20, height = 60) {
   const fps = Math.max(0.01, frames / Math.max(1, duration));
-  await run(bin('ffmpeg'), ['-hide_banner', '-y', '-i', file, '-vf', `fps=${fps.toFixed(4)},scale=-2:${height},tile=${frames}x1`, '-frames:v', '1', '-q:v', '5', out], { timeoutMs: 300000, priority: os.constants.priority.PRIORITY_BELOW_NORMAL });
+  // Keyframes only: fast even on hour-long 4K files.
+  await run(bin('ffmpeg'), ['-hide_banner', '-y', '-skip_frame', 'nokey', '-i', file, '-vf', `fps=${fps.toFixed(4)},scale=-2:${height},tile=${frames}x1`, '-frames:v', '1', '-q:v', '5', out], { timeoutMs: 300000, priority: os.constants.priority.PRIORITY_BELOW_NORMAL });
   return out;
 }
 
