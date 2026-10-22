@@ -503,11 +503,11 @@ queue.register('political.reference', {
 });
 
 queue.register('video.reverse', {
-  title: (p) => `Reverse-engineer ${String(p.src || 'a video').replace(/^https?:\/\/(www\.)?/, '').slice(0, 50)}`, heavy: true, maxAttempts: 1,
+  title: (p) => `Study the style of ${/^https?:/.test(p.src || '') ? String(p.src).replace(/^https?:\/\/(www\.)?/, '').slice(0, 50) : require('path').basename(String(p.src || 'a video')).replace(/^\d+-/, '')}`, heavy: true, maxAttempts: 1,
   async run(job, h) {
     const r = await require('../video/reverse').study(job.payload.src, { jobId: job.id, onProgress: (f, t) => h.progress(f, t) });
     events.publish('settings', {});
-    events.publish('notify', { title: 'Recipe ready', body: r.recipe?.summary?.slice(0, 160) || 'The breakdown is ready.', route: '/production' });
+    events.publish('notify', { title: 'Recipe ready', body: r.recipe?.summary?.slice(0, 160) || 'The breakdown is ready.', route: '/growth' });
     return { id: r.id };
   },
 });

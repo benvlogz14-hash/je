@@ -1,6 +1,6 @@
 'use strict';
 /**
- * Reverse-engineer a reel, short or ad: download it (or read a file), then
+ * Copy a video's style: download any video (or read an uploaded file), then
  * measure and look at everything about how it was made, and write a recipe
  * Euclidean can reuse.
  *
@@ -54,7 +54,7 @@ async function loudness(file) {
 
 const CAPTION_KEYS = ['position', 'uppercase', 'wordsPerLine', 'primary', 'highlight', 'outline', 'box', 'animation', 'font'];
 
-/** Study one reel. Returns the recipe (also saved in the recipe list). */
+/** Study one video. Returns the recipe (also saved in the recipe list). */
 async function study(src, { onProgress = () => {}, jobId } = {}) {
   const id = `rv_${Date.now().toString(36)}`;
   const dir = path.join(paths.root, 'reverse', id); fs.mkdirSync(dir, { recursive: true });

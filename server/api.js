@@ -517,7 +517,15 @@ r.post('/api/prospects/:id/package', (req, b, p) => {
 r.post('/api/political/approve', (req, b) => require('./outreach/autopilot').approve(b.ids, actorOf(req)), { roles: OWNER });
 r.post('/api/political/reference', (req, b) => { const src = String(b.src || '').trim(); if (!src) throw new HttpError(400, 'Paste a link to an ad you like.'); return queue.enqueue('political.reference', { src }, { actor: actorOf(req) }); });
 // Reverse-engineer any reel: study it, list recipes, apply one.
-r.post('/api/reverse', (req, b) => { const src = String(b.src || '').trim(); if (!src) throw new HttpError(400, 'Paste a link to a reel, short, TikTok or ad.'); return queue.enqueue('video.reverse', { src }, { actor: actorOf(req) }); });
+r.post('/api/reverse', (req, b) => { const src = String(b.src || '').trim(); if (!src) throw new HttpError(400, 'Paste a video link, or choose a file.'); return queue.enqueue('video.reverse', { src }, { actor: actorOf(req) }); });
+r.post('/api/reverse/upload', async (req, res) => {
+  const dir = path.join(paths.root, 'reverse', 'uploads'); fs.mkdirSync(dir, { recursive: true });
+  const name = decodeURIComponent(String(req.headers['x-file-name'] || 'video.mp4')).replace(/[^\w .-]/g, '').slice(-80) || 'video.mp4';
+  const file = path.join(dir, `${Date.now()}-${/\.\w{2,4}$/.test(name) ? name : `${name}.mp4`}`);
+  try { await new Promise((ok, bad) => { const w = fs.createWriteStream(file); let n = 0; req.on('data', (c) => { n += c.length; if (n > 2e9) { req.destroy(); bad(new Error('That video is too big (2 GB max).')); } }); req.pipe(w); w.on('finish', ok); w.on('error', bad); }); }
+  catch (e) { return send(res, 400, { error: e.message }); }
+  return send(res, 200, queue.enqueue('video.reverse', { src: file }, { actor: actorOf(req) }));
+}, { stream: true, raw: true });
 r.get('/api/reverse', () => require('./video/reverse').list().map(({ grade, ...x }) => x));
 r.get('/api/reverse/:id/sheet', (req, res, p) => { const x = require('./video/reverse').get(p.id); return x?.sheet && fs.existsSync(x.sheet) ? serveFile(req, res, x.sheet) : send(res, 404, { error: 'No sheet' }); }, { stream: true });
 r.del('/api/reverse/:id', (req, b, p) => { require('./video/reverse').remove(p.id); events.publish('settings', {}); return { ok: true }; });
@@ -530,7 +538,7 @@ r.post('/api/reverse/:id/apply', (req, b, p) => {
     pipeline.remember(c.id, [{ text: rv.notes(x) }], { source: 'reverse', actor: actorOf(req) }); done.push('editing notes');
     events.publish('clients', { id: c.id });
   }
-  if (b.political && x.avgShot) { ctx.store.setSettings({ political: { reference: { src: x.src, duration: x.duration, cuts: x.cuts, avgShot: x.avgShot, cutsPerMinute: x.cutsPerMinute, sheet: x.sheet, vertical: x.vertical, at: x.at } } }); done.push('political ad pacing'); events.publish('settings', {}); }
+  if (b.political) { ctx.store.setSettings({ political: { styleNotes: rv.notes(x), ...(x.avgShot ? { reference: { src: x.src, duration: x.duration, cuts: x.cuts, avgShot: x.avgShot, cutsPerMinute: x.cutsPerMinute, sheet: x.sheet, vertical: x.vertical, at: x.at } } : {}) } }); done.push('political ad style'); events.publish('settings', {}); }
   if (!done.length) throw new HttpError(400, 'Choose a client or the political ads.');
   audit.log(actorOf(req), 'reverse.applied', { id: x.id, clientId: b.clientId || null, political: !!b.political });
   return { ok: true, applied: done };
