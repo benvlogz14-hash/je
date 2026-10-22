@@ -104,7 +104,7 @@ function PackageSettings() {
 }
 
 function PackageDrawer({ p, steps, job, onClose, reload }) {
-  const [tab, setTab] = useState('videos');
+  const [tab, setTab] = useState('about');
   const [email, setEmail] = useState(p.publicContact || '');
   const pkg = p.pkg || {}; const b = pkg.brief || {}; const c = pkg.creative || {};
   const run = (body, ok = 'Started') => act(() => api.post(`/api/prospects/${p.id}/package`, body), { ok });
@@ -118,7 +118,17 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
         <div class="faint" style="font-size:var(--fs-xs)">Click a step to re-run just that step (for example after editing the email address).</div>
         ${pkg.error ? html`<div class="notice coral">${pkg.error}</div>` : null}
       </div>
-      <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ value: 'videos', label: 'Videos & sheet' }, { value: 'email', label: 'Email' }, { value: 'brief', label: 'Brief' }, { value: 'call', label: 'Call' }, { value: 'sources', label: `Sources ${pkg.sources?.length || ''}` }]} />
+      <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ value: 'about', label: 'About' }, { value: 'videos', label: 'Videos & sheet' }, { value: 'email', label: 'Email' }, { value: 'brief', label: 'Brief' }, { value: 'call', label: 'Call' }, { value: 'sources', label: `Sources ${pkg.sources?.length || ''}` }]} />
+      ${tab === 'about' ? html`<div class="col selectable" style="gap:10px;font-size:var(--fs-sm);line-height:1.55">
+        ${b.headline ? html`<h3>${b.headline}</h3>` : null}
+        <div class="grid c2" style="gap:8px">${[['Office', pkg.profile?.office || p.location], ['Party', pkg.profile?.party], ['Stage', p.stage || 'new'], ['Contact email', p.publicContact || pkg.profile?.contact || 'not found yet'], ['Office phone', pkg.profile?.officePhone], ['Found by', p.source ? `${p.source}${p.query ? ` ("${p.query}")` : ''}` : '']].filter(([, v]) => v).map(([k, v]) => html`<div class="panel pad" style="padding:8px 12px"><div class="faint" style="font-size:var(--fs-xs)">${k}</div><b style="overflow-wrap:anywhere">${v}</b></div>`)}</div>
+        ${p.why || p.angle || b.angle ? html`<div class="notice sky">${b.angle || p.angle || p.why}</div>` : null}
+        ${b.summary ? html`<p>${b.summary}</p>` : null}
+        ${b.themes?.length ? html`<div><b>Their issues</b><div class="row wrap" style="gap:6px;margin-top:4px">${b.themes.map((t) => html`<span class="badge lav">${t}</span>`)}</div></div>` : null}
+        ${(pkg.profile?.sites || []).length || (pkg.profile?.socials || []).length ? html`<div><b>Online</b><div class="col" style="gap:2px;margin-top:4px">${[...(pkg.profile?.sites || []), ...(pkg.profile?.socials || [])].slice(0, 10).map((u) => html`<a href=${u} target="_blank" rel="noreferrer">${String(u).replace(/^https?:\/\/(www\.)?/, '')}</a>`)}</div></div>` : null}
+        ${p.notes ? html`<div><b>Notes</b><div style="white-space:pre-wrap">${p.notes}</div></div>` : null}
+        ${!b.headline && !pkg.profile ? html`<div class="faint">Details fill in as the research step runs.</div>` : null}
+      </div>` : null}
       ${tab === 'videos' ? html`<div class="col" style="gap:12px">
         ${pkg.files?.v || pkg.files?.h ? html`<div class="row" style="gap:12px;align-items:flex-start">
           ${pkg.files?.v ? html`<div class="col" style="gap:6px;width:200px"><video src=${file('v')} poster=${pkg.files?.posterV ? file('posterV') : undefined} controls playsinline style="width:200px;border-radius:12px;background:#000" /><a class="faint" href=${file('v') + '&download=1'}>Download vertical</a></div>` : null}
