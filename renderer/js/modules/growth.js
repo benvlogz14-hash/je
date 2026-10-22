@@ -1,4 +1,5 @@
 // Growth: prospect research, audits and approved one-to-one outreach.
+import { HealthBanner } from './health.js';
 import { html, useState, useApi, navigate, Button, HoldButton, Seg, Empty, Loading, Drawer, Field, Avatar, act, toast, promptDialog, confirmDialog } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
@@ -26,6 +27,7 @@ export function Growth({ only = null } = {}) {
     <div class="page-head"><div class="grow"><h1>${only ? 'Politics' : 'Creator outreach'}</h1><div class="sub">${only ? 'Find candidates, make their ad packages and email them. Turn on Autopilot to run it without you.' : 'Find creator clients and track every lead. Politics has its own page in the sidebar.'}</div></div>
       ${only ? null : html`<${Seg} value=${view} onChange=${pickView} options=${[{ value: 'creators', label: 'Creators' }, { value: 'board', label: 'Pipeline' }, { value: 'table', label: 'Table' }]} />`}
       <${Button} kind="ghost" icon="plus" onClick=${async () => { const name = await promptDialog({ title: 'Add prospect', label: 'Name or handle', confirm: 'Add' }); if (name) act(() => api.post('/api/prospects', { name }), { ok: 'Added' }).then(reload); }}>Add manually</${Button}></div>
+    ${only ? html`<${HealthBanner} />` : null}
     ${view === 'political' || view === 'creators' ? html`<div class="col" style="gap:16px" key=${view}>
       <${Autopilot} lane=${view === 'political' ? 'political' : 'creators'} />
       <${ScoutChat} lane=${view === 'political' ? 'political' : 'creators'} />

@@ -6,6 +6,7 @@ import { play } from '../lib/sound.js';
 import { ago, dur } from '../lib/format.js';
 import { ClipDrawer } from './clip.js';
 import { QuotaBar } from './cards.js';
+import { HealthBanner } from './health.js';
 
 /** Quick "new client" so Production works on a fresh install; the full profile lives in Clients. */
 async function quickClient() {
@@ -32,6 +33,8 @@ export function Production() {
   const { data: assets } = useApi(`/api/assets${q}`, ['assets', 'job']);
   const { data: jobs } = useApi(`/api/jobs?status=running,queued${clientId ? `&clientId=${clientId}` : ''}`, ['job']);
   const openClip = route.query.clip;
+  const [shotsOf, setShotsOf] = useState(null);
+  const [detail, setDetail] = useState(null);
   const client = clients?.find((c) => c.id === clientId);
 
   return html`<div class="page">
@@ -39,8 +42,11 @@ export function Production() {
       <select class="select" id="prod-client" style="width:220px" value=${clientId} onChange=${async (e) => { const v = e.target.value; if (v === '__new') { e.target.value = clientId; const c = await quickClient().catch(() => null); if (c) setClientId(c.id); return; } setClientId(v); }} aria-label="Client">
         <option value="">${(clients || []).length ? 'All clients' : 'No clients yet'}</option>${(clients || []).map((c) => html`<option value=${c.id}>${c.name}</option>`)}<option value="__new">+ New client…</option></select>
     </div>
+    <${HealthBanner} clientId=${clientId} />
     ${client?.quota ? html`<${QuotaStrip} client=${client} />` : null}
-    <${Intake} clients=${clients || []} clientId=${clientId} setClientId=${setClientId} assets=${assets || []} jobs=${jobs || []} />
+    <${Intake} clients=${clients || []} clientId=${clientId} setClientId=${setClientId} assets=${assets || []} jobs=${jobs || []} setDetail=${setDetail} setShotsOf=${setShotsOf} />
+    ${shotsOf ? html`<${ShotsDrawer} asset=${shotsOf} onClose=${() => setShotsOf(null)} />` : null}
+    ${detail ? html`<${FootageDrawer} id=${detail} onClose=${() => setDetail(null)} onShots=${(a) => { setDetail(null); setShotsOf(a); }} />` : null}
     <div class="row" style="margin:22px 0 10px"><h3 class="grow">Clips</h3><span class="faint" style="font-size:var(--fs-sm)">${(clips || []).length} total</span></div>
     ${loading ? html`<${Loading} />` : !(clips || []).length ? html`<div class="panel"><${Empty} icon="film" title="No clips yet">Drop footage above. Euclidean transcribes it, finds the strongest moments and renders vertical shorts with captions.</${Empty}></div>` : html`
       <div class="board">${LANES.map((l) => {
@@ -58,13 +64,13 @@ function QuotaStrip({ client }) {
     <div class="row"><${Avatar} name=${client.name} /><div><b>${client.name}</b><div class="faint" style="font-size:var(--fs-sm)">${client.schedule.shortsPerDay} shorts/day · ${client.schedule.platforms.length} platforms · ${client.schedule.autopilot ? 'Autopilot on' : 'Autopilot off'}</div></div></div>
     <div class="col" style="gap:6px"><span class="eyebrow">Next ${client.schedule.bufferDays || 2} days</span><${QuotaBar} q=${q} /></div>
     ${[['Posted today', q.postedToday], ['Scheduled', q.scheduled], ['In review', q.inReview], ['In production', q.inProduction], ['Open slots', q.open], ['Unused footage', q.unusedFootage]].map(([l, v]) => html`<div><div class="eyebrow">${l}</div><div class="tnum" style="font:600 18px var(--font-display)">${v}</div></div>`)}
-    <div class="spacer" /><${Button} kind="soft" icon="bolt" onClick=${() => act(() => api.post(`/api/clients/${client.id}/autopilot-now`), { ok: (r) => (r.action ? `Autopilot: ${r.action}` : 'Quota is covered') })}>Run autopilot now</${Button}>
+    <div class="spacer" /><${Button} kind="soft" icon="bolt" onClick=${() => act(() => api.post(`/api/clients/${client.id}/autopilot-now`), { ok: (r) => r.message || 'Autopilot started' })}>Run autopilot now</${Button}>
   </div>`;
 }
 
-function Intake({ clients, clientId, setClientId, assets, jobs }) {
+function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setShotsOf }) {
   const [over, setOver] = useState(false);
-  const [shotsOf, setShotsOf] = useState(null);
+
   const [uploads, setUploads] = useState([]);
   const input = useRef(null);
   const target = clientId || (clients.length === 1 ? clients[0].id : '');
@@ -111,14 +117,36 @@ function Intake({ clients, clientId, setClientId, assets, jobs }) {
     <div class="panel"><div class="panel-head"><h4 class="grow">Footage</h4><span class="faint" style="font-size:var(--fs-sm)">${active.length ? `${active.length} processing` : `${assets.length} files`}</span></div>
       <div class="list" style="max-height:190px;overflow:auto">${recent.length ? recent.map((a) => {
         const j = jobs.find((x) => x.payload?.assetId === a.id && x.status === 'running') || jobs.find((x) => x.payload?.assetId === a.id);
-        return html`<div class="list-row"><div class="th" style=${{ width: '52px', height: '30px', borderRadius: '6px', background: a.thumb ? `var(--surface-3) url(${api.url(`/api/assets/${a.id}/thumb`)}) center/cover` : 'var(--surface-3)', flex: 'none' }} />
+        return html`<div class="list-row" style="cursor:pointer" title="Open: steps, clips, retry, cancel" onClick=${(e) => { if (!e.target.closest('button')) setDetail(a.id); }}><div class="th" style=${{ width: '52px', height: '30px', borderRadius: '6px', background: a.thumb ? `var(--surface-3) url(${api.url(`/api/assets/${a.id}/thumb`)}) center/cover` : 'var(--surface-3)', flex: 'none' }} />
           <div class="grow"><div class="ellipsis" style="font-weight:500">${a.name}</div><div class="faint" style="font-size:var(--fs-xs)">${j ? j.note || j.title : a.info ? `${dur(a.info.duration)} · ${a.info.width}×${a.info.height}${a.transcript ? ` · ${a.transcript.words} words` : ''}${a.vision ? ` · ${a.vision.shots} shots` : ''}` : a.status} · ${ago(a.createdAt)}</div>${j ? html`<div style="margin-top:4px"><${Progress} value=${j.progress} indeterminate=${!j.progress} /></div>` : null}${a.error && !j ? html`<div style="color:var(--coral-ink);font-size:var(--fs-xs);margin-top:2px">Stopped: ${a.error}</div>` : null}</div>
           ${a.status === 'ready' && !j ? html`<${Button} size="sm" kind="ghost" icon="eye" title="What Euclidean sees in this video, shot by shot" onClick=${() => (a.vision ? setShotsOf(a) : act(() => api.post(`/api/assets/${a.id}/look`, {}), { ok: 'Looking through the video' }))}>${a.vision ? 'Shots' : 'Look through'}</${Button}>` : null}
           ${!j && (a.status === 'importing' || a.error) && a.status !== 'ready' ? html`<${Button} size="sm" kind="primary" icon="refresh" onClick=${() => act(() => api.post(`/api/assets/${a.id}/process`, {}), { ok: 'Trying again' })}>Retry</${Button}>` : null}
           ${a.status === 'ready' && !j ? html`<${Button} size="sm" kind="ghost" icon="sparkle" onClick=${() => act(() => api.post(`/api/assets/${a.id}/process`, {}), { ok: 'Finding clips' })}>${a.transcript ? 'More clips' : 'Process'}</${Button}>` : html`<${StatusBadge} status=${a.status} />`}</div>`;
       }) : html`<div class="list-row faint">No footage yet</div>`}</div></div>
-    ${shotsOf ? html`<${ShotsDrawer} asset=${shotsOf} onClose=${() => setShotsOf(null)} />` : null}
   </div>`;
+}
+
+/** One footage file: what has happened to it, its clips, and Retry / Cancel / Delete. */
+function FootageDrawer({ id, onClose, onShots }) {
+  const { data, reload } = useApi(`/api/assets/${id}/detail`, ['job', 'assets', 'clips']);
+  if (!data) return html`<${Drawer} title="Footage" onClose=${onClose}><${Loading} /></${Drawer}>`;
+  const a = data.asset; const active = data.jobs.filter((j) => ['queued', 'running'].includes(j.status));
+  const retry = () => act(() => api.post(`/api/assets/${a.id}/process`, {}), { ok: 'Trying again' }).then(reload);
+  const cancel = (remove) => act(() => api.post(`/api/assets/${a.id}/cancel`, { remove }), { ok: remove ? 'Deleted' : 'Canceled' }).then(() => (remove ? onClose() : reload()));
+  return html`<${Drawer} wide title=${a.name} sub=${a.info ? `${dur(a.info.duration)} · ${a.info.width}×${a.info.height}` : a.status} onClose=${onClose}>
+    <div class="col" style="gap:14px">
+      <div class="row wrap" style="gap:6px">${data.steps.map((s, i) => html`<span class=${'badge ' + (s.ok ? 'moss' : active.length && !data.steps.slice(0, i).some((x) => !x.ok) ? 'sky' : '')}>${s.ok ? '✓' : `${i + 1}.`} ${s.label}</span>`)}</div>
+      ${a.error ? html`<div class="notice coral">Stopped: ${a.error}</div>` : null}
+      ${active.map((j) => html`<div><div class="row" style="font-size:var(--fs-sm)"><span class="grow">${j.title}: ${j.note || j.status}</span><span class="faint tnum">${Math.round((j.progress || 0) * 100)}%</span></div><${Progress} value=${j.progress} indeterminate=${!j.progress} /></div>`)}
+      <div class="row wrap" style="gap:6px">
+        <${Button} kind="primary" icon="refresh" onClick=${retry}>${a.status === 'ready' ? 'Find more clips' : 'Retry'}</${Button}>
+        ${active.length ? html`<${Button} kind="ghost" icon="stop" onClick=${() => cancel(false)}>Cancel</${Button}>` : null}
+        ${a.status === 'ready' ? html`<${Button} kind="ghost" icon="eye" onClick=${() => onShots(a)}>Shots</${Button}>` : null}
+        <span class="grow" /><${Button} kind="ghost" icon="trash" onClick=${() => cancel(true)}>Delete</${Button}>
+      </div>
+      <div><h4>Clips from this video</h4>${data.clips.length ? html`<div class="list">${data.clips.map((c) => html`<div class="list-row" style="cursor:pointer" onClick=${() => { onClose(); navigate(`/production?clip=${c.id}`); }}><b class="grow">${c.title}</b><span class="faint tnum">${dur(c.end - c.start)}</span><${StatusBadge} status=${c.status} /></div>`)}</div>` : html`<div class="faint">No clips yet. They appear here and on the board below as they're made.</div>`}</div>
+      ${data.jobs.length ? html`<details><summary class="faint">History</summary><div class="col" style="gap:4px;font-size:var(--fs-xs);margin-top:6px">${data.jobs.slice().reverse().map((j) => html`<div><b>${j.title}</b> · ${j.status}${j.error ? `: ${j.error}` : ''}</div>`)}</div></details>` : null}
+    </div></${Drawer}>`;
 }
 
 const KIND_TONE = { speaker: 'sky', interview: 'sky', crowd: 'lav', broll: 'moss', graphic: 'gold', text: 'gold', other: '' };

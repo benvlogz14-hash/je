@@ -27,7 +27,8 @@ queue.register('ingest.file', {
   async run(job, h) {
     const asset = ctx.store.get('assets', job.payload.assetId);
     if (!asset) throw permanent('Asset no longer exists');
-    if (!ctx.capabilities.ffprobe) throw Object.assign(new Error('FFmpeg/FFprobe not found. Install FFmpeg or set its path in Settings → System'), { notConnected: true });
+    if (!ctx.capabilities.ffprobe) await require('../setup/production').refreshTools(true);
+    if (!ctx.capabilities.ffprobe) throw Object.assign(new Error("FFmpeg isn't installed, so the video can't be read. Press Install FFmpeg at the top of Production, then Retry."), { notConnected: true });
     h.progress(0.1, 'Reading media');
     const info = await ff.probe(asset.path);
     if (!info.hasVideo && !info.hasAudio) throw permanent('File has no audio or video streams');
@@ -515,6 +516,7 @@ queue.register('video.reverse', {
 
 queue.register('setup.ollama', { title: () => 'Turn on Ollama', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setup(h) });
 queue.register('setup.vision', { title: () => 'Download free video vision (Llama vision)', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setupVision(h) });
+queue.register('setup.ffmpeg', { title: () => 'Install FFmpeg and yt-dlp', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/production').installFfmpeg(h) });
 queue.register('setup.whisper', { title: () => 'Install free speech-to-text (Whisper)', maxAttempts: 1, run: (job, h) => require('../setup/whisper').install(h) });
 queue.register('setup.rembg', { title: () => 'Install the free photo cut-out tool', maxAttempts: 1, run: (job, h) => require('../setup/rembg').install(h) });
 

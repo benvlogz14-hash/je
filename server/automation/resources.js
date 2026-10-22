@@ -77,8 +77,10 @@ async function sample() {
 /** Decide whether a heavy job may start right now. */
 function heavyGate() {
   if (!last) return { ok: true };
-  const reserve = ctx.setting('resources.reserveRamMb', 6000);
-  if (last.ramFreeMb < reserve) return { ok: false, reason: `Waiting: only ${last.ramFreeMb} MB RAM free (reserve ${reserve} MB for editing)` };
+  // Keep some RAM free for other apps, but never so much that an ordinary PC can't run anything:
+  // at most 12% of this PC's RAM (about 1 GB on an 8 GB PC), and never less than 500 MB.
+  const reserve = Math.max(500, Math.min(ctx.setting('resources.reserveRamMb', 1000), Math.round((last.ramTotalMb || 8000) * 0.12)));
+  if (last.ramFreeMb < reserve) return { ok: false, reason: `Waiting for memory: ${last.ramFreeMb} MB free, needs ${reserve} MB. Close some apps or browser tabs.` };
   const cpuMax = ctx.setting('resources.pauseHeavyWhenCpuAbove', 85);
   if (last.cpu > cpuMax) return { ok: false, reason: `Waiting: CPU at ${last.cpu}%` };
   if (last.premiereOpen && ctx.setting('resources.pauseHeavyWhenPremiereOpen', true)) return { ok: false, reason: 'Waiting: Premiere Pro is open' };

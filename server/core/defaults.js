@@ -101,7 +101,7 @@ module.exports = {
     maxConcurrentLight: 4,
     renderThreads: 0,         // 0 = let FFmpeg decide
     renderPriority: 'below_normal',
-    reserveRamMb: 6000,       // keep this much RAM free for Premiere/Astra; heavy jobs wait otherwise
+    reserveRamMb: 1000,       // keep up to this much RAM free for other apps (capped at 12% of the PC's RAM); heavy jobs wait otherwise
     pauseHeavyWhenCpuAbove: 85,
     pauseHeavyWhenPremiereOpen: true,
     autoLiteWhenPremiereOpen: false,

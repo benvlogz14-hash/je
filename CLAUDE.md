@@ -31,6 +31,11 @@ Desktop app for Euclidean Media (founders Ryan Rosario and Ben Gingold), a short
   - `.github/workflows/ios-app.yml` builds an unsigned `.ipa` for Sideloadly.
 - **Launchers:** `Start Euclidean.bat` installs Node, FFmpeg and yt-dlp, runs `npm install`, creates a desktop shortcut and starts the app. `Build Installer.bat` runs `npm run dist`. `.bat` files must keep CRLF line endings.
 
+## Production health
+- Heavy jobs (renders, ads, analysis, local transcription) wait while RAM is low: the reserve is `resources.reserveRamMb` (default 1000) capped at 12% of the PC's RAM. It used to be a fixed 6 GB, which blocked every ordinary PC.
+- `server/setup/production.js`: `health()` lists blockers (paused queue, Lite mode, remote-only, FFmpeg/yt-dlp missing, no speech-to-text, no AI, jobs waiting, last failure) with one-click fixes; shown by `renderer/js/modules/health.js` on Production and Politics. `installFfmpeg` (job `setup.ffmpeg`) installs FFmpeg + yt-dlp via winget and restarts stuck imports. `ff.detect()` re-scans for tools.
+- Every footage row opens a panel (`/api/assets/:id/detail`) with its steps, jobs, clips, Retry (`/process`), Cancel and Delete (`/cancel`). Failed jobs write `asset.error`.
+
 ## Run and test
 - `npm start` runs the Electron app; `npm run engine` runs the engine only (`--data <dir> --port <n>`). The login link with its token is printed in the log.
 - To test the UI, drive the engine's web UI with Playwright (Chromium is at `/opt/pw-browsers/chromium` in cloud sessions).

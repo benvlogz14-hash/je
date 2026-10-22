@@ -45,6 +45,7 @@ function findInstalled(name) {
 }
 
 async function detect() {
+  for (const k of Object.keys(found)) delete found[k]; // look again: tools may have been installed since
   const caps = { ffmpeg: false, ffprobe: false, libass: false, encoders: [], ytdlp: false, whisper: false };
   try {
     const v = await run(bin('ffmpeg'), ['-hide_banner', '-version'], { timeoutMs: 10000 });

@@ -248,7 +248,16 @@ r.post('/api/clients/:id/upload', async (req, b, p) => {
   }
   return out;
 }, { raw: true });
-r.post('/api/clients/:id/autopilot-now', (req, b, p) => { const c = must(ctx.store.get('clients', p.id)); return require('./automation/scheduler').feedClient(c); });
+r.post('/api/clients/:id/autopilot-now', async (req, b, p) => {
+  const c = must(ctx.store.get('clients', p.id));
+  const h = await require('./setup/production').health(c.id);
+  const block = h.issues.find((i) => i.level === 'error');
+  if (block) throw new HttpError(400, block.text);
+  const r = require('./automation/scheduler').feedClient(c);
+  const importing = ctx.store.all('assets', (a) => a.clientId === c.id && a.status === 'importing').length;
+  r.message = r.action === 'transcribe' ? 'Turning the newest footage into text, then finding clips.' : r.action === 'discover' ? 'Finding new clips in your footage.' : r.waiting ? 'Already working on footage. Watch the Footage list.' : r.need === 0 ? 'Nothing to do: the next days are already filled with clips.' : importing ? `Waiting for ${importing} video${importing === 1 ? '' : 's'} to finish importing.` : 'Out of footage. Upload a video or paste a link first.';
+  return r;
+});
 
 // ------------------------------------------------------------ assets (footage)
 r.get('/api/assets', (req) => ctx.store.all('assets', (a) => !req.query.clientId || a.clientId === req.query.clientId).reverse());
@@ -257,6 +266,25 @@ r.post('/api/assets', (req, b) => {
   const a = pipeline.addAsset({ clientId: b.clientId, filePath: b.path, source: 'local file', actor: actorOf(req) });
   if (b.autoProcess) { const j = ctx.store.find('jobs', (x) => x.dedupeKey === `ingest:${a.id}`); if (j) ctx.store.update('jobs', j.id, (x) => ({ payload: { ...x.payload, autoProcess: true } })); }
   return a;
+});
+r.get('/api/production/health', (req) => require('./setup/production').health(req.query.clientId || null));
+// Everything about one footage file: its steps, jobs, clips and any error.
+r.get('/api/assets/:id/detail', (req, b, p) => {
+  const a = must(ctx.store.get('assets', p.id));
+  const jobs = ctx.store.all('jobs', (j) => j.payload?.assetId === a.id).slice(-12).map((j) => ({ id: j.id, type: j.type, title: j.title, status: j.status, progress: j.progress, note: j.note, error: j.error, at: j.finishedAt || j.startedAt || j.createdAt }));
+  const clips = ctx.store.all('clips', (c) => c.assetId === a.id).map((c) => ({ id: c.id, title: c.title, status: c.status, start: c.start, end: c.end }));
+  const done = (t) => jobs.some((j) => j.type === t && j.status === 'done');
+  const steps = [['Import', a.status !== 'importing' && !!a.info], ['Speech to text', !!a.transcript || done('transcribe')], ['Look through it', !!a.vision || done('analyze')], ['Find clips', clips.length > 0 || done('discover')], ['Make the shorts', clips.some((c) => !['draft', 'rendering', 'queued'].includes(c.status))]].map(([label, ok]) => ({ label, ok }));
+  return { asset: { id: a.id, name: a.name, status: a.status, error: a.error || null, info: a.info, source: a.source, createdAt: a.createdAt, thumb: !!a.thumb }, steps, jobs, clips };
+});
+// Stop everything running for a footage file (optionally delete it).
+r.post('/api/assets/:id/cancel', (req, b, p) => {
+  const a = must(ctx.store.get('assets', p.id)); let n = 0;
+  for (const j of ctx.store.all('jobs', (x) => x.payload?.assetId === a.id && ['queued', 'running'].includes(x.status))) { queue.cancel(j.id, actorOf(req)); n++; }
+  if (b.remove) { ctx.store.remove('assets', a.id); audit.log(actorOf(req), 'footage.removed', { clientId: a.clientId, assetId: a.id }); }
+  else ctx.store.update('assets', a.id, { error: 'Canceled' });
+  events.publish('assets', { id: a.id });
+  return { ok: true, canceled: n };
 });
 r.post('/api/assets/:id/process', (req, b, p) => {
   const a = must(ctx.store.get('assets', p.id));
@@ -551,7 +579,7 @@ r.get('/api/political/reference/sheet', (req, res) => { const f = ctx.setting('p
 // One place that lists everything the full process needs, and one-click fixes.
 r.get('/api/setup/checklist', async () => ({ items: await require('./setup/checklist').build(), ollama: await require('./setup/ollama').status() }));
 r.post('/api/setup/:action', (req, b, p) => {
-  const job = { ollama: 'setup.ollama', rembg: 'setup.rembg', whisper: 'setup.whisper', vision: 'setup.vision' }[p.action]; if (!job) throw new HttpError(404, 'Unknown setup action');
+  const job = { ollama: 'setup.ollama', rembg: 'setup.rembg', whisper: 'setup.whisper', vision: 'setup.vision', ffmpeg: 'setup.ffmpeg' }[p.action]; if (!job) throw new HttpError(404, 'Unknown setup action');
   return queue.enqueue(job, {}, { actor: actorOf(req), dedupeKey: job });
 }, { roles: OWNER });
 r.get('/api/political/steps', () => polPkg.STEPS.map(([key, label]) => ({ key, label })));
