@@ -15,6 +15,9 @@ echo.
 echo   Getting Euclidean
 echo   -----------------
 echo.
+echo   Closing any Euclidean that is still running in the background...
+taskkill /f /im electron.exe >nul 2>nul
+timeout /t 2 /nobreak >nul
 echo   Downloading the latest version...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol='Tls12'; Invoke-WebRequest -UseBasicParsing -Uri '%URL%' -OutFile '%TMPZIP%'"
 if not exist "%TMPZIP%" (
