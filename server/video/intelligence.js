@@ -97,7 +97,7 @@ function normalizeClips(raw, { words, duration, minSec, maxSec, exclude = [], co
     if (!(end > start)) continue;
     start = snap(words, start, 'start'); end = snap(words, end, 'end') + 0.15;
     if (end - start < minSec) end = Math.min(duration, start + minSec);
-    if (end - start > maxSec) end = start + maxSec;
+    if (end - start > maxSec && !c.keep) end = start + maxSec; // story cuts span longer; their kept sentences fit
     end = Math.min(end, duration);
     const clip = { ...c, start: Math.round(start * 100) / 100, end: Math.round(end * 100) / 100 };
     if (end - start < Math.min(minSec, 5)) continue;
@@ -139,7 +139,7 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
     const cands = montage.candidates(sig, { minSec, maxSec, duration, exclude, limit: 24 });
     if (cands.length) {
       const name = cleanName(asset.name);
-      const fallback = (c, i) => ({ start: c.start, end: c.end, score: Math.round(c.score), title: `${name} · Part ${i + 1}`.slice(0, 80), hook: hookFrom(c.text) || name.split(/\s+[-|:·]\s+/)[0].split(/\s+/).slice(0, 7).join(' '), caption: '', hashtags: [], reason: `Picked for: ${c.why.join(', ') || 'steady speech'}`, punchIns: zoomsFor(c, analysis) });
+      const fallback = (c, i) => ({ start: c.start, end: c.end, keep: c.keep, score: Math.round(c.score), title: `${name} · Part ${i + 1}`.slice(0, 80), hook: hookFrom(c.text) || name.split(/\s+[-|:·]\s+/)[0].split(/\s+/).slice(0, 7).join(' '), caption: '', hashtags: [], reason: `Picked for: ${c.why.join(', ') || 'steady speech'}`, punchIns: zoomsFor(c, analysis) });
       if (ai.anyConnected()) {
         let tick = null;
         try {
@@ -152,7 +152,7 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
           const chosen = []; const seen = new Set();
           for (const x of r.json?.clips || []) {
             const c = cands[Number(x.pick) - 1]; if (!c || seen.has(c)) continue; seen.add(c);
-            chosen.push({ ...fallback(c, chosen.length), ...x, start: c.start, end: c.end, score: Math.round(c.score), reason: `${x.reason || ''}${c.why.length ? ` (${c.why.join(', ')})` : ''}`.trim(), punchIns: Array.isArray(x.punchIns) && x.punchIns.length ? x.punchIns : zoomsFor(c, analysis), agent: `${r.provider}:${r.model}` });
+            chosen.push({ ...fallback(c, chosen.length), ...x, start: c.start, end: c.end, keep: c.keep, score: Math.round(c.score), reason: `${x.reason || ''}${c.why.length ? ` (${c.why.join(', ')})` : ''}`.trim(), punchIns: Array.isArray(x.punchIns) && x.punchIns.length ? x.punchIns : zoomsFor(c, analysis), agent: `${r.provider}:${r.model}` });
             if (chosen.length >= count) break;
           }
           for (const c of cands) { if (chosen.length >= count) break; if (!seen.has(c)) { seen.add(c); chosen.push(fallback(c, chosen.length)); } }

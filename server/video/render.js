@@ -18,7 +18,8 @@ function ensureFonts() {
   const dst = path.join(paths.root, 'fonts');
   const src = path.join(__dirname, 'fonts');
   fs.mkdirSync(dst, { recursive: true });
-  for (const f of fs.readdirSync(src)) if (f.endsWith('.ttf') && !fs.existsSync(path.join(dst, f))) fs.copyFileSync(path.join(src, f), path.join(dst, f));
+  // Copy new or updated fonts (size differs) so every bundled font is there for the captions.
+  for (const f of fs.readdirSync(src)) if (f.endsWith('.ttf')) { const d = path.join(dst, f); try { if (!fs.existsSync(d) || fs.statSync(d).size !== fs.statSync(path.join(src, f)).size) fs.copyFileSync(path.join(src, f), d); } catch { /* in use */ } }
   return dst;
 }
 function rel(p) { return path.relative(paths.root, p).split(path.sep).join('/').replace(/'/g, ''); }
@@ -95,7 +96,10 @@ async function renderShort(o) {
   const info = o.info || await ff.probe(o.source);
   const start = Math.max(0, o.range.start), end = Math.min(info.duration || o.range.end, o.range.end);
   const plan = o.plan || {};
-  let segs = plan.silenceCut && o.words?.length ? keptSegments(o.words, start, end) : plan.silenceCut && plan.silences?.length ? cutPauses(plan.silences, start, end) : [[start, end]];
+  // Story cuts: only the kept sentences (whole sentences, in order), each with its pauses trimmed.
+  const parts = (plan.keep || []).map(([a, b]) => [Math.max(start, a), Math.min(end, b)]).filter(([a, b]) => b - a > 0.3);
+  const ranges = parts.length ? parts : [[start, end]];
+  let segs = ranges.flatMap(([a, b]) => (plan.silenceCut && o.words?.length ? keptSegments(o.words, a, b) : plan.silenceCut && plan.silences?.length ? cutPauses(plan.silences, a, b) : [[a, b]]));
   // Cut repeated takes and false starts (keeps the last take of each line).
   if (plan.retakeCut !== false && o.words?.length) {
     const rt = require('./retakes'); const inRange = o.words.filter((w) => w.e > start && w.s < end);

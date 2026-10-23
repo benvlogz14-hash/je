@@ -131,12 +131,15 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
 function ClipLength({ client }) {
   const p = client?.production || {};
   const [r, setR] = useState({ min: p.minClipSec || 20, max: p.maxClipSec || 59 });
+  const [n, setN] = useState(p.clipsPerFootage || 6);
+  useEffect(() => setN(p.clipsPerFootage || 6), [client?.id]);
   useEffect(() => setR({ min: p.minClipSec || 20, max: p.maxClipSec || 59 }), [client?.id]);
   const save = (next) => act(() => api.patch(`/api/clients/${client.id}`, { production: { minClipSec: next.min, maxClipSec: next.max } }), { ok: `Clips will be ${next.min} to ${next.max} seconds`, sound: 'tap' });
   const set = (k) => (e) => { const v = Number(e.target.value); setR(k === 'min' ? { min: v, max: Math.max(r.max, v + 5) } : { max: v, min: Math.min(r.min, v - 5) }); };
   return html`<div class="col" style="gap:4px;margin-top:10px;max-width:420px" onClick=${(e) => e.stopPropagation()}>
-    <span class="label">Clip length: <b class="tnum">${r.min}s to ${r.max}s</b></span>
+    <span class="label">Clip length: <b class="tnum">${r.min}s to ${r.max}s</b> · <b class="tnum">${n}</b> clip${n > 1 ? 's' : ''} per video</span>
     <div class="row" style="gap:8px;font-size:var(--fs-xs)"><span class="faint" style="width:56px">Shortest</span><input class="range grow" type="range" min="5" max="175" step="1" value=${r.min} onInput=${set('min')} onChange=${() => save(r)} aria-label="Shortest clip in seconds" /><b class="tnum" style="width:34px">${r.min}s</b></div>
+    <div class="row" style="gap:8px;font-size:var(--fs-xs)"><span class="faint" style="width:56px">Clips</span><input class="range grow" type="range" min="1" max="20" step="1" value=${n} onInput=${(e) => setN(Number(e.target.value))} onChange=${() => act(() => api.patch(`/api/clients/${client.id}`, { production: { clipsPerFootage: n } }), { ok: `${n} clip${n > 1 ? 's' : ''} from each video`, sound: 'tap' })} aria-label="Clips per video" /><b class="tnum" style="width:34px">${n}</b></div>
     <div class="row" style="gap:8px;font-size:var(--fs-xs)"><span class="faint" style="width:56px">Longest</span><input class="range grow" type="range" min="10" max="180" step="1" value=${r.max} onInput=${set('max')} onChange=${() => save(r)} aria-label="Longest clip in seconds" /><b class="tnum" style="width:34px">${r.max}s</b></div>
   </div>`;
 }

@@ -77,14 +77,16 @@ function shotScore(s) {
 // ---------------------------------------------------------------- window scoring
 const FILLER = /\b(um+|uh+|so yeah|i mean|kind of|sort of|you know|anyway|i guess|whatever)\b/i;
 const OUTRO = /\b(thanks for watching|subscribe|like and|see you (next|in the)|that'?s (it|all) for)\b/i;
+const END_HOOK = /\b(look at (this|that)|check this|watch this|wait|open(ed|ing)?|door|behind|inside|found|discover|reveal|you won'?t believe|no way|what (is|was|we)|turns out|and then|but then|until)\b|\?\s*$|!\s*$/i;
 const HOOK = /\b(never|nobody|no one|secret|hidden|abandoned|inside|why|how|what|imagine|biggest|craziest|insane|first|last|only|million|billion|\d+)\b|\?/i;
 /**
  * Score one candidate window. sig = { sents, shots, scenes, peaks, lv }.
  * Returns { score, why[] } where why lists what made it good, for the clip card.
  */
-function scoreWindow(s, e, sig) {
-  const len = e - s; const why = [];
-  const inS = sig.sents.filter((x) => x.s >= s - 0.05 && x.e <= e + 0.05);
+function scoreWindow(s, e, sig, kept = null) {
+  const why = [];
+  const inS = kept || sig.sents.filter((x) => x.s >= s - 0.05 && x.e <= e + 0.05);
+  const len = kept ? kept.reduce((n, x) => n + (x.e - x.s) + 0.3, 0) : e - s;
   const speech = inS.reduce((n, x) => n + (x.e - x.s), 0) / len;
   const vo = inS.filter((x) => x.vo).reduce((n, x) => n + (x.e - x.s), 0) / len;
   const sh = sig.shots.filter((x) => x.s < e && x.e > s);
@@ -100,6 +102,9 @@ function scoreWindow(s, e, sig) {
   let score = -25 * filler - (outro ? 15 : 0) + 30 * Math.min(1, speech / 0.75) + 25 * vo + 18 * drone + 20 * strong + 6 * Math.min(cuts, 3) + 4 * Math.min(peaks, 3) + 10 * hook - 30 * bad;
   // Dead air at the start loses viewers in the first second.
   const firstWord = inS[0]?.s ?? e; if (firstWord - s > 1.2) score -= 10;
+  const endHook = inS.length > 1 && END_HOOK.test(inS[inS.length - 1].t);
+  if (endHook) { score += 12; why.push('ends on a hook'); }
+  if (kept) why.push('story cut');
   if (vo > 0.4) why.push('voiceover');
   if (drone > 0.15) why.push('drone shots');
   if (strong > 0.55) why.push('strong visuals');
@@ -111,20 +116,42 @@ function scoreWindow(s, e, sig) {
 
 /** Candidate windows that start and end on whole sentences, within min..max seconds. */
 function candidates(sig, { minSec, maxSec, duration, exclude = [], limit = 40 }) {
-  const out = []; const S = sig.sents;
+  const out = []; const S = sig.sents; const span = Math.min(150, Math.max(maxSec * 2.2, maxSec + 20));
   for (let i = 0; i < S.length; i++) {
     for (let j = i; j < S.length; j++) {
       const s = Math.max(0, S[i].s - 0.15); const e = Math.min(duration, S[j].e + 0.25); const len = e - s;
-      if (len > maxSec) break;
-      if (len < minSec) continue;
-      if (exclude.some((x) => Math.min(x.end, e) - Math.max(x.start, s) > 0.2 * len)) continue;
-      out.push({ start: Math.round(s * 100) / 100, end: Math.round(e * 100) / 100, ...scoreWindow(s, e, sig), text: S.slice(i, j + 1).map((x) => x.t).join(' ') });
+      if (len > span) break;
+      if (exclude.some((x) => Math.min(x.end, e) - Math.max(x.start, s) > 0.2 * Math.min(len, maxSec))) continue;
+      if (len <= maxSec) {
+        if (len < minSec) continue;
+        out.push({ start: Math.round(s * 100) / 100, end: Math.round(e * 100) / 100, ...scoreWindow(s, e, sig), text: S.slice(i, j + 1).map((x) => x.t).join(' ') });
+      } else if (j - i >= 3) {
+        // Story cut: keep the opening hook and the ending, drop the weakest whole sentences in between until it fits.
+        const kept = condense(S.slice(i, j + 1), maxSec, sig);
+        if (!kept) continue;
+        const dur = kept.reduce((n, x) => n + (x.e - x.s) + 0.3, 0); if (dur < minSec) continue;
+        const sc = scoreWindow(s, e, sig, kept);
+        out.push({ start: Math.round(s * 100) / 100, end: Math.round(e * 100) / 100, keep: kept.map((x) => [Math.round(Math.max(0, x.s - 0.12) * 100) / 100, Math.round((x.e + 0.18) * 100) / 100]), score: sc.score - 4, why: sc.why, text: kept.map((x) => x.t).join(' ') });
+      }
     }
   }
   out.sort((a, b) => b.score - a.score);
   const picked = [];
   for (const c of out) { if (picked.every((p) => Math.min(p.end, c.end) - Math.max(p.start, c.start) < 0.15 * (c.end - c.start))) picked.push(c); if (picked.length >= limit) break; }
   return picked;
+}
+
+/** Whole sentences to keep for a story cut of at most maxSec: first and last always stay; filler goes first, then the weakest. */
+function condense(sents, maxSec, sig) {
+  const value = (x) => (FILLER.test(x.t) || OUTRO.test(x.t) ? -10 : 0) + (x.vo ? 3 : 0) + (HOOK.test(x.t) ? 2 : 0) + (END_HOOK.test(x.t) ? 2 : 0) + Math.min(2, x.words.length / 8)
+    + sig.shots.filter((sh) => sh.s < x.e && sh.e > x.s).reduce((n, sh) => Math.max(n, shotScore(sh) * 3), 0);
+  let kept = sents.slice(); const dur = () => kept.reduce((n, x) => n + (x.e - x.s) + 0.3, 0);
+  while (dur() > maxSec && kept.length > 2) {
+    let worst = 1; for (let k = 2; k < kept.length - 1; k++) if (value(kept[k]) < value(kept[worst])) worst = k;
+    kept.splice(worst, 1);
+  }
+  if (dur() > maxSec || OUTRO.test(kept[kept.length - 1].t) || FILLER.test(kept[0].t)) return null;
+  return kept;
 }
 
 /** Everything the scorer needs for one footage file. */
@@ -182,4 +209,4 @@ async function assemble({ source, info, start, end, covers, out, signal }) {
   return out;
 }
 
-module.exports = { levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
+module.exports = { condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
