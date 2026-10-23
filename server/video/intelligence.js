@@ -78,6 +78,16 @@ function snap(words, t, edge) {
 function cleanName(n) {
   return String(n || 'Clip').replace(/\.[^.]+$/, '').replace(/[\s_]*[[(_]?[A-Za-z0-9_-]{11}[\])_]?\s*$/, (m) => (/\d/.test(m) && /[A-Z]/.test(m) ? '' : m)).replace(/(\w)_s\b/g, "$1's").replace(/_/g, ' ').replace(/\s+/g, ' ').trim() || 'Clip';
 }
+/** A short on-screen hook from the clip's first sentence. */
+function hookFrom(text) { const first = String(text || '').split(/(?<=[.!?])\s/)[0].replace(/[.,!?]+$/, ''); const w = first.split(/\s+/); return w.length >= 3 ? w.slice(0, 7).join(' ') : ''; }
+/** Zooms on energy peaks and scene changes, about one every 5 seconds. */
+function zoomsFor(c, analysis) {
+  const beats = [...(analysis?.peaks || []), ...(analysis?.scenes || [])].filter((t) => t > c.start + 1.5 && t < c.end - 1.5).sort((a, b) => a - b);
+  const z = []; let last = -99;
+  for (const t of beats) if (t - last >= 4.5) { z.push({ at: Math.round((t - c.start) * 10) / 10, dur: 1.2, zoom: 1.12 }); last = t; }
+  for (let t = 2.5; t < c.end - c.start - 2 && z.length < Math.ceil((c.end - c.start) / 6); t += 6) if (!z.some((x) => Math.abs(x.at - t) < 3)) z.push({ at: t, dur: 1.2, zoom: 1.1 });
+  return z.sort((a, b) => a.at - b.at).slice(0, 10);
+}
 function overlap(a, b) { const i = Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start)); return i / Math.min(a.end - a.start, b.end - b.start); }
 
 function normalizeClips(raw, { words, duration, minSec, maxSec, exclude = [], count }) {
@@ -118,21 +128,32 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
   const minSec = Number(prod.minClipSec) || ctx.setting('production.minClipSec', 20); const maxSec = Math.max(minSec + 5, Number(prod.maxClipSec) || ctx.setting('production.maxClipSec', 59));
   const duration = asset.info?.duration || 0;
   const words = transcript?.words || [];
-  if (transcript && ai.anyConnected()) {
-    const lines = (transcript.segments || []).map((s) => `[${s.s.toFixed(1)}-${s.e.toFixed(1)}] ${s.t}`);
-    // Large transcripts are processed in windows and the best results merged.
-    const windows = []; let cur = []; let size = 0;
-    for (const l of lines) { if (size + l.length > 90000 && cur.length) { windows.push(cur); cur = []; size = 0; } cur.push(l); size += l.length + 1; }
-    if (cur.length) windows.push(cur);
-    const all = [];
-    for (const win of windows) {
-      const r = await ai.ask({
-        role: 'analysis', json: true, clientId: asset.clientId, jobId, maxTokens: 4000, system: DISCOVERY_SYSTEM,
-        prompt: `Footage: "${asset.name}" (${Math.round(duration)}s). Find the ${Math.min(count + 2, 12)} best clips, each ${minSec}-${maxSec} seconds.${exclude.length ? ` Do not reuse these ranges: ${exclude.map((e) => `${e.start}-${e.end}`).join(', ')}.` : ''}\nUse the video signals too: energy peaks often mark the strongest reactions, and starting a clip on a scene cut looks cleaner.\n${require('./analysis').summarize(analysis)}\n${vision ? `${require('./vision').summarize(vision)}\nPrefer clips whose shots are usable and well framed; avoid stretches marked UNUSABLE.\n` : ''}\nTRANSCRIPT (timestamps in seconds):\n${win.join('\n')}`,
-      });
-      all.push(...(r.json.clips || []).map((c) => ({ ...c, agent: `${r.provider}:${r.model}` })));
+  // Story windows on whole sentences, scored on what the footage shows and sounds like
+  // (voiceover, drone and strong shots, cuts, energy, a hook in the first line). Then an AI picks
+  // the best and writes the titles and hooks; without one, the scores decide.
+  if (transcript?.words?.length) {
+    const montage = require('./montage');
+    const sig = await montage.signals({ asset, transcript, vision, analysis });
+    const cands = montage.candidates(sig, { minSec, maxSec, duration, exclude, limit: 24 });
+    if (cands.length) {
+      const name = cleanName(asset.name);
+      const fallback = (c, i) => ({ start: c.start, end: c.end, score: Math.round(c.score), title: `${name} · Part ${i + 1}`.slice(0, 80), hook: hookFrom(c.text) || name.split(/\s+[-|:·]\s+/)[0].split(/\s+/).slice(0, 7).join(' '), caption: '', hashtags: [], reason: `Picked for: ${c.why.join(', ') || 'steady speech'}`, punchIns: zoomsFor(c, analysis) });
+      if (ai.anyConnected()) {
+        try {
+          const r = await ai.ask({ role: 'analysis', json: true, clientId: asset.clientId, jobId, maxTokens: 3500, system: DISCOVERY_SYSTEM,
+            prompt: `Footage: "${asset.name}" (${Math.round(duration)}s). Below are the ${Math.min(cands.length, 18)} strongest candidate moments, already measured (VO = voiceover narration, which performs best; DRONE = aerial shots). Choose the ${count} that would do best as YouTube Shorts/TikToks: a scroll-stopping first line, one clear story with a payoff, curiosity, strong visuals. Skip ones that start mid-thought or are just filler.\n\n${cands.slice(0, 18).map((c, i) => `#${i + 1} [${c.start.toFixed(1)}-${c.end.toFixed(1)}s] score ${Math.round(c.score)}${c.why.length ? ` (${c.why.join(', ')})` : ''}: "${c.text.slice(0, 420)}"`).join('\n')}\n\nReturn JSON: {"clips":[{"pick":1,"title":"<=60 chars, curiosity-driven","hook":"<=8 word on-screen headline in the speaker's own promise","caption":"1-2 sentence social caption","hashtags":["tag"],"reason":"why it will work","punchIns":[{"at":seconds_from_clip_start,"dur":1.2}],"trials":[{"name":"<=3 words","test":"what this version tests","hook":"a different opening headline","start":sec}]}]}` });
+          const chosen = []; const seen = new Set();
+          for (const x of r.json?.clips || []) {
+            const c = cands[Number(x.pick) - 1]; if (!c || seen.has(c)) continue; seen.add(c);
+            chosen.push({ ...fallback(c, chosen.length), ...x, start: c.start, end: c.end, score: Math.round(c.score), reason: `${x.reason || ''}${c.why.length ? ` (${c.why.join(', ')})` : ''}`.trim(), punchIns: Array.isArray(x.punchIns) && x.punchIns.length ? x.punchIns : zoomsFor(c, analysis), agent: `${r.provider}:${r.model}` });
+            if (chosen.length >= count) break;
+          }
+          for (const c of cands) { if (chosen.length >= count) break; if (!seen.has(c)) { seen.add(c); chosen.push(fallback(c, chosen.length)); } }
+          if (chosen.length) return { method: 'ai', clips: normalizeClips(chosen, { words, duration, minSec, maxSec, exclude, count }) };
+        } catch { /* the scores decide */ }
+      }
+      return { method: 'scored', clips: normalizeClips(cands.slice(0, count).map(fallback), { words, duration, minSec, maxSec, exclude, count }) };
     }
-    return { method: 'ai', clips: normalizeClips(all, { words, duration, minSec, maxSec, exclude, count }) };
   }
   // Heuristic fallback: densest speech windows. Clearly labelled in the UI.
   const { silences } = await ff.speechWindows(asset.path);
@@ -145,8 +166,12 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
     const silent = silences.reduce((acc, [a, b]) => acc + Math.max(0, Math.min(b, e) - Math.max(a, s)), 0);
     const peaks = (analysis?.peaks || []).filter((t) => t >= s && t <= e).length;
     const cuts = (analysis?.scenes || []).filter((t) => t >= s && t <= e).length;
-    const score = Math.round(100 * (1 - silent / (e - s)) + peaks * 8 + Math.min(cuts, 4) * 2);
-    cands.push({ start: s, end: e, score, title: '', hook: '', caption: '', hashtags: [], reason: `Heuristic (no AI connected): dense speech${peaks ? `, ${peaks} energy peak${peaks > 1 ? 's' : ''}` : ''}${cuts ? `, ${cuts} scene change${cuts > 1 ? 's' : ''}` : ''}` });
+    // Pictures count too: drone and strong shots lift a window, dark or unusable ones sink it.
+    const vs = (vision?.shots || []).filter((x) => x.s < e && x.e > s);
+    const m = require('./montage'); const look = vs.length ? vs.reduce((n, x) => n + m.shotScore(x) * (Math.min(e, x.e) - Math.max(s, x.s)), 0) / (e - s) : 0;
+    const drone = vs.some(m.isDrone);
+    const score = Math.round(100 * (1 - silent / (e - s)) + peaks * 8 + Math.min(cuts, 4) * 6 + look * 60 + (drone ? 20 : 0));
+    cands.push({ start: s, end: e, score, title: '', hook: '', caption: '', hashtags: [], reason: `Picked for ${drone ? 'drone shots, ' : ''}${look > 0.55 ? 'strong visuals, ' : ''}dense sound${peaks ? `, ${peaks} energy peak${peaks > 1 ? 's' : ''}` : ''}${cuts ? `, ${cuts} scene change${cuts > 1 ? 's' : ''}` : ''}` });
   }
   const picked = normalizeClips(cands, { words, duration, minSec, maxSec, exclude, count });
   // Still an edit, not a raw chunk: a clean title and hook from the video's name, and zooms on energy peaks and scene changes.

@@ -207,29 +207,53 @@ queue.register('render.short', {
     const outDir = paths.clientDir(client.id, 'renders', clip.id);
     const outPath = path.join(outDir, `v${n}-${slug(clip.title).slice(0, 40)}.mp4`);
     const facePath = await faceTrackFor(clip, asset, h);
+    // Visual cuts: weak or static stretches get the best shots from elsewhere (drone first) while the voice keeps going.
+    let src = { source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], facePath };
+    let covers = []; let assembled = null;
+    if (clip.visualCuts !== false && client.production?.visualCuts !== false) {
+      try {
+        const montage = require('../video/montage');
+        const vis = require('../video/vision').cached(asset.path, asset.workDir);
+        if (vis?.shots?.length) {
+          const sig = await montage.signals({ asset, transcript, vision: vis, analysis: null });
+          const avoid = ctx.store.all('clips', (c) => c.assetId === asset.id && c.id !== clip.id).map((c) => ({ start: c.start, end: c.end }));
+          covers = montage.planCovers({ start: clip.start, end: clip.end, shots: sig.shots, sents: sig.sents, avoid });
+          if (covers.length) {
+            h.progress(0.08, `Cutting in ${covers.length} shot${covers.length > 1 ? 's' : ''}`);
+            assembled = path.join(outDir, `v${n}-assembled.mp4`); fs.mkdirSync(outDir, { recursive: true });
+            await montage.assemble({ source: asset.path, info: asset.info, start: clip.start, end: clip.end, covers, out: assembled, signal: h.signal });
+            const len = clip.end - clip.start;
+            src = { source: assembled, info: await ff.probe(assembled), range: { start: 0, end: len }, words: (transcript?.words || []).filter((w) => w.e > clip.start && w.s < clip.end).map((w) => ({ ...w, s: w.s - clip.start, e: w.e - clip.start })), facePath: facePath ? facePath.map((p) => ({ ...p, t: p.t - clip.start })) : null };
+          }
+        }
+      } catch (e) { covers = []; assembled = null; h.log(`Visual cuts skipped: ${e.message}`); }
+    }
     h.progress(0.12, `Rendering v${n}`);
-    const r = await render.renderShort({ facePath, graphics: client.graphics,
-      source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook,
-      reframe: clip.reframe, focusX: clip.focusX, plan: { silenceCut: clip.silenceCut !== false, silences: transcript ? null : await pausesFor(asset), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
+    const r = await render.renderShort({ facePath: src.facePath, graphics: client.graphics,
+      source: src.source, info: src.info, range: src.range, words: src.words, style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook,
+      reframe: clip.reframe, focusX: clip.focusX, plan: { silenceCut: clip.silenceCut !== false, silences: transcript ? null : ((await pausesFor(asset)) || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
       outPath, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal,
       onProgress: (p) => { h.progress(0.12 + p * 0.7, `Rendering v${n}`); const pct = Math.round((0.12 + p * 0.7) * 100); if (pct - (ctx.store.get('clips', clip.id)?.renderProgress || 0) >= 4) { ctx.store.update('clips', clip.id, { renderProgress: pct }); events.publish('clips', { id: clip.id }); } },
     });
     // Music: decides when it plays and its mood (creepy, suspense, triumphant...), ducked under the voice.
     let musicSheet = null;
     const musicOn = client.production?.music !== false && clip.music !== 'off' && ctx.setting('production.music', true) !== false;
-    if (musicOn) {
+    const voiceGain = Number(clip.voiceVol ?? 1);
+    if (musicOn || Math.abs(voiceGain - 1) > 0.01) {
       try {
         h.progress(0.83, 'Adding music');
         const vis = require('../video/vision').cached(asset.path, asset.workDir);
-        const shots = (vis?.shots || []).filter((x) => x.e > clip.start && x.s < clip.end).map((x) => ({ ...x, s: render.remap(Math.max(x.s, clip.start), r.segments), e: render.remap(Math.min(x.e, clip.end), r.segments) })).filter((x) => x.e > x.s);
-        musicSheet = await require('../video/score').plan({ words: r.cutWords || [], shots, duration: r.duration, title: clip.title, hook: clip.hook, forced: clip.music || client.production?.musicMood || 'auto', clientId: client.id, jobId: job.id });
-        if (musicSheet?.cues.some((c) => c.file)) {
+        const off = assembled ? clip.start : 0; // the assembled file starts at the clip's start
+        const shots = (vis?.shots || []).filter((x) => x.e > clip.start && x.s < clip.end).map((x) => ({ ...x, s: render.remap(Math.max(x.s, clip.start) - off, r.segments), e: render.remap(Math.min(x.e, clip.end) - off, r.segments) })).filter((x) => x.e > x.s);
+        musicSheet = await require('../video/score').plan({ words: r.cutWords || [], shots, duration: r.duration, title: clip.title, hook: clip.hook, forced: musicOn ? clip.music || client.production?.musicMood || 'auto' : 'off', track: clip.musicTrack, clientId: client.id, jobId: job.id });
+        if (musicSheet?.cues.some((c) => c.file) || Math.abs(voiceGain - 1) > 0.01) {
           const tmp = outPath.replace(/\.mp4$/, '.music.mp4');
-          await require('../video/music').scoreVideo({ video: outPath, cues: musicSheet.cues, out: tmp, duration: r.duration, volume: Number(client.production?.musicVolume ?? ctx.setting('production.musicVolume', 0.3)) });
-          fs.renameSync(tmp, outPath);
+          const done = await require('../video/music').scoreVideo({ video: outPath, cues: musicSheet?.cues || [], out: tmp, duration: r.duration, voice: voiceGain, volume: Number(clip.musicVol ?? client.production?.musicVolume ?? ctx.setting('production.musicVolume', 0.3)) });
+          if (done) fs.renameSync(tmp, outPath);
         }
       } catch (e) { musicSheet = null; h.log(`Music skipped: ${e.message}`); }
     }
+    if (assembled) { try { fs.unlinkSync(assembled); } catch { /* in use */ } }
     h.progress(0.85, 'Quality check');
     const qc = await ff.qualityCheck(outPath, { expectWidth: 1080, expectHeight: 1920, minSec: 5, maxSec: 180 });
     const thumb = path.join(outDir, `v${n}.jpg`);
@@ -239,7 +263,7 @@ queue.register('render.short', {
     fs.writeFileSync(velo, JSON.stringify(exporters.toVelo({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, focusX: clip.focusX }), null, 1));
     const xml = path.join(outDir, `v${n}.premiere.xml`);
     fs.writeFileSync(xml, exporters.toFcpXml({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end } }));
-    const version = { n, path: outPath, thumb, duration: r.duration, renderedAt: now(), encoder: r.encoder, qc: { passed: qc.passed, issues: qc.issues }, srt: r.srtPath, velo, xml, changes: clip.pendingChanges || null, captioned: !!transcript, music: musicSheet ? { how: musicSheet.how, cues: musicSheet.cues.map((c) => ({ start: Math.round(c.start * 10) / 10, end: Math.round(c.end * 10) / 10, mood: c.mood, why: c.why || '', track: c.track || null, source: c.source || null })) } : null };
+    const version = { n, path: outPath, thumb, duration: r.duration, renderedAt: now(), encoder: r.encoder, qc: { passed: qc.passed, issues: qc.issues }, srt: r.srtPath, velo, xml, changes: clip.pendingChanges || null, captioned: !!transcript, cuts: covers.length, music: musicSheet ? { how: musicSheet.how, cues: musicSheet.cues.map((c) => ({ start: Math.round(c.start * 10) / 10, end: Math.round(c.end * 10) / 10, mood: c.mood, why: c.why || '', track: c.track || null, source: c.source || null })) } : null };
     ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), version], currentVersion: n, pendingChanges: null }));
     pipeline.afterQc(clip.id, qc);
     return { version: n, duration: r.duration, qc: qc.passed ? 'passed' : 'failed', encoder: r.encoder };
@@ -562,6 +586,7 @@ queue.register('video.reverse', {
 queue.register('setup.ollama', { title: () => 'Turn on Ollama', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setup(h) });
 queue.register('setup.vision', { title: () => 'Download free video vision (Llama vision)', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setupVision(h) });
 queue.register('setup.ffmpeg', { title: () => 'Install FFmpeg and yt-dlp', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/production').installFfmpeg(h) });
+queue.register('music.fill', { title: () => 'Download free music (all moods)', maxAttempts: 1, run: async (job, h) => ({ tracks: await require('../video/music').fillAll((f, t) => h.progress(f, t)) }) });
 queue.register('setup.whisper', { title: () => 'Install free speech-to-text (Whisper)', maxAttempts: 1, run: (job, h) => require('../setup/whisper').install(h) });
 queue.register('setup.rembg', { title: () => 'Install the free photo cut-out tool', maxAttempts: 1, run: (job, h) => require('../setup/rembg').install(h) });
 

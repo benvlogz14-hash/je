@@ -15,7 +15,7 @@ const ff = require('./ffmpeg');
 const ai = require('../integrations/ai');
 const { run } = require('../core/util');
 
-const KINDS = ['speaker', 'interview', 'crowd', 'broll', 'graphic', 'text', 'other'];
+const KINDS = ['speaker', 'interview', 'crowd', 'aerial', 'broll', 'graphic', 'text', 'other'];
 
 /** Shot boundaries from FFmpeg's scene detection, with long takes split and tiny shots merged. */
 async function shotList(file, duration, { maxShots = 48, signal } = {}) {
@@ -54,13 +54,14 @@ function cacheKey(file) { const st = fs.statSync(file); return `${st.size}:${Mat
 /**
  * Look through a video file. Returns { duration, engine, shots: [{ s, e, frame, faces, bright, motion, sharp, kind, what, quality, usable }] }.
  */
-async function look(file, { workDir, maxShots = 48, onProgress = () => {}, signal, jobId, clientId, purpose = '' } = {}) {
+async function look(file, { workDir, maxShots = 0, onProgress = () => {}, signal, jobId, clientId, purpose = '' } = {}) {
   workDir = workDir || path.dirname(file);
   const base = path.join(workDir, `${path.basename(file).replace(/\.[^.]+$/, '')}.vision`);
   const cacheFile = `${base}.json`;
   try { const c = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); if (c.key === cacheKey(file) && (c.engine !== 'measured' || !ai.canSee())) return c; } catch { /* look again */ }
   const info = await ff.probe(file);
   if (!info.hasVideo || !info.duration) return { duration: info.duration || 0, shots: [], engine: 'none' };
+  if (!maxShots) maxShots = Math.max(48, Math.min(120, Math.round(info.duration / 18))); // long videos get more shots logged
   onProgress(0.05, 'Finding the shots');
   const shots = await shotList(file, info.duration, { maxShots, signal });
   const dir = `${base}_frames`; fs.mkdirSync(dir, { recursive: true });
@@ -84,7 +85,7 @@ async function look(file, { workDir, maxShots = 48, onProgress = () => {}, signa
       try {
         const r = await ai.ask({ role: 'analysis', json: true, maxTokens: 1800, jobId, clientId, images: batch.map((x) => x.frame),
           system: 'You are a video editor logging footage. Describe each still plainly and briefly. Never guess names of people unless their name is written on screen.',
-          prompt: `${purpose ? `Purpose: ${purpose}\n` : ''}These ${batch.length} images are stills from consecutive shots of one video, in order: ${batch.map((x, k) => `image ${k + 1} = shot at ${x.s.toFixed(1)}-${x.e.toFixed(1)}s`).join('; ')}.\nReturn JSON: {"shots":[{"image":1,"what":"under 15 words: who/what is visible and where","kind":"one of ${KINDS.join(', ')} (speaker = one person talking to camera or crowd; broll = scenery, places, activity, details with no one talking)","text":"any words written on screen, else empty","quality":1-5 (5 = sharp, well lit, well framed),"usable":true or false (false for black frames, blur, logos, ads, screens of other videos)}]}` });
+          prompt: `${purpose ? `Purpose: ${purpose}\n` : ''}These ${batch.length} images are stills from consecutive shots of one video, in order: ${batch.map((x, k) => `image ${k + 1} = shot at ${x.s.toFixed(1)}-${x.e.toFixed(1)}s`).join('; ')}.\nReturn JSON: {"shots":[{"image":1,"what":"under 15 words: who/what is visible and where","kind":"one of ${KINDS.join(', ')} (speaker = one person talking to camera or crowd; aerial = drone or aerial view from above; broll = scenery, places, activity, details with no one talking)","text":"any words written on screen, else empty","quality":1-5 (5 = sharp, well lit, well framed),"usable":true or false (false for black frames, blur, logos, ads, screens of other videos)}]}` });
         for (const y of r.json?.shots || []) {
           const x = batch[Number(y.image) - 1]; if (!x) continue;
           x.what = String(y.what || '').slice(0, 120); x.kind = KINDS.includes(y.kind) ? y.kind : 'other'; x.text = String(y.text || '').slice(0, 120);

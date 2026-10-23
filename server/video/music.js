@@ -158,9 +158,14 @@ async function pick(mood = 'positive', { cc0Only = false, avoid = [] } = {}) {
  * Lay music cues under a finished video, ducked under speech.
  * cues: [{ start, end, file, vol? }] in the video's own seconds.
  */
-async function scoreVideo({ video, cues, out, duration, volume = 0.3, onProgress }) {
+async function scoreVideo({ video, cues, out, duration, volume = 0.3, voice = 1, onProgress }) {
   const list = cues.filter((c) => c.file && fs.existsSync(c.file) && c.end - c.start > 0.5);
-  if (!list.length) return null;
+  if (!list.length) {
+    if (Math.abs(voice - 1) < 0.01) return null;
+    // No music, just the voice turned up or down.
+    await ff.ffmpegWithProgress(['-i', video, '-map', '0:v', '-map', '0:a', '-c:v', 'copy', '-af', `volume=${f3(voice)},alimiter=limit=0.95`, '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', out], { totalSec: duration, onProgress });
+    return out;
+  }
   const inputs = ['-i', video]; const f = []; const XF = 0.7;
   list.forEach((c, i) => {
     inputs.push('-stream_loop', '-1', '-i', c.file);
@@ -169,7 +174,7 @@ async function scoreVideo({ video, cues, out, duration, volume = 0.3, onProgress
     f.push(`[${i + 1}:a]atrim=start=${f3(off)}:duration=${f3(len + off > 0 ? len : 0.1)},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,volume=${f3(v)},afade=t=in:d=${c.start < 0.1 ? 0.3 : XF},afade=t=out:st=${f3(Math.max(0, len - (i < list.length - 1 ? XF : 1.2)))}:d=${i < list.length - 1 ? XF : 1.2},adelay=${Math.round(c.start * 1000)}|${Math.round(c.start * 1000)}[m${i}]`);
   });
   f.push(`${list.map((_, i) => `[m${i}]`).join('')}amix=inputs=${list.length}:duration=longest:normalize=0,apad,atrim=0:${f3(duration)}[mus]`);
-  f.push('[0:a]aresample=48000,aformat=channel_layouts=stereo,asplit=2[vo][key]', '[mus][key]sidechaincompress=threshold=0.03:ratio=8:attack=15:release=450:makeup=1[duck]', '[vo][duck]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[a]');
+  f.push(`[0:a]aresample=48000,aformat=channel_layouts=stereo,volume=${f3(voice)},asplit=2[vo][key]`, '[mus][key]sidechaincompress=threshold=0.03:ratio=8:attack=15:release=450:makeup=1[duck]', '[vo][duck]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[a]');
   await ff.ffmpegWithProgress([...inputs, '-filter_complex', f.join(';'), '-map', '0:v', '-map', '[a]', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-t', f3(duration), '-movflags', '+faststart', out], { totalSec: duration, onProgress });
   return out;
 }
@@ -183,4 +188,32 @@ function overview() {
 }
 const CLIP_MOODS = ['creepy', 'suspense', 'intense', 'triumphant', 'positive', 'sad', 'chill', 'funny'];
 
-module.exports = { pick, generate, fill, library, overview, scoreVideo, recipe, libDir, MOODS, CLIP_MOODS };
+/** Every track you can pick, by mood: your folder, the free library, and Euclidean's own. id = "<where>/<mood>/<file>". */
+function catalog() {
+  return CLIP_MOODS.map((mood) => {
+    const tracks = [];
+    for (const root of ownDirs()) for (const sub of [mood, MOODS[mood].label.toLowerCase()]) {
+      try { for (const f of fs.readdirSync(path.join(root, sub)).filter((x) => AUDIO.test(x))) tracks.push({ id: `own/${mood}/${f}`, title: f.replace(/\.[^.]+$/, ''), license: 'yours', source: 'Your music folder' }); } catch { /* none */ }
+    }
+    for (const t of library(mood)) tracks.push({ id: `lib/${mood}/${path.basename(t.file)}`, title: t.title, license: t.credit ? 'CC BY (credit needed)' : 'CC0 (free for anything)', source: 'Free library', needsCredit: !!t.credit });
+    tracks.push({ id: `gen/${mood}/original`, title: `Euclidean original: ${MOODS[mood].label}`, license: 'Made by Euclidean', source: 'Made by Euclidean' });
+    return { mood, label: MOODS[mood].label, tracks };
+  });
+}
+/** The file for a catalog id (made on the spot for Euclidean's own), or null. Never leaves the music folders. */
+async function resolve(id) {
+  const [where, mood, ...rest] = String(id || '').split('/'); const name = rest.join('/');
+  if (!MOODS[mood] || !name || name.includes('..') || /[\\/]/.test(name)) return null;
+  if (where === 'gen') return generate(mood);
+  if (where === 'lib') { const f = path.join(libDir(mood), name); return fs.existsSync(f) ? f : null; }
+  if (where === 'own') for (const root of ownDirs()) for (const sub of [mood, MOODS[mood].label.toLowerCase()]) { const f = path.join(root, sub, name); if (fs.existsSync(f)) return f; }
+  return null;
+}
+/** Download free tracks for every mood (CC0 first). */
+async function fillAll(onProgress = () => {}) {
+  let n = 0;
+  for (let i = 0; i < CLIP_MOODS.length; i++) { onProgress(i / CLIP_MOODS.length, `Getting ${MOODS[CLIP_MOODS[i]].label.toLowerCase()} music`); try { n += await fill(CLIP_MOODS[i], { want: 5, cc0Only: true }); } catch { /* offline */ } }
+  return n;
+}
+
+module.exports = { pick, generate, fill, fillAll, library, overview, catalog, resolve, scoreVideo, recipe, libDir, MOODS, CLIP_MOODS };

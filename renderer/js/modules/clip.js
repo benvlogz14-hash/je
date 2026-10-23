@@ -1,5 +1,5 @@
 // Clip detail: player, versions, QC, copy, timing and every action a clip supports.
-import { html, useState, useEffect, useApi, Button, HoldButton, Seg, Toggle, Field, StatusBadge, act, navigate, Drawer, toast } from '../lib/ui.js';
+import { html, useState, useEffect, useRef, useApi, Button, HoldButton, Seg, Toggle, Field, StatusBadge, act, navigate, Drawer, toast } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { dateTime, dur, providerLabel, actorName } from '../lib/format.js';
@@ -39,7 +39,7 @@ export function ClipDetail({ clip, reload, compact }) {
     </div>
     <div class="col" style="gap:16px;min-width:0">
       <div class="row wrap"><${StatusBadge} status=${clip.status} />${clip.score != null ? html`<span class="badge outline">Score ${clip.score}</span>` : null}
-        <span class=${'badge ' + (clip.method === 'ai' ? 'lav' : '')}>${clip.method === 'ai' ? `Found by ${providerLabel(clip.agent)}` : 'Heuristic pick (no AI connected)'}</span>
+        <span class=${'badge ' + (clip.method === 'ai' ? 'lav' : '')}>${clip.method === 'ai' ? `Found by ${providerLabel(clip.agent)}` : clip.method === 'scored' ? 'Picked by the footage scores (no AI connected)' : 'Basic pick (no transcript or AI yet)'}</span>
         ${version ? html`<span class="badge outline tnum">${dur(version.duration)} · ${version.encoder}</span>` : null}${version && !version.captioned ? html`<span class="badge gold">No captions (no transcript)</span>` : null}${clip.faceTrack ? html`<span class="badge sky">Face tracked · ${Math.round(clip.faceTrack.coverage * 100)}% of frames</span>` : null}</div>
       ${clip.reason ? html`<p class="muted" style="font-size:var(--fs-sm)">${clip.reason}</p>` : null}
       ${version?.qc ? html`<div class="panel" style="padding:10px 12px"><div class="row" style="margin-bottom:${version.qc.issues.length ? '6px' : 0}"><span class=${'led ' + (version.qc.passed ? 'ok' : 'err')} /><b>${version.qc.passed ? 'Technical QC passed' : 'Technical QC failed'}</b></div>
@@ -96,18 +96,40 @@ function openFile(clip, v, kind) {
 
 const MOODS = [['auto', 'Auto'], ['off', 'No music'], ['creepy', 'Creepy'], ['suspense', 'Suspense'], ['intense', 'Intense'], ['triumphant', 'Triumphant'], ['positive', 'Uplifting'], ['sad', 'Sad'], ['chill', 'Chill'], ['funny', 'Funny']];
 const MOOD_NAME = Object.fromEntries(MOODS);
-/** Background music for this clip: Auto picks a mood for each moment; or choose one, or none. Shows what the last render used. */
+/** Sound for this clip: voice and music levels, the music mood or a specific track from the catalog, and what the last render used. */
 function ClipMusic({ clip, reload }) {
   const last = clip.versions?.[clip.versions.length - 1]; const sheet = last?.music;
-  const choose = (m) => act(async () => { await api.patch(`/api/clips/${clip.id}`, { music: m }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: m === 'off' ? 'Re-rendering without music' : `Re-rendering with ${m === 'auto' ? 'music picked for each moment' : `${MOOD_NAME[m].toLowerCase()} music`}` }).then(reload);
-  const cur = clip.music || 'auto';
-  return html`<details class="panel pad">
-    <summary><b>Music</b> <span class="faint" style="font-size:var(--fs-xs)">${cur === 'off' ? 'off for this clip' : sheet?.cues?.length ? sheet.cues.map((c) => MOOD_NAME[c.mood] || c.mood).filter((x, i, a) => a.indexOf(x) === i).join(', ') : cur === 'auto' ? 'picked to fit each moment' : MOOD_NAME[cur]}</span></summary>
-    <div class="col" style="gap:10px;margin-top:10px">
-      <div class="row wrap" style="gap:6px">${MOODS.map(([k, l]) => html`<button class="chip" style=${cur === k ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)' } : null} onClick=${() => choose(k)}>${l}</button>`)}</div>
-      ${sheet?.cues?.length ? html`<div class="col" style="gap:4px">${sheet.cues.map((c) => html`<div class="row" style="gap:8px;font-size:var(--fs-sm)"><span class="tnum faint" style="width:86px">${c.start.toFixed(1)}s to ${c.end.toFixed(1)}s</span><span class="badge ${c.mood === 'none' ? 'outline' : 'lav'}">${c.mood === 'none' ? 'Silence' : MOOD_NAME[c.mood] || c.mood}</span><span class="faint ellipsis" style="font-size:var(--fs-xs)">${c.why || c.source || ''}</span></div>`)}
-        <div class="faint" style="font-size:var(--fs-xs)">Chosen by ${sheet.how}. All music is royalty-free: your own folder, free CC0 tracks, or made by Euclidean. Pick a chip to re-render with a different mood.</div></div>`
-      : html`<div class="faint" style="font-size:var(--fs-xs)">${cur === 'off' ? 'This clip has no music.' : 'The next render adds royalty-free music that fits each moment (creepy, suspense, triumphant...). Pick a mood to force one.'}</div>`}
+  const { data: cat, reload: reloadCat } = useApi('/api/music/catalog', ['job']);
+  const { data: client } = useApi(`/api/clients/${clip.clientId}`, ['clients']);
+  const clientVol = client?.production?.musicVolume ?? 0.3;
+  const init = () => ({ music: clip.music || 'auto', track: clip.musicTrack || 'auto', voice: Math.round((clip.voiceVol ?? 1) * 100), vol: Math.round((clip.musicVol ?? clientVol) * 100), cuts: clip.visualCuts !== false });
+  const [m, setM] = useState(init);
+  useEffect(() => setM(init()), [clip.id, clip.updatedAt, client?.id]);
+  const [playing, setPlaying] = useState(null); const audio = useRef(null);
+  const preview = (id) => { if (!audio.current) audio.current = new Audio(); if (playing === id) { audio.current.pause(); setPlaying(null); return; } audio.current.src = api.url(`/api/music/play?id=${encodeURIComponent(id)}`); audio.current.volume = 0.6; audio.current.play().catch(() => {}); setPlaying(id); };
+  useEffect(() => () => audio.current?.pause(), []);
+  const apply = () => act(async () => { audio.current?.pause(); setPlaying(null); await api.patch(`/api/clips/${clip.id}`, { music: m.music, musicTrack: m.track, voiceVol: m.voice / 100, musicVol: m.vol / 100, visualCuts: m.cuts }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: 'Re-rendering with the new sound' }).then(reload);
+  const more = () => act(() => api.post('/api/music/fill', {}), { ok: 'Downloading free music for every mood (a few minutes)' }).then(reloadCat);
+  const off = m.music === 'off';
+  const dirty = JSON.stringify(m) !== JSON.stringify(init());
+  return html`<details class="panel pad" open=${dirty}>
+    <summary><b>Sound and music</b> <span class="faint" style="font-size:var(--fs-xs)">${off ? 'no music' : m.track !== 'auto' ? 'chosen track' : sheet?.cues?.length ? sheet.cues.map((c) => MOOD_NAME[c.mood] || c.mood).filter((x, i, a) => a.indexOf(x) === i).join(', ') : 'picked to fit each moment'} · voice ${m.voice}% · music ${off ? 'off' : `${m.vol}%`}</span></summary>
+    <div class="col" style="gap:12px;margin-top:10px">
+      <div class="form-grid">
+        <${Field} label=${`Voice volume: ${m.voice}%`} id="cm-voice"><input id="cm-voice" class="range" type="range" min="0" max="200" step="5" value=${m.voice} onInput=${(e) => setM({ ...m, voice: Number(e.target.value) })} /></${Field}>
+        <${Field} label=${off ? 'Music volume: off' : `Music volume: ${m.vol}%`} id="cm-vol"><input id="cm-vol" class="range" type="range" min="0" max="100" step="1" value=${m.vol} disabled=${off} onInput=${(e) => setM({ ...m, vol: Number(e.target.value) })} /></${Field}>
+      </div>
+      <div class="col" style="gap:4px"><span class="label">Mood</span><div class="row wrap" style="gap:6px">${MOODS.map(([k, l]) => html`<button class="chip" style=${m.music === k && (k === 'off' || m.track === 'auto') ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)' } : null} onClick=${() => setM({ ...m, music: k, track: 'auto' })}>${l}</button>`)}</div></div>
+      ${!off ? html`<div class="col" style="gap:4px"><span class="label">Track</span>
+        <div class="row" style="gap:6px"><select class="select grow" value=${m.track} onChange=${(e) => setM({ ...m, track: e.target.value, music: e.target.value === 'auto' ? m.music : 'auto' })} aria-label="Music track">
+          <option value="auto">Automatic: Euclidean picks a track for each moment</option>
+          ${(cat?.moods || []).map((g) => html`<optgroup label=${g.label}>${g.tracks.map((t) => html`<option value=${t.id}>${t.title} · ${t.license}</option>`)}</optgroup>`)}
+        </select>${m.track !== 'auto' ? html`<${Button} size="sm" kind="ghost" icon=${playing === m.track ? 'pause' : 'play'} onClick=${() => preview(m.track)}>${playing === m.track ? 'Stop' : 'Listen'}</${Button}>` : null}</div>
+        <div class="row wrap" style="gap:8px"><span class="faint grow" style="font-size:var(--fs-xs);min-width:220px">${(cat?.moods || []).reduce((n, g) => n + g.tracks.length, 0)} tracks, all royalty-free. To add your own, set a music folder in Politics → Package settings and put tracks in subfolders named by mood (creepy, suspense, triumphant...).</span><${Button} size="sm" kind="ghost" icon="download" onClick=${more}>Get more free music</${Button}></div></div>` : null}
+      <label class="row" style="gap:8px"><${Toggle} on=${m.cuts} onChange=${(x) => setM({ ...m, cuts: x })} label="Visual cuts" /><span style="font-size:var(--fs-sm)">Visual cuts: cut to the best shots (drone first) while the voice keeps going${last?.cuts ? ` · last render used ${last.cuts}` : ''}</span></label>
+      ${sheet?.cues?.length && m.track === 'auto' && !off ? html`<div class="col" style="gap:4px">${sheet.cues.map((c) => html`<div class="row" style="gap:8px;font-size:var(--fs-sm)"><span class="tnum faint" style="width:86px">${c.start.toFixed(1)}s to ${c.end.toFixed(1)}s</span><span class="badge ${c.mood === 'none' ? 'outline' : 'lav'}">${c.mood === 'none' ? 'Silence' : MOOD_NAME[c.mood] || c.mood}</span><span class="faint ellipsis" style="font-size:var(--fs-xs)">${c.why || c.source || ''}</span></div>`)}
+        <div class="faint" style="font-size:var(--fs-xs)">Last render: music chosen by ${sheet.how}.</div></div>` : null}
+      <div class="row"><${Button} kind="primary" icon="refresh" disabled=${!dirty} onClick=${apply}>Apply and re-render</${Button}></div>
     </div></details>`;
 }
 

@@ -76,8 +76,13 @@ async function withAi({ words, shots, duration, title, hook, clientId, jobId }) 
  * The cue sheet for one rendered clip, with a track picked for each part.
  *  words / shots on the clip's cut timeline; forced = a mood chosen by a person ('auto' / 'off' / a mood).
  */
-async function plan({ words = [], shots = [], duration, title, hook, forced = 'auto', clientId, jobId }) {
+async function plan({ words = [], shots = [], duration, title, hook, forced = 'auto', track = null, clientId, jobId }) {
   if (forced === 'off') return null;
+  // A track a person picked from the catalog plays under the whole clip.
+  if (track && track !== 'auto') {
+    const file = await music.resolve(track);
+    if (file) return { how: 'chosen by you', cues: [{ start: 0, end: duration, mood: track.split('/')[1], file, track: track.split('/').slice(2).join('/'), source: 'Chosen by you', offset: 0 }] };
+  }
   let sheet;
   if (forced && forced !== 'auto' && MOODS.includes(forced)) sheet = { cues: [{ start: 0, end: duration, mood: forced }], how: 'chosen by you' };
   else {

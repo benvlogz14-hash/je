@@ -360,6 +360,10 @@ r.patch('/api/clips/:id', (req, b, p) => {
   const c = must(ctx.store.get('clips', p.id)); const patch = {};
   for (const k of ['title', 'hook', 'caption', 'hashtags', 'start', 'end', 'reframe', 'focusX', 'silenceCut', 'retakeCut', 'punchIns', 'music']) if (b[k] !== undefined) patch[k] = b[k];
   if (b.style !== undefined) patch.style = b.style ? pipeline.sanitizeStyle(b.style) : null;
+  if (b.voiceVol !== undefined) patch.voiceVol = Math.max(0, Math.min(2, Number(b.voiceVol) || 0));
+  if (b.musicVol !== undefined) patch.musicVol = b.musicVol === null ? null : Math.max(0, Math.min(1, Number(b.musicVol) || 0));
+  if (b.musicTrack !== undefined) patch.musicTrack = b.musicTrack && /^(own|lib|gen)\/[a-z]+\/[^\\/]+$/.test(b.musicTrack) ? b.musicTrack : 'auto';
+  if (b.visualCuts !== undefined) patch.visualCuts = !!b.visualCuts;
   if (patch.music !== undefined) patch.music = ['auto', 'off', ...require('./video/music').CLIP_MOODS].includes(patch.music) ? patch.music : 'auto'; // this clip's own caption look (over the client's)
   const u = ctx.store.update('clips', c.id, patch);
   if (c.postId && (patch.title || patch.caption || patch.hashtags)) ctx.store.update('posts', c.postId, { title: u.title, caption: u.caption, hashtags: u.hashtags });
@@ -378,6 +382,10 @@ r.del('/api/clips/:id', (req, b, p) => {
   events.publish('clips', { id: c.id }); events.publish('approvals', {}); events.publish('posts', {});
   return { ok: true };
 });
+// Music catalog: every track by mood, a preview, and a button to download more free music.
+r.get('/api/music/catalog', () => ({ moods: require('./video/music').catalog() }));
+r.get('/api/music/play', async (req, res) => { const f = await require('./video/music').resolve(req.query.id); return f ? serveFile(req, res, f) : send(res, 404, { error: 'Not found' }); }, { stream: true });
+r.post('/api/music/fill', (req) => queue.enqueue('music.fill', {}, { actor: actorOf(req), dedupeKey: 'music.fill' }));
 /** Render one of the AI's trial openings (different hook and/or start) as the clip's next version. */
 r.post('/api/clips/:id/trial', (req, b, p) => {
   const c = must(ctx.store.get('clips', p.id)); const t = (c.trials || [])[Number(b.i)]; if (!t) throw new HttpError(404, 'Trial not found');
