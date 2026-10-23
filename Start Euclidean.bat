@@ -55,6 +55,19 @@ rem Desktop shortcut so next time it is one click (always pointed at this copy, 
   powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\Euclidean.lnk'); $s.TargetPath='%~dp0Start Euclidean.bat'; $s.WorkingDirectory='%~dp0'; $s.IconLocation='%~dp0build\icon.ico'; $s.WindowStyle=7; $s.Save()" >nul 2>nul
 )
 
+rem Start menu entry pointing at this copy too (an old installer copy used the same name).
+(
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:APPDATA+'\Microsoft\Windows\Start Menu\Programs\Euclidean.lnk'); $s.TargetPath='%~dp0Start Euclidean.bat'; $s.WorkingDirectory='%~dp0'; $s.IconLocation='%~dp0build\icon.ico'; $s.WindowStyle=7; $s.Save()" >nul 2>nul
+)
+
+rem Free speech-to-text: install it now if this copy doesn't have it yet.
+set "HAVEWH="
+for /f "delims=" %%F in ('dir /s /b "%~dp0tools\whisper\whisper-cli.exe" 2^>nul') do set "HAVEWH=1"
+if not defined HAVEWH if exist "%~dp0Install Extras.bat" call "%~dp0Install Extras.bat" whisper
+
+rem Close any Euclidean still running from another folder (it hides in the tray), so this copy is the one that opens.
+powershell -NoProfile -Command "Get-Process electron,Euclidean -ErrorAction SilentlyContinue | Where-Object { $_.Path -and -not $_.Path.StartsWith('%~dp0', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force" >nul 2>nul
+
 echo   Opening Euclidean...
 start "" "%~dp0node_modules\electron\dist\electron.exe" "%~dp0."
 exit /b 0

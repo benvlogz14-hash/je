@@ -61,7 +61,7 @@ function connections() {
 
 r.get('/api/bootstrap', (req) => ({
   user: { id: req.user.id, name: req.user.name, role: req.user.role },
-  version: ctx.version, settings: publicSettings(), capabilities: ctx.capabilities, connections: connections(),
+  version: ctx.version, build: (() => { try { return fs.readFileSync(path.join(__dirname, '..', 'BUILD.txt'), 'utf8').trim().slice(0, 40); } catch { return ''; } })(), settings: publicSettings(), capabilities: ctx.capabilities, connections: connections(),
   queue: queue.stats(), resources: resources.last, health: health.last ? health.last.summary : null, paused: queue.paused,
   commands: commands.catalog(), platforms: publishing.PLATFORMS, captionPresets: Object.keys(captions.PRESETS), captionDefaults: captions.DEFAULT_STYLE,
   dataDir: paths.root, electron: !!ctx.electron, lan: ctx.lanAddress || null,

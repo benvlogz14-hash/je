@@ -30,7 +30,9 @@ function adopt() {
   // Keep a working setup; re-adopt when the saved path is gone (for example after reinstalling the app).
   const cur = ctx.setting('ai.transcription.localWhisperPath', ''); const curModel = ctx.setting('ai.transcription.localWhisperModel', '');
   if (cur && fs.existsSync(cur) && curModel && fs.existsSync(curModel)) return;
-  for (const dir of [path.join(__dirname, '..', '..', 'tools', 'whisper'), path.join(require('../core/paths').root, 'tools', 'whisper')]) {
+  // Next to this copy of the app, in the data folder, or in the usual install folder (works for the installed .exe too).
+  const home = require('os').homedir();
+  for (const dir of [path.join(__dirname, '..', '..', 'tools', 'whisper'), path.join(require('../core/paths').root, 'tools', 'whisper'), path.join(home, 'Euclidean', 'tools', 'whisper'), path.join(process.env.APPDATA || home, 'Euclidean', 'data', 'tools', 'whisper')]) {
     const bin = findBin(dir); const model = path.join(dir, 'ggml-base.en.bin');
     if (bin && fs.existsSync(model)) { ctx.store.setSettings({ ai: { transcription: { localWhisperPath: bin, localWhisperModel: model } } }); return; }
   }

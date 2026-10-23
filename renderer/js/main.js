@@ -118,7 +118,7 @@ function StatusBar() {
       ${res.gpu ? html`<span class="item hide-sm" title=${res.gpu.name}><span class="faint">GPU</span><span class="tnum">${res.gpu.util}%</span></span>` : null}
       ${res.premiereOpen ? html`<span class="item"><span class="badge lav">Premiere open</span></span>` : null}
       <span class="item hide-sm faint tnum" title="Engine memory">Engine ${res.engineMb} MB${res.uiMb ? ` · UI ${res.uiMb} MB` : ''}</span>` : null}
-    <span class="item faint">v${boot?.version || ''}</span>
+    <span class="item faint" title="Which copy of Euclidean is open">v${boot?.version || ''}${boot?.build ? ` · updated ${boot.build}` : ''}</span>
   </footer>`;
 }
 
