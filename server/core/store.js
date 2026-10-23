@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const { id: makeId, now } = require('./util');
 
-const COLLECTIONS = [
+const COLLECTIONS = ['botTasks', 
   'users', 'clients', 'contacts', 'conversations', 'messages', 'jobs', 'assets', 'clips',
   'approvals', 'posts', 'prospects', 'invoices', 'expenses', 'usage', 'timelogs', 'projects',
   'workers', 'alerts', 'portalComments', 'processed',

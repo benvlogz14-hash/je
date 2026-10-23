@@ -193,6 +193,8 @@ function alreadyProcessed(key) {
  */
 function receive(m) {
   if (m.providerId && alreadyProcessed(`${m.channel}:${m.providerId}`)) return null;
+  // A GrokBot answering one of Euclidean's tasks: saved as the task's answer, not treated as a client message.
+  try { if (require('../integrations/grokbots').receive(m)) return null; } catch { /* normal message */ }
   let contact = findContactByAddress(m.channel === 'sms' ? { phone: m.from } : { emailAddr: m.from });
   if (!contact) {
     contact = ctx.store.insert('contacts', { name: m.fromName || m.from, phones: m.channel === 'sms' ? [twilio.normalize(m.from)] : [], emails: m.channel === 'email' ? [m.from] : [], role: 'unknown', clientId: null, optedOut: {}, source: `inbound ${m.channel}` });

@@ -22,6 +22,16 @@ function ensureFonts() {
   // Remove fonts we no longer ship (e.g. lighter weights that the renderer would pick instead of the one in the preview).
   for (const f of fs.readdirSync(dst)) if (f.endsWith('.ttf') && !fs.existsSync(path.join(src, f))) { try { fs.unlinkSync(path.join(dst, f)); } catch { /* in use */ } }
   for (const f of fs.readdirSync(src)) if (f.endsWith('.ttf')) { const d = path.join(dst, f); try { if (!fs.existsSync(d) || fs.statSync(d).size !== fs.statSync(path.join(src, f)).size) fs.copyFileSync(path.join(src, f), d); } catch { /* in use */ } }
+  // FFmpeg's caption renderer finds fonts through fontconfig. On Windows it often has no config file and falls back to a
+  // plain font, so give it one that lists Euclidean's fonts first (then the system fonts). All FFmpeg runs inherit it.
+  try {
+    const conf = path.join(paths.root, 'fonts.conf'); const cache = path.join(paths.root, 'fontcache'); fs.mkdirSync(cache, { recursive: true });
+    const x = (p) => p.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const sys = process.platform === 'win32' ? '<dir>WINDOWSFONTDIR</dir>' : process.platform === 'darwin' ? '<dir>/System/Library/Fonts</dir><dir>/Library/Fonts</dir>' : '<dir>/usr/share/fonts</dir>';
+    const xml = `<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig>\n  <dir>${x(dst)}</dir>\n  ${sys}\n  <cachedir>${x(cache)}</cachedir>\n</fontconfig>\n`;
+    if (!fs.existsSync(conf) || fs.readFileSync(conf, 'utf8') !== xml) fs.writeFileSync(conf, xml);
+    process.env.FONTCONFIG_FILE = conf; process.env.FONTCONFIG_PATH = paths.root;
+  } catch { /* fonts dir still passed to FFmpeg directly */ }
   return dst;
 }
 function rel(p) { return path.relative(paths.root, p).split(path.sep).join('/').replace(/'/g, ''); }
@@ -113,7 +123,7 @@ async function renderShort(o) {
   const cutWords = (o.words || []).filter((w) => w.e > start && w.s < end && segs.some(([a, b]) => w.s < b && w.e > a))
     .map((w) => ({ w: w.w, s: remap(Math.max(w.s, start), segs), e: remap(Math.min(w.e, end), segs) }));
   const assPath = path.join(outDir, path.basename(o.outPath, '.mp4') + '.ass');
-  fs.writeFileSync(assPath, captions.buildAss({ words: cutWords, range: { start: 0, end: outDur }, style: o.style, hook: o.hook, graphics: o.graphics, width: W, height: H }));
+  fs.writeFileSync(assPath, captions.buildAss({ words: cutWords, range: { start: 0, end: outDur }, style: o.style, hook: o.hook, graphics: o.graphics, width: W, height: H, keywords: o.keywords }));
   const gr = captions.resolveGraphics(o.graphics);
   const srtPath = path.join(outDir, path.basename(o.outPath, '.mp4') + '.srt');
   fs.writeFileSync(srtPath, captions.buildSrt({ words: cutWords, range: { start: 0, end: outDur }, style: o.style }));

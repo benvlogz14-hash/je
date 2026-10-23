@@ -100,7 +100,18 @@ function resolveGraphics(g) {
   return { lowerThird: { ...d.lowerThird, ...(g.lowerThird || {}) }, endCard: { ...d.endCard, ...(g.endCard || {}) }, progressBar: { ...d.progressBar, ...(g.progressBar || {}) }, logo: { ...d.logo, ...(g.logo || {}) } };
 }
 
-function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, height = 1920 }) {
+// Words that make good highlights: numbers and money, names, and longer strong words (never filler).
+const STOP = new Set('the a an and or but so to of in on at for with from by is are was were be been being it its this that these those there here they them we our you your i me my he she his her him as if then than just like really very kind sort get got going gonna want wanna about into out up down over under again also only even still yeah okay um uh well right know think thing things some any all every what when where which who whom why how can could would should will shall may might must do does did done have has had not no yes one two'.split(' '));
+function autoKeywords(words, every = 4) {
+  const norm = (w) => String(w).toLowerCase().replace(/[^a-z0-9$%']/g, '');
+  const freq = {}; for (const w of words) { const k = norm(w.w); if (k) freq[k] = (freq[k] || 0) + 1; }
+  const score = (w) => { const k = norm(w.w); const raw = String(w.w); if (!k || STOP.has(k)) return 0; let v = 0; if (/\d|\$|%/.test(raw)) v += 5; if (/^[A-Z][a-z]/.test(raw)) v += 2; if (k.length >= 6) v += 2 + Math.min(3, k.length - 6) * 0.5; if (/(est|ion|ous|ful|ive)$/.test(k)) v += 1; return v - Math.max(0, (freq[k] || 1) - 2) * 0.5; };
+  const picked = new Set();
+  for (let i = 0; i < words.length; i += every) { const win = words.slice(i, i + every); const best = win.reduce((b, w) => (score(w) > (b ? score(b) : 0) ? w : b), null); if (best && score(best) >= 2) picked.add(norm(best.w)); }
+  return [...picked];
+}
+
+function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, height = 1920, keywords = null }) {
   const gr = resolveGraphics(graphics);
   const style = resolveStyle(st);
   const align = style.position === 'upper' ? 8 : style.position === 'center' ? 5 : 2;
@@ -147,12 +158,16 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
     .map((w) => ({ w: w.w, s: Math.max(0, w.s - range.start), e: Math.min(dur, w.e - range.start) }))
     .filter((w) => clean(w.w, style));
   const hl = assColor(style.highlight);
+  // Keyword mode: chosen (or auto-picked) words stay in the highlight colour the whole time they're on screen.
+  const keyNorm = (w) => String(w).toLowerCase().replace(/[^a-z0-9$%']/g, '');
+  const keys = style.highlightMode === 'keywords' ? new Set((keywords && keywords.length ? keywords : autoKeywords(local)).map(keyNorm)) : null;
   for (const chunk of chunkWords(local, style)) {
     const cStart = chunk[0].s, cEnd = Math.max(chunk[chunk.length - 1].e, cStart + 0.25);
     const texts = chunk.map((w) => clean(w.w, style));
     if (style.highlightMode !== 'word') {
       const pop = style.animation === 'pop' ? '{\\fscx92\\fscy92\\t(0,90,\\fscx100\\fscy100)}' : '';
-      lines.push(`Dialogue: 0,${assTime(cStart)},${assTime(cEnd)},Caption,,0,0,0,,${pop}${texts.join(' ')}`);
+      const shown = keys ? texts.map((t, j) => (keys.has(keyNorm(chunk[j].w)) ? `{\\c${hl}}${t}{\\c${assColor(style.primary)}}` : t)) : texts;
+      lines.push(`Dialogue: 0,${assTime(cStart)},${assTime(cEnd)},Caption,,0,0,0,,${pop}${shown.join(' ')}`);
       continue;
     }
     for (let i = 0; i < chunk.length; i++) {
@@ -191,4 +206,4 @@ function captionChunks({ words = [], range, style: st }) {
   return chunkWords(local, style).map((c) => ({ start: c[0].s, end: Math.max(c[c.length - 1].e, c[0].s + 0.25), text: c.map((w) => clean(w.w, style)).join(' ') }));
 }
 
-module.exports = { HEAVY, DEFAULT_STYLE, DEFAULT_GRAPHICS, PRESETS, resolveStyle, resolveGraphics, buildAss, buildSrt, captionChunks, assColor };
+module.exports = { autoKeywords, HEAVY, DEFAULT_STYLE, DEFAULT_GRAPHICS, PRESETS, resolveStyle, resolveGraphics, buildAss, buildSrt, captionChunks, assColor };

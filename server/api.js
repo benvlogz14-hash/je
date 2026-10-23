@@ -364,6 +364,7 @@ r.patch('/api/clips/:id', (req, b, p) => {
   if (b.musicVol !== undefined) patch.musicVol = b.musicVol === null ? null : Math.max(0, Math.min(1, Number(b.musicVol) || 0));
   if (b.musicTrack !== undefined) patch.musicTrack = b.musicTrack && /^(own|lib|gen)\/[a-z]+\/[^\\/]+$/.test(b.musicTrack) ? b.musicTrack : 'auto';
   if (b.visualCuts !== undefined) patch.visualCuts = !!b.visualCuts;
+  if (b.keywords !== undefined) patch.keywords = Array.isArray(b.keywords) ? [...new Set(b.keywords.map((w) => String(w).toLowerCase().replace(/[^a-z0-9$%']/g, '')).filter(Boolean))].slice(0, 300) : null;
   if (patch.music !== undefined) patch.music = ['auto', 'off', ...require('./video/music').CLIP_MOODS].includes(patch.music) ? patch.music : 'auto'; // this clip's own caption look (over the client's)
   const u = ctx.store.update('clips', c.id, patch);
   if (c.postId && (patch.title || patch.caption || patch.hashtags)) ctx.store.update('posts', c.postId, { title: u.title, caption: u.caption, hashtags: u.hashtags });
@@ -380,6 +381,12 @@ r.get('/api/clips/:id/lines', (req, b, p) => {
   for (const w of words) { if (!cur || cur.n >= 9 || w.s - cur.e > 0.8) { if (cur) lines.push(cur); cur = { s: w.s, e: w.e, text: w.w, n: 1 }; } else { cur.e = w.e; cur.text += ` ${w.w}`; cur.n++; } if (/[.!?]$/.test(w.w)) { lines.push(cur); cur = null; } }
   if (cur) lines.push(cur);
   return { lines: lines.map((l) => ({ ...l, s: Math.round(l.s * 1000) / 1000, e: Math.round(l.e * 1000) / 1000 })) };
+});
+// Auto-picked highlight words for a clip (numbers, names, strong words).
+r.get('/api/clips/:id/keywords/auto', (req, b, p) => {
+  const c = must(ctx.store.get('clips', p.id)); const a = must(ctx.store.get('assets', c.assetId));
+  let t = null; try { t = JSON.parse(fs.readFileSync(transcriptFile(a), 'utf8')); } catch { return { keywords: [] }; }
+  return { keywords: require('./video/captions').autoKeywords((t.words || []).filter((w) => w.e > c.start && w.s < c.end)) };
 });
 r.put('/api/clips/:id/lines', (req, b, p) => {
   const c = must(ctx.store.get('clips', p.id)); const a = must(ctx.store.get('assets', c.assetId));
@@ -408,6 +415,11 @@ r.del('/api/clips/:id', (req, b, p) => {
   events.publish('clips', { id: c.id }); events.publish('approvals', {}); events.publish('posts', {});
   return { ok: true };
 });
+// GrokBots by email: your bots, tasks sent to them and their answers.
+r.get('/api/grokbots', () => ({ bots: require('./integrations/grokbots').bots(), tasks: ctx.store.all('botTasks').slice(-50).reverse(), emailReady: require('./integrations/email').configured() }));
+r.put('/api/grokbots', (req, b) => { const list = (Array.isArray(b.bots) ? b.bots : []).map((x) => ({ name: String(x.name || '').slice(0, 40) || 'GrokBot', email: String(x.email || '').trim().slice(0, 120), role: String(x.role || '').slice(0, 80) })).filter((x) => /.+@.+\..+/.test(x.email)).slice(0, 12); ctx.store.setSettings({ grokbots: { list } }); return { bots: list }; }, { roles: OWNER });
+r.post('/api/grokbots/task', (req, b) => require('./integrations/grokbots').send({ bot: b.bot, task: String(b.task || '').trim() || (() => { throw new HttpError(400, 'Write the task first.'); })(), title: b.title, actor: actorOf(req) }));
+r.del('/api/grokbots/task/:id', (req, b, p) => { ctx.store.remove('botTasks', p.id); return { ok: true }; });
 // Music catalog: every track by mood, a preview, and a button to download more free music.
 r.get('/api/music/catalog', () => ({ moods: require('./video/music').catalog() }));
 r.get('/api/music/play', async (req, res) => { const f = await require('./video/music').resolve(req.query.id); return f ? serveFile(req, res, f) : send(res, 404, { error: 'Not found' }); }, { stream: true });

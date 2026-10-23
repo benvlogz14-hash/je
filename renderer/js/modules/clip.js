@@ -96,6 +96,20 @@ function openFile(clip, v, kind) {
   const a = document.createElement('a'); a.href = url; a.download = ''; document.body.appendChild(a); a.click(); a.remove();
 }
 
+/** Click caption words to highlight them, or let Euclidean pick (numbers, names, strong words). Empty = auto. */
+function KeywordPicker({ clip, value, onChange, colour }) {
+  const [lines, setLines] = useState(null);
+  useEffect(() => { api.get(`/api/clips/${clip.id}/lines`).then((r) => setLines(r.lines)).catch(() => setLines([])); }, [clip.id]);
+  const norm = (w) => String(w).toLowerCase().replace(/[^a-z0-9$%']/g, '');
+  const on = new Set(value.map(norm));
+  const toggle = (w) => { const k = norm(w); if (!k) return; onChange(on.has(k) ? value.filter((x) => norm(x) !== k) : [...value, k]); };
+  const auto = () => api.get(`/api/clips/${clip.id}/keywords/auto`).then((r) => onChange(r.keywords || []));
+  return html`<div class="col" style="gap:6px">
+    <div class="row wrap" style="gap:6px"><${Button} size="sm" kind="soft" onClick=${auto}>Auto-pick keywords</${Button}><${Button} size="sm" kind="ghost" onClick=${() => onChange([])}>Clear</${Button}><span class="faint" style="font-size:var(--fs-xs)">${value.length ? `${value.length} highlighted. Click words to add or remove.` : 'None chosen: Euclidean picks them when it renders. Click words to choose your own.'}</span></div>
+    ${lines == null ? html`<span class="faint">Loading words…</span>` : !lines.length ? html`<span class="faint" style="font-size:var(--fs-xs)">No caption words yet (needs a transcript).</span>` : html`<div style="max-height:180px;overflow:auto;line-height:2;font-size:var(--fs-sm)">${lines.flatMap((l) => l.text.split(/\s+/)).map((w) => html`<button class="chip" style=${{ margin: '0 4px 4px 0', height: '24px', ...(on.has(norm(w)) ? { background: colour, color: '#111', borderColor: colour } : {}) }} onClick=${() => toggle(w)}>${w}</button>`)}</div>`}
+  </div>`;
+}
+
 /** Fix what the captions say: each line is editable; the timing is kept (or spread evenly when the word count changes). */
 function CaptionWords({ clip, reload }) {
   const [open, setOpen] = useState(false); const [lines, setLines] = useState(null); const [orig, setOrig] = useState('');
@@ -174,7 +188,9 @@ function CaptionStyle({ clip, reload }) {
   const set = (k) => (e) => setS({ ...s, [k]: e?.target ? (e.target.type === 'range' || e.target.type === 'number' ? Number(e.target.value) : e.target.value) : e });
   const [hookText, setHookText] = useState(clip.hook || '');
   useEffect(() => setHookText(clip.hook || ''), [clip.id, clip.hook]);
-  const saveHook = async () => { if (hookText !== (clip.hook || '')) await api.patch(`/api/clips/${clip.id}`, { hook: hookText }); };
+  const [kw, setKw] = useState(clip.keywords || []);
+  useEffect(() => setKw(clip.keywords || []), [clip.id, JSON.stringify(clip.keywords || [])]);
+  const saveHook = async () => { const patch = {}; if (hookText !== (clip.hook || '')) patch.hook = hookText; if (JSON.stringify(kw) !== JSON.stringify(clip.keywords || [])) patch.keywords = kw; if (Object.keys(patch).length) await api.patch(`/api/clips/${clip.id}`, patch); };
   const thisClip = () => act(async () => { await saveHook(); await api.patch(`/api/clips/${clip.id}`, { style: s }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: 'Saved; re-rendering with the new captions' }).then(reload);
   const allClips = () => act(async () => { await saveHook(); await api.patch(`/api/clients/${clip.clientId}`, { style: s }); await api.patch(`/api/clips/${clip.id}`, { style: null }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: `Saved for every ${client?.name || 'client'} clip; re-rendering this one` }).then(reload);
   const reset = () => act(async () => { await api.patch(`/api/clips/${clip.id}`, { style: null }); }, { ok: 'Back to the client style' }).then(reload);
@@ -215,8 +231,10 @@ function CaptionStyle({ clip, reload }) {
           </div>
           <div class="row wrap" style="gap:12px">
             <div class="col" style="gap:4px"><span class="label">Position</span><${Seg} value=${s.position} onChange=${set('position')} options=${POS} /></div>
-            ${flag(!!s.box, set('box'), 'Background box')}${flag(!!s.uppercase, set('uppercase'), 'CAPITALS')}${flag(s.animation === 'pop', (x) => setS({ ...s, animation: x ? 'pop' : 'none' }), 'Pop-in')}${flag(s.highlightMode === 'word', (x) => setS({ ...s, highlightMode: x ? 'word' : 'none' }), 'Highlight spoken word')}
+            ${flag(!!s.box, set('box'), 'Background box')}${flag(!!s.uppercase, set('uppercase'), 'CAPITALS')}${flag(s.animation === 'pop', (x) => setS({ ...s, animation: x ? 'pop' : 'none' }), 'Pop-in')}
           </div>
+          <div class="col" style="gap:4px"><span class="label">Highlight</span><${Seg} value=${s.highlightMode || 'word'} onChange=${set('highlightMode')} options=${[{ value: 'word', label: 'Spoken word' }, { value: 'keywords', label: 'Keywords' }, { value: 'none', label: 'Off' }]} /></div>
+          ${s.highlightMode === 'keywords' ? html`<${KeywordPicker} clip=${clip} value=${kw} onChange=${setKw} colour=${s.highlight} />` : null}
           ${colours([['primary', 'Text'], ['highlight', 'Highlight'], ['outline', s.box ? 'Box colour' : 'Outline']])}
         </div>
 

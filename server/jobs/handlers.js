@@ -231,7 +231,7 @@ queue.register('render.short', {
     }
     h.progress(0.12, `Rendering v${n}`);
     const r = await render.renderShort({ facePath: src.facePath, graphics: client.graphics,
-      source: src.source, info: src.info, range: src.range, words: src.words, style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook,
+      source: src.source, info: src.info, range: src.range, words: src.words, style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, keywords: clip.keywords || null,
       reframe: clip.reframe, focusX: clip.focusX, plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, silences: transcript ? null : ((await pausesFor(asset)) || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
       outPath, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal,
       onProgress: (p) => { h.progress(0.12 + p * 0.7, `Rendering v${n}`); const pct = Math.round((0.12 + p * 0.7) * 100); if (pct - (ctx.store.get('clips', clip.id)?.renderProgress || 0) >= 4) { ctx.store.update('clips', clip.id, { renderProgress: pct }); events.publish('clips', { id: clip.id }); } },
