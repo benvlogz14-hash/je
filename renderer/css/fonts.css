@@ -10,3 +10,53 @@
 @font-face { font-family: "Bowlby One"; src: url("../assets/fonts/BowlbyOne-Regular.ttf") format("truetype"); font-display: swap; }
 @font-face { font-family: "Bungee"; src: url("../assets/fonts/Bungee-Regular.ttf") format("truetype"); font-display: swap; }
 @font-face { font-family: "Chewy"; src: url("../assets/fonts/Chewy-Regular.ttf") format("truetype"); font-display: swap; }
+
+/* More caption fonts (SIL OFL / Apache 2.0, licences in server/video/fonts/licenses). */
+@font-face { font-family: "Abril Fatface"; src: url("../assets/fonts/AbrilFatface-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Alfa Slab One"; src: url("../assets/fonts/AlfaSlabOne-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Archivo Black"; src: url("../assets/fonts/ArchivoBlack-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Audiowide"; src: url("../assets/fonts/Audiowide-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Barlow Condensed"; src: url("../assets/fonts/BarlowCondensed-Black.ttf") format("truetype"); font-weight: 900; font-display: swap; }
+@font-face { font-family: "Bebas Neue"; src: url("../assets/fonts/BebasNeue-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Black Ops One"; src: url("../assets/fonts/BlackOpsOne-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Bowlby One SC"; src: url("../assets/fonts/BowlbyOneSC-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Bungee Shade"; src: url("../assets/fonts/BungeeShade-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Caveat Brush"; src: url("../assets/fonts/CaveatBrush-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Changa One"; src: url("../assets/fonts/ChangaOne-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Creepster"; src: url("../assets/fonts/Creepster-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "DM Serif Display"; src: url("../assets/fonts/DMSerifDisplay-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Dela Gothic One"; src: url("../assets/fonts/DelaGothicOne-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Eater"; src: url("../assets/fonts/Eater-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Frijole"; src: url("../assets/fonts/Frijole-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Gloria Hallelujah"; src: url("../assets/fonts/GloriaHallelujah.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Gravitas One"; src: url("../assets/fonts/GravitasOne.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Kalam"; src: url("../assets/fonts/Kalam-Bold.ttf") format("truetype"); font-weight: 800; font-display: swap; }
+@font-face { font-family: "Kanit"; src: url("../assets/fonts/Kanit-Black.ttf") format("truetype"); font-weight: 900; font-display: swap; }
+@font-face { font-family: "Knewave"; src: url("../assets/fonts/Knewave-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Lobster"; src: url("../assets/fonts/Lobster-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Metal Mania"; src: url("../assets/fonts/MetalMania-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Monoton"; src: url("../assets/fonts/Monoton-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Nosifer"; src: url("../assets/fonts/Nosifer-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Pacifico"; src: url("../assets/fonts/Pacifico-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Passion One"; src: url("../assets/fonts/PassionOne-Black.ttf") format("truetype"); font-weight: 900; font-display: swap; }
+@font-face { font-family: "Paytone One"; src: url("../assets/fonts/PaytoneOne-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Permanent Marker"; src: url("../assets/fonts/PermanentMarker-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Playfair Display SC"; src: url("../assets/fonts/PlayfairDisplaySC-Black.ttf") format("truetype"); font-weight: 900; font-display: swap; }
+@font-face { font-family: "Poppins"; src: url("../assets/fonts/Poppins-Black.ttf") format("truetype"); font-weight: 900; font-display: swap; }
+@font-face { font-family: "Poppins"; src: url("../assets/fonts/Poppins-ExtraBold.ttf") format("truetype"); font-weight: 900; font-display: swap; }
+@font-face { font-family: "Press Start 2P"; src: url("../assets/fonts/PressStart2P-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Racing Sans One"; src: url("../assets/fonts/RacingSansOne-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Rammetto One"; src: url("../assets/fonts/RammettoOne-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Righteous"; src: url("../assets/fonts/Righteous-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Rock Salt"; src: url("../assets/fonts/RockSalt-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Rubik Glitch"; src: url("../assets/fonts/RubikGlitch-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Rubik Mono One"; src: url("../assets/fonts/RubikMonoOne-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Rubik Wet Paint"; src: url("../assets/fonts/RubikWetPaint-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Russo One"; src: url("../assets/fonts/RussoOne-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Shrikhand"; src: url("../assets/fonts/Shrikhand-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Sigmar One"; src: url("../assets/fonts/SigmarOne-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Silkscreen"; src: url("../assets/fonts/Silkscreen-Bold.ttf") format("truetype"); font-weight: 800; font-display: swap; }
+@font-face { font-family: "Special Elite"; src: url("../assets/fonts/SpecialElite-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Staatliches"; src: url("../assets/fonts/Staatliches-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Titillium Web"; src: url("../assets/fonts/TitilliumWeb-Black.ttf") format("truetype"); font-weight: 900; font-display: swap; }
+@font-face { font-family: "VT323"; src: url("../assets/fonts/VT323-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }

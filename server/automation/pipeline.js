@@ -194,7 +194,7 @@ function remember(clientId, items, { source = 'feedback', actor = 'system' } = {
   return added;
 }
 
-const STYLE_KEYS = { hookSeconds: 'n', preset: 's', font: 's', size: 'n', uppercase: 'b', wordsPerLine: 'n', primary: 'c', highlight: 'c', outline: 'c', outlineWidth: 'n', position: 's', animation: 's', highlightMode: 's', box: 'b', hook: 'b', hookBg: 'c', hookColor: 'c', punctuation: 'b', shadow: 'n', hookFont: 's', hookSize: 'n', hookPosition: 's', hookBox: 'b', hookOutline: 'c', hookOutlineWidth: 'n', hookTilt: 'n', hookAnim: 's' };
+const STYLE_KEYS = { hookSeconds: 'n', preset: 's', font: 's', size: 'n', uppercase: 'b', wordsPerLine: 'n', primary: 'c', highlight: 'c', outline: 'c', outlineWidth: 'n', position: 's', animation: 's', highlightMode: 's', box: 'b', hook: 'b', hookBg: 'c', hookColor: 'c', punctuation: 'b', shadow: 'n', hookFont: 's', hookSize: 'n', hookPosition: 's', hookBox: 'b', hookOutline: 'c', hookOutlineWidth: 'n', hookTilt: 'n', hookAnim: 's', hookText: 't', rotate: 'n' };
 function sanitizeStyle(s) {
   const o = {};
   for (const [k, t] of Object.entries(STYLE_KEYS)) {
@@ -204,14 +204,16 @@ function sanitizeStyle(s) {
     else if (t === 'b') o[k] = !!v;
     else if (t === 'c' && /^#[0-9a-f]{6}$/i.test(v)) o[k] = v;
     else if (t === 's' && typeof v === 'string') o[k] = v.slice(0, 40);
+    else if (t === 't' && typeof v === 'string') o[k] = v.replace(/[{}\\]/g, '').slice(0, 160);
   }
   if (o.wordsPerLine) o.wordsPerLine = Math.max(1, Math.min(8, Math.round(o.wordsPerLine)));
-  if (o.size) o.size = Math.max(30, Math.min(160, o.size));
+  if (o.size) o.size = Math.max(30, Math.min(220, o.size));
   if (o.hookSeconds != null) o.hookSeconds = Math.max(0, Math.min(15, o.hookSeconds));
   if (o.outlineWidth != null) o.outlineWidth = Math.max(0, Math.min(30, o.outlineWidth));
-  if (o.hookSize) o.hookSize = Math.max(30, Math.min(160, o.hookSize));
+  if (o.hookSize) o.hookSize = Math.max(30, Math.min(220, o.hookSize));
   if (o.hookOutlineWidth != null) o.hookOutlineWidth = Math.max(0, Math.min(30, o.hookOutlineWidth));
-  if (o.hookTilt != null) o.hookTilt = Math.max(-15, Math.min(15, o.hookTilt));
+  if (o.hookTilt != null) o.hookTilt = Math.max(-30, Math.min(30, o.hookTilt));
+  if (o.rotate != null) o.rotate = Math.max(-30, Math.min(30, o.rotate));
   if (o.shadow != null) o.shadow = Math.max(0, Math.min(12, o.shadow));
   return o;
 }

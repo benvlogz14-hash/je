@@ -1,6 +1,10 @@
 'use strict';
 /** Caption generation: word-timed ASS subtitles (with active-word highlight) and SRT for Premiere. */
 
+// Fonts with a real bold/black weight; the others are drawn at their own weight (libass would fake-bold them).
+const HEAVY = new Set(['Montserrat', 'Poppins', 'Kanit', 'Barlow Condensed', 'Titillium Web', 'Passion One', 'Playfair Display SC', 'Kalam', 'Silkscreen', 'Arial', 'Verdana', 'Georgia', 'Trebuchet MS', 'Comic Sans MS']);
+const boldFlag = (font, want = true) => (want && HEAVY.has(font) ? -1 : 0);
+
 const DEFAULT_STYLE = {
   preset: 'clean-pop',
   font: 'Montserrat',
@@ -31,6 +35,8 @@ const DEFAULT_STYLE = {
   hookOutlineWidth: 8,
   hookTilt: 0,           // degrees, a little tilt reads as playful
   hookAnim: 'fade',      // 'fade' | 'pop'
+  hookText: '',          // what the banner says; empty = the clip's hook
+  rotate: 0,             // caption tilt in degrees
   punctuation: false,    // keep commas/periods in captions
 };
 
@@ -105,13 +111,13 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
   const hookAlign = style.hookPosition === 'lower' ? 2 : style.hookPosition === 'center' ? 5 : 8;
   const hookMarginV = style.hookPosition === 'center' ? 0 : style.hookPosition === 'lower' ? Math.round(height * 0.2) : Math.round(height * 0.11);
   const hookLook = style.hookBox
-    ? `${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookBg)},${assColor(style.hookBg)},-1,0,0,0,100,100,0,${-(style.hookTilt || 0)},3,18,0`
-    : `${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookOutline)},${assColor('#000000', 0x70)},-1,0,0,0,100,100,1,${-(style.hookTilt || 0)},1,${style.hookOutlineWidth},${style.shadow || 0}`;
+    ? `${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookBg)},${assColor(style.hookBg)},${boldFlag(hookFont)},0,0,0,100,100,0,${-(style.hookTilt || 0)},3,18,0`
+    : `${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookOutline)},${assColor('#000000', 0x70)},${boldFlag(hookFont)},0,0,0,100,100,1,${-(style.hookTilt || 0)},1,${style.hookOutlineWidth},${style.shadow || 0}`;
   const lines = [
     '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${width}`, `PlayResY: ${height}`, 'WrapStyle: 2', 'ScaledBorderAndShadow: yes', 'YCbCr Matrix: TV.709', '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    `Style: Caption,${font},${style.size},${assColor(style.primary)},${assColor(style.highlight)},${assColor(style.outline)},${assColor('#000000', 0x80)},${style.bold ? -1 : 0},0,0,0,100,100,1,0,${borderStyle},${style.outlineWidth},${style.shadow},${align},80,80,${marginV},1`,
+    `Style: Caption,${font},${style.size},${assColor(style.primary)},${assColor(style.highlight)},${assColor(style.outline)},${assColor('#000000', 0x80)},${boldFlag(font, style.bold)},0,0,0,100,100,1,${-(style.rotate || 0)},${borderStyle},${style.outlineWidth},${style.shadow},${align},80,80,${marginV},1`,
     `Style: Hook,${hookFont},${hookSize},${hookLook},${hookAlign},90,90,${hookMarginV},1`,
     `Style: LowerName,${font},${Math.round(height * 0.03)},${assColor('#FFFFFF')},${assColor('#FFFFFF')},${assColor('#15181B', 0x20)},${assColor('#15181B', 0x20)},-1,0,0,0,100,100,0,0,3,16,0,7,0,0,0,1`,
     `Style: LowerTitle,${font},${Math.round(height * 0.021)},${assColor('#15181B')},${assColor('#15181B')},${assColor(style.highlight)},${assColor(style.highlight)},-1,0,0,0,100,100,0,0,3,12,0,7,0,0,0,1`,
@@ -130,8 +136,9 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
   if (gr.endCard.enabled && gr.endCard.text && dur > gr.endCard.seconds + 2) {
     lines.push(`Dialogue: 3,${assTime(dur - gr.endCard.seconds)},${assTime(dur)},EndCard,,0,0,0,,{\\pos(${width / 2},${Math.round(height * 0.42)})\\fad(220,0)\\fscx90\\fscy90\\t(0,180,\\fscx100\\fscy100)}${esc(gr.endCard.text)}`);
   }
+  hook = String(style.hookText || '').trim() || hook;
   if (hook && style.hook) {
-    const ht = String(hook).replace(/[{}\\]/g, '').trim();
+    const ht = String(hook).replace(/[{}\\]/g, '').trim().replace(/\s*\n\s*/g, '\\N');
     const anim = style.hookAnim === 'pop' ? '\\fad(0,180)\\fscx20\\fscy20\\t(0,140,\\fscx115\\fscy115)\\t(140,240,\\fscx100\\fscy100)' : '\\fad(120,180)';
     lines.push(`Dialogue: 1,${assTime(0)},${assTime(Math.min(style.hookSeconds, dur))},Hook,,0,0,0,,{${anim}}${style.uppercase ? ht.toUpperCase() : ht}`);
   }
@@ -183,4 +190,4 @@ function captionChunks({ words = [], range, style: st }) {
   return chunkWords(local, style).map((c) => ({ start: c[0].s, end: Math.max(c[c.length - 1].e, c[0].s + 0.25), text: c.map((w) => clean(w.w, style)).join(' ') }));
 }
 
-module.exports = { DEFAULT_STYLE, DEFAULT_GRAPHICS, PRESETS, resolveStyle, resolveGraphics, buildAss, buildSrt, captionChunks, assColor };
+module.exports = { HEAVY, DEFAULT_STYLE, DEFAULT_GRAPHICS, PRESETS, resolveStyle, resolveGraphics, buildAss, buildSrt, captionChunks, assColor };

@@ -370,6 +370,32 @@ r.patch('/api/clips/:id', (req, b, p) => {
   events.publish('clips', { id: c.id });
   return clipView(u);
 });
+// Caption words for one clip, as editable lines; saving rewrites the footage transcript in that range (timing kept or spread evenly).
+const transcriptFile = (a) => path.join(a.workDir, `${a.id}.transcript.json`);
+r.get('/api/clips/:id/lines', (req, b, p) => {
+  const c = must(ctx.store.get('clips', p.id)); const a = must(ctx.store.get('assets', c.assetId));
+  let t = null; try { t = JSON.parse(fs.readFileSync(transcriptFile(a), 'utf8')); } catch { return { lines: [] }; }
+  const words = (t.words || []).filter((w) => w.e > c.start && w.s < c.end);
+  const lines = []; let cur = null;
+  for (const w of words) { if (!cur || cur.n >= 9 || w.s - cur.e > 0.8) { if (cur) lines.push(cur); cur = { s: w.s, e: w.e, text: w.w, n: 1 }; } else { cur.e = w.e; cur.text += ` ${w.w}`; cur.n++; } if (/[.!?]$/.test(w.w)) { lines.push(cur); cur = null; } }
+  if (cur) lines.push(cur);
+  return { lines: lines.map((l) => ({ ...l, s: Math.round(l.s * 1000) / 1000, e: Math.round(l.e * 1000) / 1000 })) };
+});
+r.put('/api/clips/:id/lines', (req, b, p) => {
+  const c = must(ctx.store.get('clips', p.id)); const a = must(ctx.store.get('assets', c.assetId));
+  const f = transcriptFile(a); let t; try { t = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { throw new HttpError(400, 'This video has no transcript yet.'); }
+  let words = t.words || []; let changed = 0;
+  for (const l of (Array.isArray(b.lines) ? b.lines : []).slice(0, 400)) {
+    const s = Number(l.s); const e = Number(l.e); if (!(e > s) || s < c.start - 1 || e > c.end + 1) continue;
+    const idx = words.map((w, i) => (w.s >= s - 0.01 && w.e <= e + 0.01 ? i : -1)).filter((i) => i >= 0); if (!idx.length) continue;
+    const old = idx.map((i) => words[i]); const toks = String(l.text || '').replace(/[{}\\]/g, '').split(/\s+/).filter(Boolean).slice(0, 60);
+    if (toks.join(' ') === old.map((w) => w.w).join(' ')) continue;
+    const fresh = toks.length === old.length ? toks.map((w, i) => ({ ...old[i], w })) : toks.map((w, i) => ({ w, s: s + ((e - s) * i) / toks.length, e: s + ((e - s) * (i + 1)) / toks.length }));
+    words = [...words.slice(0, idx[0]), ...fresh, ...words.slice(idx[idx.length - 1] + 1)]; changed++;
+  }
+  if (changed) { t.words = words; t.text = words.map((w) => w.w).join(' '); fs.writeFileSync(f, JSON.stringify(t)); audit.log(actorOf(req), 'transcript.edited', { assetId: a.id, clipId: c.id, lines: changed }); }
+  return { ok: true, changed };
+});
 // Delete a clip: stops its renders, removes its approvals, unpublished post and rendered files.
 r.del('/api/clips/:id', (req, b, p) => {
   const c = must(ctx.store.get('clips', p.id));

@@ -2,6 +2,7 @@
 import { html, useState, useEffect, useRef, useApi, Button, HoldButton, Seg, Toggle, Field, StatusBadge, act, navigate, Drawer, toast } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
+import { FONT_GROUPS, weightOf } from '../lib/fonts.js';
 import { dateTime, dur, providerLabel, actorName } from '../lib/format.js';
 
 export function ClipPlayer({ clip, version }) {
@@ -70,6 +71,7 @@ export function ClipDetail({ clip, reload, compact }) {
         <div class="col" style="gap:5px"><span class="label">Jump cuts</span><div class="row"><${Toggle} on=${f.silenceCut} onChange=${(x) => setF({ ...f, silenceCut: x })} label="Remove pauses" /><span class="muted" style="font-size:var(--fs-sm)">Remove pauses</span></div></div>
       </div>
       <${CaptionStyle} clip=${clip} reload=${reload} />
+      <${CaptionWords} clip=${clip} reload=${reload} />
       <${ClipMusic} clip=${clip} reload=${reload} />
       <div class="row wrap">
         <${Button} kind="primary" icon="refresh" disabled=${!dirty} onClick=${() => save(true)}>Save and re-render</${Button}>
@@ -92,6 +94,23 @@ function openFile(clip, v, kind) {
   const url = api.url(`/api/clips/${clip.id}/download/${kind}?v=${v}`);
   if (api.demo) return toast('Downloads are available in the desktop app.', { kind: 'info' });
   const a = document.createElement('a'); a.href = url; a.download = ''; document.body.appendChild(a); a.click(); a.remove();
+}
+
+/** Fix what the captions say: each line is editable; the timing is kept (or spread evenly when the word count changes). */
+function CaptionWords({ clip, reload }) {
+  const [open, setOpen] = useState(false); const [lines, setLines] = useState(null); const [orig, setOrig] = useState('');
+  const load = () => api.get(`/api/clips/${clip.id}/lines`).then((r) => { setLines(r.lines); setOrig(JSON.stringify(r.lines)); }).catch(() => setLines([]));
+  useEffect(() => { if (open) load(); }, [open, clip.id, clip.updatedAt]);
+  const dirty = lines && JSON.stringify(lines) !== orig;
+  const save = () => act(async () => { await api.put(`/api/clips/${clip.id}/lines`, { lines }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: 'Captions fixed; re-rendering' }).then(() => { load(); reload(); });
+  return html`<details class="panel pad" onToggle=${(e) => setOpen(e.target.open)}>
+    <summary><b>Edit caption words</b> <span class="faint" style="font-size:var(--fs-xs)">fix any word the captions got wrong</span></summary>
+    ${open ? html`<div class="col" style="gap:8px;margin-top:10px">
+      ${lines == null ? html`<span class="faint">Loading…</span>` : !lines.length ? html`<span class="faint" style="font-size:var(--fs-sm)">No captions yet: this video needs a transcript first (press "Make transcript" on the video in the Footage list).</span>`
+        : lines.map((l, i) => html`<div class="row" style="gap:8px;align-items:flex-start"><span class="tnum faint" style="width:52px;padding-top:7px;font-size:var(--fs-xs)">${(l.s - clip.start).toFixed(1)}s</span><textarea class="textarea grow" rows="1" style="min-height:34px" value=${l.text} onInput=${(e) => setLines(lines.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))} /></div>`)}
+      ${lines?.length ? html`<div class="row" style="gap:8px"><${Button} kind="primary" icon="refresh" disabled=${!dirty} onClick=${save}>Save words and re-render</${Button}><span class="faint" style="font-size:var(--fs-xs)">Fixes the transcript for this video, so other clips from it get the fix too.</span></div>` : null}
+    </div>` : null}
+  </details>`;
 }
 
 const MOODS = [['auto', 'Auto'], ['off', 'No music'], ['creepy', 'Creepy'], ['suspense', 'Suspense'], ['intense', 'Intense'], ['triumphant', 'Triumphant'], ['positive', 'Uplifting'], ['sad', 'Sad'], ['chill', 'Chill'], ['funny', 'Funny']];
@@ -133,8 +152,7 @@ function ClipMusic({ clip, reload }) {
     </div></details>`;
 }
 
-const FONTS = ['Luckiest Guy', 'Bangers', 'Titan One', 'Lilita One', 'Bowlby One', 'Bungee', 'Chewy', 'Montserrat', 'Anton', 'Arial Black', 'Impact', 'Arial', 'Verdana', 'Georgia', 'Trebuchet MS', 'Comic Sans MS'];
-const STYLE_DEFAULTS = { font: 'Montserrat', size: 84, uppercase: true, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#F2C14E', outline: '#111111', outlineWidth: 7, shadow: 0, position: 'lower', animation: 'pop', highlightMode: 'word', box: false, hook: true, hookSeconds: 3.2, hookBg: '#FFFFFF', hookColor: '#111111', hookFont: '', hookSize: 0, hookPosition: 'upper', hookBox: true, hookOutline: '#111111', hookOutlineWidth: 8, hookTilt: 0, hookAnim: 'fade' };
+const STYLE_DEFAULTS = { font: 'Montserrat', size: 84, uppercase: true, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#F2C14E', outline: '#111111', outlineWidth: 7, shadow: 0, position: 'lower', animation: 'pop', highlightMode: 'word', box: false, hook: true, hookSeconds: 3.2, hookBg: '#FFFFFF', hookColor: '#111111', hookFont: '', hookSize: 0, hookPosition: 'upper', hookBox: true, hookOutline: '#111111', hookOutlineWidth: 8, hookTilt: 0, hookAnim: 'fade', rotate: 0 };
 // One-click looks; every value can still be changed below.
 const LOOKS = [
   { id: 'cartoon', label: 'Cartoon', v: { font: 'Luckiest Guy', size: 96, uppercase: true, primary: '#FFFFFF', highlight: '#FFD23F', outline: '#000000', outlineWidth: 9, shadow: 5, wordsPerLine: 2, box: false, hookFont: 'Luckiest Guy', hookSize: 84, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 9, hookTilt: -4, hookAnim: 'pop' } },
@@ -153,8 +171,11 @@ function CaptionStyle({ clip, reload }) {
   const [s, setS] = useState({ ...base, ...(clip.style || {}) });
   useEffect(() => setS({ ...base, ...(clip.style || {}) }), [client?.id, clip.id, clip.updatedAt]);
   const set = (k) => (e) => setS({ ...s, [k]: e?.target ? (e.target.type === 'range' || e.target.type === 'number' ? Number(e.target.value) : e.target.value) : e });
-  const thisClip = () => act(async () => { await api.patch(`/api/clips/${clip.id}`, { style: s }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: 'Saved; re-rendering with the new captions' }).then(reload);
-  const allClips = () => act(async () => { await api.patch(`/api/clients/${clip.clientId}`, { style: s }); await api.patch(`/api/clips/${clip.id}`, { style: null }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: `Saved for every ${client?.name || 'client'} clip; re-rendering this one` }).then(reload);
+  const [hookText, setHookText] = useState(clip.hook || '');
+  useEffect(() => setHookText(clip.hook || ''), [clip.id, clip.updatedAt]);
+  const saveHook = async () => { if (hookText !== (clip.hook || '')) await api.patch(`/api/clips/${clip.id}`, { hook: hookText }); };
+  const thisClip = () => act(async () => { await saveHook(); await api.patch(`/api/clips/${clip.id}`, { style: s }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: 'Saved; re-rendering with the new captions' }).then(reload);
+  const allClips = () => act(async () => { await saveHook(); await api.patch(`/api/clients/${clip.clientId}`, { style: s }); await api.patch(`/api/clips/${clip.id}`, { style: null }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: `Saved for every ${client?.name || 'client'} clip; re-rendering this one` }).then(reload);
   const reset = () => act(async () => { await api.patch(`/api/clips/${clip.id}`, { style: null }); }, { ok: 'Back to the client style' }).then(reload);
   const words = ['THIS', 'IS', 'HOW'].slice(0, Math.max(1, Math.min(3, s.wordsPerLine)));
   const txt = (w) => (s.uppercase ? w : w.toLowerCase());
@@ -162,15 +183,15 @@ function CaptionStyle({ clip, reload }) {
   const stroke = (w, c) => (w ? `${Math.max(0.5, w / 6)}px ${c}` : '0');
   const shadow = (n) => (n ? `${n / 3}px ${n / 3}px 0 rgba(0,0,0,.55)` : 'none');
   const colours = (list) => html`<div class="row wrap" style="gap:12px">${list.map(([k, l]) => html`<label class="col" style="gap:3px;font-size:var(--fs-xs)"><span class="faint">${l}</span><input type="color" value=${s[k]} onInput=${set(k)} style="width:44px;height:30px;border:none;background:none;padding:0" /></label>`)}</div>`;
-  const fontPick = (k, id, same) => html`<select id=${id} class="select" value=${s[k]} onChange=${set(k)}>${same ? html`<option value="">Same as captions</option>` : null}${FONTS.map((f) => html`<option value=${f} style=${{ fontFamily: f }}>${f}</option>`)}</select>`;
+  const fontPick = (k, id, same) => html`<select id=${id} class="select" value=${s[k]} onChange=${set(k)} style=${{ fontFamily: `'${s[k] || s.font}', sans-serif`, fontSize: '15px' }}>${same ? html`<option value="">Same as captions</option>` : null}${FONT_GROUPS.map(([g, list]) => html`<optgroup label=${g}>${list.map((f) => html`<option value=${f} style=${{ fontFamily: `'${f}', sans-serif`, fontSize: '16px' }}>${f}</option>`)}</optgroup>`)}</select>`;
   const flag = (on, onChange, l) => html`<label class="row" style="gap:6px"><${Toggle} on=${on} onChange=${onChange} label=${l} /><span style="font-size:var(--fs-sm)">${l}</span></label>`;
   const look = LOOKS.find((x) => Object.entries(x.v).every(([k, v]) => s[k] === v))?.id;
   return html`<details class="panel pad" open=${!clip.versions?.[clip.versions.length - 1]?.captioned}>
     <summary><b>Captions and text</b> <span class="faint" style="font-size:var(--fs-xs)">${clip.style ? 'custom for this clip' : `using ${client?.name || 'the client'}'s style`}</span></summary>
     <div class="row wrap" style="gap:16px;margin-top:10px;align-items:flex-start">
       <div style=${{ width: '150px', height: '266px', borderRadius: '14px', background: 'linear-gradient(160deg,#5b6b7c,#2b3440)', position: 'relative', overflow: 'hidden', flex: 'none' }}>
-        ${s.hook && s.hookSeconds > 0 ? html`<div style=${{ position: 'absolute', left: '8px', right: '8px', textAlign: 'center', ...posCss(s.hookPosition, '22px', '60px') }}><span style=${{ display: 'inline-block', transform: `rotate(${s.hookTilt || 0}deg)`, fontFamily: `'${hookFont}', sans-serif`, fontWeight: 800, fontSize: `${Math.round(hookSize / 7)}px`, lineHeight: 1.1, color: s.hookColor, ...(s.hookBox ? { background: s.hookBg, padding: '3px 6px', borderRadius: '4px' } : { WebkitTextStroke: stroke(s.hookOutlineWidth, s.hookOutline), paintOrder: 'stroke fill', textShadow: shadow(s.shadow) }) }}>${txt('OPENING TEXT')}</span></div>` : null}
-        <div style=${{ position: 'absolute', left: '6px', right: '6px', textAlign: 'center', fontFamily: `'${s.font}', sans-serif`, fontWeight: 800, fontSize: `${Math.round(s.size / 6.5)}px`, lineHeight: 1.1, ...posCss(s.position, '60px', '50px') }}>
+        ${s.hook && s.hookSeconds > 0 ? html`<div style=${{ position: 'absolute', left: '8px', right: '8px', textAlign: 'center', ...posCss(s.hookPosition, '22px', '60px') }}><span style=${{ display: 'inline-block', transform: `rotate(${s.hookTilt || 0}deg)`, fontFamily: `'${hookFont}', sans-serif`, fontWeight: weightOf(hookFont), fontSize: `${Math.round(hookSize / 7)}px`, lineHeight: 1.1, whiteSpace: 'pre-line', color: s.hookColor, ...(s.hookBox ? { background: s.hookBg, padding: '3px 6px', borderRadius: '4px' } : { WebkitTextStroke: stroke(s.hookOutlineWidth, s.hookOutline), paintOrder: 'stroke fill', textShadow: shadow(s.shadow) }) }}>${txt(hookText || 'OPENING TEXT')}</span></div>` : null}
+        <div style=${{ position: 'absolute', left: '6px', right: '6px', textAlign: 'center', fontFamily: `'${s.font}', sans-serif`, fontWeight: weightOf(s.font), fontSize: `${Math.round(s.size / 6.5)}px`, lineHeight: 1.1, ...posCss(s.position, '60px', '50px'), ...(s.rotate ? { transform: `${posCss(s.position).transform || ''} rotate(${s.rotate}deg)` } : {}) }}>
           ${words.map((w, i) => html`<span style=${{ color: i === 1 && s.highlightMode === 'word' ? s.highlight : s.primary, WebkitTextStroke: !s.box ? stroke(s.outlineWidth, s.outline) : '0', paintOrder: 'stroke fill', textShadow: s.box ? 'none' : shadow(s.shadow), background: s.box ? s.outline : 'none', padding: s.box ? '1px 3px' : 0, marginRight: '3px', display: 'inline-block' }}>${txt(w)}</span>`)}</div>
       </div>
       <div class="col grow" style="gap:12px;min-width:260px">
@@ -180,7 +201,8 @@ function CaptionStyle({ clip, reload }) {
           <b style="font-size:var(--fs-sm)">Captions (spoken words)</b>
           <div class="form-grid">
             <${Field} label="Font" id="cs-font">${fontPick('font', 'cs-font')}</${Field}>
-            <${Field} label=${`Size: ${s.size}`} id="cs-size"><input id="cs-size" class="range" type="range" min="40" max="150" step="2" value=${s.size} onInput=${set('size')} /></${Field}>
+            <${Field} label=${`Size: ${s.size}`} id="cs-size"><input id="cs-size" class="range" type="range" min="30" max="220" step="2" value=${s.size} onInput=${set('size')} /></${Field}>
+            <${Field} label=${`Rotate: ${s.rotate || 0}°`} id="cs-rot"><input id="cs-rot" class="range" type="range" min="-30" max="30" step="1" value=${s.rotate || 0} onInput=${set('rotate')} /></${Field}>
             <${Field} label=${`Words per line: ${s.wordsPerLine}`} id="cs-wpl"><input id="cs-wpl" class="range" type="range" min="1" max="6" step="1" value=${s.wordsPerLine} onInput=${set('wordsPerLine')} /></${Field}>
             <${Field} label=${s.box ? `Box padding: ${s.outlineWidth}` : `Outline thickness: ${s.outlineWidth}`} id="cs-ow"><input id="cs-ow" class="range" type="range" min="0" max="20" step="1" value=${s.outlineWidth} onInput=${set('outlineWidth')} /></${Field}>
             <${Field} label=${`Drop shadow: ${s.shadow || 0}`} id="cs-sh"><input id="cs-sh" class="range" type="range" min="0" max="10" step="1" value=${s.shadow || 0} onInput=${set('shadow')} /></${Field}>
@@ -194,12 +216,13 @@ function CaptionStyle({ clip, reload }) {
 
         <div class="col" style="gap:8px;border-top:1px solid var(--line, #eee);padding-top:10px">
           <div class="row" style="gap:8px;align-items:center"><b style="font-size:var(--fs-sm)">Opening banner</b><${Toggle} on=${!!s.hook} onChange=${set('hook')} label="Opening banner" /><span class="faint" style="font-size:var(--fs-xs)">the headline at the start</span></div>
+          ${s.hook ? html`<${Field} label="What it says (Enter for a new line)" id="cs-htext"><textarea id="cs-htext" class="textarea" rows="2" maxlength="120" value=${hookText} placeholder="Type the opening text" onInput=${(e) => setHookText(e.target.value)} /></${Field}>` : null}
           ${s.hook ? html`
           <div class="form-grid">
             <${Field} label=${`On screen: ${s.hookSeconds}s`} id="cs-hs"><input id="cs-hs" class="range" type="range" min="0.5" max="10" step="0.5" value=${s.hookSeconds} onInput=${set('hookSeconds')} /></${Field}>
             <${Field} label="Font" id="cs-hfont">${fontPick('hookFont', 'cs-hfont', true)}</${Field}>
-            <${Field} label=${`Size: ${hookSize}`} id="cs-hsize"><input id="cs-hsize" class="range" type="range" min="30" max="150" step="2" value=${hookSize} onInput=${set('hookSize')} /></${Field}>
-            <${Field} label=${`Tilt: ${s.hookTilt || 0}°`} id="cs-ht"><input id="cs-ht" class="range" type="range" min="-10" max="10" step="1" value=${s.hookTilt || 0} onInput=${set('hookTilt')} /></${Field}>
+            <${Field} label=${`Size: ${hookSize}`} id="cs-hsize"><input id="cs-hsize" class="range" type="range" min="30" max="220" step="2" value=${hookSize} onInput=${set('hookSize')} /></${Field}>
+            <${Field} label=${`Rotate: ${s.hookTilt || 0}°`} id="cs-ht"><input id="cs-ht" class="range" type="range" min="-30" max="30" step="1" value=${s.hookTilt || 0} onInput=${set('hookTilt')} /></${Field}>
             ${!s.hookBox ? html`<${Field} label=${`Outline thickness: ${s.hookOutlineWidth}`} id="cs-how"><input id="cs-how" class="range" type="range" min="0" max="20" step="1" value=${s.hookOutlineWidth} onInput=${set('hookOutlineWidth')} /></${Field}>` : null}
           </div>
           <div class="row wrap" style="gap:12px">
