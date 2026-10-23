@@ -36,6 +36,7 @@ Desktop app for Euclidean Media (founders Ryan Rosario and Ben Gingold), a short
 ## Production health
 - Heavy jobs (renders, ads, analysis, local transcription) wait while RAM is low: the reserve is `resources.reserveRamMb` (default 1000) capped at 12% of the PC's RAM. It used to be a fixed 6 GB, which blocked every ordinary PC.
 - `server/setup/production.js`: `health()` lists blockers (paused queue, Lite mode, remote-only, FFmpeg/yt-dlp missing, no speech-to-text, no AI, jobs waiting, last failure) with one-click fixes; shown by `renderer/js/modules/health.js` on Production and Politics. `installFfmpeg` (job `setup.ffmpeg`) installs FFmpeg + yt-dlp via winget and restarts stuck imports. `ff.detect()` re-scans for tools.
+- Clip cards have an × (on hover) that deletes the clip after a confirmation (`DELETE /api/clips/:id`: cancels its renders, removes its approvals, unpublished post and render files; footage stays).
 - Every footage row opens a panel (`/api/assets/:id/detail`) with its steps, jobs, clips, Retry (`/process`), Cancel and Delete (`/cancel`). Failed jobs write `asset.error`.
 
 ## Captions and transcripts

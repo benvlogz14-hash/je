@@ -1,5 +1,5 @@
 // Production: footage intake and the clip board, per client.
-import { html, useRoute, useState, useEffect, useRef, useStore, useApi, navigate, Button, Empty, Loading, StatusBadge, Progress, act, toast, promptDialog, Avatar, Drawer } from '../lib/ui.js';
+import { html, useRoute, useState, useEffect, useRef, useStore, useApi, navigate, Button, Empty, Loading, StatusBadge, Progress, act, toast, promptDialog, confirmDialog, Avatar, Drawer } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { play } from '../lib/sound.js';
@@ -200,7 +200,13 @@ function ShotsDrawer({ asset, onClose }) {
 
 function ClipCard({ c, showClient }) {
   const thumb = c.current ? api.url(`/api/clips/${c.id}/thumb`) : null;
+  const remove = async (e) => {
+    e.stopPropagation();
+    if (!(await confirmDialog({ title: 'Delete this clip?', text: `"${c.title}" (#${c.ref}) and its rendered videos will be deleted. This can't be undone. The original footage stays.`, confirm: 'Delete clip' }))) return;
+    act(() => api.del(`/api/clips/${c.id}`), { ok: 'Clip deleted' });
+  };
   return html`<div class="clip-card" onClick=${() => { play('open'); navigate(`/production?clip=${c.id}`); }}>
+    <button class="clip-x" title="Delete clip" aria-label="Delete clip" onClick=${remove}><${Icon} name="x" size=${14} /></button>
     <div class="th" style=${thumb ? { backgroundImage: `url(${thumb})` } : null}>${!thumb ? (c.status === 'rendering' ? html`<span class="spinner" />` : html`<${Icon} name="film" size=${16} />`) : null}</div>
     <div style="min-width:0"><div class="t">${c.title}</div>
       <div class="m"><span class="tnum">#${c.ref}</span><span>${Math.round(c.end - c.start)}s</span>${showClient ? html`<span class="ellipsis">${c.client}</span>` : null}</div>

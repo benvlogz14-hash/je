@@ -365,6 +365,18 @@ r.patch('/api/clips/:id', (req, b, p) => {
   events.publish('clips', { id: c.id });
   return clipView(u);
 });
+// Delete a clip: stops its renders, removes its approvals, unpublished post and rendered files.
+r.del('/api/clips/:id', (req, b, p) => {
+  const c = must(ctx.store.get('clips', p.id));
+  for (const j of ctx.store.all('jobs', (x) => x.payload?.clipId === c.id && ['queued', 'running'].includes(x.status))) queue.cancel(j.id, actorOf(req));
+  for (const a of ctx.store.all('approvals', (x) => x.kind === 'clip' && x.refId === c.id)) ctx.store.remove('approvals', a.id);
+  if (c.postId) { const post = ctx.store.get('posts', c.postId); if (post && post.status !== 'published') ctx.store.remove('posts', post.id); }
+  try { fs.rmSync(paths.clientDir(c.clientId, 'renders', c.id), { recursive: true, force: true }); } catch { /* files already gone */ }
+  ctx.store.remove('clips', c.id);
+  audit.log(actorOf(req), 'clip.deleted', { clientId: c.clientId, clipId: c.id, title: c.title });
+  events.publish('clips', { id: c.id }); events.publish('approvals', {}); events.publish('posts', {});
+  return { ok: true };
+});
 /** Render one of the AI's trial openings (different hook and/or start) as the clip's next version. */
 r.post('/api/clips/:id/trial', (req, b, p) => {
   const c = must(ctx.store.get('clips', p.id)); const t = (c.trials || [])[Number(b.i)]; if (!t) throw new HttpError(404, 'Trial not found');
