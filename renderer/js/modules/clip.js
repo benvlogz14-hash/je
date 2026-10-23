@@ -70,6 +70,7 @@ export function ClipDetail({ clip, reload, compact }) {
         <div class="col" style="gap:5px"><span class="label">Jump cuts</span><div class="row"><${Toggle} on=${f.silenceCut} onChange=${(x) => setF({ ...f, silenceCut: x })} label="Remove pauses" /><span class="muted" style="font-size:var(--fs-sm)">Remove pauses</span></div></div>
       </div>
       <${CaptionStyle} clip=${clip} reload=${reload} />
+      <${ClipMusic} clip=${clip} reload=${reload} />
       <div class="row wrap">
         <${Button} kind="primary" icon="refresh" disabled=${!dirty} onClick=${() => save(true)}>Save and re-render</${Button}>
         <${Button} kind="ghost" disabled=${!dirty} onClick=${() => save(false)}>Save copy only</${Button}>
@@ -91,6 +92,23 @@ function openFile(clip, v, kind) {
   const url = api.url(`/api/clips/${clip.id}/download/${kind}?v=${v}`);
   if (api.demo) return toast('Downloads are available in the desktop app.', { kind: 'info' });
   const a = document.createElement('a'); a.href = url; a.download = ''; document.body.appendChild(a); a.click(); a.remove();
+}
+
+const MOODS = [['auto', 'Auto'], ['off', 'No music'], ['creepy', 'Creepy'], ['suspense', 'Suspense'], ['intense', 'Intense'], ['triumphant', 'Triumphant'], ['positive', 'Uplifting'], ['sad', 'Sad'], ['chill', 'Chill'], ['funny', 'Funny']];
+const MOOD_NAME = Object.fromEntries(MOODS);
+/** Background music for this clip: Auto picks a mood for each moment; or choose one, or none. Shows what the last render used. */
+function ClipMusic({ clip, reload }) {
+  const last = clip.versions?.[clip.versions.length - 1]; const sheet = last?.music;
+  const choose = (m) => act(async () => { await api.patch(`/api/clips/${clip.id}`, { music: m }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: m === 'off' ? 'Re-rendering without music' : `Re-rendering with ${m === 'auto' ? 'music picked for each moment' : `${MOOD_NAME[m].toLowerCase()} music`}` }).then(reload);
+  const cur = clip.music || 'auto';
+  return html`<details class="panel pad">
+    <summary><b>Music</b> <span class="faint" style="font-size:var(--fs-xs)">${cur === 'off' ? 'off for this clip' : sheet?.cues?.length ? sheet.cues.map((c) => MOOD_NAME[c.mood] || c.mood).filter((x, i, a) => a.indexOf(x) === i).join(', ') : cur === 'auto' ? 'picked to fit each moment' : MOOD_NAME[cur]}</span></summary>
+    <div class="col" style="gap:10px;margin-top:10px">
+      <div class="row wrap" style="gap:6px">${MOODS.map(([k, l]) => html`<button class="chip" style=${cur === k ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)' } : null} onClick=${() => choose(k)}>${l}</button>`)}</div>
+      ${sheet?.cues?.length ? html`<div class="col" style="gap:4px">${sheet.cues.map((c) => html`<div class="row" style="gap:8px;font-size:var(--fs-sm)"><span class="tnum faint" style="width:86px">${c.start.toFixed(1)}s to ${c.end.toFixed(1)}s</span><span class="badge ${c.mood === 'none' ? 'outline' : 'lav'}">${c.mood === 'none' ? 'Silence' : MOOD_NAME[c.mood] || c.mood}</span><span class="faint ellipsis" style="font-size:var(--fs-xs)">${c.why || c.source || ''}</span></div>`)}
+        <div class="faint" style="font-size:var(--fs-xs)">Chosen by ${sheet.how}. All music is royalty-free: your own folder, free CC0 tracks, or made by Euclidean. Pick a chip to re-render with a different mood.</div></div>`
+      : html`<div class="faint" style="font-size:var(--fs-xs)">${cur === 'off' ? 'This clip has no music.' : 'The next render adds royalty-free music that fits each moment (creepy, suspense, triumphant...). Pick a mood to force one.'}</div>`}
+    </div></details>`;
 }
 
 const FONTS = ['Luckiest Guy', 'Bangers', 'Titan One', 'Lilita One', 'Bowlby One', 'Bungee', 'Chewy', 'Montserrat', 'Anton', 'Arial Black', 'Impact', 'Arial', 'Verdana', 'Georgia', 'Trebuchet MS', 'Comic Sans MS'];

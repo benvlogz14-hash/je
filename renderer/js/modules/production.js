@@ -1,5 +1,5 @@
 // Production: footage intake and the clip board, per client.
-import { html, useRoute, useState, useEffect, useRef, useStore, useApi, navigate, Button, Empty, Loading, StatusBadge, Progress, act, toast, promptDialog, confirmDialog, Avatar, Drawer } from '../lib/ui.js';
+import { html, useRoute, useState, useEffect, useRef, useStore, useApi, navigate, Button, Empty, Loading, StatusBadge, Progress, act, toast, promptDialog, confirmDialog, Avatar, Drawer, Toggle } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { play } from '../lib/sound.js';
@@ -110,7 +110,7 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
       <div class="avatar lg" style="background:var(--teal-soft);color:var(--teal-ink)"><${Icon} name="upload" size=${20} /></div>
       <div class="grow"><b>Drop footage here</b><div class="muted" style="font-size:var(--fs-sm)">${target ? `For ${clients.find((c) => c.id === target)?.name}. Transcription and clip discovery start automatically.` : clients.length ? 'Choose the client in the menu at the top right, then drop footage.' : 'Footage is filed under a client. Create your first one (just a name) and drop away.'}</div>
         ${!clients.length ? html`<div style="margin-top:8px"><${Button} size="sm" kind="soft" icon="plus" onClick=${async () => { const c = await quickClient().catch(() => null); if (c) setClientId(c.id); }}>Create your first client</${Button}></div>` : null}
-        ${target ? html`<${ClipLength} client=${clients.find((c) => c.id === target)} />` : null}
+        ${target ? html`<${ClipLength} client=${clients.find((c) => c.id === target)} /><${MusicSwitch} client=${clients.find((c) => c.id === target)} />` : null}
         ${uploads.map((u) => html`<div style="margin-top:8px"><div class="row" style="font-size:var(--fs-sm)"><span class="grow ellipsis">${u.name}</span><span class="tnum faint">${Math.round(u.p * 100)}%</span></div><${Progress} value=${u.p} /></div>`)}</div>
       <div class="col" style="gap:6px"><${Button} size="sm" kind="primary" icon="upload" onClick=${() => input.current.click()}>Upload</${Button}><${Button} size="sm" kind="ghost" icon="folder" onClick=${addPath}>From disk</${Button}><${Button} size="sm" kind="ghost" icon="link" onClick=${addLink}>From link</${Button}></div>
       <input ref=${input} type="file" accept="video/*,audio/*" multiple hidden onChange=${(e) => { upload([...e.target.files]); e.target.value = ''; }} />
@@ -138,6 +138,20 @@ function ClipLength({ client }) {
     <span class="label">Clip length: <b class="tnum">${r.min}s to ${r.max}s</b></span>
     <div class="row" style="gap:8px;font-size:var(--fs-xs)"><span class="faint" style="width:56px">Shortest</span><input class="range grow" type="range" min="5" max="175" step="1" value=${r.min} onInput=${set('min')} onChange=${() => save(r)} aria-label="Shortest clip in seconds" /><b class="tnum" style="width:34px">${r.min}s</b></div>
     <div class="row" style="gap:8px;font-size:var(--fs-xs)"><span class="faint" style="width:56px">Longest</span><input class="range grow" type="range" min="10" max="180" step="1" value=${r.max} onInput=${set('max')} onChange=${() => save(r)} aria-label="Longest clip in seconds" /><b class="tnum" style="width:34px">${r.max}s</b></div>
+  </div>`;
+}
+
+const MOOD_LABEL = { auto: 'Auto (fits each moment)', creepy: 'Creepy / scary', suspense: 'Suspense', intense: 'Intense', triumphant: 'Triumphant', positive: 'Uplifting', sad: 'Sad', chill: 'Chill', funny: 'Funny' };
+/** Music on/off for a client's clips, how loud, and the default mood. */
+function MusicSwitch({ client }) {
+  const p = client?.production || {}; const on = p.music !== false;
+  const [vol, setVol] = useState(Math.round((p.musicVolume ?? 0.3) * 100));
+  useEffect(() => setVol(Math.round((p.musicVolume ?? 0.3) * 100)), [client?.id]);
+  const save = (patch, ok) => act(() => api.patch(`/api/clients/${client.id}`, { production: patch }), { ok, sound: 'tap' });
+  return html`<div class="col" style="gap:6px;margin-top:10px;max-width:420px" onClick=${(e) => e.stopPropagation()}>
+    <div class="row" style="gap:8px;align-items:center"><${Toggle} on=${on} onChange=${(x) => save({ music: x }, x ? 'Music on for new clips' : 'Music off for new clips')} label="Music" /><span class="label">Background music</span><span class="faint" style="font-size:var(--fs-xs)">${on ? 'royalty-free, picked to fit each moment' : 'off'}</span></div>
+    ${on ? html`<div class="row wrap" style="gap:8px;font-size:var(--fs-xs);align-items:center"><span class="faint" style="width:56px">Volume</span><input class="range grow" type="range" min="5" max="80" step="1" value=${vol} onInput=${(e) => setVol(Number(e.target.value))} onChange=${() => save({ musicVolume: vol / 100 }, `Music volume ${vol}%`)} aria-label="Music volume" /><b class="tnum" style="width:34px">${vol}%</b>
+      <select class="select" style="height:30px;font-size:var(--fs-xs);width:auto" value=${p.musicMood || 'auto'} onChange=${(e) => save({ musicMood: e.target.value }, `Music: ${MOOD_LABEL[e.target.value]}`)} aria-label="Music mood">${Object.entries(MOOD_LABEL).map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></div>` : null}
   </div>`;
 }
 

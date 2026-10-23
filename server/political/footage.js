@@ -317,7 +317,7 @@ const assEsc = (t) => String(t || '').replace(/[{}\\]/g, '').replace(/\*/g, '').
  * Render one speech ad. bites from prepare(); info as for motion.renderVideo.
  * Returns { file, duration }.
  */
-async function renderSpeechAd({ bites, footage, info, vertical, out, work, music, tagline, office, site, onProgress = () => {} }) {
+async function renderSpeechAd({ bites, footage, info, vertical, out, work, music, tagline, office, site, social = false, onProgress = () => {} }) {
   const W = vertical ? 1080 : 1920; const H = vertical ? 1920 : 1080; const XF = 0.35;
   fs.mkdirSync(work, { recursive: true });
   const P = campaign.paletteFor({ tone: info.tone, party: info.party, brand: info.brand });
@@ -329,7 +329,7 @@ async function renderSpeechAd({ bites, footage, info, vertical, out, work, music
   onProgress(0.03, 'Drawing the opening title');
   const gInfo = { ...info, style: 'campaign', noTag: true };
   const intro = await motion.renderVideo({ scenes: [{ type: 'photo', who: 'candidate', headline: tagline, sub: office || '', sec: 2.8 }], info: { ...gInfo, noDisclaimer: true }, vertical, out: path.join(work, 'intro.mp4'), work: path.join(work, 'g1') });
-  const outro = await motion.renderVideo({ scenes: [{ type: 'vote', headline: `Vote ${info.name}`, button: site || '', sec: 3 }, { type: 'disclaimer', text: `Concept ad by Euclidean Media using public footage of ${info.name}. Not paid for or authorized by any candidate or committee.${info.musicCredit ? ` ${info.musicCredit}.` : ''}`, sec: 2.5 }], info: gInfo, vertical, out: path.join(work, 'outro.mp4'), work: path.join(work, 'g2') });
+  const outro = await motion.renderVideo({ scenes: [{ type: 'vote', headline: social ? `Follow ${info.name}` : `Vote ${info.name}`, button: site || '', sec: 3 }, { type: 'disclaimer', text: `Concept ${social ? 'video' : 'ad'} by Euclidean Media using public footage of ${info.name}. Not paid for or authorized by any candidate or committee.${info.musicCredit ? ` ${info.musicCredit}.` : ''}`, sec: 2.5 }], info: gInfo, vertical, out: path.join(work, 'outro.mp4'), work: path.join(work, 'g2') });
 
   const parts = [];
   for (let k = 0; k < bites.length; k++) {

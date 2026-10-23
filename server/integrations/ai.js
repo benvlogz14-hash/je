@@ -27,7 +27,9 @@ const PROVIDERS = {
 // ------------------------------------------------------------ Ollama (free, runs on this computer)
 const ollamaState = { ok: false, at: 0, models: [], error: null };
 const ollamaBase = () => String(ctx.setting('ai.ollama.url', 'http://127.0.0.1:11434') || '').replace(/\/$/, '');
-const ollamaModel = () => ctx.setting('ai.ollama.model', 'llama3.2');
+const wantedModel = () => ctx.setting('ai.ollama.model', 'llama3.2');
+// The chosen model when it's downloaded, else any chat model this PC already has (so a running Ollama just works).
+const ollamaModel = () => ollamaState.using || wantedModel();
 /** Check (at most every 30 s) whether Ollama is running and has the chosen model. */
 async function pingOllama(force = false) {
   if (!force && Date.now() - ollamaState.at < 30000) return ollamaState.ok;
@@ -36,9 +38,12 @@ async function pingOllama(force = false) {
   try {
     const res = await fetch(`${ollamaBase()}/api/tags`, { signal: AbortSignal.timeout(2500) });
     const j = await res.json(); ollamaState.models = (j.models || []).map((m) => m.name);
-    const want = ollamaModel();
-    ollamaState.ok = ollamaState.models.some((m) => m === want || m.split(':')[0] === want.split(':')[0]);
-    ollamaState.error = ollamaState.ok ? null : `Model "${want}" isn't downloaded. In a terminal run: ollama pull ${want}`;
+    const want = wantedModel();
+    const exact = ollamaState.models.find((m) => m === want || m.split(':')[0] === want.split(':')[0]);
+    const chat = ollamaState.models.filter((m) => !/vision|embed|llava|minilm|nomic|bge|whisper/i.test(m));
+    ollamaState.using = exact || chat.find((m) => /llama|qwen|mistral|gemma|phi|deepseek/i.test(m)) || chat[0] || null;
+    ollamaState.ok = !!ollamaState.using;
+    ollamaState.error = ollamaState.ok ? null : `Ollama is running but has no AI model yet. Press "Set up free AI" in Settings → AI to download ${want}.`;
   } catch { ollamaState.ok = false; ollamaState.error = 'Ollama is not running'; }
   return ollamaState.ok;
 }

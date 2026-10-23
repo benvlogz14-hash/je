@@ -74,6 +74,10 @@ function snap(words, t, edge) {
   for (const w of words) { const v = edge === 'start' ? w.s : w.e; const d = Math.abs(v - t); if (d < bestD) { bestD = d; best = v; } }
   return bestD < 2.5 ? best : t;
 }
+/** "Inside Pepsi_s Secret ABANDONED Lab _jfE02Xr2nCU_.mp4" -> "Inside Pepsi's Secret ABANDONED Lab". */
+function cleanName(n) {
+  return String(n || 'Clip').replace(/\.[^.]+$/, '').replace(/[\s_]*[[(_]?[A-Za-z0-9_-]{11}[\])_]?\s*$/, (m) => (/\d/.test(m) && /[A-Z]/.test(m) ? '' : m)).replace(/(\w)_s\b/g, "$1's").replace(/_/g, ' ').replace(/\s+/g, ' ').trim() || 'Clip';
+}
 function overlap(a, b) { const i = Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start)); return i / Math.min(a.end - a.start, b.end - b.start); }
 
 function normalizeClips(raw, { words, duration, minSec, maxSec, exclude = [], count }) {
@@ -145,7 +149,17 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
     cands.push({ start: s, end: e, score, title: '', hook: '', caption: '', hashtags: [], reason: `Heuristic (no AI connected): dense speech${peaks ? `, ${peaks} energy peak${peaks > 1 ? 's' : ''}` : ''}${cuts ? `, ${cuts} scene change${cuts > 1 ? 's' : ''}` : ''}` });
   }
   const picked = normalizeClips(cands, { words, duration, minSec, maxSec, exclude, count });
-  picked.forEach((c, i) => { c.title = `${asset.name.replace(/\.[^.]+$/, '')} · Clip ${i + 1}`; });
+  // Still an edit, not a raw chunk: a clean title and hook from the video's name, and zooms on energy peaks and scene changes.
+  const name = cleanName(asset.name);
+  picked.forEach((c, i) => {
+    c.title = `${name} · Part ${i + 1}`.slice(0, 80);
+    c.hook = name.split(/\s+[-|:·]\s+/)[0].split(/\s+/).slice(0, 7).join(' ');
+    const beats = [...(analysis?.peaks || []), ...(analysis?.scenes || [])].filter((t) => t > c.start + 1.5 && t < c.end - 1.5).sort((a, b) => a - b);
+    const zooms = []; let last = -99;
+    for (const t of beats) { if (t - last >= 4.5) { zooms.push({ at: Math.round((t - c.start) * 10) / 10, dur: 1.2, zoom: 1.12 }); last = t; } }
+    for (let t = 2.5; t < c.end - c.start - 2 && zooms.length < Math.ceil((c.end - c.start) / 6); t += 6) if (!zooms.some((z) => Math.abs(z.at - t) < 3)) zooms.push({ at: t, dur: 1.2, zoom: 1.1 });
+    c.punchIns = zooms.sort((a, b) => a.at - b.at).slice(0, 10);
+  });
   return { method: 'heuristic', clips: picked };
 }
 

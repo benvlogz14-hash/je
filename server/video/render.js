@@ -42,6 +42,21 @@ function keptSegments(words, start, end, maxGap = 0.55, pad = 0.12) {
   return segs.filter(([a, b]) => b - a > 0.08);
 }
 
+/** Jump cuts without a transcript: drop the pauses FFmpeg heard (silences [[a,b]] in source seconds). */
+function cutPauses(silences, start, end, minGap = 0.6, pad = 0.15) {
+  const segs = []; let cur = start;
+  for (const [a, b] of silences) {
+    if (b <= start || a >= end || b - a < minGap) continue;
+    const cutA = Math.max(start, a + pad), cutB = Math.min(end, b - pad);
+    if (cutB - cutA < 0.3) continue;
+    if (cutA > cur) segs.push([cur, cutA]);
+    cur = cutB;
+  }
+  if (end > cur) segs.push([cur, end]);
+  const out = segs.filter(([a, b]) => b - a > 0.25);
+  return out.length && out.reduce((n, [a, b]) => n + b - a, 0) > (end - start) * 0.35 ? out : [[start, end]];
+}
+
 /** Map an absolute source time into the cut timeline (relative to clip start). */
 function remap(t, segs) {
   let acc = 0;
@@ -72,7 +87,7 @@ async function renderShort(o) {
   const info = o.info || await ff.probe(o.source);
   const start = Math.max(0, o.range.start), end = Math.min(info.duration || o.range.end, o.range.end);
   const plan = o.plan || {};
-  let segs = plan.silenceCut && o.words?.length ? keptSegments(o.words, start, end) : [[start, end]];
+  let segs = plan.silenceCut && o.words?.length ? keptSegments(o.words, start, end) : plan.silenceCut && plan.silences?.length ? cutPauses(plan.silences, start, end) : [[start, end]];
   // Cut repeated takes and false starts (keeps the last take of each line).
   if (plan.retakeCut !== false && o.words?.length) {
     const rt = require('./retakes'); const inRange = o.words.filter((w) => w.e > start && w.s < end);
@@ -169,4 +184,4 @@ async function renderShort(o) {
   return { outPath: o.outPath, assPath, srtPath, duration: outDur, segments: segs, encoder: enc, cutWords };
 }
 
-module.exports = { renderShort, keptSegments, remap, ensureFonts, W, H };
+module.exports = { renderShort, cutPauses, keptSegments, remap, ensureFonts, W, H };

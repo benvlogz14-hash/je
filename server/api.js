@@ -358,8 +358,9 @@ r.get('/api/clips', (req) => ctx.store.all('clips', (c) => (!req.query.clientId 
 r.get('/api/clips/:id', (req, b, p) => clipView(must(ctx.store.get('clips', p.id))));
 r.patch('/api/clips/:id', (req, b, p) => {
   const c = must(ctx.store.get('clips', p.id)); const patch = {};
-  for (const k of ['title', 'hook', 'caption', 'hashtags', 'start', 'end', 'reframe', 'focusX', 'silenceCut', 'retakeCut', 'punchIns']) if (b[k] !== undefined) patch[k] = b[k];
-  if (b.style !== undefined) patch.style = b.style ? pipeline.sanitizeStyle(b.style) : null; // this clip's own caption look (over the client's)
+  for (const k of ['title', 'hook', 'caption', 'hashtags', 'start', 'end', 'reframe', 'focusX', 'silenceCut', 'retakeCut', 'punchIns', 'music']) if (b[k] !== undefined) patch[k] = b[k];
+  if (b.style !== undefined) patch.style = b.style ? pipeline.sanitizeStyle(b.style) : null;
+  if (patch.music !== undefined) patch.music = ['auto', 'off', ...require('./video/music').CLIP_MOODS].includes(patch.music) ? patch.music : 'auto'; // this clip's own caption look (over the client's)
   const u = ctx.store.update('clips', c.id, patch);
   if (c.postId && (patch.title || patch.caption || patch.hashtags)) ctx.store.update('posts', c.postId, { title: u.title, caption: u.caption, hashtags: u.hashtags });
   events.publish('clips', { id: c.id });

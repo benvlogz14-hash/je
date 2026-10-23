@@ -210,10 +210,26 @@ queue.register('render.short', {
     h.progress(0.12, `Rendering v${n}`);
     const r = await render.renderShort({ facePath, graphics: client.graphics,
       source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook,
-      reframe: clip.reframe, focusX: clip.focusX, plan: { silenceCut: clip.silenceCut && !!transcript, retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
+      reframe: clip.reframe, focusX: clip.focusX, plan: { silenceCut: clip.silenceCut !== false, silences: transcript ? null : await pausesFor(asset), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
       outPath, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal,
       onProgress: (p) => { h.progress(0.12 + p * 0.7, `Rendering v${n}`); const pct = Math.round((0.12 + p * 0.7) * 100); if (pct - (ctx.store.get('clips', clip.id)?.renderProgress || 0) >= 4) { ctx.store.update('clips', clip.id, { renderProgress: pct }); events.publish('clips', { id: clip.id }); } },
     });
+    // Music: decides when it plays and its mood (creepy, suspense, triumphant...), ducked under the voice.
+    let musicSheet = null;
+    const musicOn = client.production?.music !== false && clip.music !== 'off' && ctx.setting('production.music', true) !== false;
+    if (musicOn) {
+      try {
+        h.progress(0.83, 'Adding music');
+        const vis = require('../video/vision').cached(asset.path, asset.workDir);
+        const shots = (vis?.shots || []).filter((x) => x.e > clip.start && x.s < clip.end).map((x) => ({ ...x, s: render.remap(Math.max(x.s, clip.start), r.segments), e: render.remap(Math.min(x.e, clip.end), r.segments) })).filter((x) => x.e > x.s);
+        musicSheet = await require('../video/score').plan({ words: r.cutWords || [], shots, duration: r.duration, title: clip.title, hook: clip.hook, forced: clip.music || client.production?.musicMood || 'auto', clientId: client.id, jobId: job.id });
+        if (musicSheet?.cues.some((c) => c.file)) {
+          const tmp = outPath.replace(/\.mp4$/, '.music.mp4');
+          await require('../video/music').scoreVideo({ video: outPath, cues: musicSheet.cues, out: tmp, duration: r.duration, volume: Number(client.production?.musicVolume ?? ctx.setting('production.musicVolume', 0.3)) });
+          fs.renameSync(tmp, outPath);
+        }
+      } catch (e) { musicSheet = null; h.log(`Music skipped: ${e.message}`); }
+    }
     h.progress(0.85, 'Quality check');
     const qc = await ff.qualityCheck(outPath, { expectWidth: 1080, expectHeight: 1920, minSec: 5, maxSec: 180 });
     const thumb = path.join(outDir, `v${n}.jpg`);
@@ -223,12 +239,20 @@ queue.register('render.short', {
     fs.writeFileSync(velo, JSON.stringify(exporters.toVelo({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, focusX: clip.focusX }), null, 1));
     const xml = path.join(outDir, `v${n}.premiere.xml`);
     fs.writeFileSync(xml, exporters.toFcpXml({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end } }));
-    const version = { n, path: outPath, thumb, duration: r.duration, renderedAt: now(), encoder: r.encoder, qc: { passed: qc.passed, issues: qc.issues }, srt: r.srtPath, velo, xml, changes: clip.pendingChanges || null, captioned: !!transcript };
+    const version = { n, path: outPath, thumb, duration: r.duration, renderedAt: now(), encoder: r.encoder, qc: { passed: qc.passed, issues: qc.issues }, srt: r.srtPath, velo, xml, changes: clip.pendingChanges || null, captioned: !!transcript, music: musicSheet ? { how: musicSheet.how, cues: musicSheet.cues.map((c) => ({ start: Math.round(c.start * 10) / 10, end: Math.round(c.end * 10) / 10, mood: c.mood, why: c.why || '', track: c.track || null, source: c.source || null })) } : null };
     ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), version], currentVersion: n, pendingChanges: null }));
     pipeline.afterQc(clip.id, qc);
     return { version: n, duration: r.duration, qc: qc.passed ? 'passed' : 'failed', encoder: r.encoder };
   },
 });
+
+/** Pauses in the footage's audio (cached), for jump cuts when there is no transcript yet. */
+async function pausesFor(asset) {
+  if (!asset.info?.hasAudio) return null;
+  const f = path.join(asset.workDir || path.dirname(asset.path), `${asset.id}.pauses.json`);
+  try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { /* not yet */ }
+  try { const { silences } = await ff.speechWindows(asset.path); fs.writeFileSync(f, JSON.stringify(silences)); return silences; } catch { return null; }
+}
 
 /** Face-track the clip range once (cached on the clip) when the reframe mode uses it. */
 async function faceTrackFor(clip, asset, h) {
