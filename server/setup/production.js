@@ -1,4 +1,5 @@
 'use strict';
+const STARTED = new Date().toISOString(); // failures from before this start of the app are history, not a current problem
 /**
  * What's stopping Production right now, in plain English, with a fix for each.
  * Shown as a banner on the Production page so "nothing is happening" never goes unexplained.
@@ -34,7 +35,10 @@ async function health(clientId) {
   if (!ai.anyConnected()) issues.push({ key: 'ai', level: 'warn', text: 'No AI is on, so clips are picked from the audio only.', fix: { action: 'ollama', label: 'Turn on Ollama (free)' } });
   if (clientId) {
     const day = new Date(Date.now() - 864e5).toISOString();
-    const failed = ctx.store.all('jobs', (j) => j.clientId === clientId && j.status === 'failed' && (j.finishedAt || '') > day).slice(-1)[0];
+    // Only a failure that still stands: not one from before this start of the app, and not one a later run of the same step has replaced.
+    const sameStep = (a, b) => a.type === b.type && (a.payload?.assetId || a.payload?.clipId || a.id) === (b.payload?.assetId || b.payload?.clipId || b.id);
+    const jobs = ctx.store.all('jobs', (j) => j.clientId === clientId);
+    const failed = jobs.filter((j) => j.status === 'failed' && (j.finishedAt || '') > day && (j.finishedAt || '') > STARTED && !jobs.some((k) => k !== j && sameStep(k, j) && (k.createdAt || '') > (j.createdAt || ''))).slice(-1)[0];
     if (failed) issues.push({ key: 'failed', level: 'warn', text: `Last problem: ${failed.title}: ${failed.error || 'failed'}`, fix: failed.payload?.assetId ? { action: 'retry-asset', assetId: failed.payload.assetId, label: 'Retry' } : { action: 'retry-job', jobId: failed.id, label: 'Retry' } });
   }
   return { ok: !issues.some((i) => i.level === 'error'), issues, paused: queue.paused };
