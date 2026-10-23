@@ -122,7 +122,7 @@ Return JSON: {"clips":[{"start":sec,"end":sec,"title":"<=60 chars, curiosity-dri
 "trials": 2-3 alternative openings for the same clip, for Instagram trial reels: each opens differently (result first, question first, a bolder sentence later in the clip via a later start, or a contrarian line), never the same hook text, and every hook is paid off by the clip.
 ${TASTE_RULES}`;
 
-async function discoverClips(asset, transcript, { count = 6, jobId, exclude = [], analysis = null, vision = null } = {}) {
+async function discoverClips(asset, transcript, { count = 6, jobId, exclude = [], analysis = null, vision = null, onProgress = () => {} } = {}) {
   // Clip length: the client's own setting (the sliders by the upload box), else the global default.
   const prod = ctx.store.get('clients', asset.clientId)?.production || {};
   const minSec = Number(prod.minClipSec) || ctx.setting('production.minClipSec', 20); const maxSec = Math.max(minSec + 5, Number(prod.maxClipSec) || ctx.setting('production.maxClipSec', 59));
@@ -133,17 +133,22 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
   // the best and writes the titles and hooks; without one, the scores decide.
   if (transcript?.words?.length) {
     const montage = require('./montage');
+    onProgress(0.25, 'Listening for voiceover');
     const sig = await montage.signals({ asset, transcript, vision, analysis });
+    onProgress(0.4, 'Scoring every moment');
     const cands = montage.candidates(sig, { minSec, maxSec, duration, exclude, limit: 24 });
     if (cands.length) {
       const name = cleanName(asset.name);
       const fallback = (c, i) => ({ start: c.start, end: c.end, score: Math.round(c.score), title: `${name} · Part ${i + 1}`.slice(0, 80), hook: hookFrom(c.text) || name.split(/\s+[-|:·]\s+/)[0].split(/\s+/).slice(0, 7).join(' '), caption: '', hashtags: [], reason: `Picked for: ${c.why.join(', ') || 'steady speech'}`, punchIns: zoomsFor(c, analysis) });
       if (ai.anyConnected()) {
+        let tick = null;
         try {
           // Llama on a laptop can be slow: if the AI hasn't chosen within a few minutes, the footage scores decide.
-          const waitSec = Number(ctx.setting('production.aiPickSeconds', 240));
+          const waitSec = Number(ctx.setting('production.aiPickSeconds', 240)); const t0 = Date.now();
+          tick = setInterval(() => { const left = Math.max(0, waitSec - Math.round((Date.now() - t0) / 1000)); onProgress(0.45 + 0.4 * (1 - left / waitSec), `AI choosing the best ${count} (uses the scores in ${Math.ceil(left / 60)} min if it hasn't answered)`); }, 5000);
           const r = await Promise.race([new Promise((_, no) => setTimeout(() => no(new Error('AI took too long')), waitSec * 1000).unref?.()), ai.ask({ role: 'analysis', json: true, clientId: asset.clientId, jobId, maxTokens: 2200, system: DISCOVERY_SYSTEM,
             prompt: `Footage: "${asset.name}" (${Math.round(duration)}s). Below are the ${Math.min(cands.length, 14)} strongest candidate moments, already measured (VO = voiceover narration, which performs best; DRONE = aerial shots). Choose the ${count} that would do best as YouTube Shorts/TikToks: a scroll-stopping first line, one clear story with a payoff, curiosity, strong visuals. Skip ones that start mid-thought or are just filler.\n\n${cands.slice(0, 14).map((c, i) => `#${i + 1} [${c.start.toFixed(1)}-${c.end.toFixed(1)}s] score ${Math.round(c.score)}${c.why.length ? ` (${c.why.join(', ')})` : ''}: "${c.text.slice(0, 300)}"`).join('\n')}\n\nReturn JSON: {"clips":[{"pick":1,"title":"<=60 chars, curiosity-driven","hook":"<=8 word on-screen headline in the speaker's own promise","caption":"1-2 sentence social caption","hashtags":["tag"],"reason":"why it will work","punchIns":[{"at":seconds_from_clip_start,"dur":1.2}],"trials":[{"name":"<=3 words","test":"what this version tests","hook":"a different opening headline","start":sec}]}]}` })]);
+          clearInterval(tick);
           const chosen = []; const seen = new Set();
           for (const x of r.json?.clips || []) {
             const c = cands[Number(x.pick) - 1]; if (!c || seen.has(c)) continue; seen.add(c);
@@ -152,7 +157,7 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
           }
           for (const c of cands) { if (chosen.length >= count) break; if (!seen.has(c)) { seen.add(c); chosen.push(fallback(c, chosen.length)); } }
           if (chosen.length) return { method: 'ai', clips: normalizeClips(chosen, { words, duration, minSec, maxSec, exclude, count }) };
-        } catch { /* the scores decide */ }
+        } catch { /* the scores decide */ } finally { clearInterval(tick); }
       }
       return { method: 'scored', clips: normalizeClips(cands.slice(0, count).map(fallback), { words, duration, minSec, maxSec, exclude, count }) };
     }

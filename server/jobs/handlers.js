@@ -169,9 +169,9 @@ queue.register('discover', {
     if (!asset) throw permanent('Asset no longer exists');
     const client = ctx.store.get('clients', asset.clientId);
     const count = job.payload.count || client.production?.clipsPerFootage || ctx.setting('production.defaultClipCount', 6);
-    h.progress(0.2, ai.anyConnected() ? 'Asking the analysis agent for the strongest moments' : 'Scanning speech (no AI connected)');
+    h.progress(0.2, 'Measuring the footage');
     const transcript = loadTranscript(asset);
-    const result = await intel.discoverClips(asset, transcript, { count, jobId: job.id, exclude: pipeline.usedRanges(asset.id), analysis: loadAnalysis(asset), vision: require('../video/vision').cached(asset.path, asset.workDir) });
+    const result = await intel.discoverClips(asset, transcript, { count, jobId: job.id, onProgress: (f, t) => h.progress(f, t), exclude: pipeline.usedRanges(asset.id), analysis: loadAnalysis(asset), vision: require('../video/vision').cached(asset.path, asset.workDir) });
     if (!result.clips.length) { ctx.store.update('assets', asset.id, { exhausted: true }); return { clips: 0, note: 'No further usable moments found' }; }
     h.progress(0.8, `Creating ${result.clips.length} clips`);
     const clips = pipeline.createClips(asset, result);
