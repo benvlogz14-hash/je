@@ -13,6 +13,11 @@ async function transcribe(asset, { jobId, onProgress } = {}) {
   const cache = path.join(asset.workDir || dir, `${asset.id}.transcript.json`);
   if (fs.existsSync(cache)) return JSON.parse(fs.readFileSync(cache, 'utf8'));
   const duration = asset.info?.duration || 0;
+  // No speech-to-text yet: install the free one (whisper.cpp) right here instead of stopping.
+  if (!ai.connected('openai')) {
+    const wh = require('../setup/whisper');
+    if (!wh.status().ready) { try { await wh.install({ progress: () => {} }); } catch (e) { const err = new Error(`Couldn't install the free speech-to-text tool: ${e.message}. Press "Install" on the speech-to-text item in Settings, or check the internet connection.`); err.notConnected = true; throw err; } }
+  }
   const localBin = ctx.setting('ai.transcription.localWhisperPath', '');
   const localModel = ctx.setting('ai.transcription.localWhisperModel', '');
   let result;
@@ -45,7 +50,7 @@ async function transcribe(asset, { jobId, onProgress } = {}) {
     }
     result = { engine: 'OpenAI Whisper', text, words, segments: segments.length ? segments : segmentsFromWords(words) };
   } else {
-    const e = new Error('No transcription engine: connect OpenAI or set a local whisper.cpp binary and model in Settings → AI');
+    const e = new Error('No speech-to-text yet. Euclidean tried to install the free one and could not; press Install on the speech-to-text item in Settings.');
     e.notConnected = true; throw e;
   }
   fs.writeFileSync(cache, JSON.stringify(result));

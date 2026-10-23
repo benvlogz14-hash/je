@@ -84,21 +84,45 @@ exit /b 0
 
 :whisper
 rem ---- whisper.cpp and the English model, next to the app (Euclidean finds them on start)
-%W% Microsoft.VCRedist.2015+.x64 >nul 2>nul
 set "WH=%~dp0tools\whisper"
+set "WURL=https://github.com/ggml-org/whisper.cpp/releases/download/v1.7.6/whisper-bin-x64.zip"
 if not exist "%WH%" mkdir "%WH%"
-dir /s /b "%WH%\whisper-cli.exe" >nul 2>nul
+echo   [..] Visual C++ runtime ^(needed by the speech-to-text tool^)
+%W% Microsoft.VCRedist.2015+.x64 >nul 2>nul
+set "WBIN="
+for /f "delims=" %%F in ('dir /s /b "%WH%\whisper-cli.exe" 2^>nul') do set "WBIN=%%F"
+if not defined WBIN (
+  echo   [..] Downloading the speech-to-text tool ^(whisper.cpp^)
+  curl.exe -L --fail --retry 3 -s -o "%TEMP%\euclidean-whisper.zip" "%WURL%" 2>nul
+  if not exist "%TEMP%\euclidean-whisper.zip" powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol='Tls12'; try { Invoke-WebRequest -UseBasicParsing '%WURL%' -OutFile (Join-Path $env:TEMP 'euclidean-whisper.zip') } catch { Write-Host ('       ' + $_.Exception.Message) }"
+  if exist "%TEMP%\euclidean-whisper.zip" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Expand-Archive -LiteralPath (Join-Path $env:TEMP 'euclidean-whisper.zip') -DestinationPath '%WH%' -Force } catch { Write-Host ('       ' + $_.Exception.Message) }"
+    del /q "%TEMP%\euclidean-whisper.zip" >nul 2>nul
+  )
+  for /f "delims=" %%F in ('dir /s /b "%WH%\whisper-cli.exe" 2^>nul') do set "WBIN=%%F"
+)
+set "WMOD=%WH%\ggml-base.en.bin"
+for %%S in ("%WMOD%") do if exist "%WMOD%" if %%~zS LSS 100000000 del /q "%WMOD%" >nul 2>nul
+if not exist "%WMOD%" (
+  echo   [..] Downloading the English speech model ^(about 150 MB^)
+  curl.exe -L --fail --retry 3 -# -o "%WMOD%.part" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
+  if not exist "%WMOD%.part" powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol='Tls12'; try { Invoke-WebRequest -UseBasicParsing 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin' -OutFile '%WMOD%.part' } catch { Write-Host ('       ' + $_.Exception.Message) }"
+  if exist "%WMOD%.part" move /y "%WMOD%.part" "%WMOD%" >nul
+)
+if not defined WBIN (
+  echo   [!!] The speech-to-text tool didn't download. Euclidean will try again by itself the first time it needs it.
+  exit /b 0
+)
+if not exist "%WMOD%" (
+  echo   [!!] The speech model didn't download. Euclidean will try again by itself the first time it needs it.
+  exit /b 0
+)
+"%WBIN%" --help >nul 2>nul
 if errorlevel 1 (
-  echo   [..] Speech-to-text tool
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol='Tls12'; $r=Invoke-RestMethod -Headers @{'User-Agent'='Euclidean'} 'https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest'; $a=$r.assets | Where-Object { $_.name -eq 'whisper-bin-x64.zip' } | Select-Object -First 1; if(-not $a){ $a=$r.assets | Where-Object { $_.name -match 'bin-x64.*\.zip$' -and $_.name -notmatch 'blas|cuda' } | Select-Object -First 1 }; $z=Join-Path $env:TEMP 'whisper.zip'; Invoke-WebRequest -UseBasicParsing $a.browser_download_url -OutFile $z; Expand-Archive -LiteralPath $z -DestinationPath '%WH%' -Force; Remove-Item $z" >nul 2>nul
+  echo   [!!] The speech-to-text tool is installed but Windows can't run it yet. Restart the PC once, or install "Microsoft Visual C++ Redistributable x64" from microsoft.com.
+) else (
+  echo   [ok] Speech-to-text ^(Whisper^) ready
 )
-if not exist "%WH%\ggml-base.en.bin" (
-  echo   [..] English speech model ^(about 150 MB^)
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol='Tls12'; Invoke-WebRequest -UseBasicParsing 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin' -OutFile '%WH%\ggml-base.en.bin'" >nul 2>nul
-)
-dir /s /b "%WH%\whisper-cli.exe" >nul 2>nul
-if errorlevel 1 (echo   [!!] Speech-to-text tool didn't install. The app's checklist has a button to retry.) else (if exist "%WH%\ggml-base.en.bin" (echo   [ok] Speech-to-text) else (echo   [!!] Speech model didn't download. The app's checklist has a button to retry.))
-
 exit /b 0
 
 :tool
