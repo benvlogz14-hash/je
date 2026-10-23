@@ -18,7 +18,7 @@ function veloClip(o) {
     id: String(o.id), type: o.type, mediaId: o.mediaId || '', name: o.name || '', start: o.start, duration: o.duration, in: o.in || 0,
     speed: 1, preservePitch: false, linkId: String(o.linkId || 0), enabled: true,
     posX: animated(o.posX || 0), posY: animated(o.posY || 0), scaleX: animated(o.scale ?? 1), scaleY: animated(o.scale ?? 1),
-    rotation: animated(0), opacity: animated(1), volume: animated(1), uniformScale: true, effects: o.effects || [],
+    rotation: animated(o.rotation || 0), opacity: animated(1), volume: animated(1), uniformScale: true, effects: o.effects || [],
     transIn: { type: 0, duration: 1 }, transOut: { type: 0, duration: 1 }, ...(o.text ? { text: o.text } : {}),
   };
 }
@@ -36,9 +36,14 @@ function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5 })
   const v1 = [veloClip({ id: nextId++, type: 0, mediaId, name: path.basename(source), start: 0, duration: dur, in: range.start, scale, posX, linkId: 1 })];
   const a1 = info.hasAudio ? [veloClip({ id: nextId++, type: 1, mediaId, name: path.basename(source), start: 0, duration: dur, in: range.start, linkId: 1 })] : [];
   const posY = st.position === 'upper' ? -H * 0.3 : st.position === 'center' ? 0 : H * 0.28;
-  const textStyle = (t, size, color) => ({ text: t, family: st.font, pixelSize: size, bold: true, italic: false, color: `#ff${color.replace('#', '').toLowerCase()}`, outlineColor: `#ff${st.outline.replace('#', '').toLowerCase()}`, outlineWidth: Math.round(st.outlineWidth / 2) });
-  const v2 = captions.captionChunks({ words, range, style }).map((c) => veloClip({ id: nextId++, type: 3, name: c.text, start: c.start, duration: c.end - c.start, posY, text: textStyle(c.text, st.size, st.primary) }));
-  const v3 = hook ? [veloClip({ id: nextId++, type: 3, name: 'Hook', start: 0, duration: Math.min(st.hookSeconds, dur), posY: -H * 0.36, text: textStyle(st.uppercase ? hook.toUpperCase() : hook, Math.round(st.size * 0.72), st.primary) })] : [];
+  const hex = (c) => `#ff${String(c || '#ffffff').replace('#', '').toLowerCase()}`;
+  const textStyle = (t, size, color, o = {}) => ({ text: t, family: o.font || st.font, pixelSize: size, bold: captions.HEAVY.has(o.font || st.font), italic: false, color: hex(color), outlineColor: hex(o.outline || st.outline), outlineWidth: Math.round((o.outlineWidth ?? st.outlineWidth) / 2), ...(o.box ? { box: true, boxColor: hex(o.boxColor), boxPad: 18 } : {}) });
+  const v2 = captions.captionChunks({ words, range, style }).map((c) => veloClip({ id: nextId++, type: 3, name: c.text, start: c.start, duration: c.end - c.start, posY, rotation: st.rotate || 0, text: textStyle(c.text, st.size, st.primary) }));
+  // The opening banner keeps its own look: font, size, colours, box or outline, rotation, position and capitals.
+  const hk = String(st.hookText || '').trim() || hook;
+  const hookY = st.hookPosition === 'lower' ? H * 0.28 : st.hookPosition === 'center' ? 0 : -H * 0.36;
+  const v3 = hk && st.hook !== false ? [veloClip({ id: nextId++, type: 3, name: 'Hook', start: 0, duration: Math.min(st.hookSeconds, dur), posY: hookY, rotation: st.hookTilt || 0,
+    text: textStyle(st.hookUpper ? hk.toUpperCase() : hk, Math.round(st.hookSize || st.size * 0.72), st.hookColor, { font: st.hookFont || st.font, outline: st.hookOutline, outlineWidth: st.hookOutlineWidth, box: st.hookBox, boxColor: st.hookBg }) })] : [];
   const track = (type, nm, clips) => ({ type, name: nm, muted: false, locked: false, volume: animated(1), clips });
   return {
     app: 'velo', version: 1,

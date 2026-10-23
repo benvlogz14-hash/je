@@ -5,6 +5,7 @@ import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { play as sfx } from '../lib/sound.js';
 import { tc, ago, dur } from '../lib/format.js';
+import { FONT_GROUPS, HEAVY } from '../lib/fonts.js';
 
 // ------------------------------------------------------------ Velo effect registry (mirrors src/effects/Effects.cpp)
 const EFFECTS = [
@@ -147,6 +148,7 @@ function animParams(c) {
 function shiftKeys(c, dt) { for (const [o, k] of animParams(c)) if (o[k]?.keys?.length) o[k] = { ...o[k], keys: o[k].keys.map(([t, v]) => [qt(t + dt), v]) }; }
 const keyTimesOf = (c) => [...new Set(animParams(c).flatMap(([o, k]) => sortedKeys(o[k]).map((x) => x[0])))].sort((a, b) => a - b);
 const clone = (o) => JSON.parse(JSON.stringify(o));
+const isCaption = (c) => c && c.type === 3 && c.name !== 'Hook' && !!c.text;
 const TRACK_H = { 0: 48, 1: 40 };
 // Live scrubbing mutates the clip in place for instant preview; the original value is restored
 // right before the committing edit() so undo snapshots stay correct.
@@ -503,7 +505,8 @@ function Editor({ id }) {
       <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} edit=${edit} setSel=${setSel} />
       <${EffectControls} selected=${selected} seq=${seq} edit=${edit} media=${media} t=${t} setT=${setT} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
     </div>
-    <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onClipMenu=${clipMenu} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
+    <div style="display:flex;flex-direction:column;min-height:0"><${CaptionsBar} seq=${seq} sel=${sel} setSel=${setSel} edit=${edit} findClip=${findClip} nextId=${nextId} />
+    <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onClipMenu=${clipMenu} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} /></div>
     ${exporting ? html`<${ExportDialog} id=${id} onClose=${() => setExporting(false)} />` : null}
     ${titleEdit ? html`<${TitleDesigner} seq=${seq} clip=${titleEdit.clipId ? findClip(seq, titleEdit.clipId)?.c : null} onClose=${() => setTitleEdit(null)} onSave=${saveTitle} />` : null}
   </div>`;
@@ -562,6 +565,48 @@ function overwrite(track, c) {
 
 // ------------------------------------------------------------ AI edit: describe a change, the connected AI makes it
 const AI_EXAMPLES = ['Add a hook title "WAIT FOR IT" for the first 2 seconds', 'Slowly zoom in on the first clip from 100% to 120%', 'Cut the first 2 seconds', 'Add cross dissolves between the clips', 'Make the whole edit black and white', 'Add a subscribe banner for the last 3 seconds'];
+/** Change all selected captions at once: size, font, and "2 words per line" so none run off the screen. */
+function CaptionsBar({ seq, sel, setSel, edit, findClip, nextId }) {
+  if (!seq) return null;
+  const all = [...seq.videoTracks].flatMap((tr) => tr.clips.filter(isCaption));
+  if (!all.length) return null;
+  const chosen = sel.map((id) => findClip(seq, id)?.c).filter(isCaption);
+  const ids = chosen.length ? chosen.map((c) => c.id) : [];
+  const forAll = (fn) => edit((d, s) => { for (const cid of ids) { const f = findClip(s, cid); if (f && isCaption(f.c)) fn(f.c); } });
+  const size = chosen[0]?.text?.pixelSize || 96;
+  const scale = (k) => forAll((c) => { c.text.pixelSize = Math.max(20, Math.min(320, Math.round((c.text.pixelSize || 96) * k))); });
+  const twoWords = () => edit((d, s) => {
+    const made = [];
+    for (const cid of ids) {
+      const f = findClip(s, cid); if (!f || !isCaption(f.c)) continue;
+      const c = f.c; const words = String(c.text.text || '').trim().split(/\s+/).filter(Boolean);
+      if (words.length <= 2) { made.push(c.id); continue; }
+      const parts = []; for (let i = 0; i < words.length; i += 2) parts.push(words.slice(i, i + 2).join(' '));
+      const total = parts.reduce((n, x) => n + x.length + 1, 0); let at = c.start; const end = c.start + c.duration;
+      parts.forEach((txt, i) => {
+        const len = i === parts.length - 1 ? end - at : c.duration * ((txt.length + 1) / total);
+        const piece = i === 0 ? c : clone(c); if (i > 0) { piece.id = nextId(d); f.tr.clips.push(piece); }
+        piece.start = at; piece.duration = Math.max(0.05, len); piece.name = txt; piece.text = { ...piece.text, text: txt };
+        made.push(piece.id); at += len;
+      });
+    }
+    setTimeout(() => setSel(made), 0);
+  });
+  return html`<div class="row wrap" style="gap:8px;padding:6px 12px;border-top:1px solid var(--line);background:var(--surface-2);font-size:var(--fs-sm)">
+    <b>Captions</b>
+    ${ids.length ? html`<span class="faint">${ids.length} selected</span>` : html`<span class="faint">click any caption to select them all</span>`}
+    <${Button} size="sm" kind="ghost" onClick=${() => setSel(all.map((c) => c.id))}>Select all captions</${Button}>
+    ${ids.length ? html`
+      <span class="faint">Size</span><${Button} size="sm" kind="ghost" onClick=${() => scale(1 / 1.1)}>A−</${Button}>
+      <input class="input sm tnum" type="number" style="width:70px" value=${size} min="20" max="320" onChange=${(e) => { const v = Number(e.target.value); if (v > 0) forAll((c) => { c.text.pixelSize = Math.max(20, Math.min(320, v)); }); }} aria-label="Caption size" />
+      <${Button} size="sm" kind="ghost" onClick=${() => scale(1.1)}>A+</${Button}>
+      <select class="select sm" style="width:auto;font-family:'${chosen[0]?.text?.family || 'Montserrat'}'" value=${chosen[0]?.text?.family || 'Montserrat'} onChange=${(e) => forAll((c) => { c.text.family = e.target.value; c.text.bold = HEAVY.has(e.target.value); })} aria-label="Caption font">
+        ${FONT_GROUPS.map(([g, list]) => html`<optgroup label=${g}>${list.map((f) => html`<option value=${f} style=${{ fontFamily: `'${f}'` }}>${f}</option>`)}</optgroup>`)}</select>
+      <${Button} size="sm" kind="soft" onClick=${twoWords} title="Split every selected caption into 2-word pieces so none run off the screen">2 words per line</${Button}>
+      <${Button} size="sm" kind="ghost" onClick=${() => setSel([])}>Done</${Button}>` : null}
+  </div>`;
+}
+
 function AIPanel({ aiEdit, aiUndo, projectId, selected }) {
   const boot = useStore((st) => st.boot);
   const connected = Object.values(boot?.connections?.ai || {}).some(Boolean);
@@ -1072,7 +1117,11 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
     const edgeL = e.clientX - r.left < 7, edgeR = r.right - e.clientX < 7;
     const mode = edgeL ? 'trimL' : edgeR ? 'trimR' : 'move';
     const additive = e.shiftKey || e.ctrlKey;
-    const ids = additive ? [...new Set([...sel, c.id])] : sel.includes(c.id) ? sel : [c.id];
+    // Captions: the first click selects every caption on that track (change them all at once); clicking one of an
+    // all-captions selection again picks just that one. Alt-click always picks one.
+    const caps = isCaption(c) ? lane.tr.clips.filter(isCaption).map((x) => x.id) : [];
+    const allCapsSelected = caps.length > 1 && caps.every((cid) => sel.includes(cid)) && sel.length === caps.length;
+    const ids = additive ? [...new Set([...sel, c.id])] : caps.length > 1 && !e.altKey && !allCapsSelected ? caps : allCapsSelected ? [c.id] : sel.includes(c.id) ? sel : [c.id];
     setSel(ids); sfx('tap');
     const group = mode === 'move' ? [...new Set(ids.flatMap((id) => { const f = findClip(seq, id); return f ? linked(seq, f.c).map((x) => x.id) : []; }))] : [c.id, ...linked(seq, c).filter((x) => x.id !== c.id).map((x) => x.id)];
     const orig = Object.fromEntries(group.map((id) => [id, clone(findClip(seq, id).c)]));
