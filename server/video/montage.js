@@ -168,13 +168,13 @@ function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5 }) {
  * file the normal renderer then frames, captions and finishes. Returns the file path.
  */
 async function assemble({ source, info, start, end, covers, out, signal }) {
-  const len = end - start; const W = info.width || 1920; const H = info.height || 1080;
+  const len = end - start; const W = info.width || 1920; const H = info.height || 1080; const FPS = require('./render').outFps(info.fps);
   const args = ['-hide_banner', '-y', '-ss', start.toFixed(3), '-t', len.toFixed(3), '-i', source];
   covers.forEach((c) => args.push('-ss', c.src.toFixed(3), '-t', (c.dur + 0.1).toFixed(3), '-an', '-i', source));
-  const f = [`[0:v]setpts=PTS-STARTPTS,fps=30,scale=${W}:${H}:flags=bicubic,setsar=1,format=yuv420p[b0]`];
+  const f = [`[0:v]setpts=PTS-STARTPTS,fps=${FPS},scale=${W}:${H}:flags=bicubic,setsar=1,format=yuv420p[b0]`];
   covers.forEach((c, i) => {
     const off = c.at - start;
-    f.push(`[${i + 1}:v]setpts=PTS-STARTPTS+${off.toFixed(3)}/TB,fps=30,scale=${W}:${H}:force_original_aspect_ratio=increase:flags=bicubic,crop=${W}:${H},setsar=1,format=yuv420p[c${i}]`);
+    f.push(`[${i + 1}:v]setpts=PTS-STARTPTS+${off.toFixed(3)}/TB,fps=${FPS},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=bicubic,crop=${W}:${H},setsar=1,format=yuv420p[c${i}]`);
     f.push(`[b${i}][c${i}]overlay=enable='between(t,${off.toFixed(3)},${(off + c.dur).toFixed(3)})':eof_action=pass[b${i + 1}]`);
   });
   args.push('-filter_complex', f.join(';'), '-map', `[b${covers.length}]`, '-map', '0:a?', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '15', '-c:a', 'aac', '-b:a', '192k', '-t', len.toFixed(3), out);

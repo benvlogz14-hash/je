@@ -57,6 +57,14 @@ function cutPauses(silences, start, end, minGap = 0.6, pad = 0.15) {
   return out.length && out.reduce((n, [a, b]) => n + b - a, 0) > (end - start) * 0.35 ? out : [[start, end]];
 }
 
+/** Output frame rate: the source's, snapped to 24/25/30/50/60 (NTSC rates kept exact). */
+function outFps(src) {
+  const f = Number(src) || 30;
+  const std = [[23.976, '24000/1001'], [24, '24'], [25, '25'], [29.97, '30000/1001'], [30, '30'], [50, '50'], [59.94, '60000/1001'], [60, '60']];
+  let best = std[4]; for (const x of std) if (Math.abs(x[0] - f) < Math.abs(best[0] - f)) best = x;
+  return Math.abs(best[0] - f) < 1.5 ? best[1] : f > 60 ? '60' : '30';
+}
+
 /** Map an absolute source time into the cut timeline (relative to clip start). */
 function remap(t, segs) {
   let acc = 0;
@@ -111,11 +119,14 @@ async function renderShort(o) {
   const audioIdx = info.hasAudio ? 0 : (hasLogo ? 2 : 1);
 
   const f = [];
-  // 1. Jump cuts (times relative to the input seek point).
+  // Keep the footage's own frame rate (rounded to a standard one). Forcing everything to 30 repeats or drops
+  // frames every so often with 24/25/60 fps footage, which looks choppy on smooth pans and drone shots.
+  const FPS = outFps(info.fps);
+  // 1. Jump cuts (times relative to the input seek point). Steady the frame timing first so cuts land cleanly.
   let v = '0:v', a = `${audioIdx}:a`;
   if (segs.length > 1) {
     const expr = segs.map(([s, e]) => `between(t,${(s - start).toFixed(3)},${(e - start).toFixed(3)})`).join('+');
-    f.push(`[0:v]select='${expr}',setpts=N/FRAME_RATE/TB[vcut]`);
+    f.push(`[0:v]fps=${FPS},select='${expr}',setpts=N/(${FPS})/TB[vcut]`);
     v = 'vcut';
     if (info.hasAudio) { f.push(`[0:a]aselect='${expr}',asetpts=N/SR/TB[acut]`); a = 'acut'; }
   }
@@ -164,7 +175,7 @@ async function renderShort(o) {
     f.push(`[${v}]drawbox=x=0:y=ih-14:w=iw*t/${outDur.toFixed(3)}:h=14:color=${col}@0.95:t=fill[vp]`);
     v = 'vp';
   }
-  f.push(`[${v}]fps=30,format=yuv420p[vout]`);
+  f.push(`[${v}]fps=${FPS},format=yuv420p[vout]`);
   // 6. Audio: loudness normalisation and click-free edges.
   const lufs = o.loudness ?? -14;
   f.push(`[${a}]aresample=48000,loudnorm=I=${lufs}:TP=-1.5:LRA=11,afade=t=in:d=0.03,afade=t=out:st=${Math.max(0, outDur - 0.08).toFixed(3)}:d=0.08[aout]`);
@@ -184,4 +195,4 @@ async function renderShort(o) {
   return { outPath: o.outPath, assPath, srtPath, duration: outDur, segments: segs, encoder: enc, cutWords };
 }
 
-module.exports = { renderShort, cutPauses, keptSegments, remap, ensureFonts, W, H };
+module.exports = { renderShort, outFps, cutPauses, keptSegments, remap, ensureFonts, W, H };
