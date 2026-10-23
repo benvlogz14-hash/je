@@ -1,5 +1,5 @@
 // Clip detail: player, versions, QC, copy, timing and every action a clip supports.
-import { html, useState, useEffect, useRef, useApi, Button, HoldButton, Seg, Toggle, Field, StatusBadge, act, navigate, Drawer, toast } from '../lib/ui.js';
+import { html, useState, useEffect, useRef, useApi, promptDialog, Button, HoldButton, Seg, Toggle, Field, StatusBadge, act, navigate, Drawer, toast } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { FONT_GROUPS, weightOf } from '../lib/fonts.js';
@@ -155,6 +155,7 @@ function ClipMusic({ clip, reload }) {
 const STYLE_DEFAULTS = { font: 'Montserrat', size: 84, uppercase: true, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#F2C14E', outline: '#111111', outlineWidth: 7, shadow: 0, position: 'lower', animation: 'pop', highlightMode: 'word', box: false, hook: true, hookSeconds: 3.2, hookBg: '#FFFFFF', hookColor: '#111111', hookFont: '', hookSize: 0, hookPosition: 'upper', hookBox: true, hookOutline: '#111111', hookOutlineWidth: 8, hookTilt: 0, hookAnim: 'fade', rotate: 0, hookUpper: false };
 // One-click looks; every value can still be changed below.
 const LOOKS = [
+  { id: 'signature', label: 'Signature', v: { font: 'Montserrat', size: 84, uppercase: true, primary: '#FFFFFF', highlight: '#F2C14E', outline: '#111111', outlineWidth: 7, shadow: 0, wordsPerLine: 3, box: false, rotate: 0, hookFont: '', hookSize: 0, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 8, hookTilt: 0, hookAnim: 'fade', hookUpper: false } },
   { id: 'cartoon', label: 'Cartoon', v: { font: 'Luckiest Guy', size: 96, uppercase: true, primary: '#FFFFFF', highlight: '#FFD23F', outline: '#000000', outlineWidth: 9, shadow: 5, wordsPerLine: 2, box: false, hookFont: 'Luckiest Guy', hookSize: 84, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 9, hookTilt: -4, hookAnim: 'pop' } },
   { id: 'comic', label: 'Comic', v: { font: 'Bangers', size: 104, uppercase: true, primary: '#FFFFFF', highlight: '#FF4D6D', outline: '#000000', outlineWidth: 8, shadow: 4, wordsPerLine: 3, box: false, hookFont: 'Bangers', hookSize: 88, hookBox: true, hookBg: '#FFD23F', hookColor: '#000000', hookTilt: -3, hookAnim: 'pop' } },
   { id: 'bubbly', label: 'Bubbly', v: { font: 'Titan One', size: 88, uppercase: false, primary: '#FFFFFF', highlight: '#5CE1E6', outline: '#1B1B3A', outlineWidth: 10, shadow: 4, wordsPerLine: 2, box: false, hookFont: 'Titan One', hookSize: 76, hookBox: true, hookBg: '#FF8FB1', hookColor: '#FFFFFF', hookTilt: 0, hookAnim: 'pop' } },
@@ -187,7 +188,10 @@ function CaptionStyle({ clip, reload }) {
   const colours = (list) => html`<div class="row wrap" style="gap:12px">${list.map(([k, l]) => html`<label class="col" style="gap:3px;font-size:var(--fs-xs)"><span class="faint">${l}</span><input type="color" value=${s[k]} onInput=${set(k)} style="width:44px;height:30px;border:none;background:none;padding:0" /></label>`)}</div>`;
   const fontPick = (k, id, same) => html`<select id=${id} class="select" value=${s[k]} onChange=${set(k)} style=${{ fontFamily: `'${s[k] || s.font}', sans-serif`, fontSize: '15px' }}>${same ? html`<option value="">Same as captions</option>` : null}${FONT_GROUPS.map(([g, list]) => html`<optgroup label=${g}>${list.map((f) => html`<option value=${f} style=${{ fontFamily: `'${f}', sans-serif`, fontSize: '16px' }}>${f}</option>`)}</optgroup>`)}</select>`;
   const flag = (on, onChange, l) => html`<label class="row" style="gap:6px"><${Toggle} on=${on} onChange=${onChange} label=${l} /><span style="font-size:var(--fs-sm)">${l}</span></label>`;
-  const look = LOOKS.find((x) => Object.entries(x.v).every(([k, v]) => s[k] === v))?.id;
+  const [mine, setMine] = useState(() => { try { return JSON.parse(localStorage.getItem('eu.looks') || '[]'); } catch { return []; } });
+  const keepMine = (list) => { setMine(list); try { localStorage.setItem('eu.looks', JSON.stringify(list)); } catch { /* private window */ } };
+  const saveLook = async () => { const name = await promptDialog({ title: 'Save this look', label: 'Name', value: 'My look', confirm: 'Save' }); if (name) keepMine([...mine.filter((x) => x.label !== name), { id: `mine-${Date.now()}`, label: name.slice(0, 24), v: Object.fromEntries(Object.keys(LOOKS[0].v).map((k) => [k, s[k]])) }]); };
+  const look = [...LOOKS, ...mine].find((x) => Object.entries(x.v).every(([k, v]) => s[k] === v))?.id;
   return html`<details class="panel pad" open=${!clip.versions?.[clip.versions.length - 1]?.captioned}>
     <summary><b>Captions and text</b> <span class="faint" style="font-size:var(--fs-xs)">${clip.style ? 'custom for this clip' : `using ${client?.name || 'the client'}'s style`}</span></summary>
     <div class="row wrap" style="gap:16px;margin-top:10px;align-items:flex-start">
@@ -197,7 +201,7 @@ function CaptionStyle({ clip, reload }) {
           ${words.map((w, i) => html`<span style=${{ color: i === 1 && s.highlightMode === 'word' ? s.highlight : s.primary, WebkitTextStroke: !s.box ? stroke(s.outlineWidth, s.outline) : '0', paintOrder: 'stroke fill', textShadow: s.box ? 'none' : shadow(s.shadow), background: s.box ? s.outline : 'none', padding: s.box ? '1px 3px' : 0, marginRight: '3px', display: 'inline-block' }}>${txt(w)}</span>`)}</div>
       </div>
       <div class="col grow" style="gap:12px;min-width:260px">
-        <div class="col" style="gap:4px"><span class="label">Quick looks</span><div class="row wrap" style="gap:6px">${LOOKS.map((x) => html`<button class="chip" style=${{ fontFamily: `'${x.v.font}', sans-serif`, fontSize: '15px', ...(look === x.id ? { background: 'var(--accent-soft, #dcefeb)', borderColor: 'var(--accent, #5f9a91)' } : {}) }} onClick=${() => setS({ ...s, ...x.v })}>${x.label}</button>`)}</div></div>
+        <div class="col" style="gap:4px"><span class="label">Quick looks</span><div class="row wrap" style="gap:6px">${[...LOOKS, ...mine].map((x) => html`<button class="chip" style=${{ fontFamily: `'${x.v.font}', sans-serif`, fontSize: '15px', ...(look === x.id ? { background: 'var(--accent-soft, #dcefeb)', borderColor: 'var(--accent, #5f9a91)' } : {}) }} onClick=${() => setS({ ...s, ...x.v })} onContextMenu=${(e) => { if (!x.id.startsWith('mine-')) return; e.preventDefault(); keepMine(mine.filter((y) => y.id !== x.id)); }} title=${x.id.startsWith('mine-') ? 'Your saved look (right-click to remove)' : ''}>${x.label}</button>`)}<button class="chip" onClick=${saveLook} title="Save the current settings as a one-click look">+ Save this look</button></div></div>
 
         <div class="col" style="gap:8px;border-top:1px solid var(--line, #eee);padding-top:10px">
           <b style="font-size:var(--fs-sm)">Captions (spoken words)</b>
