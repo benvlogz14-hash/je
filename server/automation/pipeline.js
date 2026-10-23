@@ -91,7 +91,11 @@ function requestRender(clip, { reason = 'render', changes = null } = {}) {
   if (ctx.setting('production.preferPremiere', false)) {
     return queue.enqueue('premiere.handoff', { clipId: clip.id, reason }, { clientId: clip.clientId, title: `Premiere edit: ${clip.title}`, dedupeKey: `premiere:${clip.id}:${(clip.versions || []).length + 1}` });
   }
-  return queue.enqueue('render.short', { clipId: clip.id, reason }, { clientId: clip.clientId, title: `Render: ${clip.title}`, dedupeKey: `render:${clip.id}:${(clip.versions || []).length + 1}`, priority: 5 });
+  // A render already running started before this change, so it won't include it: queue a fresh one after it.
+  // (A render that is still waiting reads the clip when it starts, so joining that one is fine.)
+  let key = `render:${clip.id}:${(clip.versions || []).length + 1}`;
+  if (ctx.store.find('jobs', (j) => j.dedupeKey === key && j.status === 'running')) key += `:again:${Date.now()}`;
+  return queue.enqueue('render.short', { clipId: clip.id, reason }, { clientId: clip.clientId, title: `Render: ${clip.title}`, dedupeKey: key, priority: 5 });
 }
 
 /** Called after QC. Opens the right approval or auto-approves for creator clients on autopilot. */

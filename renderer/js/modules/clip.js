@@ -31,7 +31,7 @@ export function ClipDetail({ clip, reload, compact }) {
   return html`<div style=${{ display: 'grid', gridTemplateColumns: compact ? '1fr' : 'minmax(260px, 340px) minmax(0, 1fr)', gap: '22px' }}>
     <div class="col" style="gap:12px">
       <div style="height:min(600px, 64vh)"><${ClipPlayer} clip=${clip} version=${v} /></div>
-      ${clip.versions?.length > 1 ? html`<div class="row wrap"><span class="faint" style="font-size:var(--fs-sm)">Version</span>${clip.versions.map((x) => html`<button class=${'chip' + (x.n === v ? ' on' : '')} onClick=${() => setV(x.n)}>v${x.n}${x.n === clip.currentVersion ? ' · current' : ''}</button>`)}</div>` : null}
+      ${clip.versions?.length > 1 ? html`<div class="row wrap"><span class="faint" style="font-size:var(--fs-sm)">Version</span>${clip.versions.map((x) => html`<button class=${'chip' + (x.n === v ? ' on' : '')} onClick=${() => setV(x.n)} title=${x.renderedAt || ''}>v${x.n}${x.look?.font ? ` · ${x.look.font}` : ''}${x.n === clip.currentVersion ? ' · current' : ''}</button>`)}${v !== clip.currentVersion ? html`<${Button} size="sm" kind="soft" onClick=${() => act(() => api.post(`/api/clips/${clip.id}/version`, { n: v }), { ok: `v${v} is now the current version` }).then(reload)}>Use v${v}</${Button}>` : null}</div>` : null}
       ${version ? html`<div class="row wrap" style="gap:6px">
         <${Button} size="sm" kind="ghost" icon="download" onClick=${() => openFile(clip, v, 'mp4')}>MP4</${Button}>
         ${version.srt ? html`<${Button} size="sm" kind="ghost" icon="download" onClick=${() => openFile(clip, v, 'srt')}>SRT</${Button}>` : null}
