@@ -27,7 +27,7 @@ Desktop app for Euclidean Media (founders Ryan Rosario and Ben Gingold), a short
 - **Agent network:** `server/agents/` (registry, adapters, broker, protocol, routes). Peer-to-peer agents; nobody is the central orchestrator; external actions need human approval.
 - **Creators analytics:** `server/integrations/creators.js` (yt-dlp, Social Blade-style report).
 - **Renderer:** Preact + htm with no build step, in `renderer/js`. Modules are in `renderer/js/modules/*.js` (studio, analytics, growth, agents, settings, production and others).
-  - Light theme only: white base, pastel accents and buttons.
+  - Light theme by default: white base, pastel accents and buttons. Night mode (Settings → Appearance → Night, `html[data-night]`, `renderer/css/night.css`) is a red-on-black cyberpunk HUD: pale bezel around a black workspace, hairline red panels with red header bars and folder tabs, Chakra Petch + Share Tech Mono fonts, grayscale thumbnails.
 - **Phone app:** `mobile/`, an Expo SDK 57 React Native remote for the engine.
   - Run it with `Start Phone App.bat` (Expo Go).
   - `.github/workflows/ios-app.yml` builds an unsigned `.ipa` for Sideloadly.

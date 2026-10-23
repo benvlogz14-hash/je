@@ -280,9 +280,9 @@ function Backups() {
 function Appearance() {
   const [theme, setTheme] = useState(() => { try { return localStorage.getItem('eu.theme') || 'light'; } catch { return 'light'; } });
   const [snd, setSnd] = useState(soundOn());
-  const apply = (t) => { setTheme(t); try { localStorage.setItem('eu.theme', t); } catch { /* ignore */ } if (t === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; window.euclidean?.setTheme?.(t); };
+  const apply = (t) => { setTheme(t); try { localStorage.setItem('eu.theme', t); } catch { /* ignore */ } window.__applyTheme?.(t); window.euclidean?.setTheme?.(t); };
   return html`<${Section} title="Appearance">
-    <div class="row"><span class="label" style="width:120px">Theme</span><${Seg} value=${theme} onChange=${apply} options=${[{ value: 'light', label: 'Light', icon: 'sun' }, { value: 'dark', label: 'Dark', icon: 'moon' }, { value: 'system', label: 'Match system' }]} /></div>
+    <div class="row"><span class="label" style="width:120px">Theme</span><${Seg} value=${theme} onChange=${apply} options=${[{ value: 'light', label: 'Light', icon: 'sun' }, { value: 'dark', label: 'Night', icon: 'moon' }, { value: 'system', label: 'Match system' }]} /></div>
     <div class="row"><span class="label" style="width:120px">Sounds</span><${Toggle} on=${snd} label="Sounds" onChange=${(v) => { setSound(v); setSnd(v); }} /><span class="muted" style="font-size:var(--fs-sm)">Soft clicks, send and receive tones</span></div>
     <div class="divider" /><div class="eyebrow">Keyboard</div>
     <div class="grid c2" style="font-size:var(--fs-sm)">${[['Ctrl K', 'Search and commands'], ['Ctrl 1–0', 'Switch module'], ['Ctrl ,', 'Settings'], ['/', 'Commands in any composer'], ['A / R / X', 'Approve, request changes, reject'], ['J / K', 'Next / previous in Approvals'], ['Space', 'Play / pause'], ['S', 'Split in Studio']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="muted">${d}</span></div>`)}</div>

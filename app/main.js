@@ -31,7 +31,7 @@ function createWindow({ lite = false } = {}) {
     ...(lite ? { width: 380, height: 560, resizable: true, minWidth: 340, minHeight: 420, alwaysOnTop: false } : { width: st.width || 1440, height: st.height || 900, x: st.x, y: st.y, minWidth: 980, minHeight: 640 }),
     title: 'Euclidean', icon: ICON, show: false, autoHideMenuBar: true, backgroundColor: nativeTheme.shouldUseDarkColors ? '#15181b' : '#f4f5f7',
     titleBarStyle: isWin ? 'hidden' : 'hiddenInset',
-    titleBarOverlay: isWin ? { color: nativeTheme.shouldUseDarkColors ? '#1c2024' : '#ffffff', symbolColor: nativeTheme.shouldUseDarkColors ? '#e9ecef' : '#1c2024', height: 41 } : undefined,
+    titleBarOverlay: isWin ? { color: nativeTheme.shouldUseDarkColors ? '#e7e8ee' : '#ffffff', symbolColor: nativeTheme.shouldUseDarkColors ? '#ff2a2a' : '#1c2024', height: 41 } : undefined,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: false, backgroundThrottling: true, spellcheck: true },
   });
   win.__lite = lite;
@@ -111,7 +111,12 @@ app.whenReady().then(async () => {
   ipcMain.on('eu:token', (e) => { e.returnValue = token; });
   ipcMain.on('eu:lite', (e, on) => applyMode(on ? 'lite' : 'full'));
   ipcMain.on('eu:tray', () => applyMode('background'));
-  ipcMain.on('eu:theme', (e, t) => { nativeTheme.themeSource = t === 'system' ? 'system' : t; });
+  ipcMain.on('eu:theme', (e, t) => {
+    nativeTheme.themeSource = t === 'system' ? 'system' : t;
+    // Night mode's title bar is the pale bezel with red window buttons.
+    const night = nativeTheme.shouldUseDarkColors;
+    if (process.platform === 'win32') for (const w of BrowserWindow.getAllWindows()) { try { w.setTitleBarOverlay({ color: night ? '#e7e8ee' : '#ffffff', symbolColor: night ? '#ff2a2a' : '#1c2024' }); } catch { /* window without an overlay */ } }
+  });
   ipcMain.on('eu:notify', (e, { title, body }) => { if (Notification.isSupported()) { const n = new Notification({ title, body, icon: ICON }); n.on('click', () => createWindow({ lite: false })); n.show(); } });
 
   tray = new Tray(nativeImage.createFromPath(TRAY_ICON));

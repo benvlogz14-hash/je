@@ -223,12 +223,22 @@ function Gate({ error }) {
     <p class="muted">${error || 'This window needs an access token. Open Euclidean from the desktop app, or use the link the engine prints when it starts (it ends with ?token=…).'}</p></div></div>`;
 }
 
+/** Light, Night (the red cyberpunk HUD) or follow the system. */
+export function applyTheme(t) {
+  window.__applyTheme = applyTheme;
+  const el = document.documentElement;
+  if (t === 'system') delete el.dataset.theme; else el.dataset.theme = t;
+  const night = t === 'dark' || (t === 'system' && window.matchMedia?.('(prefers-color-scheme: dark)').matches);
+  el.toggleAttribute('data-night', !!night);
+}
+try { window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener('change', () => { let t = 'light'; try { t = localStorage.getItem('eu.theme') || 'light'; } catch { /* ignore */ } if (t === 'system') applyTheme(t); }); } catch { /* old browsers */ }
+
 export async function boot(demoBackend) {
   const root = document.getElementById('app');
   // Light (white with pastel accents) is the default; dark and follow-system are opt-in in Settings.
   let theme = 'light'; try { theme = localStorage.getItem('eu.theme') || 'light'; } catch { /* ignore */ }
   if (window.EUCLIDEAN_DEMO) theme = 'light';
-  if (theme === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme;
+  applyTheme(theme);
   if (!api.init(demoBackend)) return render(html`<${Gate} />`, root);
   try {
     const b = await api.get('/api/bootstrap');
