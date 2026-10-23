@@ -21,7 +21,7 @@ export function ClipDetail({ clip, reload, compact }) {
   const [v, setV] = useState(clip.currentVersion);
   useEffect(() => setV(clip.currentVersion), [clip.currentVersion]);
   const [f, setF] = useState(pick(clip));
-  useEffect(() => setF(pick(clip)), [clip.id, clip.updatedAt]);
+  useEffect(() => setF(pick(clip)), [clip.id, JSON.stringify(pick(clip))]); // only when the saved values change, not on render progress
   const [feedback, setFeedback] = useState('');
   const dirty = JSON.stringify(f) !== JSON.stringify(pick(clip));
   const version = clip.versions?.[v - 1];
@@ -123,7 +123,7 @@ function ClipMusic({ clip, reload }) {
   const clientVol = client?.production?.musicVolume ?? 0.3;
   const init = () => ({ music: clip.music || 'auto', track: clip.musicTrack || 'auto', voice: Math.round((clip.voiceVol ?? 1) * 100), vol: Math.round((clip.musicVol ?? clientVol) * 100), cuts: clip.visualCuts !== false });
   const [m, setM] = useState(init);
-  useEffect(() => setM(init()), [clip.id, clip.updatedAt, client?.id]);
+  useEffect(() => setM(init()), [clip.id, client?.id, JSON.stringify(init())]);
   const [playing, setPlaying] = useState(null); const audio = useRef(null);
   const preview = (id) => { if (!audio.current) audio.current = new Audio(); if (playing === id) { audio.current.pause(); setPlaying(null); return; } audio.current.src = api.url(`/api/music/play?id=${encodeURIComponent(id)}`); audio.current.volume = 0.6; audio.current.play().catch(() => {}); setPlaying(id); };
   useEffect(() => () => audio.current?.pause(), []);
@@ -169,10 +169,10 @@ function CaptionStyle({ clip, reload }) {
   const { data: client } = useApi(`/api/clients/${clip.clientId}`, ['clients']);
   const base = { ...STYLE_DEFAULTS, ...(client?.style || {}) };
   const [s, setS] = useState({ ...base, ...(clip.style || {}) });
-  useEffect(() => setS({ ...base, ...(clip.style || {}) }), [client?.id, clip.id, clip.updatedAt]);
+  useEffect(() => setS({ ...base, ...(clip.style || {}) }), [client?.id, clip.id, JSON.stringify(clip.style || null), JSON.stringify(client?.style || null)]);
   const set = (k) => (e) => setS({ ...s, [k]: e?.target ? (e.target.type === 'range' || e.target.type === 'number' ? Number(e.target.value) : e.target.value) : e });
   const [hookText, setHookText] = useState(clip.hook || '');
-  useEffect(() => setHookText(clip.hook || ''), [clip.id, clip.updatedAt]);
+  useEffect(() => setHookText(clip.hook || ''), [clip.id, clip.hook]);
   const saveHook = async () => { if (hookText !== (clip.hook || '')) await api.patch(`/api/clips/${clip.id}`, { hook: hookText }); };
   const thisClip = () => act(async () => { await saveHook(); await api.patch(`/api/clips/${clip.id}`, { style: s }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: 'Saved; re-rendering with the new captions' }).then(reload);
   const allClips = () => act(async () => { await saveHook(); await api.patch(`/api/clients/${clip.clientId}`, { style: s }); await api.patch(`/api/clips/${clip.id}`, { style: null }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: `Saved for every ${client?.name || 'client'} clip; re-rendering this one` }).then(reload);
