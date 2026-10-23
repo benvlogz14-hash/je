@@ -22,6 +22,15 @@ const DEFAULT_STYLE = {
   hookSeconds: 3.2,
   hookBg: '#FFFFFF',
   hookColor: '#111111',
+  // The opening text has its own look; empty font / size means "same as the captions".
+  hookFont: '',
+  hookSize: 0,
+  hookPosition: 'upper', // 'upper' | 'center' | 'lower'
+  hookBox: true,         // solid box behind it (hookBg); off = outlined text like the captions
+  hookOutline: '#111111',
+  hookOutlineWidth: 8,
+  hookTilt: 0,           // degrees, a little tilt reads as playful
+  hookAnim: 'fade',      // 'fade' | 'pop'
   punctuation: false,    // keep commas/periods in captions
 };
 
@@ -31,6 +40,10 @@ const PRESETS = {
   'minimal': { uppercase: false, highlightMode: 'none', animation: 'none', size: 66, outlineWidth: 4, wordsPerLine: 5 },
   'news': { uppercase: true, highlight: '#E07A5F', wordsPerLine: 4, size: 72, position: 'lower' },
   'karaoke-teal': { highlight: '#6CC3B8', wordsPerLine: 2, size: 96 },
+  // Bold cartoon looks, like big YouTube channels.
+  'cartoon': { font: 'Luckiest Guy', size: 96, highlight: '#FFD23F', outline: '#000000', outlineWidth: 9, shadow: 5, wordsPerLine: 2, hookFont: 'Luckiest Guy', hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookTilt: -4, hookAnim: 'pop' },
+  'comic': { font: 'Bangers', size: 104, highlight: '#FF4D6D', outline: '#000000', outlineWidth: 8, shadow: 4, wordsPerLine: 3, hookFont: 'Bangers', hookBg: '#FFD23F', hookColor: '#000000', hookTilt: -3, hookAnim: 'pop' },
+  'bubbly': { font: 'Titan One', size: 88, highlight: '#5CE1E6', outline: '#1B1B3A', outlineWidth: 10, shadow: 4, wordsPerLine: 2, uppercase: false, hookFont: 'Titan One', hookBg: '#FF8FB1', hookColor: '#FFFFFF', hookAnim: 'pop' },
 };
 
 function resolveStyle(s) { const base = { ...DEFAULT_STYLE, ...(PRESETS[s?.preset] || {}) }; return { ...base, ...(s || {}) }; }
@@ -87,12 +100,19 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
   const marginV = style.position === 'center' ? 0 : style.position === 'upper' ? Math.round(height * 0.16) : Math.round(height * 0.2);
   const borderStyle = style.box ? 3 : 1;
   const font = style.font || style.fallbackFont;
+  const hookFont = style.hookFont || font;
+  const hookSize = Math.round(style.hookSize || style.size * 0.72);
+  const hookAlign = style.hookPosition === 'lower' ? 2 : style.hookPosition === 'center' ? 5 : 8;
+  const hookMarginV = style.hookPosition === 'center' ? 0 : style.hookPosition === 'lower' ? Math.round(height * 0.2) : Math.round(height * 0.11);
+  const hookLook = style.hookBox
+    ? `${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookBg)},${assColor(style.hookBg)},-1,0,0,0,100,100,0,${-(style.hookTilt || 0)},3,18,0`
+    : `${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookOutline)},${assColor('#000000', 0x70)},-1,0,0,0,100,100,1,${-(style.hookTilt || 0)},1,${style.hookOutlineWidth},${style.shadow || 0}`;
   const lines = [
     '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${width}`, `PlayResY: ${height}`, 'WrapStyle: 2', 'ScaledBorderAndShadow: yes', 'YCbCr Matrix: TV.709', '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
     `Style: Caption,${font},${style.size},${assColor(style.primary)},${assColor(style.highlight)},${assColor(style.outline)},${assColor('#000000', 0x80)},${style.bold ? -1 : 0},0,0,0,100,100,1,0,${borderStyle},${style.outlineWidth},${style.shadow},${align},80,80,${marginV},1`,
-    `Style: Hook,${font},${Math.round(style.size * 0.72)},${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookBg)},${assColor(style.hookBg)},-1,0,0,0,100,100,0,0,3,18,0,8,90,90,${Math.round(height * 0.11)},1`,
+    `Style: Hook,${hookFont},${hookSize},${hookLook},${hookAlign},90,90,${hookMarginV},1`,
     `Style: LowerName,${font},${Math.round(height * 0.03)},${assColor('#FFFFFF')},${assColor('#FFFFFF')},${assColor('#15181B', 0x20)},${assColor('#15181B', 0x20)},-1,0,0,0,100,100,0,0,3,16,0,7,0,0,0,1`,
     `Style: LowerTitle,${font},${Math.round(height * 0.021)},${assColor('#15181B')},${assColor('#15181B')},${assColor(style.highlight)},${assColor(style.highlight)},-1,0,0,0,100,100,0,0,3,12,0,7,0,0,0,1`,
     `Style: EndCard,${font},${Math.round(style.size * 0.9)},${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookBg)},${assColor(style.hookBg)},-1,0,0,0,100,100,0,0,3,26,0,5,90,90,0,1`,
@@ -112,7 +132,8 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
   }
   if (hook && style.hook) {
     const ht = String(hook).replace(/[{}\\]/g, '').trim();
-    lines.push(`Dialogue: 1,${assTime(0)},${assTime(Math.min(style.hookSeconds, dur))},Hook,,0,0,0,,{\\fad(120,180)}${style.uppercase ? ht.toUpperCase() : ht}`);
+    const anim = style.hookAnim === 'pop' ? '\\fad(0,180)\\fscx20\\fscy20\\t(0,140,\\fscx115\\fscy115)\\t(140,240,\\fscx100\\fscy100)' : '\\fad(120,180)';
+    lines.push(`Dialogue: 1,${assTime(0)},${assTime(Math.min(style.hookSeconds, dur))},Hook,,0,0,0,,{${anim}}${style.uppercase ? ht.toUpperCase() : ht}`);
   }
   const local = words.filter((w) => w.e > range.start && w.s < range.end)
     .map((w) => ({ w: w.w, s: Math.max(0, w.s - range.start), e: Math.min(dur, w.e - range.start) }))

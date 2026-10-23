@@ -194,7 +194,7 @@ function remember(clientId, items, { source = 'feedback', actor = 'system' } = {
   return added;
 }
 
-const STYLE_KEYS = { hookSeconds: 'n', preset: 's', font: 's', size: 'n', uppercase: 'b', wordsPerLine: 'n', primary: 'c', highlight: 'c', outline: 'c', outlineWidth: 'n', position: 's', animation: 's', highlightMode: 's', box: 'b', hook: 'b', hookBg: 'c', hookColor: 'c', punctuation: 'b' };
+const STYLE_KEYS = { hookSeconds: 'n', preset: 's', font: 's', size: 'n', uppercase: 'b', wordsPerLine: 'n', primary: 'c', highlight: 'c', outline: 'c', outlineWidth: 'n', position: 's', animation: 's', highlightMode: 's', box: 'b', hook: 'b', hookBg: 'c', hookColor: 'c', punctuation: 'b', shadow: 'n', hookFont: 's', hookSize: 'n', hookPosition: 's', hookBox: 'b', hookOutline: 'c', hookOutlineWidth: 'n', hookTilt: 'n', hookAnim: 's' };
 function sanitizeStyle(s) {
   const o = {};
   for (const [k, t] of Object.entries(STYLE_KEYS)) {
@@ -209,6 +209,10 @@ function sanitizeStyle(s) {
   if (o.size) o.size = Math.max(30, Math.min(160, o.size));
   if (o.hookSeconds != null) o.hookSeconds = Math.max(0, Math.min(15, o.hookSeconds));
   if (o.outlineWidth != null) o.outlineWidth = Math.max(0, Math.min(30, o.outlineWidth));
+  if (o.hookSize) o.hookSize = Math.max(30, Math.min(160, o.hookSize));
+  if (o.hookOutlineWidth != null) o.hookOutlineWidth = Math.max(0, Math.min(30, o.hookOutlineWidth));
+  if (o.hookTilt != null) o.hookTilt = Math.max(-15, Math.min(15, o.hookTilt));
+  if (o.shadow != null) o.shadow = Math.max(0, Math.min(12, o.shadow));
   return o;
 }
 

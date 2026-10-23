@@ -93,10 +93,20 @@ function openFile(clip, v, kind) {
   const a = document.createElement('a'); a.href = url; a.download = ''; document.body.appendChild(a); a.click(); a.remove();
 }
 
-const FONTS = ['Montserrat', 'Anton', 'Arial', 'Arial Black', 'Impact', 'Verdana', 'Georgia', 'Trebuchet MS', 'Comic Sans MS'];
-const STYLE_DEFAULTS = { font: 'Montserrat', size: 84, uppercase: true, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#F2C14E', outline: '#111111', outlineWidth: 7, position: 'lower', animation: 'pop', highlightMode: 'word', box: false, hook: true, hookSeconds: 3.2, hookBg: '#FFFFFF', hookColor: '#111111' };
+const FONTS = ['Luckiest Guy', 'Bangers', 'Titan One', 'Lilita One', 'Bowlby One', 'Bungee', 'Chewy', 'Montserrat', 'Anton', 'Arial Black', 'Impact', 'Arial', 'Verdana', 'Georgia', 'Trebuchet MS', 'Comic Sans MS'];
+const STYLE_DEFAULTS = { font: 'Montserrat', size: 84, uppercase: true, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#F2C14E', outline: '#111111', outlineWidth: 7, shadow: 0, position: 'lower', animation: 'pop', highlightMode: 'word', box: false, hook: true, hookSeconds: 3.2, hookBg: '#FFFFFF', hookColor: '#111111', hookFont: '', hookSize: 0, hookPosition: 'upper', hookBox: true, hookOutline: '#111111', hookOutlineWidth: 8, hookTilt: 0, hookAnim: 'fade' };
+// One-click looks; every value can still be changed below.
+const LOOKS = [
+  { id: 'cartoon', label: 'Cartoon', v: { font: 'Luckiest Guy', size: 96, uppercase: true, primary: '#FFFFFF', highlight: '#FFD23F', outline: '#000000', outlineWidth: 9, shadow: 5, wordsPerLine: 2, box: false, hookFont: 'Luckiest Guy', hookSize: 84, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 9, hookTilt: -4, hookAnim: 'pop' } },
+  { id: 'comic', label: 'Comic', v: { font: 'Bangers', size: 104, uppercase: true, primary: '#FFFFFF', highlight: '#FF4D6D', outline: '#000000', outlineWidth: 8, shadow: 4, wordsPerLine: 3, box: false, hookFont: 'Bangers', hookSize: 88, hookBox: true, hookBg: '#FFD23F', hookColor: '#000000', hookTilt: -3, hookAnim: 'pop' } },
+  { id: 'bubbly', label: 'Bubbly', v: { font: 'Titan One', size: 88, uppercase: false, primary: '#FFFFFF', highlight: '#5CE1E6', outline: '#1B1B3A', outlineWidth: 10, shadow: 4, wordsPerLine: 2, box: false, hookFont: 'Titan One', hookSize: 76, hookBox: true, hookBg: '#FF8FB1', hookColor: '#FFFFFF', hookTilt: 0, hookAnim: 'pop' } },
+  { id: 'beast', label: 'Big & loud', v: { font: 'Bowlby One', size: 92, uppercase: true, primary: '#FFFFFF', highlight: '#7CFC00', outline: '#000000', outlineWidth: 10, shadow: 6, wordsPerLine: 2, box: false, hookFont: 'Bowlby One', hookSize: 80, hookBox: false, hookColor: '#FFD23F', hookOutline: '#000000', hookOutlineWidth: 10, hookTilt: -5, hookAnim: 'pop' } },
+  { id: 'clean', label: 'Clean', v: { font: 'Montserrat', size: 84, uppercase: true, primary: '#FFFFFF', highlight: '#F2C14E', outline: '#111111', outlineWidth: 7, shadow: 0, wordsPerLine: 3, box: false, hookFont: '', hookSize: 0, hookBox: true, hookBg: '#FFFFFF', hookColor: '#111111', hookTilt: 0, hookAnim: 'fade' } },
+];
+const POS = [{ value: 'upper', label: 'Top' }, { value: 'center', label: 'Middle' }, { value: 'lower', label: 'Bottom' }];
+const posCss = (p, top, bottom) => (p === 'upper' ? { top } : p === 'center' ? { top: '50%', transform: 'translateY(-50%)' } : { bottom });
 
-/** Caption look for this clip: font, size, box, outline, colours, position, and how long the opening text stays up. */
+/** Caption look for this clip. Captions and the opening banner each have their own font, size, position and colours. */
 function CaptionStyle({ clip, reload }) {
   const { data: client } = useApi(`/api/clients/${clip.clientId}`, ['clients']);
   const base = { ...STYLE_DEFAULTS, ...(client?.style || {}) };
@@ -108,28 +118,58 @@ function CaptionStyle({ clip, reload }) {
   const reset = () => act(async () => { await api.patch(`/api/clips/${clip.id}`, { style: null }); }, { ok: 'Back to the client style' }).then(reload);
   const words = ['THIS', 'IS', 'HOW'].slice(0, Math.max(1, Math.min(3, s.wordsPerLine)));
   const txt = (w) => (s.uppercase ? w : w.toLowerCase());
+  const hookFont = s.hookFont || s.font; const hookSize = s.hookSize || Math.round(s.size * 0.72);
+  const stroke = (w, c) => (w ? `${Math.max(0.5, w / 6)}px ${c}` : '0');
+  const shadow = (n) => (n ? `${n / 3}px ${n / 3}px 0 rgba(0,0,0,.55)` : 'none');
+  const colours = (list) => html`<div class="row wrap" style="gap:12px">${list.map(([k, l]) => html`<label class="col" style="gap:3px;font-size:var(--fs-xs)"><span class="faint">${l}</span><input type="color" value=${s[k]} onInput=${set(k)} style="width:44px;height:30px;border:none;background:none;padding:0" /></label>`)}</div>`;
+  const fontPick = (k, id, same) => html`<select id=${id} class="select" value=${s[k]} onChange=${set(k)}>${same ? html`<option value="">Same as captions</option>` : null}${FONTS.map((f) => html`<option value=${f} style=${{ fontFamily: f }}>${f}</option>`)}</select>`;
+  const flag = (on, onChange, l) => html`<label class="row" style="gap:6px"><${Toggle} on=${on} onChange=${onChange} label=${l} /><span style="font-size:var(--fs-sm)">${l}</span></label>`;
+  const look = LOOKS.find((x) => Object.entries(x.v).every(([k, v]) => s[k] === v))?.id;
   return html`<details class="panel pad" open=${!clip.versions?.[clip.versions.length - 1]?.captioned}>
     <summary><b>Captions and text</b> <span class="faint" style="font-size:var(--fs-xs)">${clip.style ? 'custom for this clip' : `using ${client?.name || 'the client'}'s style`}</span></summary>
     <div class="row wrap" style="gap:16px;margin-top:10px;align-items:flex-start">
       <div style=${{ width: '150px', height: '266px', borderRadius: '14px', background: 'linear-gradient(160deg,#5b6b7c,#2b3440)', position: 'relative', overflow: 'hidden', flex: 'none' }}>
-        ${s.hook && s.hookSeconds > 0 ? html`<div style=${{ position: 'absolute', top: '22px', left: '10px', right: '10px', textAlign: 'center', background: s.hookBg, color: s.hookColor, fontFamily: s.font, fontWeight: 800, fontSize: '11px', padding: '4px 6px', borderRadius: '4px' }}>${txt('OPENING TEXT')}</div>` : null}
-        <div style=${{ position: 'absolute', left: '6px', right: '6px', textAlign: 'center', fontFamily: `'${s.font}', sans-serif`, fontWeight: 800, fontSize: `${Math.round(s.size / 6.5)}px`, lineHeight: 1.1, ...(s.position === 'upper' ? { top: '60px' } : s.position === 'center' ? { top: '45%' } : { bottom: '50px' }) }}>
-          ${words.map((w, i) => html`<span style=${{ color: i === 1 && s.highlightMode === 'word' ? s.highlight : s.primary, WebkitTextStroke: !s.box && s.outlineWidth ? `${Math.max(0.5, s.outlineWidth / 6)}px ${s.outline}` : '0', background: s.box ? s.outline : 'none', padding: s.box ? '1px 3px' : 0, marginRight: '3px', display: 'inline-block' }}>${txt(w)}</span>`)}</div>
+        ${s.hook && s.hookSeconds > 0 ? html`<div style=${{ position: 'absolute', left: '8px', right: '8px', textAlign: 'center', ...posCss(s.hookPosition, '22px', '60px') }}><span style=${{ display: 'inline-block', transform: `rotate(${s.hookTilt || 0}deg)`, fontFamily: `'${hookFont}', sans-serif`, fontWeight: 800, fontSize: `${Math.round(hookSize / 7)}px`, lineHeight: 1.1, color: s.hookColor, ...(s.hookBox ? { background: s.hookBg, padding: '3px 6px', borderRadius: '4px' } : { WebkitTextStroke: stroke(s.hookOutlineWidth, s.hookOutline), paintOrder: 'stroke fill', textShadow: shadow(s.shadow) }) }}>${txt('OPENING TEXT')}</span></div>` : null}
+        <div style=${{ position: 'absolute', left: '6px', right: '6px', textAlign: 'center', fontFamily: `'${s.font}', sans-serif`, fontWeight: 800, fontSize: `${Math.round(s.size / 6.5)}px`, lineHeight: 1.1, ...posCss(s.position, '60px', '50px') }}>
+          ${words.map((w, i) => html`<span style=${{ color: i === 1 && s.highlightMode === 'word' ? s.highlight : s.primary, WebkitTextStroke: !s.box ? stroke(s.outlineWidth, s.outline) : '0', paintOrder: 'stroke fill', textShadow: s.box ? 'none' : shadow(s.shadow), background: s.box ? s.outline : 'none', padding: s.box ? '1px 3px' : 0, marginRight: '3px', display: 'inline-block' }}>${txt(w)}</span>`)}</div>
       </div>
-      <div class="col grow" style="gap:10px;min-width:260px">
-        <div class="col" style="gap:4px"><span class="label">Opening text on screen: <b class="tnum">${s.hook ? `${s.hookSeconds}s` : 'off'}</b></span><div class="row" style="gap:8px"><${Toggle} on=${!!s.hook} onChange=${set('hook')} label="Opening text" /><input class="range grow" type="range" min="0.5" max="10" step="0.5" value=${s.hookSeconds} disabled=${!s.hook} onInput=${set('hookSeconds')} /></div></div>
-        <div class="form-grid">
-          <${Field} label="Font" id="cs-font"><select id="cs-font" class="select" value=${s.font} onChange=${set('font')}>${FONTS.map((f) => html`<option value=${f} style=${{ fontFamily: f }}>${f}</option>`)}</select></${Field}>
-          <${Field} label=${`Size: ${s.size}`} id="cs-size"><input id="cs-size" class="range" type="range" min="40" max="140" step="2" value=${s.size} onInput=${set('size')} /></${Field}>
-          <${Field} label=${`Words per line: ${s.wordsPerLine}`} id="cs-wpl"><input id="cs-wpl" class="range" type="range" min="1" max="6" step="1" value=${s.wordsPerLine} onInput=${set('wordsPerLine')} /></${Field}>
-          <${Field} label=${s.box ? `Box padding: ${s.outlineWidth}` : `Outline thickness: ${s.outlineWidth}`} id="cs-ow"><input id="cs-ow" class="range" type="range" min="0" max="20" step="1" value=${s.outlineWidth} onInput=${set('outlineWidth')} /></${Field}>
+      <div class="col grow" style="gap:12px;min-width:260px">
+        <div class="col" style="gap:4px"><span class="label">Quick looks</span><div class="row wrap" style="gap:6px">${LOOKS.map((x) => html`<button class="chip" style=${{ fontFamily: `'${x.v.font}', sans-serif`, fontSize: '15px', ...(look === x.id ? { background: 'var(--accent-soft, #dcefeb)', borderColor: 'var(--accent, #5f9a91)' } : {}) }} onClick=${() => setS({ ...s, ...x.v })}>${x.label}</button>`)}</div></div>
+
+        <div class="col" style="gap:8px;border-top:1px solid var(--line, #eee);padding-top:10px">
+          <b style="font-size:var(--fs-sm)">Captions (spoken words)</b>
+          <div class="form-grid">
+            <${Field} label="Font" id="cs-font">${fontPick('font', 'cs-font')}</${Field}>
+            <${Field} label=${`Size: ${s.size}`} id="cs-size"><input id="cs-size" class="range" type="range" min="40" max="150" step="2" value=${s.size} onInput=${set('size')} /></${Field}>
+            <${Field} label=${`Words per line: ${s.wordsPerLine}`} id="cs-wpl"><input id="cs-wpl" class="range" type="range" min="1" max="6" step="1" value=${s.wordsPerLine} onInput=${set('wordsPerLine')} /></${Field}>
+            <${Field} label=${s.box ? `Box padding: ${s.outlineWidth}` : `Outline thickness: ${s.outlineWidth}`} id="cs-ow"><input id="cs-ow" class="range" type="range" min="0" max="20" step="1" value=${s.outlineWidth} onInput=${set('outlineWidth')} /></${Field}>
+            <${Field} label=${`Drop shadow: ${s.shadow || 0}`} id="cs-sh"><input id="cs-sh" class="range" type="range" min="0" max="10" step="1" value=${s.shadow || 0} onInput=${set('shadow')} /></${Field}>
+          </div>
+          <div class="row wrap" style="gap:12px">
+            <div class="col" style="gap:4px"><span class="label">Position</span><${Seg} value=${s.position} onChange=${set('position')} options=${POS} /></div>
+            ${flag(!!s.box, set('box'), 'Background box')}${flag(!!s.uppercase, set('uppercase'), 'CAPITALS')}${flag(s.animation === 'pop', (x) => setS({ ...s, animation: x ? 'pop' : 'none' }), 'Pop-in')}${flag(s.highlightMode === 'word', (x) => setS({ ...s, highlightMode: x ? 'word' : 'none' }), 'Highlight spoken word')}
+          </div>
+          ${colours([['primary', 'Text'], ['highlight', 'Highlight'], ['outline', s.box ? 'Box colour' : 'Outline']])}
         </div>
-        <div class="row wrap" style="gap:12px">
-          <div class="col" style="gap:4px"><span class="label">Position</span><${Seg} value=${s.position} onChange=${set('position')} options=${[{ value: 'upper', label: 'Top' }, { value: 'center', label: 'Middle' }, { value: 'lower', label: 'Bottom' }]} /></div>
-          ${[['box', 'Background box'], ['uppercase', 'CAPITALS'], ['pop', 'Pop-in']].map(([k, l]) => html`<label class="row" style="gap:6px"><${Toggle} on=${k === 'pop' ? s.animation === 'pop' : !!s[k]} onChange=${(x) => setS({ ...s, ...(k === 'pop' ? { animation: x ? 'pop' : 'none' } : { [k]: x }) })} label=${l} /><span style="font-size:var(--fs-sm)">${l}</span></label>`)}
-          <label class="row" style="gap:6px"><${Toggle} on=${s.highlightMode === 'word'} onChange=${(x) => setS({ ...s, highlightMode: x ? 'word' : 'none' })} label="Highlight the spoken word" /><span style="font-size:var(--fs-sm)">Highlight spoken word</span></label>
+
+        <div class="col" style="gap:8px;border-top:1px solid var(--line, #eee);padding-top:10px">
+          <div class="row" style="gap:8px;align-items:center"><b style="font-size:var(--fs-sm)">Opening banner</b><${Toggle} on=${!!s.hook} onChange=${set('hook')} label="Opening banner" /><span class="faint" style="font-size:var(--fs-xs)">the headline at the start</span></div>
+          ${s.hook ? html`
+          <div class="form-grid">
+            <${Field} label=${`On screen: ${s.hookSeconds}s`} id="cs-hs"><input id="cs-hs" class="range" type="range" min="0.5" max="10" step="0.5" value=${s.hookSeconds} onInput=${set('hookSeconds')} /></${Field}>
+            <${Field} label="Font" id="cs-hfont">${fontPick('hookFont', 'cs-hfont', true)}</${Field}>
+            <${Field} label=${`Size: ${hookSize}`} id="cs-hsize"><input id="cs-hsize" class="range" type="range" min="30" max="150" step="2" value=${hookSize} onInput=${set('hookSize')} /></${Field}>
+            <${Field} label=${`Tilt: ${s.hookTilt || 0}°`} id="cs-ht"><input id="cs-ht" class="range" type="range" min="-10" max="10" step="1" value=${s.hookTilt || 0} onInput=${set('hookTilt')} /></${Field}>
+            ${!s.hookBox ? html`<${Field} label=${`Outline thickness: ${s.hookOutlineWidth}`} id="cs-how"><input id="cs-how" class="range" type="range" min="0" max="20" step="1" value=${s.hookOutlineWidth} onInput=${set('hookOutlineWidth')} /></${Field}>` : null}
+          </div>
+          <div class="row wrap" style="gap:12px">
+            <div class="col" style="gap:4px"><span class="label">Position</span><${Seg} value=${s.hookPosition || 'upper'} onChange=${set('hookPosition')} options=${POS} /></div>
+            ${flag(!!s.hookBox, set('hookBox'), 'Background box')}${flag(s.hookAnim === 'pop', (x) => setS({ ...s, hookAnim: x ? 'pop' : 'fade' }), 'Bounce in')}
+          </div>
+          ${s.hookBox ? colours([['hookColor', 'Text'], ['hookBg', 'Box colour']]) : colours([['hookColor', 'Text'], ['hookOutline', 'Outline']])}
+          ${s.hookPosition === s.position ? html`<div class="faint" style="font-size:var(--fs-xs)">Tip: the banner and captions are in the same spot; move one so they don't overlap.</div>` : null}` : null}
         </div>
-        <div class="row wrap" style="gap:12px">${[['primary', 'Text'], ['highlight', 'Highlight'], ['outline', s.box ? 'Box colour' : 'Outline'], ['hookBg', 'Opening box'], ['hookColor', 'Opening text']].map(([k, l]) => html`<label class="col" style="gap:3px;font-size:var(--fs-xs)"><span class="faint">${l}</span><input type="color" value=${s[k]} onInput=${set(k)} style="width:44px;height:30px;border:none;background:none;padding:0" /></label>`)}</div>
+
         <div class="row wrap" style="gap:6px"><${Button} kind="primary" icon="refresh" onClick=${thisClip}>Apply to this clip</${Button}><${Button} kind="soft" onClick=${allClips}>Use for all ${client?.name || 'client'} clips</${Button}>${clip.style ? html`<${Button} kind="ghost" onClick=${reset}>Reset</${Button}>` : null}</div>
         ${!clip.versions?.[clip.versions.length - 1]?.captioned ? html`<div class="faint" style="font-size:var(--fs-xs)">No captions yet because this video hasn't been turned into text. Euclidean installs the free speech-to-text tool by itself and adds captions to this clip when it's done; or press "Make transcript" on the video in the Footage list.</div>` : null}
       </div>

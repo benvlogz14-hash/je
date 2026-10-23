@@ -41,7 +41,7 @@ Desktop app for Euclidean Media (founders Ryan Rosario and Ben Gingold), a short
 ## Captions and transcripts
 - The `transcribe` job installs the free Whisper itself when no speech-to-text exists; the app-only bat also installs it (`Install Extras.bat whisper`). After a transcript arrives, clips in review that were rendered without captions are re-rendered.
 - Full transcript per video: Production → footage panel → Transcript (copy, `.txt`, `.srt` via `/api/assets/:id/transcript-file/:fmt`), `POST /api/assets/:id/transcribe`.
-- Caption look per clip (`clip.style`, over `client.style`; sanitized by `pipeline.sanitizeStyle`, now incl. `hookSeconds`): clip panel → "Captions and text" with live preview, apply to this clip or the whole client.
+- Caption look per clip (`clip.style`, over `client.style`; sanitized by `pipeline.sanitizeStyle`): clip panel → "Captions and text" with live preview, apply to this clip or the whole client. Captions and the opening banner (`hook*` keys: `hookFont`, `hookSize`, `hookPosition`, `hookBox`, `hookOutline`, `hookOutlineWidth`, `hookTilt`, `hookAnim`) are styled independently. Quick looks (Cartoon, Comic, Bubbly, Big & loud, Clean) use bundled bold fonts in `server/video/fonts` + `renderer/assets/fonts` (Luckiest Guy, Bangers, Titan One, Lilita One, Bowlby One, Bungee, Chewy; OFL/Apache).
 - Clip length per client (`client.production.minClipSec/maxClipSec`): sliders by the upload box; used by `discoverClips`.
 
 ## Run and test

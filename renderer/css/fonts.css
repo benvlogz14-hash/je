@@ -2,3 +2,11 @@
 @font-face { font-family: "Montserrat"; src: url("../assets/fonts/Montserrat_800ExtraBold.ttf") format("truetype"); font-weight: 700 900; font-display: swap; }
 @font-face { font-family: "Montserrat"; src: url("../assets/fonts/Montserrat_600SemiBold.ttf") format("truetype"); font-weight: 400 600; font-display: swap; }
 @font-face { font-family: "Anton"; src: url("../assets/fonts/Anton_400Regular.ttf") format("truetype"); font-display: swap; }
+/* Bold cartoon / YouTube caption fonts (SIL OFL and Apache 2.0). */
+@font-face { font-family: "Luckiest Guy"; src: url("../assets/fonts/LuckiestGuy-Regular.ttf") format("truetype"); font-display: swap; }
+@font-face { font-family: "Bangers"; src: url("../assets/fonts/Bangers-Regular.ttf") format("truetype"); font-display: swap; }
+@font-face { font-family: "Titan One"; src: url("../assets/fonts/TitanOne-Regular.ttf") format("truetype"); font-display: swap; }
+@font-face { font-family: "Lilita One"; src: url("../assets/fonts/LilitaOne-Regular.ttf") format("truetype"); font-display: swap; }
+@font-face { font-family: "Bowlby One"; src: url("../assets/fonts/BowlbyOne-Regular.ttf") format("truetype"); font-display: swap; }
+@font-face { font-family: "Bungee"; src: url("../assets/fonts/Bungee-Regular.ttf") format("truetype"); font-display: swap; }
+@font-face { font-family: "Chewy"; src: url("../assets/fonts/Chewy-Regular.ttf") format("truetype"); font-display: swap; }
