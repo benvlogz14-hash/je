@@ -168,26 +168,44 @@ async function signals({ asset, transcript, vision, analysis }) {
  * best shots from elsewhere for 2-3 s each while the voice keeps playing.
  * Returns [{ at, dur, src }] with at/src in source seconds.
  */
-function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5 }) {
+function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, black = [] }) {
   if (!shots.length) return [];
   const len = end - start;
+  const touchesBlack = (a, b) => black.some(([x, y]) => x < b + 0.15 && y > a - 0.15);
   const pool = shots.filter((x) => (x.e <= start || x.s >= end) && shotScore(x) >= 0.45 && x.e - x.s >= 2.2 && !avoid.some((a) => x.s < a.end && x.e > a.start))
     .sort((a, b) => shotScore(b) - shotScore(a));
   if (!pool.length) return [];
+  // A cut-away comes from the middle of its shot (shot starts are often fades from black) and never touches black frames.
+  const take = (src, dur) => { const mid = (src.s + src.e) / 2; const a = Math.max(src.s + 0.3, mid - dur / 2); return touchesBlack(a, a + dur) ? null : Math.round(a * 100) / 100; };
+  const out = []; let used = 0;
+  const place = (at, dur) => {
+    for (let k = 0; k < pool.length; k++) { const src = pool[used++ % pool.length]; const d = Math.min(dur, src.e - src.s - 0.6); if (d < 1.2) continue; const a = take(src, d); if (a != null) { out.push({ at: Math.round(at * 100) / 100, dur: Math.round(d * 100) / 100, src: a }); return true; } }
+    return false;
+  };
+  // 1. Black fades inside the clip (the voice keeps going): always covered with a good shot.
+  for (const [x, y] of black) { if (y <= start + 0.1 || x >= end - 0.1) continue; const at = Math.max(start, x - 0.3); place(at, Math.min(end - at, Math.max(1.5, y - x + 0.6))); }
+  const busy = (a, b) => out.some((c) => c.at < b + gap && c.at + c.dur > a - gap);
   const here = shots.filter((x) => x.s < end && x.e > start);
-  // Weak: a poor or static shot, someone talking with little movement, or any shot held too long (strong ones may run longer).
+  // 2. Weak stretches: a poor or static shot, someone talking with little movement, or any shot held too long (strong ones may run longer).
   const weak = (t) => { const s = here.find((x) => t >= x.s && t < x.e); if (!s) return true; const q = shotScore(s); return q < 0.4 || (s.kind === 'speaker' && (s.motion ?? 5) < 3) || (t - Math.max(s.s, start)) > (q >= 0.7 ? 9 : 5); };
-  const out = []; let used = 0; let tries = 0; let t = start + 2.5; // keep the first 2.5 s on the real moment: that's the hook
-  while (t < end - 2.5 && used < pool.length * 2) {
+  let tries = 0; let t = start + 2.5; // keep the first 2.5 s on the real moment: that's the hook
+  while (t < end - 2.5 && used < pool.length * 3) {
     // Voiceover is always fine to cover; someone talking on camera gets fewer cut-aways (about 3 in 5).
-    const sentNow = sents.find((x) => t >= x.s && t < x.e);
-    if (weak(t) && (!sentNow || sentNow.vo || (tries++ % 5) < 3)) {
-      const src = pool[used++ % pool.length]; const dur = Math.min(3, Math.max(2, src.e - src.s - 0.4), end - 1 - t);
-      if (dur >= 1.6) { out.push({ at: Math.round(t * 100) / 100, dur: Math.round(dur * 100) / 100, src: Math.round((src.s + 0.2) * 100) / 100 }); t += dur + gap; continue; }
-    }
+    const sentNow = sents.find((x) => t >= x.s && t < x.e); const dur = Math.min(3, end - 1 - t);
+    if (dur >= 1.6 && !busy(t, t + dur) && weak(t) && (!sentNow || sentNow.vo || (tries++ % 5) < 3) && place(t, dur)) { t += out[out.length - 1].dur + gap; continue; }
     t += 1.5;
   }
-  return out.filter((c) => c.at + c.dur <= start + len - 0.5);
+  return out.filter((c) => c.at + c.dur <= start + len - 0.2).sort((a, b) => a.at - b.at);
+}
+
+/** Black frames in the footage (fades, flashes), cached: [[start, end], ...] in seconds. */
+async function blackIntervals(file, workDir) {
+  const cache = path.join(workDir || path.dirname(file), `${path.basename(file).replace(/\.[^.]+$/, '')}.black.json`);
+  try { return JSON.parse(fs.readFileSync(cache, 'utf8')); } catch { /* measure */ }
+  const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-i', file, '-an', '-vf', 'fps=10,scale=240:-2,blackdetect=d=0.08:pix_th=0.12:pic_th=0.92', '-f', 'null', '-'], { timeoutMs: 3600000, priority: ff.priorityValue() });
+  const out = [...String(r.err || '').matchAll(/black_start:([\d.]+) black_end:([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  try { fs.writeFileSync(cache, JSON.stringify(out)); } catch { /* read-only */ }
+  return out;
 }
 
 /**
@@ -209,4 +227,4 @@ async function assemble({ source, info, start, end, covers, out, signal }) {
   return out;
 }
 
-module.exports = { condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
+module.exports = { blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };

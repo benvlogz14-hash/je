@@ -24,7 +24,7 @@ function veloClip(o) {
 }
 
 /** Build a Velo project for one short: footage on V1/A1, captions as text clips on V2. */
-function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5 }) {
+function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, covers = [] }) {
   const st = captions.resolveStyle(style);
   const dur = range.end - range.start;
   const mediaId = 'm1';
@@ -44,11 +44,13 @@ function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5 })
   const hookY = st.hookPosition === 'lower' ? H * 0.28 : st.hookPosition === 'center' ? 0 : -H * 0.36;
   const v3 = hk && st.hook !== false ? [veloClip({ id: nextId++, type: 3, name: 'Hook', start: 0, duration: Math.min(st.hookSeconds, dur), posY: hookY, rotation: st.hookTilt || 0,
     text: textStyle(st.hookUpper ? hk.toUpperCase() : hk, Math.round(st.hookSize || st.size * 0.72), st.hookColor, { font: st.hookFont || st.font, outline: st.hookOutline, outlineWidth: st.hookOutlineWidth, box: st.hookBox, boxColor: st.hookBg }) })] : [];
+  // The render's cut-away shots (B-roll) as their own picture-only clips, so you can move, trim or delete them.
+  const broll = (covers || []).filter((c) => c.at < range.end && c.at + c.dur > range.start).map((c) => veloClip({ id: nextId++, type: 0, mediaId, name: 'B-roll', start: Math.max(0, c.at - range.start), duration: c.dur, in: c.src, scale, posX: 0 }));
   const track = (type, nm, clips) => ({ type, name: nm, muted: false, locked: false, volume: animated(1), clips });
   return {
     app: 'velo', version: 1,
     media: [{ id: mediaId, path: source, name: path.basename(source), kind: info.hasVideo ? 0 : 1, duration: info.duration, width: info.width, height: info.height, fps: info.fps, hasVideo: info.hasVideo, hasAudio: info.hasAudio, srcIn: 0, srcOut: -1 }],
-    sequences: [{ id: 's1', name: name || 'Short', width: W, height: H, fps: FPS, videoTracks: [track(0, 'V1', v1), track(0, 'Captions', v2), track(0, 'Hook', v3)], audioTracks: [track(1, 'A1', a1)] }],
+    sequences: [{ id: 's1', name: name || 'Short', width: W, height: H, fps: FPS, videoTracks: [track(0, 'V1', v1), ...(broll.length ? [track(0, 'B-roll', broll)] : []), track(0, 'Captions', v2), track(0, 'Hook', v3)], audioTracks: [track(1, 'A1', a1)] }],
     openTabs: ['s1'], activeSequence: 's1', nextClipId: String(nextId),
   };
 }

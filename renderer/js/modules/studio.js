@@ -577,7 +577,7 @@ function CaptionsBar({ seq, sel, setSel, edit, findClip, nextId }) {
   const scale = (k) => forAll((c) => { c.text.pixelSize = Math.max(20, Math.min(320, Math.round((c.text.pixelSize || 96) * k))); });
   const twoWords = () => edit((d, s) => {
     const made = [];
-    for (const cid of ids) {
+    for (const cid of ids.length ? ids : all.map((c) => c.id)) {
       const f = findClip(s, cid); if (!f || !isCaption(f.c)) continue;
       const c = f.c; const words = String(c.text.text || '').trim().split(/\s+/).filter(Boolean);
       if (words.length <= 2) { made.push(c.id); continue; }
@@ -596,6 +596,7 @@ function CaptionsBar({ seq, sel, setSel, edit, findClip, nextId }) {
     <b>Captions</b>
     ${ids.length ? html`<span class="faint">${ids.length} selected</span>` : html`<span class="faint">click any caption to select them all</span>`}
     <${Button} size="sm" kind="ghost" onClick=${() => setSel(all.map((c) => c.id))}>Select all captions</${Button}>
+    ${!ids.length ? html`<${Button} size="sm" kind="soft" onClick=${twoWords} title="Split every caption into 2-word pieces so none run off the screen">2 words per line (all captions)</${Button}>` : null}
     ${ids.length ? html`
       <span class="faint">Size</span><${Button} size="sm" kind="ghost" onClick=${() => scale(1 / 1.1)}>A−</${Button}>
       <input class="input sm tnum" type="number" style="width:70px" value=${size} min="20" max="320" onChange=${(e) => { const v = Number(e.target.value); if (v > 0) forAll((c) => { c.text.pixelSize = Math.max(20, Math.min(320, v)); }); }} aria-label="Caption size" />

@@ -441,7 +441,7 @@ r.post('/api/clips/:id/open-velo', (req, b, p) => {
 r.post('/api/clips/:id/studio', (req, b, p) => {
   const c = must(ctx.store.get('clips', p.id)); const a = ctx.store.get('assets', c.assetId); const client = ctx.store.get('clients', c.clientId);
   const words = require('./jobs/handlers').loadTranscript(a)?.words || [];
-  const data = exporters.toVelo({ name: c.title, source: a.path, info: a.info, range: { start: c.start, end: c.end }, words, style: { ...(client.style || {}), ...(c.style || {}) }, hook: c.hook, focusX: c.focusX });
+  const data = exporters.toVelo({ name: c.title, source: a.path, info: a.info, range: { start: c.start, end: c.end }, words, style: { ...(client.style || {}), ...(c.style || {}) }, hook: c.hook, focusX: c.focusX, covers: c.versions?.[c.currentVersion - 1]?.covers || [] });
   return ctx.store.insert('projects', { name: `#${c.ref} ${c.title}`, clientId: c.clientId, clipId: c.id, data, exports: [] });
 });
 
