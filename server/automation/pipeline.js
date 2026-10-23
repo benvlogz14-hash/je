@@ -198,7 +198,7 @@ function remember(clientId, items, { source = 'feedback', actor = 'system' } = {
   return added;
 }
 
-const STYLE_KEYS = { hookSeconds: 'n', preset: 's', font: 's', size: 'n', uppercase: 'b', wordsPerLine: 'n', primary: 'c', highlight: 'c', outline: 'c', outlineWidth: 'n', position: 's', animation: 's', highlightMode: 's', box: 'b', hook: 'b', hookBg: 'c', hookColor: 'c', punctuation: 'b', shadow: 'n', hookFont: 's', hookSize: 'n', hookPosition: 's', hookBox: 'b', hookOutline: 'c', hookOutlineWidth: 'n', hookTilt: 'n', hookAnim: 's', hookText: 't', rotate: 'n' };
+const STYLE_KEYS = { hookSeconds: 'n', preset: 's', font: 's', size: 'n', uppercase: 'b', wordsPerLine: 'n', primary: 'c', highlight: 'c', outline: 'c', outlineWidth: 'n', position: 's', animation: 's', highlightMode: 's', box: 'b', hook: 'b', hookBg: 'c', hookColor: 'c', punctuation: 'b', shadow: 'n', hookFont: 's', hookSize: 'n', hookPosition: 's', hookBox: 'b', hookOutline: 'c', hookOutlineWidth: 'n', hookTilt: 'n', hookAnim: 's', hookText: 't', rotate: 'n', hookUpper: 'b' };
 function sanitizeStyle(s) {
   const o = {};
   for (const [k, t] of Object.entries(STYLE_KEYS)) {

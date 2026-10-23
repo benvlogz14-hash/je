@@ -36,6 +36,7 @@ const DEFAULT_STYLE = {
   hookTilt: 0,           // degrees, a little tilt reads as playful
   hookAnim: 'fade',      // 'fade' | 'pop'
   hookText: '',          // what the banner says; empty = the clip's hook
+  hookUpper: false,      // banner in CAPITALS (off = exactly as typed)
   rotate: 0,             // caption tilt in degrees
   punctuation: false,    // keep commas/periods in captions
 };
@@ -140,7 +141,7 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
   if (hook && style.hook) {
     const ht = String(hook).replace(/[{}\\]/g, '').trim().replace(/\s*\n\s*/g, '\\N');
     const anim = style.hookAnim === 'pop' ? '\\fad(0,180)\\fscx20\\fscy20\\t(0,140,\\fscx115\\fscy115)\\t(140,240,\\fscx100\\fscy100)' : '\\fad(120,180)';
-    lines.push(`Dialogue: 1,${assTime(0)},${assTime(Math.min(style.hookSeconds, dur))},Hook,,0,0,0,,{${anim}}${style.uppercase ? ht.toUpperCase() : ht}`);
+    lines.push(`Dialogue: 1,${assTime(0)},${assTime(Math.min(style.hookSeconds, dur))},Hook,,0,0,0,,{${anim}}${style.hookUpper ? ht.toUpperCase() : ht}`);
   }
   const local = words.filter((w) => w.e > range.start && w.s < range.end)
     .map((w) => ({ w: w.w, s: Math.max(0, w.s - range.start), e: Math.min(dur, w.e - range.start) }))

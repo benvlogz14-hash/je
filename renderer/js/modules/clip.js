@@ -152,7 +152,7 @@ function ClipMusic({ clip, reload }) {
     </div></details>`;
 }
 
-const STYLE_DEFAULTS = { font: 'Montserrat', size: 84, uppercase: true, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#F2C14E', outline: '#111111', outlineWidth: 7, shadow: 0, position: 'lower', animation: 'pop', highlightMode: 'word', box: false, hook: true, hookSeconds: 3.2, hookBg: '#FFFFFF', hookColor: '#111111', hookFont: '', hookSize: 0, hookPosition: 'upper', hookBox: true, hookOutline: '#111111', hookOutlineWidth: 8, hookTilt: 0, hookAnim: 'fade', rotate: 0 };
+const STYLE_DEFAULTS = { font: 'Montserrat', size: 84, uppercase: true, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#F2C14E', outline: '#111111', outlineWidth: 7, shadow: 0, position: 'lower', animation: 'pop', highlightMode: 'word', box: false, hook: true, hookSeconds: 3.2, hookBg: '#FFFFFF', hookColor: '#111111', hookFont: '', hookSize: 0, hookPosition: 'upper', hookBox: true, hookOutline: '#111111', hookOutlineWidth: 8, hookTilt: 0, hookAnim: 'fade', rotate: 0, hookUpper: false };
 // One-click looks; every value can still be changed below.
 const LOOKS = [
   { id: 'cartoon', label: 'Cartoon', v: { font: 'Luckiest Guy', size: 96, uppercase: true, primary: '#FFFFFF', highlight: '#FFD23F', outline: '#000000', outlineWidth: 9, shadow: 5, wordsPerLine: 2, box: false, hookFont: 'Luckiest Guy', hookSize: 84, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 9, hookTilt: -4, hookAnim: 'pop' } },
@@ -177,8 +177,10 @@ function CaptionStyle({ clip, reload }) {
   const thisClip = () => act(async () => { await saveHook(); await api.patch(`/api/clips/${clip.id}`, { style: s }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: 'Saved; re-rendering with the new captions' }).then(reload);
   const allClips = () => act(async () => { await saveHook(); await api.patch(`/api/clients/${clip.clientId}`, { style: s }); await api.patch(`/api/clips/${clip.id}`, { style: null }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: `Saved for every ${client?.name || 'client'} clip; re-rendering this one` }).then(reload);
   const reset = () => act(async () => { await api.patch(`/api/clips/${clip.id}`, { style: null }); }, { ok: 'Back to the client style' }).then(reload);
-  const words = ['THIS', 'IS', 'HOW'].slice(0, Math.max(1, Math.min(3, s.wordsPerLine)));
-  const txt = (w) => (s.uppercase ? w : w.toLowerCase());
+  // The preview is drawn at the real scale (150 px wide phone for a 1080 px video) and with the same capitals rules as the render.
+  const words = ['This', 'is', 'how'].slice(0, Math.max(1, Math.min(3, s.wordsPerLine)));
+  const txt = (w) => (s.uppercase ? w.toUpperCase() : w);
+  const K = 150 / 1080;
   const hookFont = s.hookFont || s.font; const hookSize = s.hookSize || Math.round(s.size * 0.72);
   const stroke = (w, c) => (w ? `${Math.max(0.5, w / 6)}px ${c}` : '0');
   const shadow = (n) => (n ? `${n / 3}px ${n / 3}px 0 rgba(0,0,0,.55)` : 'none');
@@ -190,8 +192,8 @@ function CaptionStyle({ clip, reload }) {
     <summary><b>Captions and text</b> <span class="faint" style="font-size:var(--fs-xs)">${clip.style ? 'custom for this clip' : `using ${client?.name || 'the client'}'s style`}</span></summary>
     <div class="row wrap" style="gap:16px;margin-top:10px;align-items:flex-start">
       <div style=${{ width: '150px', height: '266px', borderRadius: '14px', background: 'linear-gradient(160deg,#5b6b7c,#2b3440)', position: 'relative', overflow: 'hidden', flex: 'none' }}>
-        ${s.hook && s.hookSeconds > 0 ? html`<div style=${{ position: 'absolute', left: '8px', right: '8px', textAlign: 'center', ...posCss(s.hookPosition, '22px', '60px') }}><span style=${{ display: 'inline-block', transform: `rotate(${s.hookTilt || 0}deg)`, fontFamily: `'${hookFont}', sans-serif`, fontWeight: weightOf(hookFont), fontSize: `${Math.round(hookSize / 7)}px`, lineHeight: 1.1, whiteSpace: 'pre-line', color: s.hookColor, ...(s.hookBox ? { background: s.hookBg, padding: '3px 6px', borderRadius: '4px' } : { WebkitTextStroke: stroke(s.hookOutlineWidth, s.hookOutline), paintOrder: 'stroke fill', textShadow: shadow(s.shadow) }) }}>${txt(hookText || 'OPENING TEXT')}</span></div>` : null}
-        <div style=${{ position: 'absolute', left: '6px', right: '6px', textAlign: 'center', fontFamily: `'${s.font}', sans-serif`, fontWeight: weightOf(s.font), fontSize: `${Math.round(s.size / 6.5)}px`, lineHeight: 1.1, ...posCss(s.position, '60px', '50px'), ...(s.rotate ? { transform: `${posCss(s.position).transform || ''} rotate(${s.rotate}deg)` } : {}) }}>
+        ${s.hook && s.hookSeconds > 0 ? html`<div style=${{ position: 'absolute', left: '8px', right: '8px', textAlign: 'center', ...posCss(s.hookPosition, '22px', '60px') }}><span style=${{ display: 'inline-block', transform: `rotate(${s.hookTilt || 0}deg)`, fontFamily: `'${hookFont}', sans-serif`, fontWeight: weightOf(hookFont), fontSize: `${Math.max(6, Math.round(hookSize * K))}px`, lineHeight: 1.1, whiteSpace: 'pre-line', color: s.hookColor, ...(s.hookBox ? { background: s.hookBg, padding: '3px 6px', borderRadius: '4px' } : { WebkitTextStroke: stroke(s.hookOutlineWidth, s.hookOutline), paintOrder: 'stroke fill', textShadow: shadow(s.shadow) }) }}>${(t => (s.hookUpper ? t.toUpperCase() : t))(hookText || 'Opening text')}</span></div>` : null}
+        <div style=${{ position: 'absolute', left: '6px', right: '6px', textAlign: 'center', fontFamily: `'${s.font}', sans-serif`, fontWeight: weightOf(s.font), fontSize: `${Math.max(6, Math.round(s.size * K))}px`, lineHeight: 1.1, ...posCss(s.position, '60px', '50px'), ...(s.rotate ? { transform: `${posCss(s.position).transform || ''} rotate(${s.rotate}deg)` } : {}) }}>
           ${words.map((w, i) => html`<span style=${{ color: i === 1 && s.highlightMode === 'word' ? s.highlight : s.primary, WebkitTextStroke: !s.box ? stroke(s.outlineWidth, s.outline) : '0', paintOrder: 'stroke fill', textShadow: s.box ? 'none' : shadow(s.shadow), background: s.box ? s.outline : 'none', padding: s.box ? '1px 3px' : 0, marginRight: '3px', display: 'inline-block' }}>${txt(w)}</span>`)}</div>
       </div>
       <div class="col grow" style="gap:12px;min-width:260px">
@@ -227,7 +229,7 @@ function CaptionStyle({ clip, reload }) {
           </div>
           <div class="row wrap" style="gap:12px">
             <div class="col" style="gap:4px"><span class="label">Position</span><${Seg} value=${s.hookPosition || 'upper'} onChange=${set('hookPosition')} options=${POS} /></div>
-            ${flag(!!s.hookBox, set('hookBox'), 'Background box')}${flag(s.hookAnim === 'pop', (x) => setS({ ...s, hookAnim: x ? 'pop' : 'fade' }), 'Bounce in')}
+            ${flag(!!s.hookBox, set('hookBox'), 'Background box')}${flag(!!s.hookUpper, set('hookUpper'), 'CAPITALS')}${flag(s.hookAnim === 'pop', (x) => setS({ ...s, hookAnim: x ? 'pop' : 'fade' }), 'Bounce in')}
           </div>
           ${s.hookBox ? colours([['hookColor', 'Text'], ['hookBg', 'Box colour']]) : colours([['hookColor', 'Text'], ['hookOutline', 'Outline']])}
           ${s.hookPosition === s.position ? html`<div class="faint" style="font-size:var(--fs-xs)">Tip: the banner and captions are in the same spot; move one so they don't overlap.</div>` : null}` : null}
