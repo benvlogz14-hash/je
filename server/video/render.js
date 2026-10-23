@@ -19,6 +19,8 @@ function ensureFonts() {
   const src = path.join(__dirname, 'fonts');
   fs.mkdirSync(dst, { recursive: true });
   // Copy new or updated fonts (size differs) so every bundled font is there for the captions.
+  // Remove fonts we no longer ship (e.g. lighter weights that the renderer would pick instead of the one in the preview).
+  for (const f of fs.readdirSync(dst)) if (f.endsWith('.ttf') && !fs.existsSync(path.join(src, f))) { try { fs.unlinkSync(path.join(dst, f)); } catch { /* in use */ } }
   for (const f of fs.readdirSync(src)) if (f.endsWith('.ttf')) { const d = path.join(dst, f); try { if (!fs.existsSync(d) || fs.statSync(d).size !== fs.statSync(path.join(src, f)).size) fs.copyFileSync(path.join(src, f), d); } catch { /* in use */ } }
   return dst;
 }
