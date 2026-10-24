@@ -1062,6 +1062,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     if (!hit) for (let i = hits.current.length - 1; i >= 0; i--) { const h = hits.current[i]; const l = local(h, p.x, p.y); if (Math.abs(l.x) <= h.w / 2 && Math.abs(l.y) <= h.h / 2) { hit = h; break; } }
     if (!hit) { setSel([]); return; }
     const f = [...seq.videoTracks].flatMap((tr) => tr.clips).find((x) => x.id === hit.id); if (!f) return;
+    if (e.ctrlKey || e.metaKey || e.shiftKey) { setSel(sel.includes(f.id) ? sel.filter((x) => x !== f.id) : [...sel, f.id]); return; }
     if (!sel.includes(f.id)) setSel([f.id]);
     const lt = Math.max(0, Math.min(f.duration, tRef.current - f.start));
     drag.current = { mode, clip: f, lt, x0: p.x, y0: p.y, k: seq.width / canvas.current.width, cx: hit.cx, cy: hit.cy, px: valAt(f.posX, lt), py: valAt(f.posY, lt), s0: valAt(f.scaleX, lt, 1), started: false };
@@ -1319,17 +1320,17 @@ function MusicLibrary({ onClose, onAdd }) {
 
 /** Text settings for several selected titles/captions at once (their words stay their own). */
 function MultiTextControls({ texts, seq, edit, onEditTitle }) {
-  const c = texts[0]; const st = c.text || {}; const ids = texts.map((x) => x.id);
+  const c = texts[0]; const st = c.text || {}; const ids = texts.map((x) => x.id); const allCaps = texts.every(isCaption);
   const setAll = (fn) => edit((d, s) => { for (const tr of s.videoTracks) for (const x of tr.clips) if (ids.includes(x.id) && x.text) fn(x.text, x); });
   const hex = (v, d) => '#' + String(v || d).replace('#', '').slice(-6);
   const col = (key, label, d) => html`<label class="row" style="gap:6px;font-size:var(--fs-sm)">${label} <input type="color" value=${hex(st[key], d)} onInput=${(e) => setAll((x) => { x[key] = '#ff' + e.target.value.slice(1); })} aria-label=${label} /></label>`;
   const slider = (key, label, min, max, d) => html`<${ParamField} label=${label} p=${st[key] ?? d} animatable=${false} min=${min} max=${max} unit="px" onLive=${(v) => { for (const x of texts) x.text[key] = Math.round(v.base); window.dispatchEvent(new Event('studio-redraw')); }} onCommit=${(v) => setAll((x) => { x[key] = Math.round(v.base); })} />`;
   return html`<div style="background:var(--ed-panel);border-left:1px solid var(--line);overflow:auto;padding:12px 14px">
-    <div class="row"><span class="eyebrow grow">Text: ${texts.length} selected</span><span class="badge outline">Titles</span></div>
+    <div class="row"><span class="eyebrow grow">${allCaps ? 'Captions' : 'Text'}: ${texts.length} selected</span><span class="badge outline">${allCaps ? 'Spoken words' : 'Titles'}</span></div>
     <div class="faint" style="font-size:var(--fs-xs);margin:6px 0 10px">Changes here apply to all ${texts.length}; each keeps its own words and timing.</div>
     <div class="col" style="gap:8px">
       <${Button} size="sm" kind="lav" icon="type" onClick=${() => onEditTitle?.(c.id, ids)}>Style all ${texts.length} (full designer)…</${Button}>
-      <div class="field"><span class="label">Look</span><div class="chips">${TITLE_PRESETS.slice(0, 3).map((pr) => html`<button type="button" class="chip" onClick=${() => setAll((x) => { for (const k of STYLE_KEYS) if (pr.st[k] !== undefined) x[k] = pr.st[k]; if (!pr.st.box) x.box = false; })}>${pr.name}</button>`)}</div></div>
+      ${allCaps ? html`<div class="field"><span class="label">Caption look</span><div class="chips">${LOOKS.map((l) => html`<button type="button" class="chip" style=${{ fontFamily: `'${l.v.font}'` }} onClick=${() => setAll((x) => Object.assign(x, lookText(l.v, false)))}>${l.label}</button>`)}</div></div>` : html`<div class="field"><span class="label">Look</span><div class="chips">${TITLE_PRESETS.slice(0, 3).map((pr) => html`<button type="button" class="chip" onClick=${() => setAll((x) => { for (const k of STYLE_KEYS) if (pr.st[k] !== undefined) x[k] = pr.st[k]; if (!pr.st.box) x.box = false; })}>${pr.name}</button>`)}</div></div>`}
       <select class="select sm" value=${st.family || 'Montserrat'} style=${{ fontFamily: `'${st.family || 'Montserrat'}'` }} onChange=${(e) => setAll((x) => { x.family = e.target.value; x.bold = HEAVY.has(e.target.value); })} aria-label="Font">${fontOptions()}</select>
       ${slider('pixelSize', 'Text size', 8, 600, 96)}
       ${slider('outlineWidth', 'Outline', 0, 40, 0)}
