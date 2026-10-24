@@ -153,7 +153,9 @@ async function renderShort(o) {
   let v = '0:v', a = `${audioIdx}:a`;
   if (segs.length > 1) {
     const expr = segs.map(([s, e]) => `between(t,${(s - start).toFixed(3)},${(e - start).toFixed(3)})`).join('+');
-    f.push(`[0:v]fps=${FPS},select='${expr}',setpts=N/(${FPS})/TB[vcut]`);
+    // Exactly one tick per frame after the cut (settb + setpts=N): a rounded time base made the last fps step repeat frames.
+    const tb = FPS.includes('/') ? FPS.split('/').reverse().join('/') : `1/${FPS}`;
+    f.push(`[0:v]fps=${FPS},select='${expr}',settb=${tb},setpts=N[vcut]`);
     v = 'vcut';
     if (info.hasAudio) { f.push(`[0:a]aselect='${expr}',asetpts=N/SR/TB[acut]`); a = 'acut'; }
   }
