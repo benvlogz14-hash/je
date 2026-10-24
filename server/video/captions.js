@@ -143,7 +143,7 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
     ? `${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookBg)},${assColor('#000000', 0x70)},${boldFlag(hookFont)},0,0,0,100,100,0,${-(style.hookTilt || 0)},1,0,0`
     : style.hookBox
     ? `${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookBg)},${assColor(style.hookBg)},${boldFlag(hookFont)},0,0,0,100,100,0,${-(style.hookTilt || 0)},3,18,0`
-    : `${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookOutline)},${assColor('#000000', 0x70)},${boldFlag(hookFont)},0,0,0,100,100,1,${-(style.hookTilt || 0)},1,${style.hookOutlineWidth},${style.shadow || 0}`;
+    : `${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookOutline)},${assColor('#000000', 0x70)},${boldFlag(hookFont)},0,0,0,100,100,1,${-(style.hookTilt || 0)},1,${style.hookOutlineWidth},${style.hookShadow ?? style.shadow ?? 0}`;
   const lines = [
     '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${width}`, `PlayResY: ${height}`, 'WrapStyle: 2', 'ScaledBorderAndShadow: yes', 'YCbCr Matrix: TV.709', '',
     '[V4+ Styles]',

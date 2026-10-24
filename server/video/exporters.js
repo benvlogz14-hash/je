@@ -41,8 +41,8 @@ function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, c
   // Highlight travels with each caption: the spoken word (word timings inside the caption) or chosen keywords.
   const hlMode = ['word', 'keywords'].includes(st.highlightMode) ? st.highlightMode : 'none';
   const kws = hlMode === 'keywords' ? (keywords?.length ? keywords : captions.autoKeywords(words.filter((w) => w.e > range.start && w.s < range.end))) : [];
-  const v2 = captions.captionChunks({ words, range, style }).map((c) => veloClip({ id: nextId++, type: 3, name: c.text, start: c.start, duration: c.end - c.start, posY, rotation: st.rotate || 0,
-    text: { ...textStyle(c.text, st.size, st.primary), hlMode, hlColor: hex(st.highlight), words: c.words, keywords: kws } }));
+  const v2 = captions.captionChunks({ words, range, style }).map((c) => ({ ...veloClip({ id: nextId++, type: 3, name: c.text, start: c.start, duration: c.end - c.start, posY, rotation: st.rotate || 0,
+    text: { ...textStyle(c.text, st.size, st.primary), hlMode, hlColor: hex(st.highlight), words: c.words, keywords: kws } }), isCaption: true }));
   // The opening banner keeps its own look: font, size, colours, box or outline, rotation, position and capitals.
   const hk = String(st.hookText || '').trim() || hook;
   const hookY = st.hookPosition === 'lower' ? H * 0.28 : st.hookPosition === 'center' ? 0 : -H * 0.36;

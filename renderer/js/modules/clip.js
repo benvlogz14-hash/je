@@ -187,7 +187,16 @@ const posCss = (p, top, bottom) => (p === 'upper' ? { top } : p === 'center' ? {
 function CaptionStyle({ clip, reload }) {
   const { data: client } = useApi(`/api/clients/${clip.clientId}`, ['clients']);
   const base = { ...STYLE_DEFAULTS, ...(client?.style || {}) };
-  const [s, setS] = useState({ ...base, ...(clip.style || {}) });
+  const [s, setS0] = useState({ ...base, ...(clip.style || {}) });
+  // Captions and the opening title are fully separate: a title that still says "same as captions" keeps what it showed
+  // when the captions' font, size or shadow change.
+  const setS = (n) => {
+    const next = { ...n };
+    if (next.font !== s.font && !s.hookFont && next.hookFont === s.hookFont) next.hookFont = s.font;
+    if (next.size !== s.size && !s.hookSize && next.hookSize === s.hookSize) next.hookSize = Math.round(s.size * 0.72);
+    if (next.shadow !== s.shadow && next.hookShadow == null) next.hookShadow = s.shadow || 0;
+    setS0(next);
+  };
   useEffect(() => setS({ ...base, ...(clip.style || {}) }), [client?.id, clip.id, JSON.stringify(clip.style || null), JSON.stringify(client?.style || null)]);
   const set = (k) => (e) => setS({ ...s, [k]: e?.target ? (e.target.type === 'range' || e.target.type === 'number' ? Number(e.target.value) : e.target.value) : e });
   const [hookText, setHookText] = useState(clip.hook || '');
@@ -210,18 +219,26 @@ function CaptionStyle({ clip, reload }) {
   const flag = (on, onChange, l) => html`<label class="row" style="gap:6px"><${Toggle} on=${on} onChange=${onChange} label=${l} /><span style="font-size:var(--fs-sm)">${l}</span></label>`;
   const [mine, setMine] = useState(() => { try { return JSON.parse(localStorage.getItem('eu.looks') || '[]'); } catch { return []; } });
   const keepMine = (list) => { setMine(list); try { localStorage.setItem('eu.looks', JSON.stringify(list)); } catch { /* private window */ } };
-  const saveLook = async () => { const name = await promptDialog({ title: 'Save this look', label: 'Name', value: 'My look', confirm: 'Save' }); if (name) keepMine([...mine.filter((x) => x.label !== name), { id: `mine-${Date.now()}`, label: name.slice(0, 24), v: Object.fromEntries(Object.keys(LOOKS[0].v).map((k) => [k, s[k]])) }]); };
-  const look = [...LOOKS, ...mine].find((x) => Object.entries(x.v).every(([k, v]) => s[k] === v))?.id;
+  const saveLook = async () => { const name = await promptDialog({ title: 'Save this look', label: 'Name', value: 'My look', confirm: 'Save' }); if (name) keepMine([...mine.filter((x) => x.label !== name), { id: `mine-${Date.now()}`, label: name.slice(0, 24), v: Object.fromEntries([...new Set([...Object.keys(LOOKS[0].v), 'hookShadow', 'hookRadius', 'hookBg', 'hookPosition'])].map((k) => [k, s[k]])) }]); };
+  // A look has a captions half and a title half; each row of chips applies only its own half.
+  const isHookKey = (k) => k.startsWith('hook');
+  const half = (v, title) => {
+    const o = Object.fromEntries(Object.entries(v).filter(([k]) => isHookKey(k) === title));
+    if (title) { o.hookFont = v.hookFont || v.font; o.hookSize = v.hookSize || Math.round((v.size || 84) * 0.72); o.hookShadow = v.shadow || 0; }
+    return o;
+  };
+  const capLook = [...LOOKS, ...mine].find((x) => Object.entries(half(x.v, false)).every(([k, v]) => s[k] === v))?.id;
+  const titleLook = [...LOOKS, ...mine].find((x) => Object.entries(half(x.v, true)).every(([k, v]) => s[k] === v))?.id;
   return html`<details class="panel pad" open=${!clip.versions?.[clip.versions.length - 1]?.captioned}>
     <summary><b>Captions and text</b> <span class="faint" style="font-size:var(--fs-xs)">${clip.style ? 'custom for this clip' : `using ${client?.name || 'the client'}'s style`}</span></summary>
     <div class="row wrap" style="gap:16px;margin-top:10px;align-items:flex-start">
       <div style=${{ width: '150px', height: '266px', borderRadius: '14px', background: 'linear-gradient(160deg,#5b6b7c,#2b3440)', position: 'relative', overflow: 'hidden', flex: 'none' }}>
-        ${s.hook && s.hookSeconds > 0 ? html`<div style=${{ position: 'absolute', left: '8px', right: '8px', textAlign: 'center', ...posCss(s.hookPosition, '22px', '60px') }}><span style=${{ display: 'inline-block', transform: `rotate(${s.hookTilt || 0}deg)`, fontFamily: `'${hookFont}', sans-serif`, fontWeight: weightOf(hookFont), fontSize: `${Math.max(6, Math.round(hookSize * K))}px`, lineHeight: 1.1, whiteSpace: 'pre-line', color: s.hookColor, ...(s.hookBox ? { background: s.hookBg, padding: '3px 6px', borderRadius: `${Math.round((s.hookRadius || 0) * K)}px`, boxDecorationBreak: 'clone', WebkitBoxDecorationBreak: 'clone' } : { WebkitTextStroke: stroke(s.hookOutlineWidth, s.hookOutline), paintOrder: 'stroke fill', textShadow: shadow(s.shadow) }) }}>${(t => (s.hookUpper ? t.toUpperCase() : t))(hookText || 'Opening text')}</span></div>` : null}
+        ${s.hook && s.hookSeconds > 0 ? html`<div style=${{ position: 'absolute', left: '8px', right: '8px', textAlign: 'center', ...posCss(s.hookPosition, '22px', '60px') }}><span style=${{ display: 'inline-block', transform: `rotate(${s.hookTilt || 0}deg)`, fontFamily: `'${hookFont}', sans-serif`, fontWeight: weightOf(hookFont), fontSize: `${Math.max(6, Math.round(hookSize * K))}px`, lineHeight: 1.1, whiteSpace: 'pre-line', color: s.hookColor, ...(s.hookBox ? { background: s.hookBg, padding: '3px 6px', borderRadius: `${Math.round((s.hookRadius || 0) * K)}px`, boxDecorationBreak: 'clone', WebkitBoxDecorationBreak: 'clone' } : { WebkitTextStroke: stroke(s.hookOutlineWidth, s.hookOutline), paintOrder: 'stroke fill', textShadow: shadow(s.hookShadow ?? s.shadow) }) }}>${(t => (s.hookUpper ? t.toUpperCase() : t))(hookText || 'Opening text')}</span></div>` : null}
         <div style=${{ position: 'absolute', left: '6px', right: '6px', textAlign: 'center', fontFamily: `'${s.font}', sans-serif`, fontWeight: weightOf(s.font), fontSize: `${Math.max(6, Math.round(s.size * K))}px`, lineHeight: 1.1, ...posCss(s.position, '60px', '50px'), ...(s.rotate ? { transform: `${posCss(s.position).transform || ''} rotate(${s.rotate}deg)` } : {}) }}>
           ${words.map((w, i) => html`<span style=${{ color: i === 1 && s.highlightMode === 'word' ? s.highlight : s.primary, WebkitTextStroke: !s.box ? stroke(s.outlineWidth, s.outline) : '0', paintOrder: 'stroke fill', textShadow: s.box ? 'none' : shadow(s.shadow), background: s.box ? s.outline : 'none', padding: s.box ? '1px 3px' : 0, marginRight: '3px', display: 'inline-block' }}>${txt(w)}</span>`)}</div>
       </div>
       <div class="col grow" style="gap:12px;min-width:260px">
-        <div class="col" style="gap:4px"><span class="label">Quick looks</span><div class="row wrap" style="gap:6px">${[...LOOKS, ...mine].map((x) => html`<button class="chip" style=${{ fontFamily: `'${x.v.font}', sans-serif`, fontSize: '15px', ...(look === x.id ? { background: 'var(--accent-soft, #dcefeb)', borderColor: 'var(--accent, #5f9a91)' } : {}) }} onClick=${() => setS({ ...s, ...x.v })} onContextMenu=${(e) => { if (!x.id.startsWith('mine-')) return; e.preventDefault(); keepMine(mine.filter((y) => y.id !== x.id)); }} title=${x.id.startsWith('mine-') ? 'Your saved look (right-click to remove)' : ''}>${x.label}</button>`)}<button class="chip" onClick=${saveLook} title="Save the current settings as a one-click look">+ Save this look</button></div></div>
+        ${['captions', 'title'].map((which) => html`<div class="col" style="gap:4px"><span class="label">${which === 'title' ? 'Title looks (the text at the top)' : 'Caption looks'}</span><div class="row wrap" style="gap:6px">${[...LOOKS, ...mine].map((x) => html`<button class="chip" style=${{ fontFamily: `'${which === 'title' ? x.v.hookFont || x.v.font : x.v.font}', sans-serif`, fontSize: '15px', ...((which === 'title' ? titleLook : capLook) === x.id ? { background: 'var(--accent-soft, #dcefeb)', borderColor: 'var(--accent, #5f9a91)' } : {}) }} onClick=${() => setS0({ ...s, ...half(x.v, which === 'title') })} onContextMenu=${(e) => { if (!x.id.startsWith('mine-')) return; e.preventDefault(); keepMine(mine.filter((y) => y.id !== x.id)); }} title=${x.id.startsWith('mine-') ? 'Your saved look (right-click to remove)' : ''}>${x.label}</button>`)}${which === 'captions' ? html`<button class="chip" onClick=${saveLook} title="Save the current settings as a one-click look">+ Save this look</button>` : null}</div></div>`)}
 
         <div class="col" style="gap:8px;border-top:1px solid var(--line, #eee);padding-top:10px">
           <b style="font-size:var(--fs-sm)">Captions (spoken words)</b>
@@ -251,6 +268,7 @@ function CaptionStyle({ clip, reload }) {
             <${Field} label="Font" id="cs-hfont">${fontPick('hookFont', 'cs-hfont', true)}</${Field}>
             <${Field} label=${`Size: ${hookSize}`} id="cs-hsize"><input id="cs-hsize" class="range" type="range" min="30" max="220" step="2" value=${hookSize} onInput=${set('hookSize')} /></${Field}>
             <${Field} label=${`Rotate: ${s.hookTilt || 0}°`} id="cs-ht"><input id="cs-ht" class="range" type="range" min="-30" max="30" step="1" value=${s.hookTilt || 0} onInput=${set('hookTilt')} /></${Field}>
+            ${!s.hookBox ? html`<${Field} label=${`Shadow: ${s.hookShadow ?? s.shadow ?? 0}`} id="cs-hsh"><input id="cs-hsh" class="range" type="range" min="0" max="12" step="1" value=${s.hookShadow ?? s.shadow ?? 0} onInput=${set('hookShadow')} /></${Field}>` : null}
             ${s.hookBox ? html`<${Field} label=${`Rounded corners: ${s.hookRadius || 0}`} id="cs-hr"><input id="cs-hr" class="range" type="range" min="0" max="40" step="1" value=${s.hookRadius || 0} onInput=${set('hookRadius')} /></${Field}>` : null}
             ${!s.hookBox ? html`<${Field} label=${`Outline thickness: ${s.hookOutlineWidth}`} id="cs-how"><input id="cs-how" class="range" type="range" min="0" max="20" step="1" value=${s.hookOutlineWidth} onInput=${set('hookOutlineWidth')} /></${Field}>` : null}
           </div>

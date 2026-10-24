@@ -151,7 +151,13 @@ const keyTimesOf = (c) => [...new Set(animParams(c).flatMap(([o, k]) => sortedKe
 const clone = (o) => JSON.parse(JSON.stringify(o));
 /** The opening title made with the clip (stays recognised after you rename it). */
 const isHook = (c) => c && c.type === 3 && (c.isHook || c.name === 'Hook');
-const isCaption = (c) => c && c.type === 3 && !isHook(c) && !!c.text;
+/** Captions are marked as such (made from the transcript); titles you add yourself never count as captions. */
+const isCaption = (c) => c && c.type === 3 && !isHook(c) && !!c.text && !!c.isCaption;
+/** Older projects: the pieces on the "Captions" track (or with word timings) are the captions. */
+function markCaptions(data) {
+  for (const sq of data?.sequences || []) for (const tr of sq.videoTracks || []) for (const c of tr.clips || []) if (c.type === 3 && c.isCaption === undefined && !isHook(c) && (tr.name === 'Captions' || Array.isArray(c.text?.words))) c.isCaption = true;
+  return data;
+}
 /** What a clip is called on the timeline: its name, or for titles and captions their text unless you renamed them. */
 const clipLabel = (c) => (c.type === 3 && !c.renamed ? c.text?.text || c.name || 'Title' : c.name || 'Clip');
 const TRACK_H = { 0: 48, 1: 40 };
@@ -223,7 +229,7 @@ function Editor({ id }) {
   const undo = useRef([]); const redo = useRef([]);
   const saveTimer = useRef(null);
 
-  useEffect(() => { api.get(`/api/projects/${id}`).then((p) => { setProj(p); setDataRaw(p.data); }).catch((e) => toast(e.message, { kind: 'error' })); }, [id]);
+  useEffect(() => { api.get(`/api/projects/${id}`).then((p) => { setProj(p); setDataRaw(markCaptions(p.data)); }).catch((e) => toast(e.message, { kind: 'error' })); }, [id]);
   const seq = data ? (data.sequences.find((s) => s.id === data.activeSequence) || data.sequences[0]) : null;
   if (seq) fpsRef.current = seq.fps || 30;
   const media = useMemo(() => Object.fromEntries((data?.media || []).map((m) => [m.id, m])), [data]);
@@ -464,7 +470,7 @@ function Editor({ id }) {
     toast(`Added "${title}" on the Music track at 25% volume. Select it to change the volume.`, { kind: 'success' });
   };
   /** Replace the project with a version the engine produced (AI / agent edit), keeping Ctrl+Z working. */
-  const adoptServerData = (next) => { setDataRaw((prev) => { undo.current.push(JSON.stringify(prev)); redo.current = []; return next; }); setDirty(false); };
+  const adoptServerData = (next) => { setDataRaw((prev) => { undo.current.push(JSON.stringify(prev)); redo.current = []; return markCaptions(next); }); setDirty(false); };
   const aiEdit = async (instruction) => {
     clearTimeout(saveTimer.current);
     const r = await api.post(`/api/projects/${id}/ai-edit`, { instruction, data });
@@ -648,7 +654,7 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
     if (!tr) { tr = { type: 0, name: 'Captions', muted: false, locked: false, volume: { base: 1 }, clips: [] }; const hi = s.videoTracks.findIndex((x) => x.name === 'Hook'); s.videoTracks.splice(hi >= 0 ? hi : s.videoTracks.length, 0, tr); }
     const a = (v) => ({ base: v }); const posY = Math.round(s.height * 0.28);
     for (const k of caps) tr.clips.push({ id: nextId(d), type: 3, mediaId: '', name: k.text, start: k.start, duration: k.duration, in: 0, speed: 1, preservePitch: false, linkId: '0', enabled: true, posX: a(0), posY: a(posY), scaleX: a(1), scaleY: a(1), rotation: a(0), opacity: a(1), volume: a(1), uniformScale: true, effects: [], transIn: { type: 0, duration: 1 }, transOut: { type: 0, duration: 1 },
-      text: { text: k.text, ...lookText(lookV, false), hlMode: 'word', words: k.words, keywords: [] } });
+      text: { text: k.text, ...lookText(lookV, false), hlMode: 'word', words: k.words, keywords: [] }, isCaption: true });
     tr.clips.sort((x, y) => x.start - y.start);
   });
   const addCaptions = async () => {
