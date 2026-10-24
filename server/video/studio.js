@@ -193,7 +193,7 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
     const argb = (s, d) => { const h = String(s || d).replace('#', ''); return h.length === 8 ? { a: 255 - parseInt(h.slice(0, 2), 16), rgb: '#' + h.slice(2) } : { a: 0, rgb: '#' + h }; };
     const easeOut = (f) => 1 - (1 - f) ** 3;
     for (const { c, layer } of texts) {
-      const st = c.text || {}; const col = argb(st.color, 'ffffffff'); const oc = argb(st.outlineColor, 'ff000000');
+      const st = c.text || {}; const fc = require('./fontnames').face(st.family || 'Montserrat', st.bold !== false && require('./captions').HEAVY.has(st.family || 'Montserrat')); const col = argb(st.color, 'ffffffff'); const oc = argb(st.outlineColor, 'ff000000');
       const box = st.box ? argb(st.boxColor, 'cc000000') : null;
       const shad = st.shadow ? argb(st.shadowColor, 'b3000000') : null;
       const body = (st.uppercase ? String(st.text || '').toUpperCase() : String(st.text || '')).replace(/[{}\\]/g, '').replace(/\n/g, '\\N');
@@ -201,7 +201,7 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       const event = ({ from, to, px, py, sc, op, rot, place, pop = '', fad = '' }) => {
         const alpha = Math.round(255 - (255 - col.a) * Math.max(0, Math.min(1, op))).toString(16).padStart(2, '0');
         const look = box ? `\\3c${colTag(box.rgb)}\\3a&H${box.a.toString(16).padStart(2, '0').toUpperCase()}&\\bord${Math.round((st.boxPad ?? 18) * sc)}` : `\\3c${colTag(oc.rgb)}\\bord${Math.round((st.outlineWidth || 0) * sc)}`;
-        const tags = `{\\an5${place || `\\pos(${Math.round(px)},${Math.round(py)})`}\\fn${(st.family || 'Montserrat').replace(/[{}\\,]/g, '')}\\fs${Math.max(1, Math.round((st.pixelSize || 96) * sc))}\\fsp${Math.round((st.letterSpacing || 0) * sc)}\\b${st.bold === false || !require('./captions').HEAVY.has(st.family || 'Montserrat') ? 0 : 1}\\i${st.italic ? 1 : 0}\\c${colTag(col.rgb)}\\alpha&H${alpha.toUpperCase()}&${look}${shad ? `\\shad${Math.round(st.shadow * sc)}\\4c${colTag(shad.rgb)}\\4a&H${shad.a.toString(16).padStart(2, '0').toUpperCase()}&` : '\\shad0'}\\frz${-rot}${pop}${fad}}`;
+        const tags = `{\\an5${place || `\\pos(${Math.round(px)},${Math.round(py)})`}\\fn${fc.name.replace(/[{}\\,]/g, '')}\\fs${Math.max(1, Math.round((st.pixelSize || 96) * sc))}\\fsp${Math.round((st.letterSpacing || 0) * sc)}\\b${fc.bold ? 1 : 0}\\i${st.italic ? 1 : 0}\\c${colTag(col.rgb)}\\alpha&H${alpha.toUpperCase()}&${look}${shad ? `\\shad${Math.round(st.shadow * sc)}\\4c${colTag(shad.rgb)}\\4a&H${shad.a.toString(16).padStart(2, '0').toUpperCase()}&` : '\\shad0'}\\frz${-rot}${pop}${fad}}`;
         lines.push(`Dialogue: ${layer},${t2(from)},${t2(to)},${st.box ? 'B' : 'T'},,0,0,0,,${tags}${body}`);
       };
       const keyed = ['posX', 'posY', 'scaleX', 'rotation', 'opacity'].some((k) => hasKeys(c[k]));

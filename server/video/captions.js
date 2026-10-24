@@ -3,7 +3,11 @@
 
 // Fonts with a real bold/black weight; the others are drawn at their own weight (libass would fake-bold them).
 const HEAVY = new Set(['Montserrat', 'Poppins', 'Kanit', 'Barlow Condensed', 'Titillium Web', 'Passion One', 'Playfair Display SC', 'Kalam', 'Silkscreen', 'Arial', 'Verdana', 'Georgia', 'Trebuchet MS', 'Comic Sans MS']);
-const boldFlag = (font, want = true) => (want && HEAVY.has(font) ? -1 : 0);
+// Bundled fonts are asked for by their own full name (see fontnames.js), so a same-named Windows font never replaces them.
+const fontnames = require('./fontnames');
+const face = (font, want = true) => fontnames.face(font, want && HEAVY.has(font));
+const boldFlag = (font, want = true) => face(font, want).bold;
+const fontName = (font, want = true) => face(font, want).name.replace(/,/g, ' ');
 
 const DEFAULT_STYLE = {
   preset: 'clean-pop',
@@ -129,11 +133,11 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
     '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${width}`, `PlayResY: ${height}`, 'WrapStyle: 2', 'ScaledBorderAndShadow: yes', 'YCbCr Matrix: TV.709', '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    `Style: Caption,${font},${style.size},${assColor(style.primary)},${assColor(style.highlight)},${assColor(style.outline)},${assColor('#000000', 0x80)},${boldFlag(font, style.bold)},0,0,0,100,100,1,${-(style.rotate || 0)},${borderStyle},${style.outlineWidth},${style.shadow},${align},80,80,${marginV},1`,
-    `Style: Hook,${hookFont},${hookSize},${hookLook},${hookAlign},90,90,${hookMarginV},1`,
-    `Style: LowerName,${font},${Math.round(height * 0.03)},${assColor('#FFFFFF')},${assColor('#FFFFFF')},${assColor('#15181B', 0x20)},${assColor('#15181B', 0x20)},-1,0,0,0,100,100,0,0,3,16,0,7,0,0,0,1`,
-    `Style: LowerTitle,${font},${Math.round(height * 0.021)},${assColor('#15181B')},${assColor('#15181B')},${assColor(style.highlight)},${assColor(style.highlight)},-1,0,0,0,100,100,0,0,3,12,0,7,0,0,0,1`,
-    `Style: EndCard,${font},${Math.round(style.size * 0.9)},${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookBg)},${assColor(style.hookBg)},-1,0,0,0,100,100,0,0,3,26,0,5,90,90,0,1`,
+    `Style: Caption,${fontName(font, style.bold)},${style.size},${assColor(style.primary)},${assColor(style.highlight)},${assColor(style.outline)},${assColor('#000000', 0x80)},${boldFlag(font, style.bold)},0,0,0,100,100,1,${-(style.rotate || 0)},${borderStyle},${style.outlineWidth},${style.shadow},${align},80,80,${marginV},1`,
+    `Style: Hook,${fontName(hookFont)},${hookSize},${hookLook},${hookAlign},90,90,${hookMarginV},1`,
+    `Style: LowerName,${fontName(font)},${Math.round(height * 0.03)},${assColor('#FFFFFF')},${assColor('#FFFFFF')},${assColor('#15181B', 0x20)},${assColor('#15181B', 0x20)},${boldFlag(font)},0,0,0,100,100,0,0,3,16,0,7,0,0,0,1`,
+    `Style: LowerTitle,${fontName(font)},${Math.round(height * 0.021)},${assColor('#15181B')},${assColor('#15181B')},${assColor(style.highlight)},${assColor(style.highlight)},${boldFlag(font)},0,0,0,100,100,0,0,3,12,0,7,0,0,0,1`,
+    `Style: EndCard,${fontName(font)},${Math.round(style.size * 0.9)},${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookBg)},${assColor(style.hookBg)},${boldFlag(font)},0,0,0,100,100,0,0,3,26,0,5,90,90,0,1`,
     '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
   ];
   const dur = range.end - range.start;

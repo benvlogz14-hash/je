@@ -43,7 +43,7 @@
 @font-face { font-family: "Permanent Marker"; src: url("../assets/fonts/PermanentMarker-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "Playfair Display SC"; src: url("../assets/fonts/PlayfairDisplaySC-Black.ttf") format("truetype"); font-weight: 900; font-display: swap; }
 @font-face { font-family: "Poppins"; src: url("../assets/fonts/Poppins-Black.ttf") format("truetype"); font-weight: 900; font-display: swap; }
-@font-face { font-family: "Poppins"; src: url("../assets/fonts/Poppins-ExtraBold.ttf") format("truetype"); font-weight: 900; font-display: swap; }
+@font-face { font-family: "Poppins"; src: url("../assets/fonts/Poppins-ExtraBold.ttf") format("truetype"); font-weight: 800; font-display: swap; }
 @font-face { font-family: "Press Start 2P"; src: url("../assets/fonts/PressStart2P-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "Racing Sans One"; src: url("../assets/fonts/RacingSansOne-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "Rammetto One"; src: url("../assets/fonts/RammettoOne-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
