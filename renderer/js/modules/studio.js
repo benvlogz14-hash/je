@@ -448,7 +448,21 @@ function Editor({ id }) {
     if (m.hasAudio && m.kind !== 2) place(s, 'a', s.audioTracks[audioIdx] ? audioIdx : 0, mk(1), { replace, dir });
     sfx('press');
   });
-  const [titleEdit, setTitleEdit] = useState(null); // null | {} (new) | { clipId }
+  const [titleEdit, setTitleEdit] = useState(null); // null | {} (new) | { clipId } | { clipId, ids } (style for many)
+  const [musicOpen, setMusicOpen] = useState(false);
+  /** Add a library track at the playhead on the Music track, quiet under the voice and no longer than the edit. */
+  const addMusic = async (trackId, title) => {
+    const { path: file } = await api.post('/api/music/file', { id: trackId });
+    const [m] = await importPaths([file]); if (!m) return;
+    edit((d, s) => {
+      let ai = s.audioTracks.findIndex((tr) => tr.name === 'Music');
+      if (ai < 0) { s.audioTracks.push({ type: 1, name: 'Music', muted: false, locked: false, volume: { base: 1 }, clips: [] }); ai = s.audioTracks.length - 1; }
+      const end = Math.max(0, ...s.videoTracks.flatMap((tr) => tr.clips.map((c) => c.start + c.duration)));
+      const at = t < end - 0.5 ? t : 0; const len = Math.max(1, Math.min(m.duration || 30, (end > at ? end - at : m.duration || 30)));
+      place(s, 'a', ai, { id: nextId(d), type: 1, mediaId: m.id, name: title || m.name, start: at, duration: len, in: 0, speed: 1, preservePitch: false, linkId: '0', enabled: true, posX: anim(0), posY: anim(0), scaleX: anim(1), scaleY: anim(1), rotation: anim(0), opacity: anim(1), volume: anim(0.25), uniformScale: true, effects: [], transIn: { type: 2, duration: 0.5 }, transOut: { type: 2, duration: 1.5 } }, { replace: true });
+    });
+    toast(`Added "${title}" on the Music track at 25% volume. Select it to change the volume.`, { kind: 'success' });
+  };
   /** Replace the project with a version the engine produced (AI / agent edit), keeping Ctrl+Z working. */
   const adoptServerData = (next) => { setDataRaw((prev) => { undo.current.push(JSON.stringify(prev)); redo.current = []; return next; }); setDirty(false); };
   const aiEdit = async (instruction) => {
@@ -466,6 +480,12 @@ function Editor({ id }) {
   const addText = () => setTitleEdit({});
   const saveTitle = ({ text, posY, duration, fade }) => {
     const tid = titleEdit?.clipId;
+    if (titleEdit?.ids?.length > 1) {
+      // One style for many: every selected title/caption gets the look (and the position, if you moved it); words and timing stay.
+      const first = findClip(seq, tid)?.c; const movedY = first && Math.abs(valAt(first.posY, 0) - posY) > 1;
+      edit((d, s) => { for (const cid of titleEdit.ids) { const f = findClip(s, cid); if (!f || f.c.type !== 3) continue; for (const k of STYLE_KEYS) if (text[k] !== undefined) f.c.text[k] = text[k]; if (movedY && !isAnimated(f.c.posY)) f.c.posY = anim(posY); } });
+      setTitleEdit(null); sfx('success'); return;
+    }
     edit((d, s) => {
       if (tid) { const f = findClip(s, tid); if (!f) return; const c = f.c; c.text = text; c.name = text.text.slice(0, 40); c.duration = duration; c.posY = isAnimated(c.posY) ? c.posY : anim(posY); c.transIn = { type: fade ? 2 : 0, duration: fade || 0.25 }; c.transOut = { type: fade ? 2 : 0, duration: fade || 0.25 }; return; }
       place(s, 'v', s.videoTracks.length - 1, { id: nextId(d), type: 3, mediaId: '', name: text.text.slice(0, 40), start: t, duration, in: 0, speed: 1, preservePitch: false, linkId: '0', enabled: true, posX: anim(0), posY: anim(posY), scaleX: anim(1), scaleY: anim(1), rotation: anim(0), opacity: anim(1), volume: anim(1), uniformScale: true, effects: [], transIn: { type: fade ? 2 : 0, duration: fade || 0.25 }, transOut: { type: fade ? 2 : 0, duration: fade || 0.25 }, text });
@@ -529,6 +549,7 @@ function Editor({ id }) {
       <${Button} kind="ghost" size="sm" icon="undo" title="Undo (Ctrl+Z)" disabled=${!undo.current.length} onClick=${doUndo} />
       <${Button} kind="ghost" size="sm" icon="redo" title="Redo (Ctrl+Shift+Z)" disabled=${!redo.current.length} onClick=${doRedo} />
       <div style="width:1px;height:22px;background:var(--line)" />
+      <${Button} kind="ghost" size="sm" icon="volume" onClick=${() => setMusicOpen(true)} title="Free music library: listen and add">Music</${Button}>
       <${Button} kind="ghost" size="sm" icon="external" onClick=${() => act(() => api.post(`/api/projects/${id}/open-velo`), { ok: 'Opening in Velo', sound: 'open' })}>Open in Velo</${Button}>
       <${Button} kind="ghost" size="sm" onClick=${() => save()}>Save</${Button}>
       <${Button} kind="primary" size="sm" icon="upload" onClick=${exportNow}>Export</${Button}>
@@ -536,12 +557,13 @@ function Editor({ id }) {
     <div style="display:grid;grid-template-columns:260px minmax(0, 1fr) 300px;min-height:0">
       <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${id} />
       <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} sel=${sel} edit=${edit} setSel=${setSel} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
-      <${EffectControls} selected=${selected} seq=${seq} edit=${edit} media=${media} t=${t} setT=${setT} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
+      <${EffectControls} selected=${selected} sel=${sel} findClip=${findClip} seq=${seq} edit=${edit} media=${media} t=${t} setT=${setT} onEditTitle=${(cid, ids) => setTitleEdit({ clipId: cid, ids })} />
     </div>
     <div style="display:flex;flex-direction:column;min-height:0"><${CaptionsBar} seq=${seq} media=${media} sel=${sel} setSel=${setSel} edit=${edit} findClip=${findClip} nextId=${nextId} />
     <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onClipMenu=${clipMenu} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} /></div>
     ${exporting ? html`<${ExportDialog} id=${id} onClose=${() => setExporting(false)} />` : null}
-    ${titleEdit ? html`<${TitleDesigner} seq=${seq} clip=${titleEdit.clipId ? findClip(seq, titleEdit.clipId)?.c : null} onClose=${() => setTitleEdit(null)} onSave=${saveTitle} />` : null}
+    ${musicOpen ? html`<${MusicLibrary} onClose=${() => setMusicOpen(false)} onAdd=${addMusic} />` : null}
+    ${titleEdit ? html`<${TitleDesigner} seq=${seq} clip=${titleEdit.clipId ? findClip(seq, titleEdit.clipId)?.c : null} count=${titleEdit.ids?.length || 1} onClose=${() => setTitleEdit(null)} onSave=${saveTitle} />` : null}
   </div>`;
 }
 
@@ -611,7 +633,7 @@ function lookText(v, hook) {
 }
 
 function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
-  const [look, setLook] = useState('signature'); const [busy, setBusy] = useState('');
+  const [look, setLook] = useState('signature'); const [titleLook, setTitleLook] = useState(''); const [busy, setBusy] = useState('');
   if (!seq) return null;
   const all = [...seq.videoTracks].flatMap((tr) => tr.clips.filter(isCaption));
   const lookV = (LOOKS.find((l) => l.id === look) || LOOKS[0]).v;
@@ -648,19 +670,23 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
       insert(r.captions); sfx('success'); toast(`${r.captions.length} captions added with the spoken word highlighted. Change the look or highlight below.`, { kind: 'success' });
     } catch (e) { sfx('error'); toast(e.message, { kind: 'error' }); } finally { setBusy(''); }
   };
-  const applyLook = (id) => {
-    setLook(id); const v = (LOOKS.find((l) => l.id === id) || LOOKS[0]).v;
+  // Captions and the opening title have their own looks (e.g. a TikTok title over Signature captions).
+  const applyLook = (id, which) => {
+    const v = (LOOKS.find((l) => l.id === id) || LOOKS[0]).v; if (which === 'title') setTitleLook(id); else setLook(id);
     edit((d, s) => { for (const tr of s.videoTracks) for (const c of tr.clips) {
-      if (isCaption(c)) c.text = { ...c.text, ...lookText(v, false) };
-      else if (isHook(c) && c.text) { c.text = { ...c.text, ...lookText(v, true) }; c.rotation = { base: v.hookTilt || 0 }; }
+      if (which !== 'title' && isCaption(c)) c.text = { ...c.text, ...lookText(v, false) };
+      else if (which === 'title' && isHook(c) && c.text) { c.text = { ...c.text, ...lookText(v, true) }; c.rotation = { base: v.hookTilt || 0 }; }
     } });
     sfx('tap');
   };
+  const hasHook = seq.videoTracks.some((tr) => tr.clips.some(isHook));
   const top = html`<div class="row wrap" style="gap:8px;padding:6px 12px;border-top:1px solid var(--line);background:var(--surface-2);font-size:var(--fs-sm)">
     <b>Captions</b>
     <${Button} size="sm" kind=${all.length ? 'ghost' : 'primary'} icon="type" disabled=${!!busy} onClick=${addCaptions}>${all.length ? 'Make captions again' : 'Add captions'}</${Button}>
-    <span class="faint">Look</span>
-    <select class="select sm" style="width:auto" value=${look} onChange=${(e) => applyLook(e.target.value)} aria-label="Caption look" title="Applies to every caption and the opening title">${LOOKS.map((l) => html`<option value=${l.id}>${l.label}</option>`)}</select>
+    <span class="faint">Captions look</span>
+    <select class="select sm" style="width:auto" value=${look} onChange=${(e) => applyLook(e.target.value, 'captions')} aria-label="Caption look" title="Applies to every caption">${LOOKS.map((l) => html`<option value=${l.id}>${l.label}</option>`)}</select>
+    ${hasHook ? html`<span class="faint">Title look</span>
+    <select class="select sm" style="width:auto" value=${titleLook} onChange=${(e) => applyLook(e.target.value, 'title')} aria-label="Title look" title="Applies to the opening title (the text at the top)"><option value="" disabled>Pick…</option>${LOOKS.map((l) => html`<option value=${l.id}>${l.label}</option>`)}</select>` : null}
     ${busy ? html`<span class="badge sky">${busy}</span>` : !all.length ? html`<span class="faint">Makes captions from what's said, with the spoken word highlighted in gold.</span>` : null}
   </div>`;
   if (!all.length) return top;
@@ -1084,7 +1110,6 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     </div></div>`;
 }
 
-const TITLE_FONTS = [['Montserrat', 'Montserrat (bundled)'], ['Anton', 'Anton (bundled)'], ['Arial', 'Arial'], ['Impact', 'Impact'], ['Georgia', 'Georgia'], ['Verdana', 'Verdana'], ['Trebuchet MS', 'Trebuchet MS'], ['Segoe UI', 'Segoe UI'], ['Comic Sans MS', 'Comic Sans MS']];
 const easeOut = (f) => 1 - (1 - f) ** 3;
 const rgbaOf = (s, d) => { const h = String(s || d).replace('#', ''); if (h.length === 8) return `rgba(${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${parseInt(h.slice(6, 8), 16)},${parseInt(h.slice(0, 2), 16) / 255})`; return '#' + h; };
 /** Size of a title's box in canvas pixels (for selecting and dragging it on the monitor). */
@@ -1156,6 +1181,9 @@ function drawText(g, st, scale, local = 10, dur = 0) {
 
 // ------------------------------------------------------------ title designer (T)
 const TITLE_PRESETS = [
+  { name: 'TikTok', st: { family: 'TikTok Sans', pixelSize: 66, bold: false, uppercase: false, color: '#ff000000', outlineWidth: 0, shadow: 0, box: true, boxColor: '#ffffffff', boxPad: 18, boxRadius: 18, animIn: 'none' }, pos: 'top' },
+  { name: 'TikTok plain', st: { family: 'TikTok Sans', pixelSize: 66, bold: false, uppercase: false, color: '#ffffffff', outlineWidth: 0, shadow: 3, shadowColor: '#b3000000', box: false, animIn: 'none' }, pos: 'top' },
+  { name: 'Instagram', st: { family: 'Inter', pixelSize: 62, bold: false, uppercase: false, color: '#ff000000', outlineWidth: 0, shadow: 0, box: true, boxColor: '#ffffffff', boxPad: 18, boxRadius: 20, animIn: 'none' }, pos: 'top' },
   { name: 'Hook', st: { family: 'Anton', pixelSize: 150, bold: true, uppercase: true, color: '#ffffffff', outlineColor: '#ff000000', outlineWidth: 8, shadow: 0, box: false, animIn: 'pop' }, pos: 'top' },
   { name: 'Title', st: { family: 'Montserrat', pixelSize: 96, bold: true, color: '#ffffffff', outlineColor: '#ff111111', outlineWidth: 4, shadow: 4, box: false, animIn: 'fade' }, pos: 'center' },
   { name: 'Lower third', st: { family: 'Montserrat', pixelSize: 54, bold: true, color: '#ffffffff', outlineWidth: 0, shadow: 0, box: true, boxColor: '#e6111a22', boxPad: 22, animIn: 'slide' }, pos: 'lower' },
@@ -1164,10 +1192,14 @@ const TITLE_PRESETS = [
   { name: 'Quote', st: { family: 'Georgia', pixelSize: 68, bold: false, italic: true, color: '#ffffffff', outlineWidth: 0, shadow: 6, box: false, animIn: 'fade' }, pos: 'center' },
 ];
 const POS_Y = { top: -0.32, center: 0, lower: 0.26, bottom: 0.36 };
+/** Every font (bundled and Windows ones), grouped like the clip panel's picker. */
+const fontOptions = () => FONT_GROUPS.map(([g, list]) => html`<optgroup label=${g}>${list.map((f) => html`<option value=${f} style=${{ fontFamily: `'${f}'` }}>${f}</option>`)}</optgroup>`);
+/** The look of a title (not its words, timing or highlight), copied when one style is applied to many titles/captions. */
+const STYLE_KEYS = ['family', 'pixelSize', 'bold', 'italic', 'uppercase', 'color', 'outlineColor', 'outlineWidth', 'shadow', 'shadowColor', 'box', 'boxColor', 'boxPad', 'boxRadius', 'letterSpacing', 'animIn', 'hlColor'];
 const hex6 = (c, d) => '#' + String(c || d).replace('#', '').slice(-6);
 const withAlpha = (rgb, a) => '#' + Math.round(a * 255).toString(16).padStart(2, '0') + rgb.replace('#', '');
 
-function TitleDesigner({ seq, clip, onClose, onSave }) {
+function TitleDesigner({ seq, clip, count = 1, onClose, onSave }) {
   const start = clip?.text ? { ...TITLE_PRESETS[1].st, ...clip.text } : { ...TITLE_PRESETS[1].st, text: 'NEW TITLE' };
   const [st, setSt] = useState(start);
   const [posY, setPosY] = useState(clip ? valAt(clip.posY, 0) : Math.round(seq.height * POS_Y.center));
@@ -1192,14 +1224,14 @@ function TitleDesigner({ seq, clip, onClose, onSave }) {
   const save = () => onSave({ text: { ...st, text: st.text || 'TITLE' }, posY, duration: Math.max(0.2, dur), fade: st.animIn === 'fade' ? Math.max(fade, 0.2) : fade });
   const chip = (on, label, fn, title) => html`<button type="button" class=${'chip' + (on ? ' on' : '')} title=${title} onClick=${fn}>${label}</button>`;
   const prevW = 220; const prevH = Math.round((prevW * seq.height) / seq.width);
-  return html`<${Modal} wide title=${clip ? 'Edit title' : 'New title'} icon="type" onClose=${onClose} footer=${html`<span class="faint grow" style="font-size:var(--fs-xs)">Enter saves · Shift+Enter adds a line</span><${Button} kind="ghost" onClick=${onClose}>Cancel</${Button}><${Button} kind="primary" icon=${clip ? 'check' : 'plus'} onClick=${save}>${clip ? 'Save title' : 'Add to timeline'}</${Button}>`}>
+  return html`<${Modal} wide title=${count > 1 ? `Style for ${count} titles and captions (each keeps its own words)` : clip ? 'Edit title' : 'New title'} icon="type" onClose=${onClose} footer=${html`<span class="faint grow" style="font-size:var(--fs-xs)">Enter saves · Shift+Enter adds a line</span><${Button} kind="ghost" onClick=${onClose}>Cancel</${Button}><${Button} kind="primary" icon=${clip ? 'check' : 'plus'} onClick=${save}>${clip ? 'Save title' : 'Add to timeline'}</${Button}>`}>
     <div style="display:grid;grid-template-columns:${prevW}px minmax(0, 1fr);gap:18px;align-items:start">
       <div class="col" style="gap:8px;position:sticky;top:0"><canvas ref=${cv} width=${prevW * 2} height=${prevH * 2} style=${{ width: prevW + 'px', height: prevH + 'px', borderRadius: '10px', boxShadow: 'var(--shadow-1)' }} /><div class="faint" style="font-size:var(--fs-xs)">Live preview at ${seq.width}×${seq.height}</div></div>
       <div class="col" style="gap:12px">
         <div class="field"><span class="label">Style</span><div class="chips">${TITLE_PRESETS.map((pr) => chip(false, pr.name, () => { set({ ...pr.st }); setPosY(Math.round(seq.height * POS_Y[pr.pos])); if (pr.st.animIn === 'fade') setFade(0.3); }))}</div></div>
         <${Field} label="Text" id="td-text"><textarea id="td-text" class="textarea" rows="2" value=${st.text} autofocus onInput=${(e) => set({ text: e.target.value })} onKeyDown=${(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); } }} /></${Field}>
         <div class="form-grid" style="grid-template-columns:repeat(auto-fit, minmax(170px, 1fr))">
-          <${Field} label="Font" id="td-font"><select id="td-font" class="select" value=${st.family} onChange=${(e) => set({ family: e.target.value })}>${TITLE_FONTS.map(([f, l]) => html`<option value=${f}>${l}</option>`)}</select></${Field}>
+          <${Field} label="Font" id="td-font"><select id="td-font" class="select" value=${st.family} style=${{ fontFamily: `'${st.family}'` }} onChange=${(e) => set({ family: e.target.value, bold: HEAVY.has(e.target.value) })}>${fontOptions()}</select></${Field}>
           <div class="field"><span class="label">Look</span><div class="chips">${chip(st.bold !== false, 'Bold', () => set({ bold: st.bold === false }))}${chip(st.italic, 'Italic', () => set({ italic: !st.italic }))}${chip(st.uppercase, 'ALL CAPS', () => set({ uppercase: !st.uppercase }))}</div></div>
         </div>
         <${ParamField} label="Size" p=${st.pixelSize} animatable=${false} min=${8} max=${600} smin=${16} smax=${300} unit="px" onLive=${(v) => set({ pixelSize: Math.round(v.base) })} onCommit=${(v) => set({ pixelSize: Math.round(v.base) })} />
@@ -1213,6 +1245,7 @@ function TitleDesigner({ seq, clip, onClose, onSave }) {
         <${ParamField} label="Shadow" p=${st.shadow || 0} animatable=${false} min=${0} max=${30} smin=${0} smax=${20} unit="px" onLive=${(v) => set({ shadow: Math.round(v.base) })} onCommit=${(v) => set({ shadow: Math.round(v.base) })} />
         <div class="row wrap" style="gap:10px"><div class="check-row"><${Toggle} on=${!!st.box} label="Background box" onChange=${(v) => set({ box: v })} /><span>Background box</span></div>
           ${st.box ? html`<label class="row" style="gap:6px;font-size:var(--fs-sm)">Colour <input type="color" value=${hex6(st.boxColor, '000000')} onInput=${(e) => set({ boxColor: withAlpha(e.target.value, 0.9) })} aria-label="Box colour" /></label>` : null}</div>
+        ${st.box ? html`<${ParamField} label="Rounded corners" p=${st.boxRadius || 0} animatable=${false} min=${0} max=${80} smin=${0} smax=${40} unit="px" onLive=${(v) => set({ boxRadius: Math.round(v.base) })} onCommit=${(v) => set({ boxRadius: Math.round(v.base) })} />` : null}
         ${st.box ? html`<${ParamField} label="Box padding" p=${st.boxPad ?? 18} animatable=${false} min=${0} max=${120} smin=${0} smax=${60} unit="px" onLive=${(v) => set({ boxPad: Math.round(v.base) })} onCommit=${(v) => set({ boxPad: Math.round(v.base) })} />` : null}
         <div class="field"><span class="label">Position</span><div class="chips">${Object.entries({ top: 'Top', center: 'Centre', lower: 'Lower third', bottom: 'Bottom' }).map(([k, l]) => chip(Math.abs(posY - Math.round(seq.height * POS_Y[k])) < 2, l, () => setPosY(Math.round(seq.height * POS_Y[k]))))}</div></div>
         <${ParamField} label="Height on screen" p=${posY} animatable=${false} min=${-seq.height} max=${seq.height} smin=${-seq.height / 2} smax=${seq.height / 2} unit="px" onLive=${(v) => setPosY(Math.round(v.base))} onCommit=${(v) => setPosY(Math.round(v.base))} />
@@ -1258,7 +1291,56 @@ function ParamField({ label, p, d = 0, mult = 1, lt = 0, inClip = true, min, max
   </div>`;
 }
 
-function EffectControls({ selected, seq, edit, media, t, setT, onEditTitle }) {
+/** The music library on the Studio screen: every mood, listen to any track, add it at the playhead. */
+function MusicLibrary({ onClose, onAdd }) {
+  const { data, reload } = useApi('/api/music/catalog');
+  const [mood, setMood] = useState(null); const [playing, setPlaying] = useState(null); const [busy, setBusy] = useState(null);
+  const audio = useRef(null);
+  useEffect(() => () => audio.current?.pause(), []);
+  const listen = (id) => { if (!audio.current) { audio.current = new Audio(); audio.current.onended = () => setPlaying(null); } if (playing === id) { audio.current.pause(); setPlaying(null); return; } audio.current.src = api.url(`/api/music/play?id=${encodeURIComponent(id)}`); audio.current.volume = 0.7; audio.current.play().catch(() => toast('That track could not play.', { kind: 'warn' })); setPlaying(id); };
+  const moods = data?.moods || []; const cur = moods.find((m) => m.mood === mood) || moods[0];
+  const add = async (tr) => { setBusy(tr.id); try { audio.current?.pause(); setPlaying(null); await onAdd(tr.id, tr.title); onClose(); } catch (e) { toast(e.message, { kind: 'error' }); } finally { setBusy(null); } };
+  return html`<${Modal} wide title="Music" icon="volume" onClose=${onClose} footer=${html`<span class="faint grow" style="font-size:var(--fs-xs)">Free to use: your own music folder, CC0/CC BY tracks (credit shown) and Euclidean originals.</span><${Button} kind="ghost" onClick=${() => act(() => api.post('/api/music/fill'), { ok: 'Getting free music. New tracks show up here in a minute.' }).then(() => setTimeout(reload, 60000))}>Get more free music</${Button}><${Button} kind="ghost" onClick=${onClose}>Close</${Button}>`}>
+    ${!data ? html`<${Loading} />` : html`<div style="display:grid;grid-template-columns:170px minmax(0, 1fr);gap:16px;min-height:340px">
+      <div class="col" style="gap:4px">${moods.map((m) => html`<button type="button" class=${'chip' + (cur?.mood === m.mood ? ' on' : '')} style="justify-content:space-between;width:100%" onClick=${() => setMood(m.mood)}>${m.label}<span class="faint">${m.tracks.length}</span></button>`)}</div>
+      <div class="col" style="gap:6px;max-height:420px;overflow:auto">${(cur?.tracks || []).map((tr) => html`<div class="row" style="gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:${playing === tr.id ? 'var(--surface-2)' : 'transparent'}">
+        <${Button} size="sm" kind=${playing === tr.id ? 'primary' : 'soft'} icon=${playing === tr.id ? 'pause' : 'play'} onClick=${() => listen(tr.id)}>${playing === tr.id ? 'Stop' : 'Listen'}</${Button}>
+        <div class="col grow" style="gap:0;min-width:0"><b class="ellipsis">${tr.title}</b><span class="faint" style="font-size:var(--fs-xs)">${tr.source} · ${tr.license}</span></div>
+        <${Button} size="sm" kind="primary" icon="plus" disabled=${!!busy} onClick=${() => add(tr)}>${busy === tr.id ? 'Adding…' : 'Add'}</${Button}>
+      </div>`)}</div></div>`}
+  </${Modal}>`;
+}
+
+/** Text settings for several selected titles/captions at once (their words stay their own). */
+function MultiTextControls({ texts, seq, edit, onEditTitle }) {
+  const c = texts[0]; const st = c.text || {}; const ids = texts.map((x) => x.id);
+  const setAll = (fn) => edit((d, s) => { for (const tr of s.videoTracks) for (const x of tr.clips) if (ids.includes(x.id) && x.text) fn(x.text, x); });
+  const hex = (v, d) => '#' + String(v || d).replace('#', '').slice(-6);
+  const col = (key, label, d) => html`<label class="row" style="gap:6px;font-size:var(--fs-sm)">${label} <input type="color" value=${hex(st[key], d)} onInput=${(e) => setAll((x) => { x[key] = '#ff' + e.target.value.slice(1); })} aria-label=${label} /></label>`;
+  const slider = (key, label, min, max, d) => html`<${ParamField} label=${label} p=${st[key] ?? d} animatable=${false} min=${min} max=${max} unit="px" onLive=${(v) => { for (const x of texts) x.text[key] = Math.round(v.base); window.dispatchEvent(new Event('studio-redraw')); }} onCommit=${(v) => setAll((x) => { x[key] = Math.round(v.base); })} />`;
+  return html`<div style="background:var(--ed-panel);border-left:1px solid var(--line);overflow:auto;padding:12px 14px">
+    <div class="row"><span class="eyebrow grow">Text: ${texts.length} selected</span><span class="badge outline">Titles</span></div>
+    <div class="faint" style="font-size:var(--fs-xs);margin:6px 0 10px">Changes here apply to all ${texts.length}; each keeps its own words and timing.</div>
+    <div class="col" style="gap:8px">
+      <${Button} size="sm" kind="lav" icon="type" onClick=${() => onEditTitle?.(c.id, ids)}>Style all ${texts.length} (full designer)…</${Button}>
+      <div class="field"><span class="label">Look</span><div class="chips">${TITLE_PRESETS.slice(0, 3).map((pr) => html`<button type="button" class="chip" onClick=${() => setAll((x) => { for (const k of STYLE_KEYS) if (pr.st[k] !== undefined) x[k] = pr.st[k]; if (!pr.st.box) x.box = false; })}>${pr.name}</button>`)}</div></div>
+      <select class="select sm" value=${st.family || 'Montserrat'} style=${{ fontFamily: `'${st.family || 'Montserrat'}'` }} onChange=${(e) => setAll((x) => { x.family = e.target.value; x.bold = HEAVY.has(e.target.value); })} aria-label="Font">${fontOptions()}</select>
+      ${slider('pixelSize', 'Text size', 8, 600, 96)}
+      ${slider('outlineWidth', 'Outline', 0, 40, 0)}
+      ${slider('shadow', 'Shadow', 0, 30, 0)}
+      <div class="row wrap" style="gap:12px">${col('color', 'Text', 'ffffff')}${col('outlineColor', 'Outline', '000000')}${col('hlColor', 'Highlight', 'f2c14e')}</div>
+      <div class="row wrap" style="gap:10px">
+        <div class="check-row"><${Toggle} on=${!!st.box} label="Background box" onChange=${(v) => setAll((x) => { x.box = v; if (v && !x.boxColor) x.boxColor = '#ffffffff'; })} /><span>Box</span></div>
+        <div class="check-row"><${Toggle} on=${!!st.uppercase} label="Capitals" onChange=${(v) => setAll((x) => { x.uppercase = v; })} /><span>CAPITALS</span></div>
+        ${st.box ? col('boxColor', 'Box colour', 'ffffff') : null}
+      </div>
+      ${st.box ? slider('boxRadius', 'Rounded corners', 0, 80, 0) : null}
+    </div></div>`;
+}
+
+function EffectControls({ selected, sel = [], findClip, seq, edit, media, t, setT, onEditTitle }) {
+  const texts = findClip ? sel.map((id) => findClip(seq, id)?.c).filter((x) => x && x.type === 3 && x.text) : [];
+  if (texts.length > 1 && texts.length === sel.length) return html`<${MultiTextControls} texts=${texts} seq=${seq} edit=${edit} onEditTitle=${onEditTitle} />`;
   if (!selected) return html`<div style="background:var(--ed-panel);border-left:1px solid var(--line);padding:14px"><div class="eyebrow">Effect controls</div><p class="faint" style="font-size:var(--fs-sm);margin-top:10px">Select a clip on the timeline to adjust and animate position, scale, rotation, opacity, volume, speed, effects and transitions.</p>
     <div class="divider" /><div class="eyebrow">Shortcuts</div><div class="col" style="gap:4px;margin-top:8px;font-size:var(--fs-sm)" class="muted">${[['Space', 'Play / pause'], ['J K L', 'Shuttle'], ['S', 'Split selected'], ['Shift S / Ctrl B', 'Split all tracks'], ['Ctrl A', 'Select everything'], ['Drag on empty space', 'Box-select clips'], ['Q / W', 'Delete everything before / after the playhead'], ['Del', 'Delete'], ['Alt / Shift Del', 'Ripple delete (closes the gap)'], ['V / C / T', 'Select / razor / title'], ['Ctrl Z', 'Undo'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl D', 'Duplicate'], ['Ctrl R', 'Speed / duration'], ['F2', 'Rename clip'], ['Shift E', 'Enable / disable'], ['Right-click', 'All clip tools'], ['Drop on a clip', 'Pushes it down a layer'], ['Shift + drop', 'Pushes it up instead'], ['Ctrl + drop', 'Replaces it'], ['+ / −', 'Zoom timeline']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="faint">${d}</span></div>`)}</div></div>`;
   const c = selected.c;
@@ -1280,7 +1362,7 @@ function EffectControls({ selected, seq, edit, media, t, setT, onEditTitle }) {
     ${c.type === 3 ? html`<div class="col" style="gap:8px;margin-bottom:10px">
       <${Button} size="sm" kind="lav" icon="type" onClick=${() => onEditTitle?.(c.id)}>Edit title, style & animation…</${Button}>
       <textarea class="textarea" rows="2" id="ec-text" value=${c.text?.text || ''} onInput=${(e) => liveSet(c.text, 'text', e.target.value, c.id + 'txt')} onBlur=${(e) => { const v = e.target.value; setRaw((x) => { x.text.text = v; x.name = v.slice(0, 40); }); }} onKeyDown=${(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.target.blur(); } }} aria-label="Title text" title="Enter applies · Shift+Enter adds a line" />
-      <select class="select sm" value=${c.text?.family || 'Montserrat'} onChange=${(e) => setRaw((x) => { x.text.family = e.target.value; })} aria-label="Font">${TITLE_FONTS.map(([f, l]) => html`<option value=${f}>${l}</option>`)}</select>
+      <select class="select sm" value=${c.text?.family || 'Montserrat'} style=${{ fontFamily: `'${c.text?.family || 'Montserrat'}'` }} onChange=${(e) => setRaw((x) => { x.text.family = e.target.value; x.text.bold = HEAVY.has(e.target.value); })} aria-label="Font">${fontOptions()}</select>
       <${ParamField} label="Text size" p=${c.text?.pixelSize || 96} animatable=${false} min=${8} max=${600} smin=${12} smax=${300} unit="px" onLive=${(v) => liveSet(c.text, 'pixelSize', Math.round(v.base), c.id + 'tsize')} onCommit=${(v) => setRaw((x) => { x.text.pixelSize = Math.round(v.base); })} />
       <${ParamField} label="Outline" p=${c.text?.outlineWidth || 0} animatable=${false} min=${0} max=${40} unit="px" onLive=${(v) => liveSet(c.text, 'outlineWidth', Math.round(v.base), c.id + 'tow')} onCommit=${(v) => setRaw((x) => { x.text.outlineWidth = Math.round(v.base); })} /></div>` : null}
     ${c.type !== 1 ? html`<div class="eyebrow" style="margin-top:6px">Motion</div>
