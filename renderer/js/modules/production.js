@@ -110,9 +110,9 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
       <div class="avatar lg" style="background:var(--teal-soft);color:var(--teal-ink)"><${Icon} name="upload" size=${20} /></div>
       <div class="grow"><b>Drop footage here</b><div class="muted" style="font-size:var(--fs-sm)">${target ? `For ${clients.find((c) => c.id === target)?.name}. Transcription and clip discovery start automatically.` : clients.length ? 'Choose the client in the menu at the top right, then drop footage.' : 'Footage is filed under a client. Create your first one (just a name) and drop away.'}</div>
         ${!clients.length ? html`<div style="margin-top:8px"><${Button} size="sm" kind="soft" icon="plus" onClick=${async () => { const c = await quickClient().catch(() => null); if (c) setClientId(c.id); }}>Create your first client</${Button}></div>` : null}
-        ${target ? html`<${ClipLength} client=${clients.find((c) => c.id === target)} /><${MusicSwitch} client=${clients.find((c) => c.id === target)} />` : null}
+        ${target ? html`<${ClipLength} client=${clients.find((c) => c.id === target)} /><${MusicSwitch} client=${clients.find((c) => c.id === target)} /><${AiTips} client=${clients.find((c) => c.id === target)} />` : null}
         ${uploads.map((u) => html`<div style="margin-top:8px"><div class="row" style="font-size:var(--fs-sm)"><span class="grow ellipsis">${u.name}</span><span class="tnum faint">${Math.round(u.p * 100)}%</span></div><${Progress} value=${u.p} /></div>`)}</div>
-      <div class="col" style="gap:6px"><${Button} size="sm" kind="primary" icon="upload" onClick=${() => input.current.click()}>Upload</${Button}><${Button} size="sm" kind="ghost" icon="folder" onClick=${addPath}>From disk</${Button}><${Button} size="sm" kind="ghost" icon="link" onClick=${addLink}>From link</${Button}></div>
+      <div class="col" style="gap:6px">${(() => { const waiting = assets.filter((a) => a.status === 'waiting' && (!target || a.clientId === target)); return waiting.length ? html`<button type="button" class="btn primary" style="box-shadow:inset 0 3px 8px rgba(0,0,0,0.35);transform:translateY(2px);font-weight:700" title="Your footage is in and waiting. Set the clip length, count and tips, then press to make the clips." onClick=${(e) => { e.stopPropagation(); act(async () => { for (const a of waiting) await api.post(`/api/assets/${a.id}/process`, {}); }, { ok: `Making clips from ${waiting.length} video${waiting.length > 1 ? 's' : ''}`, sound: 'success' }); }}>▶ Make clips (${waiting.length} waiting)</button>` : null; })()}<${Button} size="sm" kind="primary" icon="upload" onClick=${() => input.current.click()}>Upload</${Button}><${Button} size="sm" kind="ghost" icon="folder" onClick=${addPath}>From disk</${Button}><${Button} size="sm" kind="ghost" icon="link" onClick=${addLink}>From link</${Button}></div>
       <input ref=${input} type="file" accept="video/*,audio/*" multiple hidden onChange=${(e) => { upload([...e.target.files]); e.target.value = ''; }} />
     </div>
     <div class="panel"><div class="panel-head"><h4 class="grow">Footage</h4><span class="faint" style="font-size:var(--fs-sm)">${active.length ? `${active.length} processing` : `${assets.length} files`}</span></div>
@@ -122,7 +122,7 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
           <div class="grow"><div class="ellipsis" style="font-weight:500">${a.name}</div><div class="faint" style="font-size:var(--fs-xs)">${j ? j.note || STEP_NAME[j.type] || j.title : a.info ? `${dur(a.info.duration)} · ${a.info.width}×${a.info.height}${a.transcript ? ` · ${a.transcript.words} words` : ''}${a.vision ? ` · ${a.vision.shots} shots` : ''}` : a.status} · ${ago(a.createdAt)}</div>${j ? html`<div class="row" style="margin-top:4px;gap:8px"><div class="grow"><${Progress} value=${j.progress} indeterminate=${!j.progress} /></div><b class="tnum" style="font-size:var(--fs-xs);min-width:84px;text-align:right">${STEP_OF[j.type] ? `Step ${STEP_OF[j.type]}/5 · ` : ''}${Math.round((j.progress || 0) * 100)}%</b></div>` : null}${a.error && !j ? html`<div style="color:var(--coral-ink);font-size:var(--fs-xs);margin-top:2px">Stopped: ${a.error}</div>` : null}</div>
           ${a.status === 'ready' && !j ? html`<${Button} size="sm" kind="ghost" icon="eye" title="What Euclidean sees in this video, shot by shot" onClick=${() => (a.vision ? setShotsOf(a) : act(() => api.post(`/api/assets/${a.id}/look`, {}), { ok: 'Looking through the video' }))}>${a.vision ? 'Shots' : 'Look through'}</${Button}>` : null}
           ${!j && (a.status === 'importing' || a.error) && a.status !== 'ready' ? html`<${Button} size="sm" kind="primary" icon="refresh" onClick=${() => act(() => api.post(`/api/assets/${a.id}/process`, {}), { ok: 'Trying again' })}>Retry</${Button}>` : null}
-          ${a.status === 'ready' && !j ? html`<${Button} size="sm" kind="ghost" icon="sparkle" onClick=${() => act(() => api.post(`/api/assets/${a.id}/process`, {}), { ok: 'Finding clips' })}>${a.transcript ? 'More clips' : 'Process'}</${Button}>` : html`<${StatusBadge} status=${a.status} />`}</div>`;
+          ${a.status === 'waiting' && !j ? html`<${Button} size="sm" kind="primary" icon="play" title="Pick the clips now, with the clip length, count and AI tips set above" onClick=${() => act(() => api.post(`/api/assets/${a.id}/process`, {}), { ok: 'Making clips with your settings and tips' })}>Make clips</${Button}>` : a.status === 'ready' && !j ? html`<${Button} size="sm" kind="ghost" icon="sparkle" onClick=${() => act(() => api.post(`/api/assets/${a.id}/process`, {}), { ok: 'Finding clips' })}>${a.transcript ? 'More clips' : 'Process'}</${Button}>` : html`<${StatusBadge} status=${a.status} />`}</div>`;
       }) : html`<div class="list-row faint">No footage yet</div>`}</div></div>
   </div>`;
 }
@@ -141,6 +141,19 @@ function ClipLength({ client }) {
     <div class="row" style="gap:8px;font-size:var(--fs-xs)"><span class="faint" style="width:56px">Shortest</span><input class="range grow" type="range" min="5" max="175" step="1" value=${r.min} onInput=${set('min')} onChange=${() => save(r)} aria-label="Shortest clip in seconds" /><b class="tnum" style="width:34px">${r.min}s</b></div>
     <div class="row" style="gap:8px;font-size:var(--fs-xs)"><span class="faint" style="width:56px">Clips</span><input class="range grow" type="range" min="1" max="20" step="1" value=${n} onInput=${(e) => setN(Number(e.target.value))} onChange=${() => act(() => api.patch(`/api/clients/${client.id}`, { production: { clipsPerFootage: n } }), { ok: `${n} clip${n > 1 ? 's' : ''} from each video`, sound: 'tap' })} aria-label="Clips per video" /><b class="tnum" style="width:34px">${n}</b></div>
     <div class="row" style="gap:8px;font-size:var(--fs-xs)"><span class="faint" style="width:56px">Longest</span><input class="range grow" type="range" min="10" max="180" step="1" value=${r.max} onInput=${set('max')} onChange=${() => save(r)} aria-label="Longest clip in seconds" /><b class="tnum" style="width:34px">${r.max}s</b></div>
+  </div>`;
+}
+
+/** Tips for the AI that picks the clips, and whether new footage waits for "Make clips" (so these can still change). */
+function AiTips({ client }) {
+  const p = client?.production || {}; const wait = p.waitForStart !== false;
+  const [tips, setTips] = useState(p.aiTips || '');
+  useEffect(() => setTips(p.aiTips || ''), [client?.id]);
+  const save = (patch, ok) => act(() => api.patch(`/api/clients/${client.id}`, { production: patch }), { ok, sound: 'tap' });
+  return html`<div class="col" style="gap:6px;margin-top:10px;max-width:520px" onClick=${(e) => e.stopPropagation()}>
+    <span class="label">Tips for the AI</span>
+    <textarea class="textarea" rows="2" value=${tips} placeholder="e.g. Focus on the drone shots and the reveal at the end. Skip the intro and the sponsor read. Funny moments first." onInput=${(e) => setTips(e.target.value)} onBlur=${() => { if (tips !== (p.aiTips || '')) save({ aiTips: tips.slice(0, 1000) }, tips.trim() ? 'Tips saved; used when clips are picked' : 'Tips cleared'); }} aria-label="Tips for the AI" />
+    <div class="row" style="gap:8px;align-items:center"><${Toggle} on=${wait} onChange=${(x) => save({ waitForStart: x }, x ? 'New footage waits for "Make clips"' : 'New footage makes clips right away')} label="Wait for Make clips" /><span style="font-size:var(--fs-sm)">Wait for me to press <b>Make clips</b></span><span class="faint" style="font-size:var(--fs-xs)">${wait ? 'footage gets transcribed, then waits so you can change these first' : 'clips start as soon as footage is in'}</span></div>
   </div>`;
 }
 
@@ -171,7 +184,7 @@ function FootageDrawer({ id, onClose, onShots }) {
       ${a.error ? html`<div class="notice coral">Stopped: ${a.error}</div>` : null}
       ${active.map((j) => html`<div><div class="row" style="font-size:var(--fs-sm)"><span class="grow">${j.title}: ${j.note || j.status}</span><span class="faint tnum">${Math.round((j.progress || 0) * 100)}%</span></div><${Progress} value=${j.progress} indeterminate=${!j.progress} /></div>`)}
       <div class="row wrap" style="gap:6px">
-        <${Button} kind="primary" icon="refresh" onClick=${retry}>${a.status === 'ready' ? 'Find more clips' : 'Retry'}</${Button}>
+        <${Button} kind="primary" icon=${a.status === 'waiting' ? 'play' : 'refresh'} onClick=${retry}>${a.status === 'waiting' ? 'Make clips' : a.status === 'ready' ? 'Find more clips' : 'Retry'}</${Button}>
         ${active.length ? html`<${Button} kind="ghost" icon="stop" onClick=${() => cancel(false)}>Cancel</${Button}>` : null}
         ${a.status === 'ready' ? html`<${Button} kind="ghost" icon="eye" onClick=${() => onShots(a)}>Shots</${Button}>` : null}
         <span class="grow" /><${Button} kind="ghost" icon="trash" onClick=${() => cancel(true)}>Delete</${Button}>

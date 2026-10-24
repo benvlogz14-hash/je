@@ -322,7 +322,8 @@ r.post('/api/assets/:id/process', (req, b, p) => {
   // Stuck or failed import: run the import again, then transcription and clip finding.
   if (!a.info || a.status === 'importing') { ctx.store.update('assets', a.id, { error: null }); return queue.enqueue('ingest.file', { assetId: a.id, autoProcess: true }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `ingest:${a.id}:${Date.now()}`, priority: 6 }); }
   if (a.info && !a.info.hasVideo) throw new HttpError(400, 'This is an audio-only file, so there is no picture to make shorts from. Upload the video file (.mp4) instead.');
-  ctx.store.update('assets', a.id, { error: null });
+  // "Make clips" (or More clips): from now on this footage doesn't wait; clip length, count and AI tips are read now.
+  ctx.store.update('assets', a.id, { error: null, started: true, ...(a.status === 'waiting' ? { status: 'ready' } : {}) });
   if (!a.transcript && a.info?.hasAudio) return queue.enqueue('transcribe', { assetId: a.id, thenDiscover: true }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `transcribe:${a.id}` });
   return queue.enqueue('discover', { assetId: a.id, count: b.count }, { clientId: a.clientId, actor: actorOf(req) });
 });

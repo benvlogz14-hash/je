@@ -93,7 +93,7 @@ queue.register('transcribe', {
     const asset = ctx.store.get('assets', job.payload.assetId);
     if (!asset) throw permanent('Asset no longer exists');
     if (!asset.info) throw new Error('Asset not imported yet');
-    if (!asset.info.hasAudio) { ctx.store.update('assets', asset.id, { status: 'ready', transcript: null }); if (job.payload.thenDiscover) h.enqueue('discover', { assetId: asset.id }, { dedupeKey: `discover:${asset.id}:${Date.now()}` }); return { skipped: 'no audio' }; }
+    if (!asset.info.hasAudio) { ctx.store.update('assets', asset.id, { status: 'ready', transcript: null }); if (job.payload.thenDiscover) discoverOrWait(h, asset, { dedupeKey: `discover:${asset.id}:${Date.now()}` }); return { skipped: 'no audio' }; }
     ctx.store.update('assets', asset.id, { status: 'transcribing' }); events.publish('assets', { id: asset.id });
     h.progress(0.05, 'Extracting audio');
     // No speech-to-text yet: install the free one (Whisper) right here, once, instead of making clips without captions.
@@ -150,7 +150,7 @@ queue.register('analyze', {
         ctx.store.update('assets', asset.id, { vision: { shots: v.shots.length, engine: v.engine, usable: v.shots.filter((x) => x.usable).length } });
       } catch (e) { h.log(`Looking through the video: ${e.message}`); }
     }
-    if (job.payload.thenDiscover) h.enqueue('discover', { assetId: asset.id }, { title: `Find clips in ${asset.name}`, dedupeKey: `discover:${asset.id}:auto` });
+    if (job.payload.thenDiscover) discoverOrWait(h, asset, { dedupeKey: `discover:${asset.id}:auto` });
     return { scenes: a.scenes.length, peaks: a.peaks.length };
   },
 });
@@ -169,6 +169,18 @@ function studioAsset(file) {
 function studioTranscript(file) {
   const a = ctx.store.find('assets', (x) => x.path === file);
   try { return loadTranscript(a || studioAsset(file)); } catch { return null; }
+}
+
+/**
+ * After import, transcription and analysis, pick clips now, or (the default) wait for "Make clips" so the clip
+ * length, count and AI tips can still be changed. Autopilot clients and footage already started don't wait.
+ */
+function discoverOrWait(h, asset, opts = {}) {
+  const a = ctx.store.get('assets', asset.id) || asset; const cl = ctx.store.get('clients', a.clientId);
+  if (cl?.production?.waitForStart !== false && !cl?.schedule?.autopilot && !a.started) {
+    ctx.store.update('assets', a.id, { status: 'waiting' }); events.publish('assets', { id: a.id }); h.log('Ready. Waiting for "Make clips".'); return;
+  }
+  h.enqueue('discover', { assetId: a.id }, { title: `Find clips in ${a.name}`, ...opts });
 }
 
 function loadTranscript(asset) {
