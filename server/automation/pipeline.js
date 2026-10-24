@@ -84,6 +84,19 @@ function createClips(asset, discovered) {
   return created;
 }
 
+/** The extra B-roll edit for a video (music-only cut-through of its best shots), when the client has it switched on. */
+function createBrollClip(asset) {
+  const client = ctx.store.get('clients', asset.clientId); const prod = client?.production || {};
+  const len = Math.max(8, Math.min(60, Number(prod.brollSeconds) || 20));
+  const clip = ctx.store.insert('clips', {
+    ref: nextRef(), clientId: asset.clientId, assetId: asset.id, kind: 'broll', start: 0, end: len, title: `B-roll edit: ${String(asset.name || 'video').replace(/\.[^.]+$/, '')}`.slice(0, 80), hook: '', caption: '', hashtags: [],
+    method: 'broll', reason: 'A dramatic, music-only cut-through of the best shots', music: prod.brollMood || 'suspense', status: 'queued', versions: [], currentVersion: 0, feedback: [], approvalId: null, postId: null,
+  });
+  requestRender(clip, { reason: 'initial' });
+  events.publish('clips', { assetId: asset.id });
+  return clip;
+}
+
 function nextRef() { const n = (ctx.store.settings._clipSeq || 100) + 1; ctx.store.settings._clipSeq = n; ctx.store.touch(); return n; }
 
 function requestRender(clip, { reason = 'render', changes = null } = {}) {
@@ -290,4 +303,4 @@ function quotaStatus(client) {
   return { slotsAhead: slots.length, scheduled, open: Math.max(0, slots.length - scheduled), inReview, inProduction, approvedUnscheduled, unusedFootage, perDay: client.schedule.shortsPerDay, postedToday };
 }
 
-module.exports = { nextRef, clientDefaults, createClient, enforceApprovalPolicy, addAsset, usedRanges, createClips, requestRender, afterQc, decideClip, remember, sanitizeStyle, upcomingSlots, scheduleClip, unschedule, quotaStatus, portalUrl, zoned, localDate };
+module.exports = { createBrollClip, nextRef, clientDefaults, createClient, enforceApprovalPolicy, addAsset, usedRanges, createClips, requestRender, afterQc, decideClip, remember, sanitizeStyle, upcomingSlots, scheduleClip, unschedule, quotaStatus, portalUrl, zoned, localDate };

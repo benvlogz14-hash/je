@@ -329,6 +329,7 @@ r.post('/api/assets/:id/cancel', (req, b, p) => {
   events.publish('assets', { id: a.id });
   return { ok: true, canceled: n };
 });
+r.post('/api/assets/:id/broll', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); if (!a.info?.hasVideo) throw new HttpError(400, 'This file has no picture to make a B-roll edit from.'); return require('./automation/pipeline').createBrollClip(a); });
 r.post('/api/assets/:id/process', (req, b, p) => {
   const a = must(ctx.store.get('assets', p.id));
   // Still importing/transcribing/analysing: mark it started, so clips are made the moment it's ready.
