@@ -204,6 +204,18 @@ function clientView(c, full = false) {
   return v;
 }
 r.get('/api/clients', () => ctx.store.all('clients').map((c) => clientView(c)));
+// Remove a client: archive (status "archived", everything kept) or delete for good (the client and its records: footage list,
+// clips, posts, approvals, contacts, memory). Files on disk stay in the client's folder either way.
+r.del('/api/clients/:id', (req, b, p) => {
+  const c = must(ctx.store.get('clients', p.id));
+  if (req.query.mode !== 'delete') { audit.log(actorOf(req), 'client.archived', { clientId: c.id }); return ctx.store.update('clients', c.id, { status: 'archived', archivedAt: now() }); }
+  for (const j of ctx.store.all('jobs', (x) => x.clientId === c.id && ['queued', 'running'].includes(x.status))) { try { queue.cancel(j.id); } catch { /* finished */ } }
+  const clipIds = new Set(ctx.store.all('clips', (x) => x.clientId === c.id).map((x) => x.id));
+  for (const col of ['assets', 'clips', 'posts', 'contacts', 'portalComments']) for (const x of ctx.store.all(col, (y) => y.clientId === c.id)) ctx.store.remove(col, x.id);
+  for (const a of ctx.store.all('approvals', (y) => y.clientId === c.id || clipIds.has(y.refId))) ctx.store.remove('approvals', a.id);
+  ctx.store.remove('clients', c.id); audit.log(actorOf(req), 'client.deleted', { clientId: c.id, name: c.name });
+  return { ok: true, deleted: c.name };
+}, { roles: OWNER });
 r.post('/api/clients', (req, b) => { if (!b.name) throw new HttpError(400, 'Name is required'); return clientView(pipeline.createClient(b, actorOf(req))); }, { roles: OWNER });
 r.get('/api/clients/:id', (req, b, p) => {
   const c = must(ctx.store.get('clients', p.id));
@@ -853,12 +865,15 @@ r.post('/api/prospects/:id/convert', (req, b, p) => {
 r.get('/api/finance', (req) => finance.summary(req.query.month || monthKey()), { roles: OWNER });
 r.get('/api/invoices', () => ctx.store.all('invoices').reverse().map((i) => ({ ...i, client: ctx.store.get('clients', i.clientId)?.name })), { roles: OWNER });
 r.post('/api/invoices/draft', (req) => finance.draftInvoices(actorOf(req)), { roles: OWNER });
-r.patch('/api/invoices/:id', (req, b, p) => { must(ctx.store.get('invoices', p.id)); const patch = {}; for (const k of ['status', 'amount', 'dueDate', 'notes']) if (b[k] !== undefined) patch[k] = b[k]; if (patch.status === 'paid') patch.paidAt = now().slice(0, 10); audit.log(actorOf(req), 'invoice.updated', { invoiceId: p.id, ...patch }); return ctx.store.update('invoices', p.id, patch); }, { roles: OWNER });
+r.post('/api/invoices', (req, b) => { const c = must(ctx.store.get('clients', b.clientId), 'Pick a client'); const seq = (ctx.store.settings._invoiceSeq || 1000) + 1; ctx.store.settings._invoiceSeq = seq; const month = (b.period || now().slice(0, 7)); return ctx.store.insert('invoices', { clientId: c.id, number: `EM-${seq}`, amount: Number(b.amount) || 0, period: month, issuedAt: b.issuedAt || now().slice(0, 10), dueDate: b.dueDate || null, status: 'draft', notes: b.notes || '', createdBy: actorOf(req) }); }, { roles: OWNER });
+r.del('/api/invoices/:id', (req, b, p) => { audit.log(actorOf(req), 'invoice.deleted', { invoiceId: p.id }); return { ok: ctx.store.remove('invoices', p.id) }; }, { roles: OWNER });
+r.patch('/api/invoices/:id', (req, b, p) => { must(ctx.store.get('invoices', p.id)); const patch = {}; for (const k of ['status', 'amount', 'dueDate', 'notes', 'number', 'period', 'issuedAt', 'clientId']) if (b[k] !== undefined) patch[k] = k === 'amount' ? Number(b[k]) || 0 : b[k]; if (patch.status === 'paid') patch.paidAt = now().slice(0, 10); audit.log(actorOf(req), 'invoice.updated', { invoiceId: p.id, ...patch }); return ctx.store.update('invoices', p.id, patch); }, { roles: OWNER });
 r.get('/api/expenses', () => ctx.store.all('expenses').reverse(), { roles: OWNER });
 r.post('/api/expenses', (req, b) => ctx.store.insert('expenses', { label: b.label, amount: Number(b.amount) || 0, category: b.category || 'other', date: b.date || now().slice(0, 10), recurring: !!b.recurring, clientId: b.clientId || null }), { roles: OWNER });
 r.del('/api/expenses/:id', (req, b, p) => ({ ok: ctx.store.remove('expenses', p.id) }), { roles: OWNER });
 r.patch('/api/expenses/:id', (req, b, p) => { must(ctx.store.get('expenses', p.id)); const patch = {}; for (const k of ['label', 'category', 'date', 'clientId']) if (b[k] !== undefined) patch[k] = b[k]; if (b.amount !== undefined) patch.amount = Number(b.amount) || 0; if (b.recurring !== undefined) patch.recurring = !!b.recurring; return ctx.store.update('expenses', p.id, patch); }, { roles: OWNER });
 r.get('/api/timelogs', (req) => ctx.store.all('timelogs', (t) => !req.query.month || String(t.date || '').startsWith(req.query.month)).slice(-200).reverse(), { roles: OWNER });
+r.patch('/api/timelogs/:id', (req, b, p) => { must(ctx.store.get('timelogs', p.id)); const patch = {}; if (b.minutes !== undefined) patch.minutes = Number(b.minutes) || 0; for (const k of ['note', 'date', 'clientId']) if (b[k] !== undefined) patch[k] = b[k]; return ctx.store.update('timelogs', p.id, patch); }, { roles: OWNER });
 r.del('/api/timelogs/:id', (req, b, p) => ({ ok: ctx.store.remove('timelogs', p.id) }), { roles: OWNER });
 r.post('/api/timelogs', (req, b) => ctx.store.insert('timelogs', { userId: actorOf(req), clientId: b.clientId || null, minutes: Number(b.minutes) || 0, note: b.note || '', date: b.date || now().slice(0, 10) }));
 r.post('/api/analytics/sync', () => queue.enqueue('analytics.sync', {}, { dedupeKey: `analytics:manual:${Math.floor(Date.now() / 60000)}` }));

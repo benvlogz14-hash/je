@@ -17,9 +17,13 @@ function summary(month = monthKey()) {
   const mrr = active.reduce((t, c) => t + monthly(c.retainer), 0);
   const invoices = s.all('invoices');
   const paidThisMonth = invoices.filter((i) => i.status === 'paid' && (i.paidAt || '').startsWith(month)).reduce((t, i) => t + Number(i.amount || 0), 0);
-  const revenue = invoices.some((i) => (i.period || i.issuedAt || '').startsWith(month)) ? paidThisMonth : mrr;
+  // Numbers typed in on the Finance page for a month win over the calculated ones (empty = calculated again).
+  const ov = (ctx.setting('financeOverrides', {}) || {})[month] || {};
+  const autoRevenue = invoices.some((i) => (i.period || i.issuedAt || '').startsWith(month)) ? paidThisMonth : mrr;
+  const revenue = ov.revenue != null ? Number(ov.revenue) : autoRevenue;
   const usage = s.all('usage', (u) => u.month === month);
-  const aiCost = usage.reduce((t, u) => t + (u.costUsd || 0), 0);
+  const autoAi = usage.reduce((t, u) => t + (u.costUsd || 0), 0);
+  const aiCost = ov.aiCost != null ? Number(ov.aiCost) : autoAi;
   const expenses = s.all('expenses', (e) => (e.date || '').startsWith(month) || (e.recurring && (e.date || '') <= `${month}-31`));
   const expenseTotal = expenses.reduce((t, e) => t + Number(e.amount || 0), 0);
   const profit = revenue - aiCost - expenseTotal;
@@ -52,7 +56,8 @@ function summary(month = monthKey()) {
   for (const u of usage) aiByProvider[u.provider] = round((aiByProvider[u.provider] || 0) + (u.costUsd || 0));
   const totalHours = perClient.reduce((t, c) => t + c.hours, 0);
   return {
-    month, mrr: round(mrr), arr: round(mrr * 12), revenue: round(revenue), revenueSource: revenue === mrr ? 'retainers (no invoices this month)' : 'paid invoices',
+    month, mrr: round(mrr), arr: round(mrr * 12), revenue: round(revenue), revenueSource: ov.revenue != null ? 'the number you entered' : revenue === mrr ? 'retainers (no invoices this month)' : 'paid invoices',
+    overrides: { revenue: ov.revenue != null, aiCost: ov.aiCost != null }, autoRevenue: round(autoRevenue), autoAiCost: round(autoAi),
     aiCost: round(aiCost), aiByProvider, expenses: round(expenseTotal), expenseItems: expenses, profit: round(profit), margin: revenue ? Math.round((profit / revenue) * 100) : null,
     taxReserve: round(tax), retained: round(retained), distributable: round(distributable), founders,
     perClient, byService, outstanding, outstandingTotal: round(outstanding.reduce((t, i) => t + Number(i.amount || 0), 0)), renewals,

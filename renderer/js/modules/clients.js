@@ -13,7 +13,7 @@ export function Clients() {
 
 function ClientList() {
   const { data, loading } = useApi('/api/clients', ['clients', 'clips', 'posts']);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(false); const [removing, setRemoving] = useState(null);
   const [filter, setFilter] = useState('active');
   const list = (data || []).filter((c) => filter === 'all' || (filter === 'active' ? c.status === 'active' : c.status !== 'active'));
   const mrr = (data || []).filter((c) => c.status === 'active').reduce((t, c) => t + (c.monthly || 0), 0);
@@ -23,7 +23,7 @@ function ClientList() {
       <${Seg} value=${filter} onChange=${setFilter} options=${[{ value: 'active', label: 'Active' }, { value: 'other', label: 'Leads & past' }, { value: 'all', label: 'All' }]} />
       ${isOwner ? html`<${Button} kind="primary" icon="plus" onClick=${() => setCreating(true)}>New client</${Button}>` : null}</div>
     ${loading ? html`<${Loading} />` : !list.length ? html`<div class="panel"><${Empty} icon="clients" title="No clients here" action=${isOwner ? html`<${Button} kind="soft" icon="plus" onClick=${() => setCreating(true)}>Add your first client</${Button}>` : null}>Each client gets an isolated workspace: their own footage, style, memory, schedule and portal link.</${Empty}></div>` : html`
-      <div class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Client</th><th>Type</th><th>Status</th><th>Production</th><th>Next ${2} days</th><th class="num">Retainer</th><th>Approval</th></tr></thead><tbody>
+      <div class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Client</th><th>Type</th><th>Status</th><th>Production</th><th>Next ${2} days</th><th class="num">Retainer</th><th>Approval</th>${isOwner ? html`<th></th>` : null}</tr></thead><tbody>
         ${list.map((c) => html`<tr class="click" onClick=${() => navigate(`/clients/${c.id}`)}>
           <td><div class="row"><${Avatar} name=${c.name} size="sm" /><b>${c.name}</b></div></td>
           <td><span class=${'badge ' + (c.type === 'political' ? 'slate' : 'teal')}>${c.type === 'political' ? 'Political' : 'Creator'}</span></td>
@@ -31,10 +31,24 @@ function ClientList() {
           <td>${c.schedule?.autopilot ? html`<span class="badge moss"><${Icon} name="bolt" size=${11} />${c.schedule.shortsPerDay}/day</span>` : html`<span class="faint">Manual</span>`}</td>
           <td>${c.quota ? html`<${QuotaBar} q=${c.quota} />` : html`<span class="faint">—</span>`}</td>
           <td class="num">${money(c.monthly)}</td>
-          <td class="muted">${{ founder: 'Founder', 'founder+client': 'Founder + client', auto: 'Auto after QC' }[c.approval?.mode]}</td></tr>`)}
+          <td class="muted">${{ founder: 'Founder', 'founder+client': 'Founder + client', auto: 'Auto after QC' }[c.approval?.mode]}</td>
+          ${isOwner ? html`<td class="num" onClick=${(e) => e.stopPropagation()}><${Button} size="sm" kind="ghost" icon="trash" title=${`Remove ${c.name}`} onClick=${() => setRemoving(c)} /></td>` : null}</tr>`)}
       </tbody></table></div></div>`}
     ${creating ? html`<${NewClient} onClose=${() => setCreating(false)} />` : null}
+    ${removing ? html`<${RemoveClient} c=${removing} onClose=${() => setRemoving(null)} />` : null}
   </div>`;
+}
+
+/** Remove a client: archive (hidden from Active, everything kept, can be brought back) or delete for good. */
+function RemoveClient({ c, onClose, after }) {
+  const archive = () => act(() => api.del(`/api/clients/${c.id}?mode=archive`), { ok: `${c.name} archived. Find it under "Leads & past".` }).then(() => { onClose(); after?.(); });
+  const del = async () => {
+    if (!(await confirmDialog({ title: `Delete ${c.name} for good?`, text: 'The client, its footage list, clips, posts, approvals and contacts are removed from Euclidean. Video files stay on your PC. This cannot be undone.', confirm: 'Delete for good' }))) return;
+    act(() => api.del(`/api/clients/${c.id}?mode=delete`), { ok: `${c.name} deleted` }).then(() => { onClose(); after?.(); navigate('/clients'); });
+  };
+  return html`<${Modal} title=${`Remove ${c.name}`} icon="clients" onClose=${onClose} footer=${html`<${Button} kind="ghost" onClick=${onClose}>Cancel</${Button}><${Button} kind="soft" onClick=${archive}>Archive</${Button}><${Button} kind="coral" icon="trash" onClick=${del}>Delete for good</${Button}>`}>
+    <div class="col" style="gap:8px"><div><b>Archive</b> hides them from your active clients and stops their production and posting. Everything is kept, and you can make them active again any time.</div>
+    <div><b>Delete for good</b> removes the client and all of its records from Euclidean.</div></div></${Modal}>`;
 }
 
 function NewClient({ onClose }) {
@@ -62,19 +76,21 @@ function NewClient({ onClose }) {
 
 function ClientWorkspace({ id }) {
   const { data: c, reload } = useApi(`/api/clients/${id}`, ['clients', 'assets', 'clips', 'posts', 'contacts']);
-  const [tab, setTab] = useState('overview');
+  const [tab, setTab] = useState('overview'); const [removing, setRemoving] = useState(false);
   const isOwner = useStore((s) => s.boot?.user?.role === 'owner');
   if (!c) return html`<div class="page"><${Loading} /></div>`;
   const patch = (body, ok = 'Saved') => act(() => api.patch(`/api/clients/${id}`, body), { ok }).then(reload);
   return html`<div class="page">
     <div class="page-head"><${Button} kind="ghost" size="sm" icon="chevronLeft" title="All clients" onClick=${() => navigate('/clients')} /><${Avatar} name=${c.name} size="lg" />
-      <div class="grow"><h1>${c.name}</h1><div class="row" style="margin-top:4px"><span class=${'badge ' + (c.type === 'political' ? 'slate' : 'teal')}>${c.type === 'political' ? 'Political' : 'Creator'}</span><${StatusBadge} status=${c.status} />${c.schedule?.autopilot ? html`<span class="badge moss"><${Icon} name="bolt" size=${11} />Autopilot · ${c.schedule.shortsPerDay}/day</span>` : null}</div></div>
+      <div class="grow"><h1>${c.name}</h1><div class="row" style="margin-top:4px"><span class=${'badge ' + (c.type === 'political' ? 'slate' : 'teal')}>${c.type === 'political' ? 'Political' : 'Creator'}</span>${isOwner ? html`<select class="select sm" style="width:auto;height:26px" value=${c.status} title="Change status" aria-label="Client status" onChange=${(e) => patch({ status: e.target.value }, `Status: ${e.target.value}`)}>${['active', 'lead', 'paused', 'churned', 'archived'].map((x) => html`<option value=${x}>${x[0].toUpperCase() + x.slice(1)}</option>`)}</select>` : html`<${StatusBadge} status=${c.status} />`}${c.schedule?.autopilot ? html`<span class="badge moss"><${Icon} name="bolt" size=${11} />Autopilot · ${c.schedule.shortsPerDay}/day</span>` : null}</div></div>
       ${isOwner ? html`<${Button} kind="soft" icon="finance" title="How much this client pays you" onClick=${async () => { const v = await promptDialog({ title: `How much does ${c.name} pay you?`, label: `US dollars per ${c.retainer?.interval === 'weekly' ? 'week' : 'month'}`, value: String(c.retainer?.amount || ''), confirm: 'Save' }); if (v != null && v !== '') patch({ retainer: { ...(c.retainer || {}), amount: Number(String(v).replace(/[^\d.]/g, '')) || 0, interval: c.retainer?.interval || 'monthly' } }, 'Saved'); }}>${c.retainer?.amount ? `${money(c.retainer.amount)} / ${c.retainer.interval === 'weekly' ? 'week' : 'month'}` : 'Add monthly revenue'}</${Button}>` : null}
       <${Button} kind="ghost" icon="production" onClick=${() => { try { localStorage.setItem('eu.prodClient', c.id); } catch { /* ignore */ } navigate('/production'); }}>Production</${Button}>
+      ${isOwner ? html`<${Button} kind="ghost" icon="trash" title="Archive or delete this client" onClick=${() => setRemoving(true)}>Remove</${Button}>` : null}
       <${Button} kind="soft" icon="link" onClick=${() => { navigator.clipboard?.writeText(c.portalUrl).then(() => toast('Portal link copied', { kind: 'ok' })).catch(() => promptDialog({ title: 'Client portal link', value: c.portalUrl, confirm: 'Done' })); }}>Copy portal link</${Button}>
     </div>
     <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ value: 'overview', label: 'Overview' }, { value: 'schedule', label: 'Schedule & platforms' }, { value: 'style', label: 'Captions & graphics' }, { value: 'memory', label: 'Profile & memory' }, { value: 'footage', label: 'Footage & sources' }, { value: 'contacts', label: 'Contacts' }, ...(isOwner ? [{ value: 'billing', label: 'Billing & accounts' }] : [])]} />
     ${tab === 'overview' ? html`<${Overview} c=${c} />` : tab === 'schedule' ? html`<${Schedule} c=${c} patch=${patch} />` : tab === 'style' ? html`<${StyleEditor} c=${c} patch=${patch} />` : tab === 'memory' ? html`<${Memory} c=${c} patch=${patch} reload=${reload} />` : tab === 'footage' ? html`<${Footage} c=${c} patch=${patch} />` : tab === 'contacts' ? html`<${Contacts} c=${c} reload=${reload} />` : html`<${Billing} c=${c} patch=${patch} reload=${reload} />`}
+    ${removing ? html`<${RemoveClient} c=${c} onClose=${() => setRemoving(false)} after=${reload} />` : null}
   </div>`;
 }
 
