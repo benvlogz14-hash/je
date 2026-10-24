@@ -147,7 +147,12 @@ function loadAnalysis(asset) {
 
 function loadTranscript(asset) {
   const f = path.join(asset.workDir, `${asset.id}.transcript.json`);
-  return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null;
+  if (!fs.existsSync(f)) return null;
+  const raw = JSON.parse(fs.readFileSync(f, 'utf8'));
+  // Tidy word times and repetition loops once, and save it, so captions, cuts and the caption editor all agree.
+  const t = require('../video/transcript-fix').clean(raw);
+  if (t !== raw) { try { fs.writeFileSync(f, JSON.stringify(t)); } catch { /* read-only */ } }
+  return t;
 }
 
 queue.register('video.look', {

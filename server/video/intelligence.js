@@ -11,7 +11,7 @@ const { run, safeJson, clamp } = require('../core/util');
 async function transcribe(asset, { jobId, onProgress } = {}) {
   const dir = path.dirname(asset.path);
   const cache = path.join(asset.workDir || dir, `${asset.id}.transcript.json`);
-  if (fs.existsSync(cache)) return JSON.parse(fs.readFileSync(cache, 'utf8'));
+  if (fs.existsSync(cache)) { const raw = JSON.parse(fs.readFileSync(cache, 'utf8')); const t = require('./transcript-fix').clean(raw); if (t !== raw) { try { fs.writeFileSync(cache, JSON.stringify(t)); } catch { /* read-only */ } } return t; }
   const duration = asset.info?.duration || 0;
   // No speech-to-text yet: install the free one (whisper.cpp) right here instead of stopping.
   if (!ai.connected('openai')) {
@@ -59,6 +59,7 @@ async function transcribe(asset, { jobId, onProgress } = {}) {
     const off = (await ff.probe(asset.path)).audioOffset || 0;
     if (off > 0.02) { result.words = result.words.map((w) => ({ ...w, s: w.s + off, e: w.e + off })); result.segments = (result.segments || []).map((x) => ({ ...x, s: x.s + off, e: x.e + off })); result.audioOffset = off; }
   } catch { /* keep as is */ }
+  result = require('./transcript-fix').clean(result);
   fs.writeFileSync(cache, JSON.stringify(result));
   return result;
 }
