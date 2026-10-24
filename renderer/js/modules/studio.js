@@ -503,7 +503,7 @@ function Editor({ id }) {
     </div>
     <div style="display:grid;grid-template-columns:260px minmax(0, 1fr) 300px;min-height:0">
       <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${id} />
-      <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} edit=${edit} setSel=${setSel} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
+      <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} sel=${sel} edit=${edit} setSel=${setSel} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
       <${EffectControls} selected=${selected} seq=${seq} edit=${edit} media=${media} t=${t} setT=${setT} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
     </div>
     <div style="display:flex;flex-direction:column;min-height:0"><${CaptionsBar} seq=${seq} media=${media} sel=${sel} setSel=${setSel} edit=${edit} findClip=${findClip} nextId=${nextId} />
@@ -687,7 +687,7 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
   </div>` : null}
   <div class="row wrap" style="gap:8px;padding:6px 12px">
     <b>Edit captions</b>
-    ${ids.length ? html`<span class="faint">${ids.length} selected</span>` : html`<span class="faint">click any caption to select them all</span>`}
+    ${ids.length ? html`<span class="faint">${ids.length} selected</span>` : html`<span class="faint">click a caption to pick it, or Select all captions</span>`}
     <${Button} size="sm" kind="ghost" onClick=${() => setSel(all.map((c) => c.id))}>Select all captions</${Button}>
     ${!ids.length ? html`<${Button} size="sm" kind="soft" onClick=${twoWords} title="Split every caption into 2-word pieces so none run off the screen">2 words per line (all captions)</${Button}>` : null}
     ${ids.length ? html`
@@ -796,7 +796,7 @@ function usePinch(ref, onScale) {
 }
 const wheelFactor = (e) => Math.exp(-Math.max(-60, Math.min(60, e.deltaMode === 1 ? e.deltaY * 30 : e.deltaY)) * 0.005);
 
-function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected, edit, setSel, onEditTitle }) {
+function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected, sel = [], edit, setSel, onEditTitle }) {
   const canvas = useRef(null);
   const hits = useRef([]); // what's drawn where (canvas pixels), topmost last: for clicking and dragging on the monitor
   const els = useRef(new Map());   // clipId -> HTMLVideoElement | HTMLImageElement | HTMLAudioElement
@@ -998,7 +998,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     if (!hit) for (let i = hits.current.length - 1; i >= 0; i--) { const h = hits.current[i]; const l = local(h, p.x, p.y); if (Math.abs(l.x) <= h.w / 2 && Math.abs(l.y) <= h.h / 2) { hit = h; break; } }
     if (!hit) { setSel([]); return; }
     const f = [...seq.videoTracks].flatMap((tr) => tr.clips).find((x) => x.id === hit.id); if (!f) return;
-    if (!selected || selected.c.id !== f.id) setSel([f.id]);
+    if (!sel.includes(f.id)) setSel([f.id]);
     const lt = Math.max(0, Math.min(f.duration, tRef.current - f.start));
     drag.current = { mode, clip: f, lt, x0: p.x, y0: p.y, k: seq.width / canvas.current.width, cx: hit.cx, cy: hit.cy, px: valAt(f.posX, lt), py: valAt(f.posY, lt), s0: valAt(f.scaleX, lt, 1), started: false };
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -1024,7 +1024,13 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     revertLive();
     edit((dd, s) => { for (const tr of s.videoTracks) { const c = tr.clips.find((x) => x.id === d.clip.id); if (!c) continue;
       if (d.mode === 'move') { c.posX = withValueAt(c.posX, d.lt, d.nx); c.posY = withValueAt(c.posY, d.lt, d.ny); }
-      else { c.scaleX = withValueAt(c.scaleX, d.lt, d.ns, 1); c.scaleY = withValueAt(c.scaleY, d.lt, d.ns, 1); } } });
+      else { c.scaleX = withValueAt(c.scaleX, d.lt, d.ns, 1); c.scaleY = withValueAt(c.scaleY, d.lt, d.ns, 1); } }
+      // The other selected titles/captions move (or resize) by the same amount, so a group of captions stays lined up.
+      if (sel.length > 1 && sel.includes(d.clip.id)) for (const tr of s.videoTracks) for (const c of tr.clips) {
+        if (c.id === d.clip.id || c.type !== 3 || !sel.includes(c.id)) continue; const lt = 0;
+        if (d.mode === 'move') { c.posX = withValueAt(c.posX, lt, valAt(c.posX, lt) + (d.nx - d.px)); c.posY = withValueAt(c.posY, lt, valAt(c.posY, lt) + (d.ny - d.py)); }
+        else { const k = d.ns / (d.s0 || 1); c.scaleX = withValueAt(c.scaleX, lt, valAt(c.scaleX, lt, 1) * k, 1); c.scaleY = withValueAt(c.scaleY, lt, valAt(c.scaleY, lt, 1) * k, 1); }
+      } });
   };
 
   return html`<div style="display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden">
@@ -1320,11 +1326,9 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
     const edgeL = e.clientX - r.left < 7, edgeR = r.right - e.clientX < 7;
     const mode = edgeL ? 'trimL' : edgeR ? 'trimR' : 'move';
     const additive = e.shiftKey || e.ctrlKey;
-    // Captions: the first click selects every caption on that track (change them all at once); clicking one of an
-    // all-captions selection again picks just that one. Alt-click always picks one.
-    const caps = isCaption(c) ? lane.tr.clips.filter(isCaption).map((x) => x.id) : [];
-    const allCapsSelected = caps.length > 1 && caps.every((cid) => sel.includes(cid)) && sel.length === caps.length;
-    const ids = additive ? [...new Set([...sel, c.id])] : caps.length > 1 && !e.altKey && !allCapsSelected ? caps : allCapsSelected ? [c.id] : sel.includes(c.id) ? sel : [c.id];
+    // A click picks that one clip (captions too; "Select all captions" picks them all). Shift/Ctrl-click adds to the
+    // selection; clicking a clip that's already selected keeps the selection, so a group drags together.
+    const ids = additive ? [...new Set([...sel, c.id])] : sel.includes(c.id) ? sel : [c.id];
     setSel(ids); sfx('tap');
     const group = mode === 'move' ? [...new Set(ids.flatMap((id) => { const f = findClip(seq, id); return f ? linked(seq, f.c).map((x) => x.id) : []; }))] : [c.id, ...linked(seq, c).filter((x) => x.id !== c.id).map((x) => x.id)];
     const orig = Object.fromEntries(group.map((id) => [id, clone(findClip(seq, id).c)]));
@@ -1351,7 +1355,10 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
             c.start = Math.max(0, Math.round((o.start + d.dt) * fps) / fps);
             const list = c.type === 1 ? s.audioTracks : s.videoTracks; let ti = list.indexOf(f.tr);
             if (id === d.clipId || sel.includes(id)) { const dir = c.type === 1 ? d.dTrack : -d.dTrack; ti = Math.max(0, Math.min(list.length - 1, ti + dir)); }
-            f.tr.clips = f.tr.clips.filter((x) => x.id !== id); pushed += place(s, c.type === 1 ? 'a' : 'v', ti, c, { replace, keep, dir });
+            f.tr.clips = f.tr.clips.filter((x) => x.id !== id);
+            // Captions slide freely along their own track (they may overlap; nothing gets pushed to another layer).
+            if (isCaption(c) && !replace && list[ti] === f.tr) { f.tr.clips.push(c); f.tr.clips.sort((a, b) => a.start - b.start); continue; }
+            pushed += place(s, c.type === 1 ? 'a' : 'v', ti, c, { replace, keep, dir });
           } else if (d.mode === 'trimL') {
             const maxIn = (o.in || 0) / (o.speed || 1);
             const ns = doSnap(Math.min(o.start + o.duration - 1 / fps, Math.max(o.start - maxIn, o.start + d.dt)), d.alt);
@@ -1386,7 +1393,7 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
     const ti = Math.max(0, Math.min(list.length - 1, list.indexOf(f.tr) + (o.type === 1 ? drag.dTrack : -drag.dTrack)));
     const st = o.start + drag.dt, en = st + o.duration;
     const n = list[ti].clips.filter((x) => !drag.group.includes(x.id) && x.start < en - 1e-6 && x.start + x.duration > st + 1e-6).length;
-    if (!n) return '';
+    if (!n || (isCaption(o) && !drag.ctrl && list[ti] === f.tr)) return '';
     return drag.ctrl ? `Release to replace ${n} clip${n > 1 ? 's' : ''} (Ctrl)` : `Release to push ${n} clip${n > 1 ? 's' : ''} ${drag.shift ? 'up' : 'down'} a layer · Shift = up · Ctrl = replace`;
   })();
   const toggleTrack = (lane, key) => edit((d, s) => { (lane.type === 1 ? s.audioTracks : s.videoTracks)[lane.i][key] = !(lane.type === 1 ? s.audioTracks : s.videoTracks)[lane.i][key]; });
