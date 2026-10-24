@@ -32,6 +32,27 @@ async function levels(file, workDir) {
 }
 const at = (lv, t) => (lv?.db?.length ? lv.db[Math.max(0, Math.min(lv.db.length - 1, Math.floor(t / lv.step)))] : null);
 
+/**
+ * Reaction bursts: moments clearly louder than the ~20 s around them (a laugh, a shout, a crowd,
+ * a big reveal), measured against that local level rather than the whole video, so a quiet vlog
+ * and a loud one both get their own highlights. Robust: median and median deviation of the
+ * neighbourhood; a burst is at least 0.5 s at 3+ deviations above it. Returns burst times in seconds.
+ */
+function reactionBursts(lv, { win = 10, z = 3, minSec = 0.5 } = {}) {
+  const db = lv?.db; if (!db?.length) return [];
+  const step = lv.step; const half = Math.round(win / step); const need = Math.ceil(minSec / step);
+  const med = (a) => { const b = a.slice().sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
+  const out = []; let run = 0; let peakAt = 0; let peakZ = 0;
+  for (let i = 0; i < db.length; i += 1) {
+    const nb = db.slice(Math.max(0, i - half), i + half + 1).filter((v) => v > -80);
+    let zi = 0;
+    if (nb.length >= 8 && db[i] > -80) { const m = med(nb); const mad = med(nb.map((v) => Math.abs(v - m))) * 1.4826 || 1; zi = (db[i] - m) / Math.max(1.5, mad); }
+    if (zi >= z) { run += 1; if (zi > peakZ) { peakZ = zi; peakAt = i; } } else { if (run >= need) out.push(Math.round(peakAt * step * 100) / 100); run = 0; peakZ = 0; }
+  }
+  if (run >= need) out.push(Math.round(peakAt * step * 100) / 100);
+  return out;
+}
+
 /** Sentences with timing, from transcript words. */
 function sentences(words) {
   const out = []; let cur = null;
@@ -95,11 +116,12 @@ function scoreWindow(s, e, sig, kept = null) {
   const bad = cover((x) => x.usable === false || (x.bright != null && x.bright < 35));
   const cuts = sig.scenes.filter((t) => t > s && t < e).length / (len / 10); // cuts per 10 s
   const peaks = sig.peaks.filter((t) => t > s && t < e).length;
+  const bursts = (sig.bursts || []).filter((t) => t > s && t < e).length;
   const hook = inS[0] && HOOK.test(inS[0].t) ? 1 : 0;
   // Filler and outros lose viewers: "um, so yeah, I mean, anyway", "thanks for watching, subscribe".
   const filler = inS.filter((x) => FILLER.test(x.t)).reduce((n, x) => n + (x.e - x.s), 0) / len;
   const outro = inS.some((x) => OUTRO.test(x.t));
-  let score = -25 * filler - (outro ? 15 : 0) + 30 * Math.min(1, speech / 0.75) + 25 * vo + 18 * drone + 20 * strong + 6 * Math.min(cuts, 3) + 4 * Math.min(peaks, 3) + 10 * hook - 30 * bad;
+  let score = -25 * filler - (outro ? 15 : 0) + 30 * Math.min(1, speech / 0.75) + 25 * vo + 18 * drone + 20 * strong + 6 * Math.min(cuts, 3) + 4 * Math.min(peaks, 3) + 3 * Math.min(bursts, 2) + 10 * hook - 30 * bad;
   // Dead air at the start loses viewers in the first second.
   const firstWord = inS[0]?.s ?? e; if (firstWord - s > 1.2) score -= 10;
   const endHook = inS.length > 1 && END_HOOK.test(inS[inS.length - 1].t);
@@ -110,6 +132,7 @@ function scoreWindow(s, e, sig, kept = null) {
   if (strong > 0.55) why.push('strong visuals');
   if (cuts >= 1.5) why.push('fast cuts');
   if (peaks) why.push(`${peaks} energy peak${peaks > 1 ? 's' : ''}`);
+  if (bursts) why.push('big reaction');
   if (hook) why.push('hook in the first line');
   return { score: Math.round(score * 10) / 10, why };
 }
@@ -159,7 +182,7 @@ async function signals({ asset, transcript, vision, analysis }) {
   const shots = (vision?.shots || []).map((x) => ({ ...x }));
   let lv = null; try { lv = asset.info?.hasAudio ? await levels(asset.path, asset.workDir) : null; } catch { /* no level map */ }
   const sents = tagVoiceover(sentences(transcript?.words || []), lv, shots);
-  return { sents, shots, scenes: analysis?.scenes || [], peaks: analysis?.peaks || [], lv };
+  return { sents, shots, scenes: analysis?.scenes || [], peaks: analysis?.peaks || [], bursts: reactionBursts(lv), lv };
 }
 
 // ---------------------------------------------------------------- visual cuts
@@ -228,4 +251,4 @@ async function assemble({ source, info, start, end, covers, out, signal }) {
   return out;
 }
 
-module.exports = { blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
+module.exports = { reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
