@@ -740,6 +740,11 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       else { if (!el.paused) el.pause(); if (Math.abs(el.currentTime - want) > 0.02) el.currentTime = want; }
     }
     for (const [cid, el] of els.current) if (!live.has(cid) && el instanceof HTMLMediaElement && !el.paused) el.pause();
+    // Get the next clips ready ahead of time (loaded and parked on their first frame), so they don't flash black when they start.
+    for (const tr of seq.videoTracks) for (const c of tr.clips) {
+      if (c.type === 3 || c.enabled === false || c.start <= time || c.start - time > 2.5) continue;
+      const el = getEl(c); if (el instanceof HTMLMediaElement && el.paused && Math.abs(el.currentTime - (c.in || 0)) > 0.05) el.currentTime = c.in || 0;
+    }
     return v;
   };
   const draw = () => {
@@ -775,7 +780,9 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       if (c.type === 3) drawText(g, c.text || {}, sx * quality, local);
       else {
         const el = getEl(c); const m = media[c.mediaId];
-        if (el && ((el instanceof HTMLVideoElement && el.readyState >= 2) || (el instanceof HTMLImageElement && el.complete && el.naturalWidth))) {
+        // A player still on the wrong spot (catching up after a jump) is skipped, so the layer underneath shows instead of a wrong or black frame.
+        const onSpot = !(el instanceof HTMLVideoElement) || Math.abs(el.currentTime - ((c.in || 0) + local * (c.speed || 1))) < 0.35;
+        if (el && onSpot && ((el instanceof HTMLVideoElement && el.readyState >= 2) || (el instanceof HTMLImageElement && el.complete && el.naturalWidth))) {
           const nw = (m.width || el.videoWidth || el.naturalWidth) * sx * quality, nh = (m.height || el.videoHeight || el.naturalHeight) * sy * quality;
           const iw = el.videoWidth || el.naturalWidth, ih = el.videoHeight || el.naturalHeight;
           let sxp = 0, syp = 0, sw = iw, sh = ih, dx = -nw / 2, dy = -nh / 2, dw = nw, dh = nh;
