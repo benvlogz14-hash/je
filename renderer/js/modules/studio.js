@@ -290,10 +290,11 @@ function Editor({ id }) {
   const findClip = (s, cid) => { for (const tr of [...s.videoTracks, ...s.audioTracks]) { const c = tr.clips.find((x) => x.id === cid); if (c) return { c, tr }; } return null; };
   const linked = (s, c) => (c.linkId && c.linkId !== '0' ? [...s.videoTracks, ...s.audioTracks].flatMap((tr) => tr.clips).filter((x) => x.linkId === c.linkId) : [c]);
 
-  const split = (all) => edit((d, s) => {
+  /** Cut clips at time `at` (all unlocked tracks, or only `pick` clips). Returns how many were cut. */
+  const splitAt = (d, s, at, pick) => {
     const targets = [];
-    for (const tr of [...s.videoTracks, ...s.audioTracks]) { if (tr.locked) continue; for (const c of tr.clips) if (t > c.start + 0.03 && t < c.start + c.duration - 0.03 && (all || sel.includes(c.id) || !sel.length)) targets.push({ c, tr }); }
-    const linkMap = {};
+    for (const tr of [...s.videoTracks, ...s.audioTracks]) { if (tr.locked) continue; for (const c of tr.clips) if (at > c.start + 0.03 && at < c.start + c.duration - 0.03 && (!pick || pick(c))) targets.push({ c, tr }); }
+    const t = at; const linkMap = {};
     for (const { c, tr } of targets) {
       const right = clone(c); right.id = nextId(d);
       const off = t - c.start; right.start = t; right.duration = c.duration - off; right.in = (c.in || 0) + off * (c.speed || 1); right.transIn = { type: 0, duration: 1 }; shiftKeys(right, -off);
@@ -301,15 +302,36 @@ function Editor({ id }) {
       if (c.linkId && c.linkId !== '0') { linkMap[c.linkId] = linkMap[c.linkId] || nextId(d); right.linkId = linkMap[c.linkId]; }
       tr.clips.push(right); tr.clips.sort((a, b) => a.start - b.start);
     }
-    if (targets.length) sfx('press');
+    return targets.length;
+  };
+  const split = (all) => edit((d, s) => { if (splitAt(d, s, t, all ? null : (c) => sel.includes(c.id) || !sel.length)) sfx('press'); });
+  /** Premiere's ripple trim: Q removes everything before the playhead on every track (the rest moves to 0:00), W everything after. */
+  const trimToPlayhead = (side) => edit((d, s) => {
+    splitAt(d, s, t, null);
+    for (const tr of [...s.videoTracks, ...s.audioTracks]) {
+      if (tr.locked) continue;
+      if (side === 'before') { tr.clips = tr.clips.filter((c) => c.start >= t - 1e-3); for (const c of tr.clips) c.start = Math.max(0, c.start - t); }
+      else tr.clips = tr.clips.filter((c) => c.start < t - 1e-3);
+    }
+    setSel([]); if (side === 'before') setT(0); sfx('press');
   });
   const remove = (ripple) => edit((d, s) => {
     const ids = new Set(sel.flatMap((cid) => { const f = findClip(s, cid); return f ? linked(s, f.c).map((x) => x.id) : []; }));
-    for (const tr of [...s.videoTracks, ...s.audioTracks]) {
+    const tracks = [...s.videoTracks, ...s.audioTracks];
+    const all = tracks.flatMap((tr) => tr.clips.filter((c) => ids.has(c.id))); if (!all.length) return;
+    const a = Math.min(...all.map((c) => c.start)), b = Math.max(...all.map((c) => c.start + c.duration));
+    // A selected block with nothing else in its time span (e.g. everything before a Ctrl+B cut): ripple closes that whole
+    // span on every track at once, so video, audio and captions stay in sync.
+    const whole = !tracks.some((tr) => tr.clips.some((c) => !ids.has(c.id) && c.start < b - 1e-6 && c.start + c.duration > a + 1e-6));
+    for (const tr of tracks) {
       const gone = tr.clips.filter((c) => ids.has(c.id));
       tr.clips = tr.clips.filter((c) => !ids.has(c.id));
-      if (ripple) for (const g of gone) for (const c of tr.clips) if (c.start >= g.start + g.duration - 1e-6) c.start -= g.duration;
+      if (ripple && whole) { if (!tr.locked) for (const c of tr.clips) if (c.start >= b - 1e-6) c.start -= b - a; }
+      else if (ripple) for (const g of gone) for (const c of tr.clips) if (c.start >= g.start + g.duration - 1e-6) c.start -= g.duration;
     }
+    // Deleting the start of the edit leaves nothing to play at 0:00, so everything moves up to the start together.
+    const rest = tracks.flatMap((tr) => tr.clips); const first = rest.length ? Math.min(...rest.map((c) => c.start)) : 0;
+    if (first > 1e-3 && a <= 1e-3) { for (const tr of tracks) for (const c of tr.clips) c.start = Math.round((c.start - first) * 1e6) / 1e6; setT(0); }
     setSel([]);
   });
 
@@ -472,11 +494,15 @@ function Editor({ id }) {
       else if (key === 'k') setPlaying(false);
       else if (key === 'j') { setPlaying(false); setT((x) => Math.max(0, x - 1)); }
       else if (key === 's' && !mod) { e.preventDefault(); split(e.shiftKey); }
+      else if (mod && key === 'b') { e.preventDefault(); split(true); }
+      else if (mod && key === 'a') { e.preventDefault(); setSel([...seq.videoTracks, ...seq.audioTracks].filter((tr) => !tr.locked).flatMap((tr) => tr.clips.map((c) => c.id))); }
+      else if (key === 'q' && !mod) { e.preventDefault(); trimToPlayhead('before'); }
+      else if (key === 'w' && !mod) { e.preventDefault(); trimToPlayhead('after'); }
       else if (key === 'v') setTool('select');
       else if (key === 'c') setTool('razor');
       else if (key === 'f2' && sel.length) { e.preventDefault(); const f = findClip(seq, sel[0]); if (f) renameClip(f.c); }
       else if (key === 't' && !mod) addText();
-      else if ((key === 'delete' || key === 'backspace') && sel.length) { e.preventDefault(); remove(e.altKey); }
+      else if ((key === 'delete' || key === 'backspace') && sel.length) { e.preventDefault(); remove(e.altKey || e.shiftKey); }
       else if (key === 'arrowleft') { e.preventDefault(); setT((x) => Math.max(0, x - (e.shiftKey ? 1 : 1 / (seq?.fps || 30)))); }
       else if (key === 'arrowright') { e.preventDefault(); setT((x) => x + (e.shiftKey ? 1 : 1 / (seq?.fps || 30))); }
       else if (key === 'home') setT(0);
@@ -1234,7 +1260,7 @@ function ParamField({ label, p, d = 0, mult = 1, lt = 0, inClip = true, min, max
 
 function EffectControls({ selected, seq, edit, media, t, setT, onEditTitle }) {
   if (!selected) return html`<div style="background:var(--ed-panel);border-left:1px solid var(--line);padding:14px"><div class="eyebrow">Effect controls</div><p class="faint" style="font-size:var(--fs-sm);margin-top:10px">Select a clip on the timeline to adjust and animate position, scale, rotation, opacity, volume, speed, effects and transitions.</p>
-    <div class="divider" /><div class="eyebrow">Shortcuts</div><div class="col" style="gap:4px;margin-top:8px;font-size:var(--fs-sm)" class="muted">${[['Space', 'Play / pause'], ['J K L', 'Shuttle'], ['S', 'Split selected'], ['Shift S', 'Split all tracks'], ['Del', 'Delete'], ['Alt Del', 'Ripple delete'], ['V / C / T', 'Select / razor / title'], ['Ctrl Z', 'Undo'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl D', 'Duplicate'], ['Ctrl R', 'Speed / duration'], ['F2', 'Rename clip'], ['Shift E', 'Enable / disable'], ['Right-click', 'All clip tools'], ['Drop on a clip', 'Pushes it down a layer'], ['Shift + drop', 'Pushes it up instead'], ['Ctrl + drop', 'Replaces it'], ['+ / −', 'Zoom timeline']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="faint">${d}</span></div>`)}</div></div>`;
+    <div class="divider" /><div class="eyebrow">Shortcuts</div><div class="col" style="gap:4px;margin-top:8px;font-size:var(--fs-sm)" class="muted">${[['Space', 'Play / pause'], ['J K L', 'Shuttle'], ['S', 'Split selected'], ['Shift S / Ctrl B', 'Split all tracks'], ['Ctrl A', 'Select everything'], ['Drag on empty space', 'Box-select clips'], ['Q / W', 'Delete everything before / after the playhead'], ['Del', 'Delete'], ['Alt / Shift Del', 'Ripple delete (closes the gap)'], ['V / C / T', 'Select / razor / title'], ['Ctrl Z', 'Undo'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl D', 'Duplicate'], ['Ctrl R', 'Speed / duration'], ['F2', 'Rename clip'], ['Shift E', 'Enable / disable'], ['Right-click', 'All clip tools'], ['Drop on a clip', 'Pushes it down a layer'], ['Shift + drop', 'Pushes it up instead'], ['Ctrl + drop', 'Replaces it'], ['+ / −', 'Zoom timeline']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="faint">${d}</span></div>`)}</div></div>`;
   const c = selected.c;
   // Live-preview while dragging a slider (mutate in place); commit one undo step on release.
   const [, force] = useState(0);
@@ -1280,6 +1306,22 @@ function EffectControls({ selected, seq, edit, media, t, setT, onEditTitle }) {
 function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom, duration, edit, findClip, linked, onAdd, onDropFiles, onClipMenu, onEditTitle }) {
   const scroller = useRef(null);
   const [drag, setDrag] = useState(null);
+  // Box select: drag on empty timeline space to select every clip the box touches (Shift/Ctrl adds to the selection).
+  const [box, setBox] = useState(null);
+  const startBox = (e) => {
+    if (e.button !== 0) return;
+    const b0 = { x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY, add: e.shiftKey || e.ctrlKey || e.metaKey, base: sel };
+    setBox(b0);
+    const move = (ev) => setBox((b) => b && { ...b, x1: ev.clientX, y1: ev.clientY });
+    const up = (ev) => {
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); setBox(null);
+      const x0 = Math.min(b0.x0, ev.clientX), x1 = Math.max(b0.x0, ev.clientX), y0 = Math.min(b0.y0, ev.clientY), y1 = Math.max(b0.y0, ev.clientY);
+      if (x1 - x0 < 4 && y1 - y0 < 4) { if (!b0.add) setSel([]); return; }
+      const hit = [...(scroller.current?.querySelectorAll('[data-clip]') || [])].filter((el) => { const r = el.getBoundingClientRect(); return r.right > x0 && r.left < x1 && r.bottom > y0 && r.top < y1; }).map((el) => el.dataset.clip);
+      setSel(b0.add ? [...new Set([...b0.base, ...hit])] : hit); if (hit.length) sfx('tap');
+    };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+  };
   // Pinch / Ctrl+wheel zooms around the mouse; the plain wheel scrolls along the timeline.
   const zoomRef = useRef(zoom); zoomRef.current = zoom; const anchor = useRef(null);
   const zoomAround = (factor, cx) => {
@@ -1414,14 +1456,15 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
     onAdd(media[mid], lane.type === 0 ? lane.i : 0, at, lane.type === 1 ? lane.i : 0, e.ctrlKey || e.metaKey, e.shiftKey ? 'up' : 'down');
   };
 
-  return html`<div style="display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--ed-panel);border-top:1px solid var(--line)">
+  return html`<div style="flex:1;display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--ed-panel);border-top:1px solid var(--line)">
     <div class="row" style="padding:6px 12px;border-bottom:1px solid var(--line);gap:10px">
       <span class="eyebrow">Timeline</span><span class="mono tnum" style="color:var(--teal-ink)">${tc(t, fps)}</span><span class="faint" style="font-size:var(--fs-xs)">${sel.length ? `${sel.length} selected` : ''}</span>${dragHint ? html`<span class="badge ${drag?.ctrl ? 'coral' : drag?.shift ? 'lav' : 'sky'}">${dragHint}</span>` : null}
       <div class="spacer" /><${Button} kind="ghost" size="sm" icon="plus" onClick=${() => addTrack(0)}>Video track</${Button}><${Button} kind="ghost" size="sm" icon="plus" onClick=${() => addTrack(1)}>Audio track</${Button}>
       <${Icon} name="zoomOut" size=${15} style="color:var(--ink-3)" /><input type="range" class="range" style="width:140px" min="4" max="600" value=${zoom} onInput=${(e) => setZoom(Number(e.target.value))} aria-label="Timeline zoom" title="Or pinch / Ctrl + scroll on the timeline" /><${Icon} name="zoomIn" size=${15} style="color:var(--ink-3)" />
     </div>
-    <div ref=${scroller} style="flex:1;overflow:auto;position:relative;touch-action:pan-x pan-y" onPointerDown=${(e) => { if (e.target === e.currentTarget) setSel([]); }}>
-      <div style=${{ width: width + HEAD_W + 'px', position: 'relative', minHeight: '100%' }}>
+    <div ref=${scroller} style="flex:1;overflow:auto;position:relative;touch-action:pan-x pan-y" onPointerDown=${(e) => { if (e.target === e.currentTarget) startBox(e); }}>
+      ${box ? html`<div style=${{ position: 'fixed', left: Math.min(box.x0, box.x1) + 'px', top: Math.min(box.y0, box.y1) + 'px', width: Math.abs(box.x1 - box.x0) + 'px', height: Math.abs(box.y1 - box.y0) + 'px', border: '1px dashed var(--teal-ink)', background: 'rgba(102,189,180,0.12)', zIndex: 50, pointerEvents: 'none' }} />` : null}
+      <div style=${{ width: width + HEAD_W + 'px', position: 'relative', minHeight: '100%' }} onPointerDown=${(e) => { if (e.target === e.currentTarget) startBox(e); }}>
         <div style=${{ position: 'sticky', top: 0, zIndex: 3, display: 'flex', height: '24px', background: 'var(--ed-panel)', borderBottom: '1px solid var(--line)' }}>
           <div style=${{ width: HEAD_W + 'px', flex: 'none', position: 'sticky', left: 0, background: 'var(--ed-panel)', zIndex: 4, borderRight: '1px solid var(--line)' }} />
           <div style="position:relative;flex:1;cursor:text" onPointerDown=${onRuler}>${ticks.map((s) => html`<div style=${{ position: 'absolute', left: xOf(s) + 'px', top: 0, bottom: 0, borderLeft: '1px solid var(--line-strong)', paddingLeft: '4px', fontSize: '10px', color: 'var(--ink-3)', lineHeight: '22px' }} class="tnum">${dur(s)}</div>`)}</div>
@@ -1432,9 +1475,9 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
             <button class="btn ghost sm icon" title=${lane.type === 1 ? (lane.tr.muted ? 'Unmute' : 'Mute') : lane.tr.muted ? 'Show track' : 'Hide track'} onClick=${() => { sfx('toggle'); toggleTrack(lane, 'muted'); }}><${Icon} name=${lane.type === 1 ? (lane.tr.muted ? 'mute' : 'volume') : lane.tr.muted ? 'eyeOff' : 'eye'} size=${14} /></button>
             <button class="btn ghost sm icon" title=${lane.tr.locked ? 'Unlock' : 'Lock'} onClick=${() => { sfx('toggle'); toggleTrack(lane, 'locked'); }}><${Icon} name=${lane.tr.locked ? 'lock' : 'unlock'} size=${14} /></button>
           </div>
-          <div style=${{ position: 'relative', flex: 1, background: lane.tr.locked ? 'repeating-linear-gradient(135deg, transparent 0 6px, var(--surface-3) 6px 7px)' : 'transparent', opacity: lane.tr.muted ? 0.5 : 1 }} onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => onDropMedia(e, lane)} onPointerDown=${() => setSel([])}>
+          <div style=${{ position: 'relative', flex: 1, background: lane.tr.locked ? 'repeating-linear-gradient(135deg, transparent 0 6px, var(--surface-3) 6px 7px)' : 'transparent', opacity: lane.tr.muted ? 0.5 : 1 }} onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => onDropMedia(e, lane)} onPointerDown=${startBox}>
             ${lane.tr.clips.map((c) => { const v = view(c); const isSel = sel.includes(c.id); const colors = c.type === 1 ? ['--clip-a', '--clip-a-line'] : c.type === 3 ? ['--clip-t', '--clip-t-line'] : ['--clip-v', '--clip-v-line'];
-              return html`<div key=${c.id} title=${clipLabel(c)} onContextMenu=${(e) => onClipMenu(e, c)} onDblClick=${() => { if (c.type === 3) onEditTitle(c.id); }} onPointerDown=${(e) => { if (e.button === 2) return; onClipDown(e, c, lane); }} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(4, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
+              return html`<div key=${c.id} data-clip=${c.id} title=${clipLabel(c)} onContextMenu=${(e) => onClipMenu(e, c)} onDblClick=${() => { if (c.type === 3) onEditTitle(c.id); }} onPointerDown=${(e) => { if (e.button === 2) return; onClipDown(e, c, lane); }} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(4, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
                 ${c.type === 0 && media[c.mediaId] && xOf(v.duration) > 50 ? html`<div style=${{ position: 'absolute', inset: 0, backgroundImage: `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(media[c.mediaId].path)}&t=${Math.round(c.in || 0) + 1}`)})`, backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x', opacity: 0.45 }} />` : null}
                 <div class="ellipsis" style="position:relative;font-size:11px;font-weight:600;padding:3px 7px;color:var(--ink)">${clipLabel(c)}${c.effects?.length ? ' ·fx' : ''}${(c.speed || 1) !== 1 ? ` · ${Math.round((c.speed || 1) * 100)}%` : ''}</div>
                 ${keyTimesOf(c).map((kt) => html`<span title=${`Keyframe at ${kt.toFixed(2)}s`} style=${{ position: 'absolute', left: Math.max(0, xOf(kt) - 4) + 'px', bottom: '3px', width: '7px', height: '7px', background: 'var(--gold)', border: '1px solid var(--gold-ink)', transform: 'rotate(45deg)', pointerEvents: 'none' }} />`)}
