@@ -200,11 +200,20 @@ function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, blac
   if (!pool.length) return [];
   // A cut-away comes from the middle of its shot (shot starts are often fades from black) and never touches black frames.
   const take = (src, dur) => { const mid = (src.s + src.e) / 2; const a = Math.max(src.s + 0.3, mid - dur / 2); return touchesBlack(a, a + dur) ? null : Math.round(a * 100) / 100; };
-  const out = []; let used = 0;
+  // Every cut-away in a clip is a different shot: never the same shot twice, nor its neighbour (a few seconds away in the
+  // footage, usually the same scene), nor a shot described the same way. When the good shots run out, the cut-aways stop.
+  const out = []; const used = [];
+  const sameAs = (x, u) => x === u || (x.s < u.e + 3 && x.e > u.s - 3) || (x.what && u.what && norm(x.what) === norm(u.what));
+  const norm = (w) => String(w).toLowerCase().replace(/[^a-z ]/g, '').trim();
   const place = (at, dur) => {
-    for (let k = 0; k < pool.length; k++) { const src = pool[used++ % pool.length]; const d = Math.min(dur, src.e - src.s - 0.6); if (d < 1.2) continue; const a = take(src, d); if (a != null) { out.push({ at: Math.round(at * 100) / 100, dur: Math.round(d * 100) / 100, src: a }); return true; } }
+    for (const src of pool) {
+      if (used.some((u) => sameAs(src, u))) continue;
+      const d = Math.min(dur, src.e - src.s - 0.6); if (d < 1.2) continue; const a = take(src, d); if (a == null) continue;
+      used.push(src); out.push({ at: Math.round(at * 100) / 100, dur: Math.round(d * 100) / 100, src: a }); return true;
+    }
     return false;
   };
+  const left = () => pool.some((x) => !used.some((u) => sameAs(x, u)));
   // 1. Black fades inside the clip (the voice keeps going): always covered with a good shot.
   // Only true black fades (short), at most two per clip: dark scenes are not black and stay as they are.
   for (const [x, y] of black.filter(([a, b]) => b > start + 0.1 && a < end - 0.1 && b - a <= 2.5).slice(0, 2)) { const at = Math.max(start, x - 0.3); place(at, Math.min(end - at, Math.max(1.5, y - x + 0.6))); }
@@ -213,7 +222,7 @@ function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, blac
   // 2. Weak stretches: a poor or static shot, someone talking with little movement, or any shot held too long (strong ones may run longer).
   const weak = (t) => { const s = here.find((x) => t >= x.s && t < x.e); if (!s) return true; const q = shotScore(s); return q < 0.4 || (s.kind === 'speaker' && (s.motion ?? 5) < 3) || (t - Math.max(s.s, start)) > (q >= 0.7 ? 9 : 5); };
   let tries = 0; let t = start + 2.5; // keep the first 2.5 s on the real moment: that's the hook
-  while (t < end - 2.5 && used < pool.length * 3) {
+  while (t < end - 2.5 && left()) {
     // Voiceover is always fine to cover; someone talking on camera gets fewer cut-aways (about 3 in 5).
     const sentNow = sents.find((x) => t >= x.s && t < x.e); const dur = Math.min(3, end - 1 - t);
     if (dur >= 1.6 && !busy(t, t + dur) && weak(t) && (!sentNow || sentNow.vo || (tries++ % 5) < 3) && place(t, dur)) { t += out[out.length - 1].dur + gap; continue; }
