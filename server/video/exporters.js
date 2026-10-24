@@ -24,7 +24,7 @@ function veloClip(o) {
 }
 
 /** Build a Velo project for one short: footage on V1/A1, captions as text clips on V2. */
-function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, covers = [] }) {
+function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, covers = [], keywords = null }) {
   const st = captions.resolveStyle(style);
   const dur = range.end - range.start;
   const mediaId = 'm1';
@@ -38,7 +38,11 @@ function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, c
   const posY = st.position === 'upper' ? -H * 0.3 : st.position === 'center' ? 0 : H * 0.28;
   const hex = (c) => `#ff${String(c || '#ffffff').replace('#', '').toLowerCase()}`;
   const textStyle = (t, size, color, o = {}) => ({ text: t, family: o.font || st.font, pixelSize: size, bold: captions.HEAVY.has(o.font || st.font), italic: false, color: hex(color), outlineColor: hex(o.outline || st.outline), outlineWidth: Math.round((o.outlineWidth ?? st.outlineWidth) / 2), ...(o.box ? { box: true, boxColor: hex(o.boxColor), boxPad: 18 } : {}) });
-  const v2 = captions.captionChunks({ words, range, style }).map((c) => veloClip({ id: nextId++, type: 3, name: c.text, start: c.start, duration: c.end - c.start, posY, rotation: st.rotate || 0, text: textStyle(c.text, st.size, st.primary) }));
+  // Highlight travels with each caption: the spoken word (word timings inside the caption) or chosen keywords.
+  const hlMode = ['word', 'keywords'].includes(st.highlightMode) ? st.highlightMode : 'none';
+  const kws = hlMode === 'keywords' ? (keywords?.length ? keywords : captions.autoKeywords(words.filter((w) => w.e > range.start && w.s < range.end))) : [];
+  const v2 = captions.captionChunks({ words, range, style }).map((c) => veloClip({ id: nextId++, type: 3, name: c.text, start: c.start, duration: c.end - c.start, posY, rotation: st.rotate || 0,
+    text: { ...textStyle(c.text, st.size, st.primary), hlMode, hlColor: hex(st.highlight), words: c.words, keywords: kws } }));
   // The opening banner keeps its own look: font, size, colours, box or outline, rotation, position and capitals.
   const hk = String(st.hookText || '').trim() || hook;
   const hookY = st.hookPosition === 'lower' ? H * 0.28 : st.hookPosition === 'center' ? 0 : -H * 0.36;

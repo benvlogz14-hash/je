@@ -502,7 +502,7 @@ function Editor({ id }) {
     </div>
     <div style="display:grid;grid-template-columns:260px minmax(0, 1fr) 300px;min-height:0">
       <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${id} />
-      <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} edit=${edit} setSel=${setSel} />
+      <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} edit=${edit} setSel=${setSel} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
       <${EffectControls} selected=${selected} seq=${seq} edit=${edit} media=${media} t=${t} setT=${setT} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
     </div>
     <div style="display:flex;flex-direction:column;min-height:0"><${CaptionsBar} seq=${seq} sel=${sel} setSel=${setSel} edit=${edit} findClip=${findClip} nextId=${nextId} />
@@ -582,17 +582,47 @@ function CaptionsBar({ seq, sel, setSel, edit, findClip, nextId }) {
       const c = f.c; const words = String(c.text.text || '').trim().split(/\s+/).filter(Boolean);
       if (words.length <= 2) { made.push(c.id); continue; }
       const parts = []; for (let i = 0; i < words.length; i += 2) parts.push(words.slice(i, i + 2).join(' '));
-      const total = parts.reduce((n, x) => n + x.length + 1, 0); let at = c.start; const end = c.start + c.duration;
+      // With word timings each piece starts when its first word is said (keeps the spoken-word highlight in step); else split by length.
+      const tw = Array.isArray(c.text.words) && c.text.words.length === words.length ? c.text.words : null;
+      const total = parts.reduce((n, x) => n + x.length + 1, 0); let at = c.start; const start0 = c.start; const end = c.start + c.duration;
       parts.forEach((txt, i) => {
-        const len = i === parts.length - 1 ? end - at : c.duration * ((txt.length + 1) / total);
+        const next = i === parts.length - 1 ? end : tw ? start0 + tw[(i + 1) * 2].s : at + c.duration * ((txt.length + 1) / total);
         const piece = i === 0 ? c : clone(c); if (i > 0) { piece.id = nextId(d); f.tr.clips.push(piece); }
-        piece.start = at; piece.duration = Math.max(0.05, len); piece.name = txt; piece.text = { ...piece.text, text: txt };
-        made.push(piece.id); at += len;
+        const off = at - start0;
+        piece.start = at; piece.duration = Math.max(0.05, next - at); piece.name = txt;
+        piece.text = { ...piece.text, text: txt, words: tw ? tw.slice(i * 2, i * 2 + 2).map((w) => ({ ...w, s: Math.max(0, w.s - off), e: Math.max(0, w.e - off) })) : undefined };
+        made.push(piece.id); at = next;
       });
     }
     setTimeout(() => setSel(made), 0);
   });
-  return html`<div class="row wrap" style="gap:8px;padding:6px 12px;border-top:1px solid var(--line);background:var(--surface-2);font-size:var(--fs-sm)">
+  // Highlight: applies to the selected captions, or to all of them when none are selected.
+  const targets = ids.length ? chosen : all;
+  const forTargets = (fn) => edit((d, s) => { for (const c0 of targets) { const f = findClip(s, c0.id); if (f && isCaption(f.c)) fn(f.c); } });
+  const hlMode = targets[0]?.text?.hlMode || 'none';
+  const hlColor = '#' + String(targets[0]?.text?.hlColor || '#fff2c14e').replace('#', '').slice(-6);
+  const keywords = all[0]?.text?.keywords || [];
+  const kwSet = new Set(keywords.map(normWord));
+  // Keywords are shared by every caption, so a word lights up wherever it appears.
+  const setKeywords = (list) => edit((d, s) => { for (const c0 of all) { const f = findClip(s, c0.id); if (f) f.c.text.keywords = list; } });
+  const toggleWord = (w) => { const k = normWord(w); if (!k) return; setKeywords(kwSet.has(k) ? keywords.filter((x) => normWord(x) !== k) : [...keywords, k]); };
+  const autoPick = async () => {
+    try { const r = await api.post('/api/captions/keywords', { text: all.map((c) => c.text?.text || '').join(' ') }); setKeywords(r.keywords || []); toast(`${(r.keywords || []).length} keyword${(r.keywords || []).length === 1 ? '' : 's'} picked. Click any word below to change them.`, { kind: 'success' }); } catch (e) { toast(e.message, { kind: 'error' }); }
+  };
+  const wordsShown = [...new Set((ids.length ? chosen : all).flatMap((c) => String(c.text?.text || '').split(/\s+/)).filter((w) => normWord(w)))].slice(0, 60);
+  return html`<div class="col" style="gap:0;border-top:1px solid var(--line);background:var(--surface-2);font-size:var(--fs-sm)">
+  <div class="row wrap" style="gap:8px;padding:6px 12px">
+    <b>Highlight</b>
+    <${Seg} value=${hlMode} onChange=${(v) => forTargets((c) => { c.text.hlMode = v; if (!c.text.hlColor) c.text.hlColor = '#fff2c14e'; })} options=${[{ value: 'none', label: 'Off' }, { value: 'word', label: 'Spoken word' }, { value: 'keywords', label: 'Keywords' }]} />
+    ${hlMode !== 'none' ? html`<input type="color" value=${hlColor} title="Highlight colour" aria-label="Highlight colour" style="width:34px;height:26px;padding:0;border:0;background:none;cursor:pointer" onInput=${(e) => forTargets((c) => { c.text.hlColor = '#ff' + e.target.value.slice(1); })} />` : null}
+    ${hlMode === 'keywords' ? html`<${Button} size="sm" kind="soft" onClick=${autoPick}>Pick keywords for me</${Button}>${keywords.length ? html`<${Button} size="sm" kind="ghost" onClick=${() => setKeywords([])}>Clear</${Button}>` : null}` : null}
+    <span class="faint">${ids.length ? `for the ${ids.length} selected caption${ids.length > 1 ? 's' : ''}` : 'for all captions'}</span>
+  </div>
+  ${hlMode === 'keywords' ? html`<div class="row wrap" style="gap:4px;padding:0 12px 6px;max-height:86px;overflow:auto">
+    <span class="faint" style="font-size:var(--fs-xs)">Click words to highlight:</span>
+    ${wordsShown.map((w) => html`<button type="button" class="badge ${kwSet.has(normWord(w)) ? 'gold' : ''}" style="cursor:pointer;border:1px solid var(--line)" onClick=${() => toggleWord(w)}>${w}</button>`)}
+  </div>` : null}
+  <div class="row wrap" style="gap:8px;padding:6px 12px">
     <b>Captions</b>
     ${ids.length ? html`<span class="faint">${ids.length} selected</span>` : html`<span class="faint">click any caption to select them all</span>`}
     <${Button} size="sm" kind="ghost" onClick=${() => setSel(all.map((c) => c.id))}>Select all captions</${Button}>
@@ -605,7 +635,7 @@ function CaptionsBar({ seq, sel, setSel, edit, findClip, nextId }) {
         ${FONT_GROUPS.map(([g, list]) => html`<optgroup label=${g}>${list.map((f) => html`<option value=${f} style=${{ fontFamily: `'${f}'` }}>${f}</option>`)}</optgroup>`)}</select>
       <${Button} size="sm" kind="soft" onClick=${twoWords} title="Split every selected caption into 2-word pieces so none run off the screen">2 words per line</${Button}>
       <${Button} size="sm" kind="ghost" onClick=${() => setSel([])}>Done</${Button}>` : null}
-  </div>`;
+  </div></div>`;
 }
 
 function AIPanel({ aiEdit, aiUndo, projectId, selected }) {
@@ -688,13 +718,28 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
 }
 
 // ------------------------------------------------------------ program monitor (canvas compositor)
-function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected, edit, setSel }) {
+/** Two-finger pinch on a touch screen: calls onScale(factor, x, y) as the fingers spread or close. (Trackpad pinches arrive as Ctrl+wheel.) */
+function usePinch(ref, onScale) {
+  const cb = useRef(onScale); cb.current = onScale;
+  useEffect(() => {
+    const el = ref.current; if (!el) return; let last = 0;
+    const span = (e) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+    const start = (e) => { if (e.touches.length === 2) last = span(e); };
+    const move = (e) => { if (e.touches.length !== 2 || !last) return; e.preventDefault(); const d = span(e); cb.current(d / last, (e.touches[0].clientX + e.touches[1].clientX) / 2, (e.touches[0].clientY + e.touches[1].clientY) / 2); last = d; };
+    const end = (e) => { if (e.touches.length < 2) last = 0; };
+    el.addEventListener('touchstart', start, { passive: true }); el.addEventListener('touchmove', move, { passive: false }); el.addEventListener('touchend', end);
+    return () => { el.removeEventListener('touchstart', start); el.removeEventListener('touchmove', move); el.removeEventListener('touchend', end); };
+  }, []);
+}
+const wheelFactor = (e) => Math.exp(-Math.max(-60, Math.min(60, e.deltaMode === 1 ? e.deltaY * 30 : e.deltaY)) * 0.005);
+
+function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected, edit, setSel, onEditTitle }) {
   const canvas = useRef(null);
   const hits = useRef([]); // what's drawn where (canvas pixels), topmost last: for clicking and dragging on the monitor
   const els = useRef(new Map());   // clipId -> HTMLVideoElement | HTMLImageElement | HTMLAudioElement
   const clock = useRef({ wall: 0, t0: 0 });
   const tRef = useRef(t); tRef.current = t;
-  const [quality, setQuality] = useState(0.5);
+  const [qualitySel, setQuality] = useState(0.5);
   const raf = useRef(0);
   // Fit the sequence frame inside the monitor area at any window size.
   const box = useRef(null);
@@ -709,6 +754,30 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     });
     ro.observe(el); return () => ro.disconnect();
   }, [seq.width, seq.height]);
+  // View zoom and pan (pinch, Ctrl+wheel; drag the grey area or with the middle button to move around; double-click empty space to fit).
+  const [view, setView] = useState({ k: 1, x: 0, y: 0 });
+  const viewRef = useRef(view); viewRef.current = view; const fitRef = useRef(fit); fitRef.current = fit;
+  const zoomAt = (factor, cx, cy) => {
+    const el = box.current; if (!el) return; const r = el.getBoundingClientRect(); const mx = cx - r.left, my = cy - r.top;
+    const v = viewRef.current, f = fitRef.current; const k = Math.max(1, Math.min(8, v.k * factor));
+    if (k === 1) { setView({ k: 1, x: 0, y: 0 }); return; }
+    const left = f.x + v.x, top = f.y + v.y; const rx = (mx - left) / (f.w * v.k), ry = (my - top) / (f.h * v.k);
+    setView({ k, x: mx - rx * f.w * k - f.x, y: my - ry * f.h * k - f.y });
+  };
+  useEffect(() => {
+    const el = box.current; if (!el) return;
+    const onWheel = (e) => {
+      if (e.ctrlKey || e.metaKey) { e.preventDefault(); zoomAt(wheelFactor(e), e.clientX, e.clientY); return; }
+      if (viewRef.current.k > 1) { e.preventDefault(); setView((v) => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY })); }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false }); return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+  usePinch(box, zoomAt);
+  const quality = view.k > 1.4 ? 1 : qualitySel; // zoomed in: draw at full size so it stays sharp
+  const pan = useRef(null);
+  const onBoxDown = (e) => { if (e.target !== box.current && e.button !== 1) return; e.preventDefault(); pan.current = { x0: e.clientX, y0: e.clientY, v: viewRef.current }; e.currentTarget.setPointerCapture(e.pointerId); };
+  const onBoxMove = (e) => { const p = pan.current; if (!p) return; setView({ ...p.v, x: p.v.x + e.clientX - p.x0, y: p.v.y + e.clientY - p.y0 }); };
+  const onBoxUp = () => { pan.current = null; };
 
   const getEl = (c) => {
     let el = els.current.get(c.id); const m = media[c.mediaId]; if (!m) return null;
@@ -777,7 +846,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
         if (e.effectId === 'vignette') vig = p.amount / 100;
       }
       g.filter = filters.join(' ') || 'none';
-      if (c.type === 3) drawText(g, c.text || {}, sx * quality, local);
+      if (c.type === 3) drawText(g, c.text || {}, sx * quality, local, c.duration);
       else {
         const el = getEl(c); const m = media[c.mediaId];
         // A player still on the wrong spot (catching up after a jump) is skipped, so the layer underneath shows instead of a wrong or black frame.
@@ -844,7 +913,20 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
   const drag = useRef(null); const snapGuide = useRef(null);
   const toCanvas = (e) => { const r = canvas.current.getBoundingClientRect(); const k = canvas.current.width / r.width; return { x: (e.clientX - r.left) * k, y: (e.clientY - r.top) * k, k }; };
   const local = (h, x, y) => { const dx = x - h.cx, dy = y - h.cy, c = Math.cos(-h.rot), s2 = Math.sin(-h.rot); return { x: dx * c - dy * s2, y: dx * s2 + dy * c }; };
+  const hitAt = (p) => {
+    const grab = 12 * p.k; const hsel = selected && hits.current.find((x) => x.id === selected.c.id);
+    if (hsel) { const l = local(hsel, p.x, p.y); if (Math.abs(Math.abs(l.x) - hsel.w / 2) < grab && Math.abs(Math.abs(l.y) - hsel.h / 2) < grab) return { mode: 'scale', hit: hsel }; }
+    for (let i = hits.current.length - 1; i >= 0; i--) { const h = hits.current[i]; const l = local(h, p.x, p.y); if (Math.abs(l.x) <= h.w / 2 && Math.abs(l.y) <= h.h / 2) return { mode: 'move', hit: h }; }
+    return null;
+  };
+  const onHover = (e) => { if (drag.current || pan.current) return; const h = hitAt(toCanvas(e)); e.currentTarget.style.cursor = !h ? 'default' : h.mode === 'scale' ? 'nwse-resize' : 'move'; };
+  const onDbl = (e) => {
+    const h = hitAt(toCanvas(e));
+    const c = h && [...seq.videoTracks].flatMap((tr) => tr.clips).find((x) => x.id === h.hit.id);
+    if (c?.type === 3) onEditTitle?.(c.id); else if (!h) setView({ k: 1, x: 0, y: 0 });
+  };
   const onDown = (e) => {
+    if (e.button === 1) return; // middle button pans the view
     const p = toCanvas(e); const grab = 12 * p.k;
     // corner handle of the selected clip first, then the topmost clip under the pointer
     const hsel = selected && hits.current.find((x) => x.id === selected.c.id);
@@ -859,7 +941,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onMove = (e) => {
-    const d = drag.current; if (!d) return;
+    const d = drag.current; if (!d) { onHover(e); return; }
     const p = toCanvas(e); const dx = (p.x - d.x0) * d.k, dy = (p.y - d.y0) * d.k;
     if (!d.started) { if (Math.hypot(dx, dy) < 3 * d.k) return; d.started = true; }
     const c = d.clip;
@@ -884,9 +966,11 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
 
   return html`<div style="display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden">
     <div class="row" style="padding:6px 12px;gap:8px"><span class="eyebrow grow">Program</span>
-      <select class="select sm" style="width:90px" value=${quality} onChange=${(e) => setQuality(Number(e.target.value))} aria-label="Preview quality"><option value="1">Full</option><option value="0.5">1/2</option><option value="0.25">1/4</option></select></div>
-    <div ref=${box} style="flex:1;min-height:0;min-width:0;position:relative;overflow:hidden">
-      <canvas ref=${canvas} style=${{ position: 'absolute', left: fit.x + 'px', top: fit.y + 'px', width: fit.w + 'px', height: fit.h + 'px', background: '#000', borderRadius: '8px', boxShadow: 'var(--shadow-2)', cursor: 'pointer' }} onPointerDown=${onDown} onPointerMove=${onMove} onPointerUp=${onUp} />
+      <span class="faint" style="font-size:var(--fs-xs)" title="Pinch or Ctrl + scroll to zoom. Drag the grey area to move around. Double-click empty space to fit.">${view.k > 1 ? `${Math.round(view.k * 100)}%` : 'Pinch to zoom'}</span>
+      ${view.k > 1 ? html`<${Button} size="sm" kind="ghost" onClick=${() => setView({ k: 1, x: 0, y: 0 })}>Fit</${Button}>` : null}
+      <select class="select sm" style="width:90px" value=${qualitySel} onChange=${(e) => setQuality(Number(e.target.value))} aria-label="Preview quality"><option value="1">Full</option><option value="0.5">1/2</option><option value="0.25">1/4</option></select></div>
+    <div ref=${box} style=${{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative', overflow: 'hidden', touchAction: 'none', cursor: view.k > 1 ? 'grab' : 'default' }} onPointerDown=${onBoxDown} onPointerMove=${onBoxMove} onPointerUp=${onBoxUp} onDblClick=${(e) => { if (e.target === box.current) setView({ k: 1, x: 0, y: 0 }); }}>
+      <canvas ref=${canvas} style=${{ position: 'absolute', left: fit.x + view.x + 'px', top: fit.y + view.y + 'px', width: fit.w * view.k + 'px', height: fit.h * view.k + 'px', background: '#000', borderRadius: '8px', boxShadow: 'var(--shadow-2)', cursor: 'default' }} onPointerDown=${onDown} onPointerMove=${onMove} onPointerUp=${onUp} onDblClick=${onDbl} />
     </div>
     <div class="row" style="padding:6px 12px 10px;justify-content:center;gap:6px">
       <span class="mono tnum" style="width:100px;color:var(--teal-ink)">${tc(t, seq.fps)}</span>
@@ -914,8 +998,25 @@ function titleBox(st, scale) {
   return { w: Math.max(size, ...lines.map((l) => g.measureText(l).width)) + pad * 2, h: lines.length * size * 1.15 + pad * 1.2 };
 }
 
-/** Draw a title centred on the current origin. local = seconds into the clip (for pop / slide-up). */
-function drawText(g, st, scale, local = 10) {
+const normWord = (w) => String(w).toLowerCase().replace(/[^a-z0-9$%']/g, '');
+/** Start/end of each word in a caption: its own timings, or (text edited, or none) spread over the caption by length. Same as the export. */
+function hlTimes(st, flat, dur) {
+  const ws = Array.isArray(st.words) ? st.words : [];
+  if (ws.length && ws.length === flat.length) return ws;
+  const total = flat.reduce((n, w) => n + w.length + 1, 0) || 1; let at = 0;
+  return flat.map((w) => { const s = at; at += ((dur || 1) * (w.length + 1)) / total; return { s, e: at }; });
+}
+/** Lines of [{ w, hl }]: which words are lit at `local` seconds (spoken word or keywords). */
+function hlLines(st, text, local, dur) {
+  const lines = text.split('\n').map((l) => l.split(/\s+/).filter(Boolean));
+  const mode = st.hlMode; let active = -1;
+  if (mode === 'word') { const times = hlTimes(st, lines.flat(), dur); for (let i = 0; i < times.length; i++) if (local >= times[i].s) active = i; }
+  const kw = new Set((st.keywords || []).map(normWord)); let k = 0;
+  return lines.map((ws) => ws.map((w) => { const i = k++; return { w, hl: mode === 'word' ? i === active : mode === 'keywords' && kw.has(normWord(w)) }; }));
+}
+
+/** Draw a title centred on the current origin. local = seconds into the clip (for pop / slide-up and the spoken-word highlight). */
+function drawText(g, st, scale, local = 10, dur = 0) {
   const size = (st.pixelSize || 96) * scale;
   const text = st.uppercase ? String(st.text || '').toUpperCase() : String(st.text || '');
   g.font = `${st.italic ? 'italic ' : ''}${st.bold === false ? 500 : 800} ${size}px ${JSON.stringify(st.family || 'Montserrat')}, Montserrat, "Segoe UI", sans-serif`;
@@ -929,11 +1030,21 @@ function drawText(g, st, scale, local = 10) {
     g.fillStyle = rgbaOf(st.boxColor, 'cc000000');
     g.fillRect(-w / 2 - pad, -(lines.length * lh) / 2 - pad * 0.6, w + pad * 2, lines.length * lh + pad * 1.2);
   }
+  const lit = st.hlMode === 'word' || st.hlMode === 'keywords' ? hlLines(st, text, local, dur) : null;
   lines.forEach((line, i) => {
     const y = (i - (lines.length - 1) / 2) * lh;
     if (st.shadow) { g.shadowColor = rgbaOf(st.shadowColor, 'b3000000'); g.shadowOffsetX = g.shadowOffsetY = st.shadow * scale; g.shadowBlur = st.shadow * scale; }
-    if (st.outlineWidth && !st.box) { g.lineJoin = 'round'; g.lineWidth = st.outlineWidth * 2 * scale; g.strokeStyle = rgbaOf(st.outlineColor, 'ff000000'); g.strokeText(line, 0, y); }
-    g.fillStyle = rgbaOf(st.color, 'ffffffff'); g.fillText(line, 0, y);
+    if (!lit) {
+      if (st.outlineWidth && !st.box) { g.lineJoin = 'round'; g.lineWidth = st.outlineWidth * 2 * scale; g.strokeStyle = rgbaOf(st.outlineColor, 'ff000000'); g.strokeText(line, 0, y); }
+      g.fillStyle = rgbaOf(st.color, 'ffffffff'); g.fillText(line, 0, y);
+    } else {
+      // Word by word, so the lit words get the highlight colour.
+      const parts = lit[i] || []; const sp = g.measureText(' ').width; const ws = parts.map((p) => g.measureText(p.w).width);
+      const x0 = -(ws.reduce((n, w) => n + w, 0) + sp * Math.max(0, parts.length - 1)) / 2; g.textAlign = 'left';
+      if (st.outlineWidth && !st.box) { g.lineJoin = 'round'; g.lineWidth = st.outlineWidth * 2 * scale; g.strokeStyle = rgbaOf(st.outlineColor, 'ff000000'); let x = x0; parts.forEach((p, k) => { g.strokeText(p.w, x, y); x += ws[k] + sp; }); }
+      let x = x0; parts.forEach((p, k) => { g.fillStyle = p.hl ? rgbaOf(st.hlColor, 'fff2c14e') : rgbaOf(st.color, 'ffffffff'); g.fillText(p.w, x, y); x += ws[k] + sp; });
+      g.textAlign = 'center';
+    }
     g.shadowColor = 'transparent';
   });
 }
@@ -1089,6 +1200,23 @@ function EffectControls({ selected, seq, edit, media, t, setT, onEditTitle }) {
 function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom, duration, edit, findClip, linked, onAdd, onDropFiles, onClipMenu, onEditTitle }) {
   const scroller = useRef(null);
   const [drag, setDrag] = useState(null);
+  // Pinch / Ctrl+wheel zooms around the mouse; the plain wheel scrolls along the timeline.
+  const zoomRef = useRef(zoom); zoomRef.current = zoom; const anchor = useRef(null);
+  const zoomAround = (factor, cx) => {
+    const el = scroller.current; if (!el) return; const mx = Math.max(0, cx - el.getBoundingClientRect().left - HEAD_W);
+    const nz = Math.max(4, Math.min(600, zoomRef.current * factor)); if (nz === zoomRef.current) return;
+    anchor.current = { at: (mx + el.scrollLeft) / zoomRef.current, mx }; zoomRef.current = nz; setZoom(nz);
+  };
+  useEffect(() => {
+    const el = scroller.current; if (!el) return;
+    const onWheel = (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) { e.preventDefault(); zoomAround(wheelFactor(e), e.clientX); return; }
+      if (!e.shiftKey && Math.abs(e.deltaY) > Math.abs(e.deltaX) && el.scrollHeight <= el.clientHeight + 2) { e.preventDefault(); el.scrollLeft += e.deltaY; }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false }); return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+  usePinch(scroller, (f, x) => zoomAround(f, x));
+  useEffect(() => { const a = anchor.current; if (a && scroller.current) { scroller.current.scrollLeft = Math.max(0, a.at * zoom - a.mx); anchor.current = null; } }, [zoom]);
   const [, force] = useState(0);
   useEffect(() => { const f = () => force((n) => n + 1); window.addEventListener('studio-redraw', f); return () => window.removeEventListener('studio-redraw', f); }, []);
   const lanes = [...seq.videoTracks.map((tr, i) => ({ tr, type: 0, i })).reverse(), ...seq.audioTracks.map((tr, i) => ({ tr, type: 1, i }))];
@@ -1207,9 +1335,9 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
     <div class="row" style="padding:6px 12px;border-bottom:1px solid var(--line);gap:10px">
       <span class="eyebrow">Timeline</span><span class="mono tnum" style="color:var(--teal-ink)">${tc(t, fps)}</span><span class="faint" style="font-size:var(--fs-xs)">${sel.length ? `${sel.length} selected` : ''}</span>${dragHint ? html`<span class="badge ${drag?.ctrl ? 'coral' : drag?.shift ? 'lav' : 'sky'}">${dragHint}</span>` : null}
       <div class="spacer" /><${Button} kind="ghost" size="sm" icon="plus" onClick=${() => addTrack(0)}>Video track</${Button}><${Button} kind="ghost" size="sm" icon="plus" onClick=${() => addTrack(1)}>Audio track</${Button}>
-      <${Icon} name="zoomOut" size=${15} style="color:var(--ink-3)" /><input type="range" class="range" style="width:140px" min="4" max="400" value=${zoom} onInput=${(e) => setZoom(Number(e.target.value))} aria-label="Timeline zoom" /><${Icon} name="zoomIn" size=${15} style="color:var(--ink-3)" />
+      <${Icon} name="zoomOut" size=${15} style="color:var(--ink-3)" /><input type="range" class="range" style="width:140px" min="4" max="600" value=${zoom} onInput=${(e) => setZoom(Number(e.target.value))} aria-label="Timeline zoom" title="Or pinch / Ctrl + scroll on the timeline" /><${Icon} name="zoomIn" size=${15} style="color:var(--ink-3)" />
     </div>
-    <div ref=${scroller} style="flex:1;overflow:auto;position:relative" onPointerDown=${(e) => { if (e.target === e.currentTarget) setSel([]); }}>
+    <div ref=${scroller} style="flex:1;overflow:auto;position:relative;touch-action:pan-x pan-y" onPointerDown=${(e) => { if (e.target === e.currentTarget) setSel([]); }}>
       <div style=${{ width: width + HEAD_W + 'px', position: 'relative', minHeight: '100%' }}>
         <div style=${{ position: 'sticky', top: 0, zIndex: 3, display: 'flex', height: '24px', background: 'var(--ed-panel)', borderBottom: '1px solid var(--line)' }}>
           <div style=${{ width: HEAD_W + 'px', flex: 'none', position: 'sticky', left: 0, background: 'var(--ed-panel)', zIndex: 4, borderRight: '1px solid var(--line)' }} />

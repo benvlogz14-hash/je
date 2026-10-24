@@ -207,7 +207,8 @@ function captionChunks({ words = [], range, style: st }) {
   const style = resolveStyle(st);
   const dur = range.end - range.start;
   const local = words.filter((w) => w.e > range.start && w.s < range.end).map((w) => ({ w: w.w, s: Math.max(0, w.s - range.start), e: Math.min(dur, w.e - range.start) })).filter((w) => clean(w.w, style));
-  return chunkWords(local, style).map((c) => ({ start: c[0].s, end: Math.max(c[c.length - 1].e, c[0].s + 0.25), text: c.map((w) => clean(w.w, style)).join(' ') }));
+  return chunkWords(local, style).map((c) => ({ start: c[0].s, end: Math.max(c[c.length - 1].e, c[0].s + 0.25), text: c.map((w) => clean(w.w, style)).join(' '),
+    words: c.map((w) => ({ w: clean(w.w, style), s: Math.round((w.s - c[0].s) * 1000) / 1000, e: Math.round((w.e - c[0].s) * 1000) / 1000 })) }));
 }
 
 module.exports = { autoKeywords, HEAVY, DEFAULT_STYLE, DEFAULT_GRAPHICS, PRESETS, resolveStyle, resolveGraphics, buildAss, buildSrt, captionChunks, assColor };

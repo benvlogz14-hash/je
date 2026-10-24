@@ -383,6 +383,8 @@ r.get('/api/clips/:id/lines', (req, b, p) => {
   return { lines: lines.map((l) => ({ ...l, s: Math.round(l.s * 1000) / 1000, e: Math.round(l.e * 1000) / 1000 })) };
 });
 // Auto-picked highlight words for a clip (numbers, names, strong words).
+// Keywords worth highlighting in any caption text (Studio's "Pick keywords for me").
+r.post('/api/captions/keywords', (req, b) => ({ keywords: require('./video/captions').autoKeywords(String(b?.text || '').split(/\s+/).filter(Boolean).slice(0, 5000).map((w) => ({ w }))) }));
 r.get('/api/clips/:id/keywords/auto', (req, b, p) => {
   const c = must(ctx.store.get('clips', p.id)); const a = must(ctx.store.get('assets', c.assetId));
   let t = null; try { t = JSON.parse(fs.readFileSync(transcriptFile(a), 'utf8')); } catch { return { keywords: [] }; }
@@ -453,7 +455,7 @@ r.post('/api/clips/:id/open-velo', (req, b, p) => {
 r.post('/api/clips/:id/studio', (req, b, p) => {
   const c = must(ctx.store.get('clips', p.id)); const a = ctx.store.get('assets', c.assetId); const client = ctx.store.get('clients', c.clientId);
   const words = require('./jobs/handlers').loadTranscript(a)?.words || [];
-  const data = exporters.toVelo({ name: c.title, source: a.path, info: a.info, range: { start: c.start, end: c.end }, words, style: { ...(client.style || {}), ...(c.style || {}) }, hook: c.hook, focusX: c.focusX, covers: c.versions?.[c.currentVersion - 1]?.covers || [] });
+  const data = exporters.toVelo({ name: c.title, source: a.path, info: a.info, range: { start: c.start, end: c.end }, words, style: { ...(client.style || {}), ...(c.style || {}) }, hook: c.hook, focusX: c.focusX, covers: c.versions?.[c.currentVersion - 1]?.covers || [], keywords: c.keywords });
   return ctx.store.insert('projects', { name: `#${c.ref} ${c.title}`, clientId: c.clientId, clipId: c.id, data, exports: [] });
 });
 
