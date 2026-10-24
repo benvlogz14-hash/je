@@ -329,6 +329,7 @@ r.post('/api/assets/:id/cancel', (req, b, p) => {
   events.publish('assets', { id: a.id });
   return { ok: true, canceled: n };
 });
+r.post('/api/clients/:id/broll', (req, b, p) => { const c = must(ctx.store.get('clients', p.id)); const count = (a) => ctx.store.all('clips', (x) => x.assetId === a.id && x.kind === 'broll').length; const a = ctx.store.all('assets', (x) => x.clientId === c.id && ['ready', 'waiting'].includes(x.status) && x.info?.hasVideo !== false).sort((x, y) => count(x) - count(y) || String(y.createdAt).localeCompare(String(x.createdAt)))[0]; if (!a) throw new HttpError(400, `${c.name} has no finished footage yet. Upload a video first.`); return require('./automation/pipeline').createBrollClip(a); });
 r.post('/api/assets/:id/broll', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); if (!a.info?.hasVideo) throw new HttpError(400, 'This file has no picture to make a B-roll edit from.'); return require('./automation/pipeline').createBrollClip(a); });
 r.post('/api/assets/:id/process', (req, b, p) => {
   const a = must(ctx.store.get('assets', p.id));

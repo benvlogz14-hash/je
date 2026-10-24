@@ -295,4 +295,4 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
   return { outPath, duration: dur, warnings: [...warnings] };
 }
 
-module.exports = { exportProject };
+module.exports = { exportProject, xfadeSupport };

@@ -29,6 +29,7 @@ const MOODS = {
   positive: { label: 'Uplifting', search: ['uplifting inspirational', 'hopeful cinematic', 'upbeat motivational'], gen: { kind: 'pad', bpm: 112, chords: [[N.C4, N.E4, N.G4], [N.G3, N.B3, N.D4], [N.A3, N.C4, N.E4], [N.F3, N.A3, N.C4]], kick: 1 } },
   triumphant: { label: 'Triumphant', search: ['epic triumphant', 'victory orchestral', 'heroic cinematic'], gen: { kind: 'pad', bpm: 100, brass: true, chords: [[N.D3, N.Fs3, N.A3], [N.A2, N.Cs4 / 2, N.E3], [N.B2, N.D3, N.Fs3], [N.G2, N.B2, N.D3]], kick: 2, snare: true } },
   suspense: { label: 'Suspense', search: ['suspense tension', 'dark suspense', 'thriller tension'], gen: { kind: 'drone', bpm: 76, root: N.A1, rub: N.Bb1, pulse: [N.A2, N.A2, N.Bb2, N.A2], heartbeat: true } },
+  darkbeat: { label: 'Dark beat (horror trap)', search: ['dark ambient beat', 'horror trap', 'dark phonk', 'dark cinematic percussion'], gen: { kind: 'drone', bpm: 92, root: N.E1 * 2, rub: N.G2 / 2, kick: 1, snare: true, plinks: [N.E5, N.G4, N.B4, N.Fs4] } },
   creepy: { label: 'Creepy / scary', search: ['creepy horror', 'eerie haunted', 'horror ambient'], gen: { kind: 'drone', bpm: 60, root: N.G1, rub: N.Db2, whine: true, plinks: [N.E5, N.C5, N.B4, N.Fs4] } },
   intense: { label: 'Intense / action', search: ['intense action', 'epic battle', 'driving drums action'], gen: { kind: 'pad', bpm: 140, chords: [[N.A2, N.C3, N.E3], [N.F2, N.A2, N.C3], [N.G2, N.B2, N.D3], [N.E2, N.Gs3 / 2, N.B2]], kick: 1, snare: true, drive: true } },
   sad: { label: 'Sad / emotional', search: ['sad piano', 'emotional melancholy', 'sad cinematic'], gen: { kind: 'piano', bpm: 66, chords: [[N.A3, N.C4, N.E4], [N.F3, N.A3, N.C4], [N.C4, N.E4, N.G4], [N.G3, N.B3, N.D4]] } },
@@ -105,6 +106,8 @@ function recipe(mood) {
     let e = `0.35*(sin(2*PI*${g.root}*t)+0.6*sin(2*PI*${g.root * 2}*t)+0.4*sin(2*PI*${g.rub}*t))*${swell}`;
     if (g.pulse) { const st = beat / 2; const pIdx = `floor(mod(t,${f3(st * 4)})/${f3(st)})`; const pf = g.pulse.reduceRight((acc, v, i) => (i === g.pulse.length - 1 ? `${v}` : `if(eq(${pIdx},${i}),${v},${acc})`), ''); e += `+0.32*(sin(2*PI*(${pf})*t)+0.3*sin(6*PI*(${pf})*t))*exp(-7*mod(t,${f3(st)}))`; }
     if (g.heartbeat) { const hb = beat * 1.2; e += `+0.8*sin(2*PI*52*mod(t,${f3(hb)}))*(exp(-14*mod(t,${f3(hb)}))+0.7*exp(-14*abs(mod(t,${f3(hb)})-0.22)))`; }
+    if (g.kick) e += `+${kick(g.kick)}`;
+    if (g.snare) e += `+${snare}`;
     if (g.whine) e += `+0.05*sin(2*PI*1180*t+3.3*sin(2*PI*5.5*t))*pow(sin(2*PI*t/11),2)+0.04*sin(2*PI*1253*t+12*sin(2*PI*0.7*t))*pow(sin(2*PI*t/7),2)`; // vibrato (phase-modulated, so the pitch stays put)
     if (g.plinks) { const p = 2.7; const pIdx = `mod(floor(t/${p}),${g.plinks.length})`; const pf = g.plinks.reduceRight((acc, v, i) => (i === g.plinks.length - 1 ? `${v}` : `if(eq(${pIdx},${i}),${v},${acc})`), ''); e += `+0.16*(sin(2*PI*(${pf})*t)+0.25*sin(4*PI*(${pf})*t))*exp(-3.2*mod(t,${p}))*gt(mod(floor(t/${p}),5),0)`; }
     return { expr: e, lowpass: g.whine ? 6000 : 3000 };
@@ -186,7 +189,7 @@ function overview() {
     return { mood: k, label: m.label, own: !!fromFolder(k), cc0: lib.filter((t) => !t.credit).length, ccby: lib.filter((t) => t.credit).length, generated: fs.existsSync(path.join(libDir(k), `generated-${k}-v2.m4a`)), tracks: lib.map((t) => ({ name: path.basename(t.file), title: t.title, license: t.license })) };
   });
 }
-const CLIP_MOODS = ['creepy', 'suspense', 'intense', 'triumphant', 'positive', 'sad', 'chill', 'funny'];
+const CLIP_MOODS = ['darkbeat', 'creepy', 'suspense', 'intense', 'triumphant', 'positive', 'sad', 'chill', 'funny'];
 
 /** Every track you can pick, by mood: your folder, the free library, and Euclidean's own. id = "<where>/<mood>/<file>". */
 function catalog() {

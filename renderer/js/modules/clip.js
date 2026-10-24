@@ -148,7 +148,7 @@ function CaptionWords({ clip, reload }) {
   </details>`;
 }
 
-const MOODS = [['auto', 'Auto'], ['off', 'No music'], ['creepy', 'Creepy'], ['suspense', 'Suspense'], ['intense', 'Intense'], ['triumphant', 'Triumphant'], ['positive', 'Uplifting'], ['sad', 'Sad'], ['chill', 'Chill'], ['funny', 'Funny']];
+const MOODS = [['auto', 'Auto'], ['off', 'No music'], ['darkbeat', 'Dark beat'], ['creepy', 'Creepy'], ['suspense', 'Suspense'], ['intense', 'Intense'], ['triumphant', 'Triumphant'], ['positive', 'Uplifting'], ['sad', 'Sad'], ['chill', 'Chill'], ['funny', 'Funny']];
 const MOOD_NAME = Object.fromEntries(MOODS);
 /** Sound for this clip: voice and music levels, the music mood or a specific track from the catalog, and what the last render used. */
 function ClipMusic({ clip, reload }) {

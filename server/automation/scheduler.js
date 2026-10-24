@@ -63,11 +63,28 @@ function digest() {
   messaging.addMessage(conv, { direction: 'in', channel: 'system', status: 'received', body: `Good morning. ${pendingApprovals} item${pendingApprovals === 1 ? '' : 's'} waiting for approval${failed ? `, ${failed} failed job${failed === 1 ? '' : 's'} to look at` : ''}.`, card: { type: 'digest', data: { rows, pendingApprovals, failed } } });
 }
 
+/** One B-roll edit per day per client: from the footage with the fewest B-roll edits so far (newest first on a tie). */
+function dailyBroll(client) {
+  const tz = ctx.setting('agency.timezone', 'America/New_York'); const day = pipeline.localDate(new Date(), tz);
+  if ((client.production || {})._brollDay === day) return;
+  const assets = ctx.store.all('assets', (a) => a.clientId === client.id && ['ready', 'waiting'].includes(a.status) && a.info?.hasVideo !== false && a.info?.duration > 20);
+  if (!assets.length) return;
+  const count = (a) => ctx.store.all('clips', (c) => c.assetId === a.id && c.kind === 'broll').length;
+  const a = assets.sort((x, y) => count(x) - count(y) || String(y.createdAt).localeCompare(String(x.createdAt)))[0];
+  ctx.store.update('clients', client.id, (c) => ({ production: { ...(c.production || {}), _brollDay: day } }));
+  pipeline.createBrollClip(a);
+  audit.log('system', 'broll.daily', { clientId: client.id, assetId: a.id });
+}
+
 function tick() {
   if (queue.paused) return;
   const lite = ctx.setting('resources.mode', 'full') === 'lite';
   for (const client of ctx.store.all('clients', (c) => c.status === 'active' && c.schedule?.autopilot)) {
     try { feedClient(client); } catch (e) { audit.log('system', 'autopilot.error', { clientId: client.id, error: e.message }, 'error'); }
+  }
+  // B-roll edit of the day: clients with "one per day" get a fresh one from their footage (it goes to review like any clip).
+  for (const client of ctx.store.all('clients', (c) => c.status === 'active' && c.production?.brollDaily)) {
+    try { dailyBroll(client); } catch (e) { audit.log('system', 'broll.daily_error', { clientId: client.id, error: e.message }, 'error'); }
   }
   require('../integrations/elevenlabs').pollCalls().catch(() => {});
   try { require('../outreach/autopilot').tick(); } catch (e) { audit.log('system', 'outreach.autopilot_error', { error: e.message }, 'error'); }

@@ -236,16 +236,18 @@ async function renderBroll(job, h, clip) {
   const vis = require('../video/vision').cached(asset.path, asset.workDir); const an = loadAnalysis(asset);
   let black = []; try { black = await require('../video/montage').blackIntervals(asset.path, asset.workDir); } catch { /* none */ }
   const be = require('../video/brolledit');
-  const segs = be.plan({ shots: vis?.shots || [], scenes: an?.scenes || [], duration: asset.info?.duration || 0, length: clip.end - clip.start, black });
   h.progress(0.15, 'Choosing the music');
-  const music = require('../video/music'); const mood = clip.music && !['auto', 'off'].includes(clip.music) ? clip.music : client?.production?.brollMood || 'suspense';
+  const music = require('../video/music'); const mood = clip.music && !['auto', 'off'].includes(clip.music) ? clip.music : client?.production?.brollMood || 'darkbeat';
   const track = clip.musicTrack ? { file: await music.resolve(clip.musicTrack) } : await music.pick(mood);
-  h.progress(0.2, `Cutting ${segs.length} shots together`);
-  const r = await be.render({ source: asset.path, segs, music: track?.file || null, out: outPath, volume: Number(clip.musicVol ?? 0.9), signal: h.signal });
+  // Shots used by this footage's earlier B-roll edits are skipped when there are enough others (so daily edits differ).
+  const avoid = ctx.store.all('clips', (c) => c.assetId === asset.id && c.kind === 'broll' && c.id !== clip.id).flatMap((c) => (c.versions || []).flatMap((v) => (v.broll?.segs || []).map((s) => [s.src, s.src + s.dur])));
+  h.progress(0.2, 'Finding the beat and cutting the shots to it');
+  const r = await be.make({ source: asset.path, duration: asset.info?.duration || 0, shots: vis?.shots || [], scenes: an?.scenes || [], black, avoid, music: track?.file || null, length: clip.end - clip.start, out: outPath, volume: Number(clip.musicVol ?? 0.9), signal: h.signal });
+  const segs = r.segs;
   const qc = await ff.qualityCheck(outPath, { expectWidth: 1080, expectHeight: 1920, minSec: 3, maxSec: 180 });
   const thumb = path.join(outDir, `v${n}.jpg`); await ff.thumbnail(outPath, thumb, Math.min(1.5, r.duration / 2), 405);
-  const version = { n, path: outPath, thumb, duration: r.duration, renderedAt: now(), qc: { passed: qc.passed, issues: qc.issues }, captioned: false, broll: { shots: segs.length, mood, track: track?.source || null } };
-  ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), version], currentVersion: n, pendingChanges: null, end: (c.start || 0) + r.duration }));
+  const version = { n, path: outPath, thumb, duration: r.duration, renderedAt: now(), qc: { passed: qc.passed, issues: qc.issues }, captioned: false, broll: { shots: segs.length, mood, track: track?.source || null, bpm: r.bpm, synced: r.synced, segs } };
+  ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), version], currentVersion: n, pendingChanges: null }));
   pipeline.afterQc(clip.id, qc);
   return { version: n, duration: r.duration, shots: segs.length };
 }
