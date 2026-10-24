@@ -203,7 +203,10 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
     const easeOut = (f) => 1 - (1 - f) ** 3;
     for (const { c, layer } of texts) {
       const st = c.text || {}; const fc = require('./fontnames').face(st.family || 'Montserrat', st.bold !== false && require('./captions').HEAVY.has(st.family || 'Montserrat')); const col = argb(st.color, 'ffffffff'); const oc = argb(st.outlineColor, 'ff000000');
-      const box = st.box ? argb(st.boxColor, 'cc000000') : null;
+      const keyed = ['posX', 'posY', 'scaleX', 'rotation', 'opacity'].some((k) => hasKeys(c[k]));
+      // Rounded boxes (TikTok / Instagram titles) are drawn as shapes behind the text; libass boxes are square.
+      const round = st.box && (st.boxRadius || 0) > 0 && !keyed;
+      const box = st.box && !round ? argb(st.boxColor, 'cc000000') : null;
       const shad = st.shadow ? argb(st.shadowColor, 'b3000000') : null;
       const raw = (st.uppercase ? String(st.text || '').toUpperCase() : String(st.text || '')).replace(/[{}\\]/g, '');
       // Highlight: the word being said ('word', timed by st.words) or chosen keywords, in the highlight colour.
@@ -219,11 +222,18 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       /** One subtitle event: either the whole title (ASS animates fades/pop/slide), or one frame of a keyframed title. */
       const event = ({ from, to, px, py, sc, op, rot, place, pop = '', fad = '', body = bodyAt(-1) }) => {
         const alpha = Math.round(255 - (255 - col.a) * Math.max(0, Math.min(1, op))).toString(16).padStart(2, '0');
-        const look = box ? `\\3c${colTag(box.rgb)}\\3a&H${box.a.toString(16).padStart(2, '0').toUpperCase()}&\\bord${Math.round((st.boxPad ?? 18) * sc)}` : `\\3c${colTag(oc.rgb)}\\bord${Math.round((st.outlineWidth || 0) * sc)}`;
+        const look = box ? `\\3c${colTag(box.rgb)}\\3a&H${box.a.toString(16).padStart(2, '0').toUpperCase()}&\\bord${Math.round((st.boxPad ?? 18) * sc)}` : round ? '\\bord0' : `\\3c${colTag(oc.rgb)}\\bord${Math.round((st.outlineWidth || 0) * sc)}`;
         const tags = `{\\an5${place || `\\pos(${Math.round(px)},${Math.round(py)})`}\\fn${fc.name.replace(/[{}\\,]/g, '')}\\fs${Math.max(1, Math.round((st.pixelSize || 96) * sc))}\\fsp${Math.round((st.letterSpacing || 0) * sc)}\\b${fc.bold ? 1 : 0}\\i${st.italic ? 1 : 0}\\c${colTag(col.rgb)}\\alpha&H${alpha.toUpperCase()}&${look}${shad ? `\\shad${Math.round(st.shadow * sc)}\\4c${colTag(shad.rgb)}\\4a&H${shad.a.toString(16).padStart(2, '0').toUpperCase()}&` : '\\shad0'}\\frz${-rot}${pop}${fad}}`;
-        lines.push(`Dialogue: ${layer},${t2(from)},${t2(to)},${st.box ? 'B' : 'T'},,0,0,0,,${tags}${body}`);
+        lines.push(`Dialogue: ${layer},${t2(from)},${t2(to)},${box ? 'B' : 'T'},,0,0,0,,${tags}${body}`);
       };
-      const keyed = ['posX', 'posY', 'scaleX', 'rotation', 'opacity'].some((k) => hasKeys(c[k]));
+      if (round) {
+        const sc = base(c.scaleX, 1); const px = W / 2 + base(c.posX, 0), py = H / 2 + base(c.posY, 0); const fsz = Math.max(1, (st.pixelSize || 96) * sc);
+        const tl = raw.split('\n'); const m = require('./fontnames').measure(st.family || 'Montserrat', st.bold !== false && require('./captions').HEAVY.has(st.family || 'Montserrat'), fsz, tl);
+        const top = py - (tl.length * fsz) / 2; const pad = m.capH * 0.55, padX = m.capH * 0.6; const bc = argb(st.boxColor, 'ffffffff');
+        const shapes = tl.map((l, i) => { const bl = top + i * fsz + m.asc; return require('./captions').roundRect(px - m.widths[i] / 2 - padX, bl - m.capH - pad, px + m.widths[i] / 2 + padX, bl + pad * 0.95, st.boxRadius * sc); }).join(' ');
+        const fi = transDur(c.transIn), fo = transDur(c.transOut);
+        lines.push(`Dialogue: ${layer},${t2(c.start)},${t2(c.start + c.duration)},T,,0,0,0,,{\\an7\\pos(0,0)\\org(${Math.round(px)},${Math.round(py)})\\frz${-base(c.rotation, 0)}${fi || fo ? `\\fad(${Math.round(fi * 1000)},${Math.round(fo * 1000)})` : ''}\\bord0\\shad0\\1c${colTag(bc.rgb)}\\1a&H${bc.a.toString(16).padStart(2, '0').toUpperCase()}&\\p1}${shapes}{\\p0}`);
+      }
       if (!keyed) {
         const sc = base(c.scaleX, 1); const px = Math.round(W / 2 + base(c.posX, 0)), py = Math.round(H / 2 + base(c.posY, 0));
         // Spoken-word highlight: one piece per word (the coloured word moves on as it is said); the entrance plays on the first piece, the fade-out on the last.

@@ -60,3 +60,7 @@
 @font-face { font-family: "Staatliches"; src: url("../assets/fonts/Staatliches-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "Titillium Web"; src: url("../assets/fonts/TitilliumWeb-Black.ttf") format("truetype"); font-weight: 900; font-display: swap; }
 @font-face { font-family: "VT323"; src: url("../assets/fonts/VT323-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "TikTok Sans"; src: url("../assets/fonts/TikTokSans-SemiBold.ttf") format("truetype"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "TikTok Sans Bold"; src: url("../assets/fonts/TikTokSans-ExtraBold.ttf") format("truetype"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Inter"; src: url("../assets/fonts/Inter-SemiBold.ttf") format("truetype"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Inter Bold"; src: url("../assets/fonts/Inter-ExtraBold.ttf") format("truetype"); font-weight: 100 900; font-display: swap; }

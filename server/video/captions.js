@@ -38,6 +38,7 @@ const DEFAULT_STYLE = {
   hookOutline: '#111111',
   hookOutlineWidth: 8,
   hookTilt: 0,           // degrees, a little tilt reads as playful
+  hookRadius: 0,         // rounded box corners (px); TikTok / Instagram titles use rounded boxes
   hookAnim: 'fade',      // 'fade' | 'pop'
   hookText: '',          // what the banner says; empty = the clip's hook
   hookUpper: false,      // banner in CAPITALS (off = exactly as typed)
@@ -52,12 +53,22 @@ const PRESETS = {
   'news': { uppercase: true, highlight: '#E07A5F', wordsPerLine: 4, size: 72, position: 'lower' },
   'karaoke-teal': { highlight: '#6CC3B8', wordsPerLine: 2, size: 96 },
   // Bold cartoon looks, like big YouTube channels.
+  'tiktok': { font: 'TikTok Sans Bold', size: 72, uppercase: false, primary: '#FFFFFF', highlight: '#FFE14D', outline: '#000000', outlineWidth: 5, shadow: 2, wordsPerLine: 3, box: false, hookFont: 'TikTok Sans', hookSize: 66, hookBox: true, hookBg: '#FFFFFF', hookColor: '#000000', hookRadius: 18, hookTilt: 0, hookAnim: 'fade', hookUpper: false },
+  'tiktok-plain': { font: 'TikTok Sans Bold', size: 72, uppercase: false, primary: '#FFFFFF', highlight: '#FFE14D', outline: '#000000', outlineWidth: 5, shadow: 2, wordsPerLine: 3, box: false, hookFont: 'TikTok Sans', hookSize: 66, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 0, hookRadius: 0, hookTilt: 0, hookAnim: 'fade', hookUpper: false },
+  'instagram': { font: 'Inter Bold', size: 70, uppercase: false, primary: '#FFFFFF', highlight: '#FFE14D', outline: '#000000', outlineWidth: 4, shadow: 2, wordsPerLine: 3, box: false, hookFont: 'Inter', hookSize: 62, hookBox: true, hookBg: '#FFFFFF', hookColor: '#000000', hookRadius: 20, hookTilt: 0, hookAnim: 'fade', hookUpper: false },
+  'instagram-plain': { font: 'Inter Bold', size: 70, uppercase: false, primary: '#FFFFFF', highlight: '#FFE14D', outline: '#000000', outlineWidth: 4, shadow: 2, wordsPerLine: 3, box: false, hookFont: 'Inter', hookSize: 62, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 0, hookRadius: 0, hookTilt: 0, hookAnim: 'fade', hookUpper: false },
   'cartoon': { font: 'Luckiest Guy', size: 96, highlight: '#FFD23F', outline: '#000000', outlineWidth: 9, shadow: 5, wordsPerLine: 2, hookFont: 'Luckiest Guy', hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookTilt: -4, hookAnim: 'pop' },
   'comic': { font: 'Bangers', size: 104, highlight: '#FF4D6D', outline: '#000000', outlineWidth: 8, shadow: 4, wordsPerLine: 3, hookFont: 'Bangers', hookBg: '#FFD23F', hookColor: '#000000', hookTilt: -3, hookAnim: 'pop' },
   'bubbly': { font: 'Titan One', size: 88, highlight: '#5CE1E6', outline: '#1B1B3A', outlineWidth: 10, shadow: 4, wordsPerLine: 2, uppercase: false, hookFont: 'Titan One', hookBg: '#FF8FB1', hookColor: '#FFFFFF', hookAnim: 'pop' },
 };
 
 function resolveStyle(s) { const base = { ...DEFAULT_STYLE, ...(PRESETS[s?.preset] || {}) }; return { ...base, ...(s || {}) }; }
+
+/** A rounded rectangle as an ASS drawing (pixels). */
+function roundRect(x0, y0, x1, y1, r) {
+  r = Math.max(0, Math.min(r, (x1 - x0) / 2, (y1 - y0) / 2)); const k = r * 0.45; const n = (v) => Math.round(v);
+  return `m ${n(x0 + r)} ${n(y0)} l ${n(x1 - r)} ${n(y0)} b ${n(x1 - k)} ${n(y0)} ${n(x1)} ${n(y0 + k)} ${n(x1)} ${n(y0 + r)} l ${n(x1)} ${n(y1 - r)} b ${n(x1)} ${n(y1 - k)} ${n(x1 - k)} ${n(y1)} ${n(x1 - r)} ${n(y1)} l ${n(x0 + r)} ${n(y1)} b ${n(x0 + k)} ${n(y1)} ${n(x0)} ${n(y1 - k)} ${n(x0)} ${n(y1 - r)} l ${n(x0)} ${n(y0 + r)} b ${n(x0)} ${n(y0 + k)} ${n(x0 + k)} ${n(y0)} ${n(x0 + r)} ${n(y0)}`;
+}
 
 function assColor(hex, alpha = 0) {
   const h = String(hex || '#FFFFFF').replace('#', '').padEnd(6, '0');
@@ -126,7 +137,11 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
   const hookSize = Math.round(style.hookSize || style.size * 0.72);
   const hookAlign = style.hookPosition === 'lower' ? 2 : style.hookPosition === 'center' ? 5 : 8;
   const hookMarginV = style.hookPosition === 'center' ? 0 : style.hookPosition === 'lower' ? Math.round(height * 0.2) : Math.round(height * 0.11);
-  const hookLook = style.hookBox
+  // Rounded boxes are drawn as shapes behind the text (libass boxes are square), so the text itself has no box.
+  const hookRound = !!style.hookBox && (style.hookRadius || 0) > 0;
+  const hookLook = hookRound
+    ? `${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookBg)},${assColor('#000000', 0x70)},${boldFlag(hookFont)},0,0,0,100,100,0,${-(style.hookTilt || 0)},1,0,0`
+    : style.hookBox
     ? `${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookBg)},${assColor(style.hookBg)},${boldFlag(hookFont)},0,0,0,100,100,0,${-(style.hookTilt || 0)},3,18,0`
     : `${assColor(style.hookColor)},${assColor(style.hookColor)},${assColor(style.hookOutline)},${assColor('#000000', 0x70)},${boldFlag(hookFont)},0,0,0,100,100,1,${-(style.hookTilt || 0)},1,${style.hookOutlineWidth},${style.shadow || 0}`;
   const lines = [
@@ -155,8 +170,19 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
   hook = String(style.hookText || '').trim() || hook;
   if (hook && style.hook) {
     const ht = String(hook).replace(/[{}\\]/g, '').trim().replace(/\s*\n\s*/g, '\\N');
-    const anim = style.hookAnim === 'pop' ? '\\fad(0,180)\\fscx20\\fscy20\\t(0,140,\\fscx115\\fscy115)\\t(140,240,\\fscx100\\fscy100)' : '\\fad(120,180)';
-    lines.push(`Dialogue: 1,${assTime(0)},${assTime(Math.min(style.hookSeconds, dur))},Hook,,0,0,0,,{${anim}}${style.hookUpper ? ht.toUpperCase() : ht}`);
+    const text = style.hookUpper ? ht.toUpperCase() : ht; const until = assTime(Math.min(style.hookSeconds, dur));
+    // Fully on screen from the very first frame (that frame is also the cover on TikTok and Reels); "Bounce in" is a quick pulse from full size.
+    const pulse = style.hookAnim === 'pop' && !hookRound ? '\\t(0,120,\\fscx112\\fscy112)\\t(120,240,\\fscx100\\fscy100)' : '';
+    if (hookRound) {
+      // TikTok / Instagram style: one rounded box per line, sized to the measured text.
+      const tl = text.split('\\N'); const fsz = hookSize; const m = fontnames.measure(hookFont, HEAVY.has(hookFont), fsz, tl);
+      const blockH = tl.length * fsz; const y0 = hookAlign === 8 ? hookMarginV : hookAlign === 5 ? (height - blockH) / 2 : height - hookMarginV - blockH;
+      const cx = width / 2; const yc = y0 + blockH / 2; const pad = m.capH * 0.55; const padX = m.capH * 0.6;
+      const shapes = tl.map((l, i) => { const base = y0 + i * fsz + m.asc; const w = m.widths[i]; return roundRect(cx - w / 2 - padX, base - m.capH - pad, cx + w / 2 + padX, base + pad * 0.95, style.hookRadius); }).join(' ');
+      const bg = assColor(style.hookBg);
+      lines.push(`Dialogue: 1,${assTime(0)},${until},Hook,,0,0,0,,{\\an7\\pos(0,0)\\org(${Math.round(cx)},${Math.round(yc)})\\fad(0,180)\\bord0\\shad0\\1c&H${bg.slice(4)}&\\1a&H${bg.slice(2, 4)}&\\p1}${shapes}{\\p0}`);
+      lines.push(`Dialogue: 2,${assTime(0)},${until},Hook,,0,0,0,,{\\an8\\pos(${Math.round(cx)},${Math.round(y0)})\\org(${Math.round(cx)},${Math.round(yc)})\\fad(0,180)}${text}`);
+    } else lines.push(`Dialogue: 1,${assTime(0)},${until},Hook,,0,0,0,,{\\fad(0,180)${pulse}}${text}`);
   }
   const local = words.filter((w) => w.e > range.start && w.s < range.end)
     .map((w) => ({ w: w.w, s: Math.max(0, w.s - range.start), e: Math.min(dur, w.e - range.start) }))
@@ -211,4 +237,4 @@ function captionChunks({ words = [], range, style: st }) {
     words: c.map((w) => ({ w: clean(w.w, style), s: Math.round((w.s - c[0].s) * 1000) / 1000, e: Math.round((w.e - c[0].s) * 1000) / 1000 })) }));
 }
 
-module.exports = { autoKeywords, HEAVY, DEFAULT_STYLE, DEFAULT_GRAPHICS, PRESETS, resolveStyle, resolveGraphics, buildAss, buildSrt, captionChunks, assColor };
+module.exports = { roundRect, autoKeywords, HEAVY, DEFAULT_STYLE, DEFAULT_GRAPHICS, PRESETS, resolveStyle, resolveGraphics, buildAss, buildSrt, captionChunks, assColor };

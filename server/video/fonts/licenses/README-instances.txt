@@ -1,0 +1,1 @@
+TikTokSans-SemiBold.ttf / TikTokSans-ExtraBold.ttf: fixed-weight instances (600 / 800) of TikTok Sans (google/fonts ofl/tiktoksans), renamed "TikTok Sans" / "TikTok Sans Bold". Inter-SemiBold.ttf / Inter-ExtraBold.ttf: instances (600 / 800) of Inter, renamed "Inter" / "Inter Bold". Both under the SIL Open Font License 1.1 (OFL-TikTokSans.txt, OFL-Inter.txt).

@@ -37,13 +37,45 @@ function readFont(file) {
   return family && full ? { family, full, weight } : null;
 }
 
+/**
+ * Text measuring for one font file: advance widths from cmap + hmtx (no kerning), scaled the way libass
+ * sizes fonts (the size is the Windows ascent + descent, like VSFilter). Used to fit rounded boxes behind titles.
+ */
+function readMetrics(file) {
+  const b = fs.readFileSync(file); const T = {};
+  for (let i = 0, n = b.readUInt16BE(4); i < n; i++) { const o = 12 + i * 16; T[b.toString('latin1', o, o + 4)] = b.readUInt32BE(o + 8); }
+  const upem = b.readUInt16BE(T.head + 18); const nH = b.readUInt16BE(T.hhea + 34);
+  const os2 = T['OS/2']; const winSum = os2 != null ? b.readUInt16BE(os2 + 74) + b.readUInt16BE(os2 + 76) : 0;
+  const asc = os2 != null ? b.readUInt16BE(os2 + 74) : b.readInt16BE(T.hhea + 4);
+  const capH = os2 != null && b.readUInt16BE(os2) >= 2 ? b.readInt16BE(os2 + 88) : Math.round(upem * 0.7);
+  const adv = (g) => b.readUInt16BE(T.hmtx + Math.min(g, nH - 1) * 4);
+  // cmap: Windows Unicode, full repertoire (format 12) or BMP (format 4).
+  const map = new Map(); const cm = T.cmap; let sub = null;
+  for (let i = 0, n = b.readUInt16BE(cm + 2); i < n; i++) { const r = cm + 4 + i * 8; const pid = b.readUInt16BE(r); const eid = b.readUInt16BE(r + 2); const off = cm + b.readUInt32BE(r + 4); const fmt = b.readUInt16BE(off); if (pid === 3 && eid === 10 && fmt === 12) { sub = off; break; } if (pid === 3 && eid === 1 && fmt === 4) sub = off; }
+  const glyph = (code) => {
+    if (map.has(code)) return map.get(code); let g = 0;
+    if (sub != null && b.readUInt16BE(sub) === 12) { for (let i = 0, n = b.readUInt32BE(sub + 12); i < n; i++) { const r = sub + 16 + i * 12; const a = b.readUInt32BE(r), z = b.readUInt32BE(r + 4); if (code >= a && code <= z) { g = b.readUInt32BE(r + 8) + code - a; break; } } }
+    else if (sub != null) {
+      const segX2 = b.readUInt16BE(sub + 6); const ends = sub + 14, starts = ends + segX2 + 2, deltas = starts + segX2, ranges = deltas + segX2;
+      for (let i = 0; i < segX2 / 2; i++) {
+        if (code > b.readUInt16BE(ends + i * 2)) continue; const st = b.readUInt16BE(starts + i * 2); if (code < st) break;
+        const ro = b.readUInt16BE(ranges + i * 2); const d = b.readInt16BE(deltas + i * 2);
+        if (!ro) g = (code + d) & 0xffff; else { const gi = b.readUInt16BE(ranges + i * 2 + ro + (code - st) * 2); g = gi ? (gi + d) & 0xffff : 0; }
+        break;
+      }
+    }
+    map.set(code, g); return g;
+  };
+  return { upem, winSum: winSum || upem, asc, capH, width: (text) => { let w = 0; for (const ch of String(text)) w += adv(glyph(ch.codePointAt(0))); return w; } };
+}
+
 /** family -> [{ full, weight }] for every bundled font. */
 function fonts() {
   if (table) return table;
   table = {};
   let files = []; try { files = fs.readdirSync(DIR).filter((f) => /\.(ttf|otf)$/i.test(f)); } catch { /* none */ }
   for (const f of files) {
-    try { const x = readFont(path.join(DIR, f)); if (x) (table[x.family] = table[x.family] || []).push({ full: x.full, weight: x.weight }); } catch { /* unreadable */ }
+    try { const x = readFont(path.join(DIR, f)); if (x) (table[x.family] = table[x.family] || []).push({ full: x.full, weight: x.weight, file: path.join(DIR, f) }); } catch { /* unreadable */ }
   }
   return table;
 }
@@ -58,7 +90,21 @@ function face(family, heavy) {
   if (!list?.length) return { name: family, bold: heavy ? -1 : 0 };
   const want = heavy ? 800 : 400;
   const best = list.slice().sort((a, b) => Math.abs(a.weight - want) - Math.abs(b.weight - want))[0];
-  return { name: best.full, bold: 0 };
+  return { name: best.full, bold: 0, file: best.file };
 }
 
-module.exports = { face, fonts, readFont };
+const metricsCache = new Map();
+/**
+ * Measure lines of text in a font at an ASS font size: { widths[], lineH, capH, asc } in pixels.
+ * Fonts that aren't bundled (Windows fonts) get an estimate.
+ */
+function measure(family, heavy, fsPx, lines) {
+  const f = face(family, heavy);
+  if (!f.file) return { widths: lines.map((l) => l.length * fsPx * 0.52), lineH: fsPx, capH: fsPx * 0.62, asc: fsPx * 0.8 };
+  if (!metricsCache.has(f.file)) { try { metricsCache.set(f.file, readMetrics(f.file)); } catch { metricsCache.set(f.file, null); } }
+  const m = metricsCache.get(f.file); if (!m) return { widths: lines.map((l) => l.length * fsPx * 0.52), lineH: fsPx, capH: fsPx * 0.62, asc: fsPx * 0.8 };
+  const k = fsPx / m.winSum;
+  return { widths: lines.map((l) => m.width(l) * k), lineH: fsPx, capH: m.capH * k, asc: m.asc * k };
+}
+
+module.exports = { face, fonts, readFont, readMetrics, measure };

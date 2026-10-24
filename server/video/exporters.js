@@ -37,7 +37,7 @@ function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, c
   const a1 = info.hasAudio ? [veloClip({ id: nextId++, type: 1, mediaId, name: path.basename(source), start: 0, duration: dur, in: range.start, linkId: 1 })] : [];
   const posY = st.position === 'upper' ? -H * 0.3 : st.position === 'center' ? 0 : H * 0.28;
   const hex = (c) => `#ff${String(c || '#ffffff').replace('#', '').toLowerCase()}`;
-  const textStyle = (t, size, color, o = {}) => ({ text: t, family: o.font || st.font, pixelSize: size, bold: captions.HEAVY.has(o.font || st.font), italic: false, color: hex(color), outlineColor: hex(o.outline || st.outline), outlineWidth: Math.round((o.outlineWidth ?? st.outlineWidth) / 2), ...(o.box ? { box: true, boxColor: hex(o.boxColor), boxPad: 18 } : {}) });
+  const textStyle = (t, size, color, o = {}) => ({ text: t, family: o.font || st.font, pixelSize: size, bold: captions.HEAVY.has(o.font || st.font), italic: false, color: hex(color), outlineColor: hex(o.outline || st.outline), outlineWidth: Math.round((o.outlineWidth ?? st.outlineWidth) / 2), ...(o.box ? { box: true, boxColor: hex(o.boxColor), boxPad: 18, ...(o.radius ? { boxRadius: o.radius } : {}) } : {}) });
   // Highlight travels with each caption: the spoken word (word timings inside the caption) or chosen keywords.
   const hlMode = ['word', 'keywords'].includes(st.highlightMode) ? st.highlightMode : 'none';
   const kws = hlMode === 'keywords' ? (keywords?.length ? keywords : captions.autoKeywords(words.filter((w) => w.e > range.start && w.s < range.end))) : [];
@@ -47,7 +47,7 @@ function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, c
   const hk = String(st.hookText || '').trim() || hook;
   const hookY = st.hookPosition === 'lower' ? H * 0.28 : st.hookPosition === 'center' ? 0 : -H * 0.36;
   const v3 = hk && st.hook !== false ? [veloClip({ id: nextId++, type: 3, name: 'Hook', start: 0, duration: Math.min(st.hookSeconds, dur), posY: hookY, rotation: st.hookTilt || 0,
-    text: textStyle(st.hookUpper ? hk.toUpperCase() : hk, Math.round(st.hookSize || st.size * 0.72), st.hookColor, { font: st.hookFont || st.font, outline: st.hookOutline, outlineWidth: st.hookOutlineWidth, box: st.hookBox, boxColor: st.hookBg }) })] : [];
+    text: textStyle(st.hookUpper ? hk.toUpperCase() : hk, Math.round(st.hookSize || st.size * 0.72), st.hookColor, { font: st.hookFont || st.font, outline: st.hookOutline, outlineWidth: st.hookOutlineWidth, box: st.hookBox, boxColor: st.hookBg, radius: st.hookRadius || 0 }) })] : [];
   // The render's cut-away shots (B-roll) as their own picture-only clips, so you can move, trim or delete them.
   const broll = (covers || []).filter((c) => c.at < range.end && c.at + c.dur > range.start).map((c) => veloClip({ id: nextId++, type: 0, mediaId, name: 'B-roll', start: Math.max(0, c.at - range.start), duration: c.dur, in: c.src, scale, posX: 0 }));
   const track = (type, nm, clips) => ({ type, name: nm, muted: false, locked: false, volume: animated(1), clips });

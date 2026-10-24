@@ -1025,7 +1025,11 @@ function drawText(g, st, scale, local = 10, dur = 0) {
   if (st.animIn === 'pop') { const k = 0.6 + 0.4 * easeOut(Math.min(1, Math.max(0, local) / 0.25)); g.scale(k, k); }
   if (st.animIn === 'slide') g.translate(0, 70 * scale * (1 - easeOut(Math.min(1, Math.max(0, local) / 0.35))));
   const lines = text.split('\n'); const lh = size * 1.15;
-  if (st.box) {
+  if (st.box && st.boxRadius > 0) {
+    // Rounded box per line (TikTok / Instagram titles), as in the export.
+    const pad = (st.boxPad ?? 18) * scale; g.fillStyle = rgbaOf(st.boxColor, 'ffffffff');
+    lines.forEach((l, i) => { const w = g.measureText(l).width; const y = (i - (lines.length - 1) / 2) * lh; g.beginPath(); g.roundRect(-w / 2 - pad, y - lh / 2, w + pad * 2, lh, st.boxRadius * scale); g.fill(); });
+  } else if (st.box) {
     const pad = (st.boxPad ?? 18) * scale; const w = Math.max(...lines.map((l) => g.measureText(l).width));
     g.fillStyle = rgbaOf(st.boxColor, 'cc000000');
     g.fillRect(-w / 2 - pad, -(lines.length * lh) / 2 - pad * 0.6, w + pad * 2, lines.length * lh + pad * 1.2);

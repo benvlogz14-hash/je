@@ -1,5 +1,6 @@
 /** Caption and banner fonts, grouped for the picker. All are bundled (free licences) except the System group. */
 export const FONT_GROUPS = [
+  ['TikTok and Instagram', ['TikTok Sans', 'TikTok Sans Bold', 'Inter', 'Inter Bold']],
   ['Bold YouTube', ['Luckiest Guy', 'Bangers', 'Titan One', 'Lilita One', 'Bowlby One', 'Bowlby One SC', 'Bungee', 'Sigmar One', 'Rammetto One', 'Dela Gothic One', 'Archivo Black', 'Paytone One', 'Passion One', 'Poppins', 'Kanit', 'Montserrat', 'Anton', 'Bebas Neue', 'Staatliches', 'Barlow Condensed', 'Titillium Web', 'Russo One', 'Changa One', 'Knewave', 'Chewy']],
   ['Horror and creepy', ['Creepster', 'Nosifer', 'Eater', 'Metal Mania', 'Frijole', 'Rubik Wet Paint', 'Special Elite', 'Rubik Glitch']],
   ['Handwritten and marker', ['Permanent Marker', 'Rock Salt', 'Caveat Brush', 'Gloria Hallelujah', 'Kalam', 'Shrikhand', 'Pacifico', 'Lobster']],
