@@ -319,6 +319,8 @@ r.post('/api/assets/:id/cancel', (req, b, p) => {
 });
 r.post('/api/assets/:id/process', (req, b, p) => {
   const a = must(ctx.store.get('assets', p.id));
+  // Still importing/transcribing/analysing: mark it started, so clips are made the moment it's ready.
+  if (!a.started && ctx.store.find('jobs', (j) => j.payload?.assetId === a.id && ['queued', 'running'].includes(j.status))) { ctx.store.update('assets', a.id, { started: true }); events.publish('assets', { id: a.id }); return { started: true, note: 'Clips will be made as soon as this video is ready' }; }
   // Stuck or failed import: run the import again, then transcription and clip finding.
   if (!a.info || a.status === 'importing') { ctx.store.update('assets', a.id, { error: null }); return queue.enqueue('ingest.file', { assetId: a.id, autoProcess: true }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `ingest:${a.id}:${Date.now()}`, priority: 6 }); }
   if (a.info && !a.info.hasVideo) throw new HttpError(400, 'This is an audio-only file, so there is no picture to make shorts from. Upload the video file (.mp4) instead.');
