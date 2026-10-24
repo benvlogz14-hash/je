@@ -110,6 +110,9 @@ function remap(t, segs) {
  */
 async function renderShort(o) {
   ensureFonts();
+  // o.wide: the full-frame 16:9 version (1920×1080, nothing cropped) with the same cuts and captions.
+  const W = o.wide ? 1920 : 1080, H = o.wide ? 1080 : 1920;
+  if (o.wide) { const st = captions.resolveStyle(o.style); o = { ...o, style: { ...(o.style || {}), size: Math.round(st.size * 0.7), hookSize: Math.round((st.hookSize || st.size * 0.72) * 0.7) }, reframe: 'fit', facePath: null }; }
   const outDir = path.dirname(o.outPath);
   fs.mkdirSync(outDir, { recursive: true });
   const info = o.info || await ff.probe(o.source);

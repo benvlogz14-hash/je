@@ -8,7 +8,28 @@ import { dateTime, dur, providerLabel, actorName } from '../lib/format.js';
 export function ClipPlayer({ clip, version }) {
   const v = version || clip.currentVersion;
   if (!v) return html`<div class="phone" style="display:grid;place-items:center;color:#8a929b"><div class="col" style="align-items:center"><span class="spinner" /><span style="font-size:12px">${clip.status === 'rendering' ? `Rendering… ${clip.renderProgress ? `${clip.renderProgress}%` : 'waiting its turn'}` : clip.status === 'failed' ? `Couldn't render: ${clip.error || 'see the job list'}` : 'Not rendered yet'}</span></div></div>`;
-  return html`<div class="phone"><video key=${clip.id + ':' + v} src=${api.url(`/api/clips/${clip.id}/video?v=${v}`)} poster=${api.url(`/api/clips/${clip.id}/thumb?v=${v}`)} controls playsinline preload="metadata" /></div>`;
+  return html`<${ClipViews} clip=${clip} v=${v} />`;
+}
+
+/** The vertical render, the full-frame (16:9) render, or both side by side. */
+function ClipViews({ clip, v }) {
+  const ver = clip.versions?.[v - 1] || {}; const hasWide = !!ver.wide;
+  const [mode, setMode] = useState(() => { try { return localStorage.getItem('eu.clipView') || 'vertical'; } catch { return 'vertical'; } });
+  const pick = (m) => { setMode(m); try { localStorage.setItem('eu.clipView', m); } catch { /* private window */ } };
+  const show = hasWide ? mode : 'vertical';
+  const vertical = html`<div class="phone" style=${show === 'both' ? { height: '100%' } : null}><video key=${clip.id + ':' + v} src=${api.url(`/api/clips/${clip.id}/video?v=${v}`)} poster=${api.url(`/api/clips/${clip.id}/thumb?v=${v}`)} controls playsinline preload="metadata" /></div>`;
+  const wide = html`<div style="aspect-ratio:16/9;max-height:100%;max-width:100%;${show === 'both' ? 'flex:1;min-width:0;' : 'width:100%;'}border-radius:14px;overflow:hidden;background:#0d0f11;box-shadow:var(--shadow-3)"><video key=${clip.id + ':w' + v} src=${api.url(`/api/clips/${clip.id}/wide?v=${v}`)} controls playsinline preload="metadata" style="width:100%;height:100%;object-fit:contain;display:block" /></div>`;
+  const makeWide = () => act(async () => { await api.patch(`/api/clips/${clip.id}`, { wide: true }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: 'Rendering again with a full-frame version too' });
+  return html`<div class="col" style="gap:8px;height:100%;min-height:0;align-items:center">
+    <div class="row" style="gap:8px;flex:none">${hasWide ? html`<${Seg} value=${show} onChange=${pick} options=${[{ value: 'vertical', label: 'Vertical' }, { value: 'wide', label: 'Full frame' }, { value: 'both', label: 'Both' }]} />` : clip.status !== 'rendering' ? html`<${Button} size="sm" kind="ghost" icon="film" title="Render the same clip in full frame (16:9) too, to compare side by side" onClick=${makeWide}>${clip.wide ? 'Full frame comes with the next render' : 'Also make full-frame (16:9)'}</${Button}>` : null}</div>
+    <div class="row" style="gap:12px;flex:1;min-height:0;width:100%;justify-content:center;align-items:center">${show === 'wide' ? wide : vertical}</div>
+    ${show === 'both' ? html`<div style="position:fixed;inset:0;z-index:300;background:rgba(5,6,8,0.92);display:flex;flex-direction:column;padding:18px 24px;gap:12px" onClick=${(e) => { if (e.target === e.currentTarget) pick('vertical'); }}>
+      <div class="row" style="gap:10px;color:#fff"><b class="grow">${clip.title} · both sizes</b><${Button} size="sm" kind="soft" icon="x" onClick=${() => pick('vertical')}>Close</${Button}></div>
+      <div class="row" style="gap:24px;flex:1;min-height:0;align-items:center;justify-content:center">
+        <div class="phone" style="height:100%;flex:none"><video src=${api.url(`/api/clips/${clip.id}/video?v=${v}`)} controls playsinline preload="metadata" /></div>
+        <div style="flex:1;min-width:0;aspect-ratio:16/9;max-height:100%;border-radius:14px;overflow:hidden;background:#0d0f11"><video src=${api.url(`/api/clips/${clip.id}/wide?v=${v}`)} controls playsinline preload="metadata" style="width:100%;height:100%;object-fit:contain;display:block" /></div>
+      </div></div>` : null}
+  </div>`;
 }
 
 export function ClipDrawer({ id, onClose }) {

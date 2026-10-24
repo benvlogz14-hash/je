@@ -367,6 +367,7 @@ r.patch('/api/clips/:id', (req, b, p) => {
   if (b.musicVol !== undefined) patch.musicVol = b.musicVol === null ? null : Math.max(0, Math.min(1, Number(b.musicVol) || 0));
   if (b.musicTrack !== undefined) patch.musicTrack = b.musicTrack && /^(own|lib|gen)\/[a-z]+\/[^\\/]+$/.test(b.musicTrack) ? b.musicTrack : 'auto';
   if (b.visualCuts !== undefined) patch.visualCuts = !!b.visualCuts;
+  if (b.wide !== undefined) patch.wide = !!b.wide;
   if (b.keywords !== undefined) patch.keywords = Array.isArray(b.keywords) ? [...new Set(b.keywords.map((w) => String(w).toLowerCase().replace(/[^a-z0-9$%']/g, '')).filter(Boolean))].slice(0, 300) : null;
   if (patch.music !== undefined) patch.music = ['auto', 'off', ...require('./video/music').CLIP_MOODS].includes(patch.music) ? patch.music : 'auto'; // this clip's own caption look (over the client's)
   const u = ctx.store.update('clips', c.id, patch);
@@ -444,9 +445,10 @@ r.post('/api/clips/:id/decide', (req, b, p) => clipView(pipeline.decideClip(p.id
 r.post('/api/clips/:id/version', (req, b, p) => { const c = must(ctx.store.get('clips', p.id)); const n = Number(b.n); if (!c.versions[n - 1]) throw new HttpError(400, 'No such version'); return clipView(ctx.store.update('clips', c.id, { currentVersion: n })); });
 function versionFile(c, req, kind) {
   const n = Number(req.query.v || c.currentVersion); const v = must(c.versions?.[n - 1], 'Not rendered yet');
-  return { mp4: v.path, thumb: v.thumb, srt: v.srt, velo: v.velo, xml: v.xml }[kind];
+  return { mp4: v.path, wide: v.wide, thumb: v.thumb, srt: v.srt, velo: v.velo, xml: v.xml }[kind];
 }
 r.get('/api/clips/:id/video', (req, res, p) => serveFile(req, res, versionFile(must(ctx.store.get('clips', p.id)), req, 'mp4')), { stream: true });
+r.get('/api/clips/:id/wide', (req, res, p) => serveFile(req, res, must(versionFile(must(ctx.store.get('clips', p.id)), req, 'wide'), 'No full-frame version yet')), { stream: true });
 r.get('/api/clips/:id/thumb', (req, res, p) => serveFile(req, res, versionFile(must(ctx.store.get('clips', p.id)), req, 'thumb'), { cache: true }), { stream: true });
 r.get('/api/clips/:id/download/:kind', (req, res, p) => { const c = must(ctx.store.get('clips', p.id)); const f = must(versionFile(c, req, p.kind), 'No such file'); return serveFile(req, res, f, { download: `${c.ref}-${path.basename(f)}` }); }, { stream: true });
 r.post('/api/clips/:id/premiere', (req, b, p) => { const c = must(ctx.store.get('clips', p.id)); return queue.enqueue('premiere.handoff', { clipId: c.id, reason: 'manual' }, { clientId: c.clientId, actor: actorOf(req), title: `Premiere edit: ${c.title}` }); });

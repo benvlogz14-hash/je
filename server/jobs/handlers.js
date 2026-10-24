@@ -297,6 +297,21 @@ queue.register('render.short', {
         }
       } catch (e) { musicSheet = null; h.log(`Music skipped: ${e.message}`); }
     }
+    // Both sizes: the same cut, captions and music in full frame (16:9), for a side-by-side look.
+    let wideOut = null;
+    if (clip.wide) {
+      try {
+        h.progress(0.84, 'Rendering the full-frame version');
+        wideOut = outPath.replace(/\.mp4$/, '-wide.mp4');
+        const rw = await render.renderShort({ graphics: client.graphics, source: src.source, info: src.info, range: src.range, words: src.words, style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, keywords: clip.keywords || null, wide: true,
+          plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, silences: ((await pausesFor(asset)) || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
+          outPath: wideOut, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal });
+        if (musicSheet?.cues.some((c) => c.file) || Math.abs(voiceGain - 1) > 0.01) {
+          const tmp = wideOut.replace(/\.mp4$/, '.music.mp4');
+          if (await require('../video/music').scoreVideo({ video: wideOut, cues: musicSheet?.cues || [], out: tmp, duration: rw.duration, voice: voiceGain, volume: Number(clip.musicVol ?? client.production?.musicVolume ?? ctx.setting('production.musicVolume', 0.3)) })) fs.renameSync(tmp, wideOut);
+        }
+      } catch (e) { wideOut = null; h.log(`Full-frame version skipped: ${e.message}`); }
+    }
     if (assembled) { try { fs.unlinkSync(assembled); } catch { /* in use */ } }
     h.progress(0.85, 'Quality check');
     const qc = await ff.qualityCheck(outPath, { expectWidth: 1080, expectHeight: 1920, minSec: 5, maxSec: 180 });
@@ -307,7 +322,7 @@ queue.register('render.short', {
     fs.writeFileSync(velo, JSON.stringify(exporters.toVelo({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, focusX: clip.focusX }), null, 1));
     const xml = path.join(outDir, `v${n}.premiere.xml`);
     fs.writeFileSync(xml, exporters.toFcpXml({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end } }));
-    const version = { n, path: outPath, thumb, duration: r.duration, renderedAt: now(), encoder: r.encoder, qc: { passed: qc.passed, issues: qc.issues }, srt: r.srtPath, velo, xml, changes: clip.pendingChanges || null, captioned: !!transcript, look: (({ font, size, hookFont }) => ({ font: font || 'Montserrat', size, hookFont }))({ ...(client.style || {}), ...(clip.style || {}) }), cuts: covers.length, covers, music: musicSheet ? { how: musicSheet.how, cues: musicSheet.cues.map((c) => ({ start: Math.round(c.start * 10) / 10, end: Math.round(c.end * 10) / 10, mood: c.mood, why: c.why || '', track: c.track || null, source: c.source || null })) } : null };
+    const version = { n, path: outPath, ...(wideOut ? { wide: wideOut } : {}), thumb, duration: r.duration, renderedAt: now(), encoder: r.encoder, qc: { passed: qc.passed, issues: qc.issues }, srt: r.srtPath, velo, xml, changes: clip.pendingChanges || null, captioned: !!transcript, look: (({ font, size, hookFont }) => ({ font: font || 'Montserrat', size, hookFont }))({ ...(client.style || {}), ...(clip.style || {}) }), cuts: covers.length, covers, music: musicSheet ? { how: musicSheet.how, cues: musicSheet.cues.map((c) => ({ start: Math.round(c.start * 10) / 10, end: Math.round(c.end * 10) / 10, mood: c.mood, why: c.why || '', track: c.track || null, source: c.source || null })) } : null };
     ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), version], currentVersion: n, pendingChanges: null }));
     pipeline.afterQc(clip.id, qc);
     return { version: n, duration: r.duration, qc: qc.passed ? 'passed' : 'failed', encoder: r.encoder };
