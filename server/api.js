@@ -1013,6 +1013,29 @@ r.get('/api/projects/:id', (req, b, p) => must(ctx.store.get('projects', p.id)))
 // ---- AI editing (Studio's AI box, agents, and anything with an agent token)
 const editOps = require('./video/edit-ops');
 r.get('/api/projects/:id/summary', (req, b, p) => ({ text: editOps.summarize(must(ctx.store.get('projects', p.id))) }));
+// Studio "Add captions": caption pieces (with word timings) for the video clips on the timeline, from each video's
+// transcript. Videos without one are listed in `missing`; /api/studio/transcribe makes them.
+r.post('/api/studio/captions', (req, b) => {
+  const captions = require('./video/captions'); const st = { wordsPerLine: Math.max(1, Math.min(8, Number(b.wordsPerLine) || 3)), uppercase: b.uppercase !== false };
+  const out = []; const missing = new Set();
+  for (const c of (b.clips || []).slice(0, 500)) {
+    const t = require('./jobs/handlers').studioTranscript(String(c.path || '')); if (!t) { missing.add(c.path); continue; }
+    const speed = Math.abs(Number(c.speed) || 1); const a = Number(c.in) || 0; const z = a + (Number(c.duration) || 0) * speed;
+    for (const k of captions.captionChunks({ words: t.words || [], range: { start: a, end: z }, style: st })) {
+      out.push({ start: Number(c.start) + k.start / speed, duration: Math.max(0.2, (k.end - k.start) / speed), text: k.text, words: k.words.map((w) => ({ ...w, s: w.s / speed, e: w.e / speed })) });
+    }
+  }
+  return { captions: out.sort((x, y) => x.start - y.start), missing: [...missing] };
+});
+r.post('/api/studio/transcribe', (req, b) => {
+  const jobs = [];
+  for (const file of [...new Set(b.paths || [])].slice(0, 20)) {
+    if (!file || !fs.existsSync(file)) continue;
+    const a = ctx.store.find('assets', (x) => x.path === file);
+    jobs.push(a ? queue.enqueue('transcribe', { assetId: a.id }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `transcribe:${a.id}` }) : queue.enqueue('studio.transcribe', { path: file }, { actor: actorOf(req), dedupeKey: `studio.transcribe:${file}` }));
+  }
+  return { queued: jobs.length };
+});
 r.post('/api/projects/:id/ai-edit', async (req, b, p) => {
   let pr = must(ctx.store.get('projects', p.id));
   const instruction = String(b.instruction || '').trim(); if (!instruction) throw new HttpError(400, 'Tell the AI what to change.');

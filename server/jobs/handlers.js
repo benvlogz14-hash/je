@@ -120,6 +120,21 @@ queue.register('transcribe', {
   },
 });
 
+queue.register('studio.transcribe', {
+  title: (j) => `Transcribe ${path.basename(j.payload.path || '')} for captions`,
+  heavy: () => !!(ctx.setting('ai.transcription.localWhisperPath', '') && ctx.setting('ai.transcription.localWhisperModel', '')),
+  async run(job, h) {
+    const file = job.payload.path; if (!file || !fs.existsSync(file)) throw permanent('That video file is gone');
+    const a = { ...studioAsset(file), info: await ff.probe(file) };
+    if (!a.info.hasAudio) return { skipped: 'no audio' };
+    if (!ai.connected('openai') && !require('../setup/whisper').status().ready) {
+      try { await require('../setup/whisper').install({ progress: (f, t) => h.progress(0.02 + f * 0.08, `Installing free speech-to-text (one time): ${t || ''}`) }); } catch (e) { h.log(`Couldn't install speech-to-text: ${e.message}`); }
+    }
+    const t = await intel.transcribe(a, { jobId: job.id, onProgress: (p) => h.progress(0.1 + p * 0.85, 'Transcribing') });
+    return { engine: t.engine, words: t.words.length };
+  },
+});
+
 queue.register('analyze', {
   title: () => 'Analyze footage', heavy: true,
   async run(job, h) {
@@ -143,6 +158,17 @@ queue.register('analyze', {
 function loadAnalysis(asset) {
   const f = path.join(asset.workDir, `${asset.id}.analysis.json`);
   return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null;
+}
+
+/** A video used in Studio that isn't footage in Production: transcripts kept under <data>/studio/transcripts. */
+function studioAsset(file) {
+  const workDir = path.join(paths.root, 'studio', 'transcripts'); fs.mkdirSync(workDir, { recursive: true });
+  return { id: 'st' + require('crypto').createHash('sha1').update(file).digest('hex').slice(0, 16), path: file, workDir };
+}
+/** The transcript for any video file: its Production footage transcript, or one made for Studio. */
+function studioTranscript(file) {
+  const a = ctx.store.find('assets', (x) => x.path === file);
+  try { return loadTranscript(a || studioAsset(file)); } catch { return null; }
 }
 
 function loadTranscript(asset) {
@@ -674,4 +700,4 @@ queue.register('backup', {
   async run() { const f = ctx.store.backup(paths.backups()); audit.log('system', 'backup.created', { file: path.basename(f) }); return { file: f }; },
 });
 
-module.exports = { loadTranscript, loadAnalysis, faceTrackFor };
+module.exports = { loadTranscript, studioTranscript, loadAnalysis, faceTrackFor };
