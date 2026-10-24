@@ -149,7 +149,11 @@ function animParams(c) {
 function shiftKeys(c, dt) { for (const [o, k] of animParams(c)) if (o[k]?.keys?.length) o[k] = { ...o[k], keys: o[k].keys.map(([t, v]) => [qt(t + dt), v]) }; }
 const keyTimesOf = (c) => [...new Set(animParams(c).flatMap(([o, k]) => sortedKeys(o[k]).map((x) => x[0])))].sort((a, b) => a - b);
 const clone = (o) => JSON.parse(JSON.stringify(o));
-const isCaption = (c) => c && c.type === 3 && c.name !== 'Hook' && !!c.text;
+/** The opening title made with the clip (stays recognised after you rename it). */
+const isHook = (c) => c && c.type === 3 && (c.isHook || c.name === 'Hook');
+const isCaption = (c) => c && c.type === 3 && !isHook(c) && !!c.text;
+/** What a clip is called on the timeline: its name, or for titles and captions their text unless you renamed them. */
+const clipLabel = (c) => (c.type === 3 && !c.renamed ? c.text?.text || c.name || 'Title' : c.name || 'Clip');
 const TRACK_H = { 0: 48, 1: 40 };
 // Live scrubbing mutates the clip in place for instant preview; the original value is restored
 // right before the committing edit() so undo snapshots stay correct.
@@ -180,7 +184,7 @@ function Projects() {
     <div class="page-head"><div class="grow"><h1>Studio</h1><div class="sub">Edit by hand when automation needs a human touch. Projects use Velo's format, so they open in Velo too, and any clip can go to Premiere through Astra.</div></div>
       <${Button} kind="primary" icon="plus" onClick=${() => setCreating(true)}>New project</${Button}></div>
     ${loading ? html`<${Loading} />` : !(data || []).length ? html`<div class="panel"><${Empty} icon="studio" title="No projects yet" action=${html`<${Button} kind="soft" icon="plus" onClick=${() => setCreating(true)}>New project</${Button}>`}>Open any clip with "Open in Studio" to get a project pre-built with footage, captions and hook, or start from scratch.</${Empty}></div>` : html`
-      <div class="grid c3">${data.map((p) => html`<div class="panel pad" style="cursor:pointer" onClick=${() => { sfx('open'); navigate(`/studio/${p.id}`); }} onContextMenu=${(e) => openMenu(e, [{ label: 'Delete project', icon: 'trash', danger: true, onClick: async () => { if (await confirmDialog({ title: 'Delete project?', text: `"${p.name}" will be removed. Media files are not deleted.`, confirm: 'Delete' })) act(() => api.del(`/api/projects/${p.id}`), { ok: 'Deleted' }).then(reload); } }])}>
+      <div class="grid c3">${data.map((p) => html`<div class="panel pad" style="cursor:pointer" onClick=${() => { sfx('open'); navigate(`/studio/${p.id}`); }} onContextMenu=${(e) => openMenu(e, [{ label: 'Rename project', icon: 'edit', onClick: async () => { const v = await promptDialog({ title: 'Rename project', label: 'Project name', value: p.name || '', confirm: 'Rename' }); if (v && v.trim()) act(() => api.put(`/api/projects/${p.id}`, { name: v.trim() }), { ok: 'Renamed' }).then(reload); } }, { label: 'Delete project', icon: 'trash', danger: true, onClick: async () => { if (await confirmDialog({ title: 'Delete project?', text: `"${p.name}" will be removed. Media files are not deleted.`, confirm: 'Delete' })) act(() => api.del(`/api/projects/${p.id}`), { ok: 'Deleted' }).then(reload); } }])}>
         <div class="row"><div class="avatar" style="background:var(--slate-soft);color:var(--slate-ink)"><${Icon} name="studio" size=${17} /></div><div class="grow" style="min-width:0"><b class="ellipsis" style="display:block">${p.name || 'Untitled edit'}</b><div class="faint" style="font-size:var(--fs-sm)">${p.media} media · edited ${ago(p.updatedAt)}</div></div></div>
         ${(p.exports || []).length ? html`<div class="faint" style="font-size:var(--fs-xs);margin-top:10px">${p.exports.length} export${p.exports.length > 1 ? 's' : ''}</div>` : null}</div>`)}</div>`}
     ${creating ? html`<${NewProject} clients=${clients || []} onClose=${() => setCreating(false)} />` : null}
@@ -354,7 +358,8 @@ function Editor({ id }) {
     c.scaleX = anim(k); c.scaleY = anim(k); c.posX = anim(0); c.posY = anim(0); c.rotation = anim(0);
   });
   const setTransitions = (ids, type) => forGroup(ids, (c) => { if (type) { c.transIn = { type, duration: Math.min(0.5, c.duration / 3) }; c.transOut = { type, duration: Math.min(0.5, c.duration / 3) }; } else { c.transIn = { type: 0, duration: 0.5 }; c.transOut = { type: 0, duration: 0.5 }; } });
-  const renameClip = async (c) => { const v = await promptDialog({ title: 'Rename clip', label: 'Clip name', value: c.name || '' }); if (v != null && v.trim()) forGroup([c.id], (x) => { if (x.id === c.id) x.name = v.trim(); }); };
+  const renameClip = async (c) => { const v = await promptDialog({ title: 'Rename clip', label: 'Clip name (shown on the timeline)', value: clipLabel(c), confirm: 'Rename' }); if (v != null && v.trim()) forGroup([c.id], (x) => { if (x.id === c.id) { if (isHook(x)) x.isHook = true; x.name = v.trim().slice(0, 80); x.renamed = true; } }); };
+  const renameProject = async () => { const v = await promptDialog({ title: 'Rename project', label: 'Project name', value: proj.name || '', confirm: 'Rename' }); if (v == null || !v.trim()) return; await act(() => api.put(`/api/projects/${id}`, { data, name: v.trim() }), { ok: 'Renamed' }); setProj((p) => ({ ...p, name: v.trim().slice(0, 120) })); setDirty(false); };
   /** Extract Audio: write the clip's sound to its own file, put it on a free audio track, unlink it from the picture. */
   const extractAudio = async (c) => {
     const m = media[c.mediaId]; if (!m?.hasAudio) return toast('This clip has no audio', { kind: 'warn' });
@@ -469,6 +474,7 @@ function Editor({ id }) {
       else if (key === 's' && !mod) { e.preventDefault(); split(e.shiftKey); }
       else if (key === 'v') setTool('select');
       else if (key === 'c') setTool('razor');
+      else if (key === 'f2' && sel.length) { e.preventDefault(); const f = findClip(seq, sel[0]); if (f) renameClip(f.c); }
       else if (key === 't' && !mod) addText();
       else if ((key === 'delete' || key === 'backspace') && sel.length) { e.preventDefault(); remove(e.altKey); }
       else if (key === 'arrowleft') { e.preventDefault(); setT((x) => Math.max(0, x - (e.shiftKey ? 1 : 1 / (seq?.fps || 30)))); }
@@ -488,7 +494,7 @@ function Editor({ id }) {
   return html`<div style="position:absolute;inset:0;display:grid;grid-template-columns:minmax(0, 1fr);grid-template-rows:46px minmax(0, 1fr) minmax(210px, 38%);background:var(--ed-bg)">
     <div class="row" style="padding:0 12px;background:var(--surface);border-bottom:1px solid var(--line);gap:10px;min-width:0;overflow-x:auto">
       <${Button} kind="ghost" size="sm" icon="chevronLeft" title="All projects" onClick=${() => { if (dirty) save(true); navigate('/studio'); }} />
-      <b class="ellipsis" style="max-width:260px">${proj.name || 'Untitled edit'}</b><span class="faint tnum" style="font-size:var(--fs-sm)">${seq.width}×${seq.height} · ${seq.fps} fps</span>
+      <b class="ellipsis" style="max-width:260px;cursor:text" title="Click to rename the project" onClick=${renameProject}>${proj.name || 'Untitled edit'}</b><span class="faint tnum" style="font-size:var(--fs-sm)">${seq.width}×${seq.height} · ${seq.fps} fps</span>
       <span class="faint" style="font-size:var(--fs-xs)">${dirty ? 'Unsaved changes' : 'Saved'}</span>
       <div class="spacer" />
       <div class="btn-group"><button class=${tool === 'select' ? 'on' : ''} title="Selection (V)" onClick=${() => { sfx('tap'); setTool('select'); }}><${Icon} name="pointer" size=${14} /></button><button class=${tool === 'razor' ? 'on' : ''} title="Razor (C)" onClick=${() => { sfx('tap'); setTool('razor'); }}><${Icon} name="scissors" size=${14} /></button><button title="Add title (T)" onClick=${addText}><${Icon} name="type" size=${14} /></button></div>
@@ -620,7 +626,7 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
     setLook(id); const v = (LOOKS.find((l) => l.id === id) || LOOKS[0]).v;
     edit((d, s) => { for (const tr of s.videoTracks) for (const c of tr.clips) {
       if (isCaption(c)) c.text = { ...c.text, ...lookText(v, false) };
-      else if (c.type === 3 && c.name === 'Hook' && c.text) { c.text = { ...c.text, ...lookText(v, true) }; c.rotation = { base: v.hookTilt || 0 }; }
+      else if (isHook(c) && c.text) { c.text = { ...c.text, ...lookText(v, true) }; c.rotation = { base: v.hookTilt || 0 }; }
     } });
     sfx('tap');
   };
@@ -1228,7 +1234,7 @@ function ParamField({ label, p, d = 0, mult = 1, lt = 0, inClip = true, min, max
 
 function EffectControls({ selected, seq, edit, media, t, setT, onEditTitle }) {
   if (!selected) return html`<div style="background:var(--ed-panel);border-left:1px solid var(--line);padding:14px"><div class="eyebrow">Effect controls</div><p class="faint" style="font-size:var(--fs-sm);margin-top:10px">Select a clip on the timeline to adjust and animate position, scale, rotation, opacity, volume, speed, effects and transitions.</p>
-    <div class="divider" /><div class="eyebrow">Shortcuts</div><div class="col" style="gap:4px;margin-top:8px;font-size:var(--fs-sm)" class="muted">${[['Space', 'Play / pause'], ['J K L', 'Shuttle'], ['S', 'Split selected'], ['Shift S', 'Split all tracks'], ['Del', 'Delete'], ['Alt Del', 'Ripple delete'], ['V / C / T', 'Select / razor / title'], ['Ctrl Z', 'Undo'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl D', 'Duplicate'], ['Ctrl R', 'Speed / duration'], ['Shift E', 'Enable / disable'], ['Right-click', 'All clip tools'], ['Drop on a clip', 'Pushes it down a layer'], ['Shift + drop', 'Pushes it up instead'], ['Ctrl + drop', 'Replaces it'], ['+ / −', 'Zoom timeline']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="faint">${d}</span></div>`)}</div></div>`;
+    <div class="divider" /><div class="eyebrow">Shortcuts</div><div class="col" style="gap:4px;margin-top:8px;font-size:var(--fs-sm)" class="muted">${[['Space', 'Play / pause'], ['J K L', 'Shuttle'], ['S', 'Split selected'], ['Shift S', 'Split all tracks'], ['Del', 'Delete'], ['Alt Del', 'Ripple delete'], ['V / C / T', 'Select / razor / title'], ['Ctrl Z', 'Undo'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl D', 'Duplicate'], ['Ctrl R', 'Speed / duration'], ['F2', 'Rename clip'], ['Shift E', 'Enable / disable'], ['Right-click', 'All clip tools'], ['Drop on a clip', 'Pushes it down a layer'], ['Shift + drop', 'Pushes it up instead'], ['Ctrl + drop', 'Replaces it'], ['+ / −', 'Zoom timeline']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="faint">${d}</span></div>`)}</div></div>`;
   const c = selected.c;
   // Live-preview while dragging a slider (mutate in place); commit one undo step on release.
   const [, force] = useState(0);
@@ -1242,7 +1248,8 @@ function EffectControls({ selected, seq, edit, media, t, setT, onEditTitle }) {
     onLive=${(v) => { liveSet(c, 'scaleX', v, c.id + 'sx'); liveSet(c, 'scaleY', clone(v), c.id + 'sy'); }} onCommit=${(v) => setRaw((x) => { x.scaleX = v; x.scaleY = clone(v); })} />`;
   return html`<div style="background:var(--ed-panel);border-left:1px solid var(--line);overflow:auto;padding:12px 14px">
     <div class="row"><span class="eyebrow grow">Effect controls</span><span class="badge outline">${['Video', 'Audio', 'Image', 'Title', 'Nested'][c.type]}</span></div>
-    <div class="ellipsis" style="font-weight:600;margin:6px 0 4px">${c.name || media[c.mediaId]?.name || 'Clip'}</div>
+    <input class="input sm" style="font-weight:600;margin:6px 0 4px;width:100%" key=${c.id} value=${c.type === 3 && !c.renamed ? clipLabel(c) : c.name || media[c.mediaId]?.name || 'Clip'} title="Clip name: type a new one and press Enter (F2 also renames)" aria-label="Clip name"
+      onKeyDown=${(e) => { if (e.key === 'Enter') e.target.blur(); e.stopPropagation(); }} onChange=${(e) => { const v = e.target.value.trim().slice(0, 80); if (v) setRaw((x) => { if (isHook(x)) x.isHook = true; x.name = v; x.renamed = true; }); }} />
     <div class="faint" style="font-size:var(--fs-xs);margin-bottom:8px">${inClip ? html`Playhead ${lt.toFixed(2)}s into this clip. Click <${Icon} name="clock" size=${11} /> to animate a setting, then move the playhead and change the value to add keyframes.` : 'Move the playhead over this clip to set keyframes.'}</div>
     ${c.type === 3 ? html`<div class="col" style="gap:8px;margin-bottom:10px">
       <${Button} size="sm" kind="lav" icon="type" onClick=${() => onEditTitle?.(c.id)}>Edit title, style & animation…</${Button}>
@@ -1337,6 +1344,8 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
   useEffect(() => {
     if (!drag) return;
     const move = (e) => {
+      // Button already up (a quick click can release before this listener exists): end the drag instead of dragging a loose clip.
+      if (!(e.buttons & 1)) { setDrag(null); return; }
       const ds = (e.clientX - drag.startX) / zoom; if (!drag.moved && Math.abs(e.clientX - drag.startX) < 3 && Math.abs(e.clientY - drag.startY) < 4) return;
       const o = drag.orig[drag.clipId]; let dt = ds;
       if (drag.mode === 'move') { const ns = doSnap(o.start + ds, e.altKey, new Set([o.start, o.start + o.duration])); const ne = doSnap(o.start + o.duration + ds, e.altKey, new Set([o.start, o.start + o.duration])); dt = Math.abs(ns - (o.start + ds)) <= Math.abs(ne - (o.start + o.duration + ds)) ? ns - o.start : ne - o.start - o.duration; dt = Math.max(-Math.min(...Object.values(drag.orig).map((x) => x.start)), dt); }
@@ -1425,9 +1434,9 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
           </div>
           <div style=${{ position: 'relative', flex: 1, background: lane.tr.locked ? 'repeating-linear-gradient(135deg, transparent 0 6px, var(--surface-3) 6px 7px)' : 'transparent', opacity: lane.tr.muted ? 0.5 : 1 }} onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => onDropMedia(e, lane)} onPointerDown=${() => setSel([])}>
             ${lane.tr.clips.map((c) => { const v = view(c); const isSel = sel.includes(c.id); const colors = c.type === 1 ? ['--clip-a', '--clip-a-line'] : c.type === 3 ? ['--clip-t', '--clip-t-line'] : ['--clip-v', '--clip-v-line'];
-              return html`<div key=${c.id} title=${c.name} onContextMenu=${(e) => onClipMenu(e, c)} onDblClick=${() => { if (c.type === 3) onEditTitle(c.id); }} onPointerDown=${(e) => { if (e.button === 2) return; onClipDown(e, c, lane); }} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(4, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
+              return html`<div key=${c.id} title=${clipLabel(c)} onContextMenu=${(e) => onClipMenu(e, c)} onDblClick=${() => { if (c.type === 3) onEditTitle(c.id); }} onPointerDown=${(e) => { if (e.button === 2) return; onClipDown(e, c, lane); }} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(4, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
                 ${c.type === 0 && media[c.mediaId] && xOf(v.duration) > 50 ? html`<div style=${{ position: 'absolute', inset: 0, backgroundImage: `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(media[c.mediaId].path)}&t=${Math.round(c.in || 0) + 1}`)})`, backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x', opacity: 0.45 }} />` : null}
-                <div class="ellipsis" style="position:relative;font-size:11px;font-weight:600;padding:3px 7px;color:var(--ink)">${c.type === 3 ? (c.text?.text || 'Title') : c.name}${c.effects?.length ? ' ·fx' : ''}${(c.speed || 1) !== 1 ? ` · ${Math.round((c.speed || 1) * 100)}%` : ''}</div>
+                <div class="ellipsis" style="position:relative;font-size:11px;font-weight:600;padding:3px 7px;color:var(--ink)">${clipLabel(c)}${c.effects?.length ? ' ·fx' : ''}${(c.speed || 1) !== 1 ? ` · ${Math.round((c.speed || 1) * 100)}%` : ''}</div>
                 ${keyTimesOf(c).map((kt) => html`<span title=${`Keyframe at ${kt.toFixed(2)}s`} style=${{ position: 'absolute', left: Math.max(0, xOf(kt) - 4) + 'px', bottom: '3px', width: '7px', height: '7px', background: 'var(--gold)', border: '1px solid var(--gold-ink)', transform: 'rotate(45deg)', pointerEvents: 'none' }} />`)}
                 ${c.transIn?.type ? html`<div style=${{ position: 'absolute', left: 0, top: 0, bottom: 0, width: xOf(c.transIn.duration) + 'px', background: 'linear-gradient(90deg, rgba(0,0,0,0.25), transparent)' }} />` : null}
                 ${c.transOut?.type ? html`<div style=${{ position: 'absolute', right: 0, top: 0, bottom: 0, width: xOf(c.transOut.duration) + 'px', background: 'linear-gradient(270deg, rgba(0,0,0,0.25), transparent)' }} />` : null}

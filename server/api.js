@@ -1062,7 +1062,8 @@ r.put('/api/projects/:id', (req, b, p) => {
   const known = Object.fromEntries((pr.data?.media || []).map((m) => [m.id, m]));
   for (const m of b.data?.media || []) { const k = known[m.id]; if (k && k.proxy && !m.proxy) { m.proxy = k.proxy; m.proxyPending = false; } }
   // Only touch the name when one is sent (autosaves send data only; an undefined name used to wipe it).
-  return ctx.store.update('projects', p.id, { data: b.data, ...(b.name ? { name: String(b.name).slice(0, 120) } : {}) });
+  // A rename alone (no data) keeps the project's contents.
+  return ctx.store.update('projects', p.id, { ...(b.data ? { data: b.data } : {}), ...(b.name ? { name: String(b.name).slice(0, 120) } : {}) });
 });
 r.del('/api/projects/:id', (req, b, p) => ({ ok: ctx.store.remove('projects', p.id) }));
 r.get('/api/projects/:id/export-defaults', (req, b, p) => {
