@@ -25,10 +25,11 @@ async function transcribe(asset, { jobId, onProgress } = {}) {
     const wav = path.join(asset.workDir, `${asset.id}.wav`);
     await ff.extractWav(asset.path, wav);
     const outBase = path.join(asset.workDir, `${asset.id}.whisper`);
-    await run(localBin, ['-m', localModel, '-f', wav, '-oj', '-ml', '1', '-sow', '-of', outBase], {
-      timeoutMs: 6 * 3600000, priority: ff.priorityValue(),
-      onStderrLine: (l) => { const m = /progress\s*=\s*(\d+)%/.exec(l); if (m && onProgress) onProgress(Number(m[1]) / 100); },
-    });
+    // Word timing: DTW alignment gives much tighter word times (whisper.cpp 1.6+); older builds run without it.
+    const base = ['-m', localModel, '-f', wav, '-oj', '-ml', '1', '-sow', '-of', outBase];
+    const opts = { timeoutMs: 6 * 3600000, priority: ff.priorityValue(), onStderrLine: (l) => { const m = /progress\s*=\s*(\d+)%/.exec(l); if (m && onProgress) onProgress(Number(m[1]) / 100); } };
+    const dtw = /base\.en/i.test(localModel) ? 'base.en' : /small\.en/i.test(localModel) ? 'small.en' : /tiny\.en/i.test(localModel) ? 'tiny.en' : null;
+    try { await run(localBin, dtw ? [...base, '--dtw', dtw] : base, opts); } catch (e) { if (!dtw) throw e; await run(localBin, base, opts); }
     const j = JSON.parse(fs.readFileSync(outBase + '.json', 'utf8'));
     const words = (j.transcription || []).map((t) => ({ w: t.text.trim(), s: t.offsets.from / 1000, e: t.offsets.to / 1000 })).filter((w) => w.w);
     result = { engine: 'whisper.cpp (local)', text: words.map((w) => w.w).join(' '), words, segments: segmentsFromWords(words) };
@@ -53,6 +54,11 @@ async function transcribe(asset, { jobId, onProgress } = {}) {
     const e = new Error('No speech-to-text yet. Euclidean tried to install the free one and could not; press Install on the speech-to-text item in Settings.');
     e.notConnected = true; throw e;
   }
+  // Line the words up with the picture when the file's sound starts later than its video.
+  try {
+    const off = (await ff.probe(asset.path)).audioOffset || 0;
+    if (off > 0.02) { result.words = result.words.map((w) => ({ ...w, s: w.s + off, e: w.e + off })); result.segments = (result.segments || []).map((x) => ({ ...x, s: x.s + off, e: x.e + off })); result.audioOffset = off; }
+  } catch { /* keep as is */ }
   fs.writeFileSync(cache, JSON.stringify(result));
   return result;
 }

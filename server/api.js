@@ -345,7 +345,7 @@ r.get('/api/assets/:id/transcript-file/:fmt', (req, res, p) => {
   res.writeHead(200, { 'Content-Type': type, 'Content-Disposition': `${req.query.download ? 'attachment' : 'inline'}; filename="${base}.${p.fmt === 'srt' ? 'srt' : 'txt'}"`, 'Cache-Control': 'no-store' });
   return res.end(body);
 }, { stream: true });
-r.post('/api/assets/:id/transcribe', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); if (a.info && !a.info.hasAudio) throw new HttpError(400, 'This video has no sound to transcribe.'); return queue.enqueue('transcribe', { assetId: a.id }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `transcribe:${a.id}:${Date.now()}` }); });
+r.post('/api/assets/:id/transcribe', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); if (a.info && !a.info.hasAudio) throw new HttpError(400, 'This video has no sound to transcribe.'); try { fs.unlinkSync(path.join(a.workDir, `${a.id}.transcript.json`)); } catch { /* none yet */ } /* a fresh transcript (new timing fixes) */ return queue.enqueue('transcribe', { assetId: a.id }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `transcribe:${a.id}:${Date.now()}` }); });
 r.get('/api/assets/:id/transcript', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); return require('./jobs/handlers').loadTranscript(a) || { words: [], segments: [] }; });
 r.del('/api/assets/:id', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); ctx.store.remove('assets', a.id); audit.log(actorOf(req), 'footage.removed', { clientId: a.clientId, assetId: a.id }); return { ok: true }; }, { roles: OWNER });
 

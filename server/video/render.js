@@ -40,13 +40,20 @@ function rel(p) { return path.relative(paths.root, p).split(path.sep).join('/').
  * Compute kept segments inside [start,end] by removing pauses between words
  * longer than `maxGap`. Returns absolute source segments.
  */
-function keptSegments(words, start, end, maxGap = 0.55, pad = 0.12) {
+function keptSegments(words, start, end, maxGap = 0.55, pad = 0.12, silences = null) {
   const inRange = words.filter((w) => w.e > start && w.s < end);
   if (inRange.length < 3) return [[start, end]];
   const segs = []; let segStart = start;
   for (let i = 1; i < inRange.length; i++) {
-    const gapStart = inRange[i - 1].e, gapEnd = inRange[i].s;
+    let gapStart = inRange[i - 1].e, gapEnd = inRange[i].s;
     if (gapEnd - gapStart > maxGap) {
+      // Only cut where the sound really is quiet: word times can be off, and cutting through speech chops sentences.
+      if (silences) {
+        const quiet = silences.filter(([a, b]) => a < gapEnd && b > gapStart);
+        if (!quiet.length) continue;
+        gapStart = Math.max(gapStart, Math.min(...quiet.map(([a]) => a))); gapEnd = Math.min(gapEnd, Math.max(...quiet.map(([, b]) => b)));
+        if (gapEnd - gapStart < maxGap * 0.8) continue;
+      }
       segs.push([segStart, Math.min(end, gapStart + pad)]);
       segStart = Math.max(start, gapEnd - pad);
     }
@@ -115,7 +122,7 @@ async function renderShort(o) {
     if (last && a <= last[1] + 0.35) last[1] = Math.max(last[1], b); else parts.push([a, b]); // overlapping or touching pieces become one, so captions stay in sync
   }
   const ranges = parts.length ? parts : [[start, end]];
-  let segs = ranges.flatMap(([a, b]) => (plan.silenceCut && o.words?.length ? keptSegments(o.words, a, b) : plan.silenceCut && plan.silences?.length ? cutPauses(plan.silences, a, b) : [[a, b]]));
+  let segs = ranges.flatMap(([a, b]) => (plan.silenceCut && o.words?.length ? keptSegments(o.words, a, b, 0.55, 0.12, plan.silences?.length ? plan.silences : null) : plan.silenceCut && plan.silences?.length ? cutPauses(plan.silences, a, b) : [[a, b]]));
   // Cut repeated takes and false starts (keeps the last take of each line).
   if (plan.retakeCut !== false && o.words?.length) {
     const rt = require('./retakes'); const inRange = o.words.filter((w) => w.e > start && w.s < end);
