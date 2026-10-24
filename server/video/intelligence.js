@@ -136,7 +136,7 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
     onProgress(0.25, 'Listening for voiceover');
     const sig = await montage.signals({ asset, transcript, vision, analysis });
     onProgress(0.4, 'Scoring every moment');
-    const cands = montage.candidates(sig, { minSec, maxSec, duration, exclude, limit: 24 });
+    const cands = montage.candidates(sig, { minSec, maxSec, duration, exclude, limit: 24, storyCuts: prod.storyCuts === true || ctx.setting('production.storyCuts', false) === true });
     if (cands.length) {
       const name = cleanName(asset.name);
       const fallback = (c, i) => ({ start: c.start, end: c.end, keep: c.keep, score: Math.round(c.score), title: `${name} · Part ${i + 1}`.slice(0, 80), hook: hookFrom(c.text) || name.split(/\s+[-|:·]\s+/)[0].split(/\s+/).slice(0, 7).join(' '), caption: '', hashtags: [], reason: `Picked for: ${c.why.join(', ') || 'steady speech'}`, punchIns: zoomsFor(c, analysis) });

@@ -109,7 +109,11 @@ async function renderShort(o) {
   const start = Math.max(0, o.range.start), end = Math.min(info.duration || o.range.end, o.range.end);
   const plan = o.plan || {};
   // Story cuts: only the kept sentences (whole sentences, in order), each with its pauses trimmed.
-  const parts = (plan.keep || []).map(([a, b]) => [Math.max(start, a), Math.min(end, b)]).filter(([a, b]) => b - a > 0.3);
+  const parts = [];
+  for (const [a, b] of (plan.keep || []).map(([x, y]) => [Math.max(start, x), Math.min(end, y)]).filter(([x, y]) => y - x > 0.3).sort((x, y) => x[0] - y[0])) {
+    const last = parts[parts.length - 1];
+    if (last && a <= last[1] + 0.35) last[1] = Math.max(last[1], b); else parts.push([a, b]); // overlapping or touching pieces become one, so captions stay in sync
+  }
   const ranges = parts.length ? parts : [[start, end]];
   let segs = ranges.flatMap(([a, b]) => (plan.silenceCut && o.words?.length ? keptSegments(o.words, a, b) : plan.silenceCut && plan.silences?.length ? cutPauses(plan.silences, a, b) : [[a, b]]));
   // Cut repeated takes and false starts (keeps the last take of each line).

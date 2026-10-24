@@ -115,8 +115,8 @@ function scoreWindow(s, e, sig, kept = null) {
 }
 
 /** Candidate windows that start and end on whole sentences, within min..max seconds. */
-function candidates(sig, { minSec, maxSec, duration, exclude = [], limit = 40 }) {
-  const out = []; const S = sig.sents; const span = Math.min(150, Math.max(maxSec * 2.2, maxSec + 20));
+function candidates(sig, { minSec, maxSec, duration, exclude = [], limit = 40, storyCuts = false }) {
+  const out = []; const S = sig.sents; const span = storyCuts ? Math.min(150, Math.max(maxSec * 2.2, maxSec + 20)) : maxSec;
   for (let i = 0; i < S.length; i++) {
     for (let j = i; j < S.length; j++) {
       const s = Math.max(0, S[i].s - 0.15); const e = Math.min(duration, S[j].e + 0.25); const len = e - s;
@@ -125,7 +125,7 @@ function candidates(sig, { minSec, maxSec, duration, exclude = [], limit = 40 })
       if (len <= maxSec) {
         if (len < minSec) continue;
         out.push({ start: Math.round(s * 100) / 100, end: Math.round(e * 100) / 100, ...scoreWindow(s, e, sig), text: S.slice(i, j + 1).map((x) => x.t).join(' ') });
-      } else if (j - i >= 3) {
+      } else if (storyCuts && j - i >= 3) {
         // Story cut: keep the opening hook and the ending, drop the weakest whole sentences in between until it fits.
         const kept = condense(S.slice(i, j + 1), maxSec, sig);
         if (!kept) continue;
@@ -183,7 +183,8 @@ function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, blac
     return false;
   };
   // 1. Black fades inside the clip (the voice keeps going): always covered with a good shot.
-  for (const [x, y] of black) { if (y <= start + 0.1 || x >= end - 0.1) continue; const at = Math.max(start, x - 0.3); place(at, Math.min(end - at, Math.max(1.5, y - x + 0.6))); }
+  // Only true black fades (short), at most two per clip: dark scenes are not black and stay as they are.
+  for (const [x, y] of black.filter(([a, b]) => b > start + 0.1 && a < end - 0.1 && b - a <= 2.5).slice(0, 2)) { const at = Math.max(start, x - 0.3); place(at, Math.min(end - at, Math.max(1.5, y - x + 0.6))); }
   const busy = (a, b) => out.some((c) => c.at < b + gap && c.at + c.dur > a - gap);
   const here = shots.filter((x) => x.s < end && x.e > start);
   // 2. Weak stretches: a poor or static shot, someone talking with little movement, or any shot held too long (strong ones may run longer).
@@ -200,9 +201,9 @@ function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, blac
 
 /** Black frames in the footage (fades, flashes), cached: [[start, end], ...] in seconds. */
 async function blackIntervals(file, workDir) {
-  const cache = path.join(workDir || path.dirname(file), `${path.basename(file).replace(/\.[^.]+$/, '')}.black.json`);
+  const cache = path.join(workDir || path.dirname(file), `${path.basename(file).replace(/\.[^.]+$/, '')}.black2.json`);
   try { return JSON.parse(fs.readFileSync(cache, 'utf8')); } catch { /* measure */ }
-  const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-i', file, '-an', '-vf', 'fps=10,scale=240:-2,blackdetect=d=0.08:pix_th=0.12:pic_th=0.92', '-f', 'null', '-'], { timeoutMs: 3600000, priority: ff.priorityValue() });
+  const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-i', file, '-an', '-vf', 'fps=10,scale=240:-2,blackdetect=d=0.12:pix_th=0.04:pic_th=0.98', '-f', 'null', '-'], { timeoutMs: 3600000, priority: ff.priorityValue() });
   const out = [...String(r.err || '').matchAll(/black_start:([\d.]+) black_end:([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
   try { fs.writeFileSync(cache, JSON.stringify(out)); } catch { /* read-only */ }
   return out;
