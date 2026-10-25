@@ -300,6 +300,24 @@ queue.register('render.short', {
         }
       } catch (e) { covers = []; assembled = null; h.log(`Visual cuts skipped: ${e.message}`); }
     }
+    // Black stretches in this clip's part of the footage are found before rendering (only these seconds are scanned) and
+    // covered with good shots now, so the clip renders once. The check after rendering stays as a safety net.
+    try {
+      const montage = require('../video/montage');
+      const pre = (await montage.blackInRange(asset.path, clip.start, clip.end)).filter(([a, b]) => b - a >= 0.2);
+      const open = pre.filter(([a, b]) => !covers.some((c) => c.at <= a + 0.05 && c.at + c.dur >= b - 0.05));
+      if (open.length) {
+        const vis = require('../video/vision').cached(asset.path, asset.workDir);
+        const extra = await montage.coverBlack({ forced: open, start: clip.start, end: clip.end, duration: asset.info?.duration || clip.end, shots: vis?.shots || [], scenes: loadAnalysis(asset)?.scenes || [], black: [...open], used: covers.map((c) => [c.src, c.src + c.dur]), isDark: (a, d) => montage.darkAt(asset.path, a, d).catch(() => false) });
+        if (extra.length) {
+          covers = [...covers.filter((c) => !extra.some((x) => c.at < x.at + x.dur && c.at + c.dur > x.at)), ...extra].sort((a, b) => a.at - b.at);
+          assembled = path.join(outDir, `v${n}-assembled.mp4`); fs.mkdirSync(outDir, { recursive: true });
+          await montage.assemble({ source: asset.path, info: asset.info, start: clip.start, end: clip.end, covers, out: assembled, signal: h.signal });
+          src = { source: assembled, info: await ff.probe(assembled), range: { start: 0, end: clip.end - clip.start }, words: (transcript?.words || []).filter((w) => w.e > clip.start && w.s < clip.end).map((w) => ({ ...w, s: w.s - clip.start, e: w.e - clip.start })), facePath: facePath ? facePath.map((p) => ({ ...p, t: p.t - clip.start })) : null };
+          h.log(`Covered ${open.length} black stretch${open.length > 1 ? 'es' : ''} before rendering`);
+        }
+      }
+    } catch (e) { h.log(`Black check before rendering skipped: ${e.message}`); }
     h.progress(0.12, `Rendering v${n}`);
     const pauses = (await pausesFor(asset)) || [];
     const renderArgs = () => ({ facePath: src.facePath, graphics: client.graphics,

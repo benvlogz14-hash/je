@@ -311,4 +311,10 @@ async function darkAt(file, src, dur) {
   return !ys.length || ys.some((y) => y < 28);
 }
 
-module.exports = { darkAt, coverBlack, outputToSource, reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
+/** Black or near-black stretches inside one part of a video (source seconds); only that part is decoded, so it takes a second or two. */
+async function blackInRange(file, start, end) {
+  const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-ss', Math.max(0, start).toFixed(2), '-t', Math.max(0.5, end - start).toFixed(2), '-i', file, '-an', '-vf', 'fps=10,scale=240:-2,blackdetect=d=0.2:pix_th=0.10:pic_th=0.90', '-f', 'null', '-'], { timeoutMs: 300000, priority: ff.priorityValue() });
+  return [...String(r.err || '').matchAll(/black_start:([\d.]+) black_end:([\d.]+)/g)].map((m) => [start + Number(m[1]), start + Number(m[2])]);
+}
+
+module.exports = { blackInRange, darkAt, coverBlack, outputToSource, reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
