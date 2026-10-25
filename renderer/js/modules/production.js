@@ -110,7 +110,7 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
       <div class="avatar lg" style="background:var(--teal-soft);color:var(--teal-ink)"><${Icon} name="upload" size=${20} /></div>
       <div class="grow"><b>Drop footage here</b><div class="muted" style="font-size:var(--fs-sm)">${target ? `For ${clients.find((c) => c.id === target)?.name}. Transcription and clip discovery start automatically.` : clients.length ? 'Choose the client in the menu at the top right, then drop footage.' : 'Footage is filed under a client. Create your first one (just a name) and drop away.'}</div>
         ${!clients.length ? html`<div style="margin-top:8px"><${Button} size="sm" kind="soft" icon="plus" onClick=${async () => { const c = await quickClient().catch(() => null); if (c) setClientId(c.id); }}>Create your first client</${Button}></div>` : null}
-        ${target ? html`<${ClipLength} client=${clients.find((c) => c.id === target)} /><${MusicSwitch} client=${clients.find((c) => c.id === target)} /><${AiTips} client=${clients.find((c) => c.id === target)} /><${BrollSwitch} client=${clients.find((c) => c.id === target)} />` : null}
+        ${target ? html`<${ClipLength} client=${clients.find((c) => c.id === target)} /><${MusicSwitch} client=${clients.find((c) => c.id === target)} /><${AiTips} client=${clients.find((c) => c.id === target)} /><${BrollSwitch} client=${clients.find((c) => c.id === target)} /><${WideSwitch} client=${clients.find((c) => c.id === target)} />` : null}
         ${uploads.map((u) => html`<div style="margin-top:8px"><div class="row" style="font-size:var(--fs-sm)"><span class="grow ellipsis">${u.name}</span><span class="tnum faint">${Math.round(u.p * 100)}%</span></div><${Progress} value=${u.p} /></div>`)}</div>
       <div class="col" style="gap:6px">${(() => { const tc = clients.find((c) => c.id === target); const waitOn = tc?.production?.waitForStart !== false && !tc?.schedule?.autopilot;
           // Shows as soon as footage is uploaded (not only once it's ready): pressing it early makes clips the moment the video is ready.
@@ -159,6 +159,12 @@ function AiTips({ client }) {
     <textarea class="textarea" rows="2" value=${tips} placeholder="e.g. Focus on the drone shots and the reveal at the end. Skip the intro and the sponsor read. Funny moments first." onInput=${(e) => setTips(e.target.value)} onBlur=${() => { if (tips !== (p.aiTips || '')) save({ aiTips: tips.slice(0, 1000) }, tips.trim() ? 'Tips saved; used when clips are picked' : 'Tips cleared'); }} aria-label="Tips for the AI" />
     <div class="row" style="gap:8px;align-items:center"><${Toggle} on=${wait} onChange=${(x) => save({ waitForStart: x }, x ? 'New footage waits for "Make clips"' : 'New footage makes clips right away')} label="Wait for Make clips" /><span style="font-size:var(--fs-sm)">Wait for me to press <b>Make clips</b></span><span class="faint" style="font-size:var(--fs-xs)">${wait ? 'footage gets transcribed, then waits so you can change these first' : 'clips start as soon as footage is in'}</span></div>
   </div>`;
+}
+
+/** Every new clip also rendered full frame (16:9), so Vertical / Full frame / Both can be compared on the clip. */
+function WideSwitch({ client }) {
+  const on = !!client?.production?.wide;
+  return html`<div class="row" style="gap:8px;align-items:center;margin-top:10px" onClick=${(e) => e.stopPropagation()}><${Toggle} on=${on} onChange=${(x) => act(() => api.patch(`/api/clients/${client.id}`, { production: { wide: x } }), { ok: x ? 'New clips also get a full-frame (16:9) version' : 'Full-frame versions off', sound: 'tap' })} label="Full frame too" /><span class="label">Full frame too</span><span class="faint" style="font-size:var(--fs-xs)">${on ? 'each new clip also gets a 16:9 version; open a clip and pick Both to compare' : 'off (or turn it on per clip above its video)'}</span></div>`;
 }
 
 /** Extra B-roll edit per video: a dramatic, music-only cut-through of the best shots. Off unless switched on. */

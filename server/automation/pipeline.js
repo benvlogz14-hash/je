@@ -73,7 +73,7 @@ function createClips(asset, discovered) {
     const clip = ctx.store.insert('clips', {
       ref: nextRef(), clientId: asset.clientId, assetId: asset.id, start: d.start, end: d.end, title: d.title || 'Untitled clip', hook: d.hook || '', caption: d.caption || '',
       hashtags: (d.hashtags || []).map((h) => String(h).replace(/^#/, '')).slice(0, 12), score: d.score ?? null, keep: Array.isArray(d.keep) ? d.keep : null, reason: d.reason || '', method: discovered.method, agent: d.agent || null,
-      punchIns: prod.punchIns ? (d.punchIns || []) : [], reframe: prod.reframe || 'smart-blur', focusX: prod.focusX ?? 0.5, silenceCut: prod.silenceCut !== false, retakeCut: prod.retakeCut !== false,
+      wide: !!prod.wide, punchIns: prod.punchIns ? (d.punchIns || []) : [], reframe: prod.reframe || 'smart-blur', focusX: prod.focusX ?? 0.5, silenceCut: prod.silenceCut !== false, retakeCut: prod.retakeCut !== false,
       trials: (d.trials || []).filter((t) => t && t.hook && t.hook !== d.hook).slice(0, 3).map((t) => ({ name: String(t.name || 'Trial').slice(0, 30), test: String(t.test || '').slice(0, 160), hook: String(t.hook).slice(0, 80), start: Number(t.start) >= d.start && Number(t.start) < d.end - 8 ? Number(t.start) : d.start })),
       status: 'queued', versions: [], currentVersion: 0, feedback: [], approvalId: null, postId: null,
     });
