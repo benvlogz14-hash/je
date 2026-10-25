@@ -1039,6 +1039,32 @@ r.get('/api/projects/:id', (req, b, p) => must(ctx.store.get('projects', p.id)))
 // ---- AI editing (Studio's AI box, agents, and anything with an agent token)
 const editOps = require('./video/edit-ops');
 r.get('/api/projects/:id/summary', (req, b, p) => ({ text: editOps.summarize(must(ctx.store.get('projects', p.id))) }));
+// Studio "Add from a link": a YouTube (or any yt-dlp) link -> its audio as an MP3 in <data>/studio/links, ready to import.
+// The same link is only downloaded once.
+r.post('/api/studio/link', async (req, b) => {
+  const url = String(b?.url || '').trim();
+  if (!/^https?:\/\/\S+$/i.test(url)) throw new HttpError(400, 'Paste a full link, like https://www.youtube.com/watch?v=...');
+  const ff = require('./video/ffmpeg'); const { run } = require('./core/util');
+  if (!ctx.capabilities.ytdlp) { await ff.detect().catch(() => {}); if (!ctx.capabilities.ytdlp) throw new HttpError(400, 'The YouTube downloader (yt-dlp) isn\'t installed yet. Open Production and press the fix button for FFmpeg and yt-dlp, then try again.'); }
+  const dir = path.join(paths.root, 'studio', 'links'); fs.mkdirSync(dir, { recursive: true });
+  const key = require('crypto').createHash('sha1').update(url.replace(/[&?](si|feature|pp)=[^&]*/g, '')).digest('hex').slice(0, 16);
+  const meta = path.join(dir, `${key}.json`);
+  try { const m = JSON.parse(fs.readFileSync(meta, 'utf8')); if (m.file && fs.existsSync(m.file) && fs.statSync(m.file).size > 1000) return { path: m.file, title: m.title }; } catch { /* not downloaded yet */ }
+  let got = '', title = '';
+  try {
+    const r2 = await run(ff.ytdlpBin(), ['-f', 'bestaudio/best', '--no-playlist', '--max-filesize', '400M', '-o', path.join(dir, `${key}.src.%(ext)s`), '--print', 'after_move:%(filepath)s\t%(title)s', '--', url], { timeoutMs: 600000 });
+    const line = r2.out.trim().split('\n').pop() || ''; [got, title] = line.split('\t');
+  } catch (e) { throw new HttpError(400, `Couldn't get the audio from that link. Check it opens in a browser and isn't private. (${String(e.message || e).split('\n').pop().slice(0, 160)})`); }
+  if (!got || !fs.existsSync(got)) got = fs.readdirSync(dir).filter((f) => f.startsWith(`${key}.src.`)).map((f) => path.join(dir, f))[0];
+  if (!got) throw new HttpError(400, "Couldn't get the audio from that link.");
+  // Named after the video's title, so it reads well in the Project panel.
+  const nice = String(title || 'Audio from link').replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Audio from link';
+  const mp3 = path.join(dir, `${nice} ${key.slice(0, 6)}.mp3`);
+  await run(ff.bin('ffmpeg'), ['-hide_banner', '-y', '-i', got, '-vn', '-c:a', 'libmp3lame', '-q:a', '2', mp3], { timeoutMs: 600000 });
+  try { fs.unlinkSync(got); } catch { /* keep */ }
+  fs.writeFileSync(meta, JSON.stringify({ url, file: mp3, title: title || 'Audio from link', at: new Date().toISOString() }));
+  return { path: mp3, title: title || 'Audio from link' };
+});
 // Studio "Add captions": caption pieces (with word timings) for the video clips on the timeline, from each video's
 // transcript. Videos without one are listed in `missing`; /api/studio/transcribe makes them.
 r.post('/api/studio/captions', (req, b) => {

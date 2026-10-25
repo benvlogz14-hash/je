@@ -479,6 +479,36 @@ function Editor({ id }) {
     });
     toast(`Added "${title}" on the Music track at 25% volume. Select it to change the volume.`, { kind: 'success' });
   };
+  /** A YouTube (or other) link: the engine downloads its audio, and it goes on the timeline at the playhead, full length, on the first free audio track. */
+  const [linkBusy, setLinkBusy] = useState(false);
+  const addLink = async (url) => {
+    url = String(url || '').trim(); if (!url || linkBusy) return;
+    setLinkBusy(true); toast('Getting the audio from that link. It goes on the timeline in a moment.', { kind: 'info', ms: 6000 });
+    try {
+      const r = await api.post('/api/studio/link', { url });
+      const [m] = await importPaths([r.path]); if (!m) return;
+      edit((d, s) => {
+        const len = Math.max(0.5, m.duration || 30); const at = t;
+        const free = (tr) => !tr.locked && !tr.clips.some((x) => x.start < at + len - 1e-3 && x.start + x.duration > at + 1e-3);
+        let ai = s.audioTracks.findIndex(free);
+        if (ai < 0) { s.audioTracks.push({ type: 1, name: `Audio ${s.audioTracks.length + 1}`, muted: false, locked: false, volume: { base: 1 }, clips: [] }); ai = s.audioTracks.length - 1; }
+        place(s, 'a', ai, { id: nextId(d), type: 1, mediaId: m.id, name: r.title || m.name, start: at, duration: len, in: 0, speed: 1, preservePitch: false, linkId: '0', enabled: true, posX: anim(0), posY: anim(0), scaleX: anim(1), scaleY: anim(1), rotation: anim(0), opacity: anim(1), volume: anim(1), uniformScale: true, effects: [], transIn: { type: 0, duration: 1 }, transOut: { type: 0, duration: 1 } });
+      });
+      sfx('success'); toast(`Added "${r.title}" at the playhead. Drag it, trim it or lower its volume like any clip.`, { kind: 'success' });
+    } catch (e) { sfx('error'); toast(e.message, { kind: 'error', title: "Couldn't add that link" }); }
+    finally { setLinkBusy(false); }
+  };
+  const askLink = async () => { const u = await promptDialog({ title: 'Add audio from a YouTube link', label: 'Paste the link', placeholder: 'https://www.youtube.com/watch?v=...', confirm: 'Add to timeline' }); if (u) addLink(u); };
+  // Pasting a link anywhere in Studio (not into a text box) adds it straight to the timeline.
+  useEffect(() => {
+    const onPaste = (e) => {
+      if (document.body.dataset.screen && document.body.dataset.screen !== '/studio') return;
+      const el = e.target; if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      const txt = (e.clipboardData?.getData('text') || '').trim();
+      if (/^https?:\/\/(www\.|m\.|music\.)?(youtube\.com|youtu\.be)\//i.test(txt)) { e.preventDefault(); addLink(txt); }
+    };
+    window.addEventListener('paste', onPaste); return () => window.removeEventListener('paste', onPaste);
+  });
   /** Replace the project with a version the engine produced (AI / agent edit), keeping Ctrl+Z working. */
   const adoptServerData = (next) => { setDataRaw((prev) => { undo.current.push(JSON.stringify(prev)); redo.current = []; return markCaptions(next); }); setDirty(false); };
   const aiEdit = async (instruction) => {
@@ -566,6 +596,7 @@ function Editor({ id }) {
       <${Button} kind="ghost" size="sm" icon="redo" title="Redo (Ctrl+Shift+Z)" disabled=${!redo.current.length} onClick=${doRedo} />
       <div style="width:1px;height:22px;background:var(--line)" />
       <${Button} kind="ghost" size="sm" icon="volume" onClick=${() => setMusicOpen(true)} title="Free music library: listen and add">Music</${Button}>
+      <${Button} kind="ghost" size="sm" icon="link" disabled=${linkBusy} onClick=${askLink} title="Paste a YouTube link and its audio goes on the timeline at the playhead (or just press Ctrl+V on the timeline)">${linkBusy ? 'Getting audio...' : 'YouTube link'}</${Button}>
       <${Button} kind="ghost" size="sm" icon="external" onClick=${() => act(() => api.post(`/api/projects/${id}/open-velo`), { ok: 'Opening in Velo', sound: 'open' })}>Open in Velo</${Button}>
       <${Button} kind="ghost" size="sm" onClick=${() => save()}>Save</${Button}>
       <${Button} kind="primary" size="sm" icon="upload" onClick=${exportNow}>Export</${Button}>
@@ -1359,7 +1390,7 @@ function EffectControls({ selected, sel = [], findClip, seq, edit, media, t, set
   const texts = findClip ? sel.map((id) => findClip(seq, id)?.c).filter((x) => x && x.type === 3 && x.text) : [];
   if (texts.length > 1 && texts.length === sel.length) return html`<${MultiTextControls} texts=${texts} seq=${seq} edit=${edit} onEditTitle=${onEditTitle} />`;
   if (!selected) return html`<div style="background:var(--ed-panel);border-left:1px solid var(--line);padding:14px"><div class="eyebrow">Effect controls</div><p class="faint" style="font-size:var(--fs-sm);margin-top:10px">Select a clip on the timeline to adjust and animate position, scale, rotation, opacity, volume, speed, effects and transitions.</p>
-    <div class="divider" /><div class="eyebrow">Shortcuts</div><div class="col" style="gap:4px;margin-top:8px;font-size:var(--fs-sm)" class="muted">${[['Space', 'Play / pause'], ['J K L', 'Shuttle'], ['S', 'Split selected'], ['Shift S / Ctrl B', 'Split all tracks'], ['Ctrl A', 'Select everything'], ['Drag on empty space', 'Box-select clips'], ['Q / W', 'Delete everything before / after the playhead'], ['Del', 'Delete'], ['Alt / Shift Del', 'Ripple delete (closes the gap)'], ['V / C / T', 'Select / razor / title'], ['Ctrl Z', 'Undo'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl D', 'Duplicate'], ['Ctrl R', 'Speed / duration'], ['F2', 'Rename clip'], ['Shift E', 'Enable / disable'], ['Right-click', 'All clip tools'], ['Drop on a clip', 'Pushes it down a layer'], ['Shift + drop', 'Pushes it up instead'], ['Ctrl + drop', 'Replaces it'], ['+ / −', 'Zoom timeline']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="faint">${d}</span></div>`)}</div></div>`;
+    <div class="divider" /><div class="eyebrow">Shortcuts</div><div class="col" style="gap:4px;margin-top:8px;font-size:var(--fs-sm)" class="muted">${[['Space', 'Play / pause'], ['J K L', 'Shuttle'], ['S', 'Split selected'], ['Shift S / Ctrl B', 'Split all tracks'], ['Ctrl A', 'Select everything'], ['Drag on empty space', 'Box-select clips'], ['Q / W', 'Delete everything before / after the playhead'], ['Del', 'Delete'], ['Alt / Shift Del', 'Ripple delete (closes the gap)'], ['V / C / T', 'Select / razor / title'], ['Ctrl Z', 'Undo'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl V a YouTube link', 'Puts its audio on the timeline'], ['Ctrl D', 'Duplicate'], ['Ctrl R', 'Speed / duration'], ['F2', 'Rename clip'], ['Shift E', 'Enable / disable'], ['Right-click', 'All clip tools'], ['Drop on a clip', 'Pushes it down a layer'], ['Shift + drop', 'Pushes it up instead'], ['Ctrl + drop', 'Replaces it'], ['+ / −', 'Zoom timeline']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="faint">${d}</span></div>`)}</div></div>`;
   const c = selected.c;
   // Live-preview while dragging a slider (mutate in place); commit one undo step on release.
   const [, force] = useState(0);
