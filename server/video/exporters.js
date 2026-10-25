@@ -37,7 +37,9 @@ function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, c
   const a1 = info.hasAudio ? [veloClip({ id: nextId++, type: 1, mediaId, name: path.basename(source), start: 0, duration: dur, in: range.start, linkId: 1 })] : [];
   const posY = st.position === 'upper' ? -H * 0.3 : st.position === 'center' ? 0 : H * 0.28;
   const hex = (c) => `#ff${String(c || '#ffffff').replace('#', '').toLowerCase()}`;
-  const textStyle = (t, size, color, o = {}) => ({ text: t, family: o.font || st.font, pixelSize: size, bold: captions.HEAVY.has(o.font || st.font), italic: false, color: hex(color), outlineColor: hex(o.outline || st.outline), outlineWidth: Math.round((o.outlineWidth ?? st.outlineWidth) / 2), ...(o.box ? { box: true, boxColor: hex(o.boxColor), boxPad: 18, ...(o.radius ? { boxRadius: o.radius } : {}) } : {}) });
+  // Clip renders size text the subtitle way (Windows line height); Studio sizes it the browser way (em), so convert.
+  const em = (size, font) => Math.max(1, Math.round(size / require('./fontnames').emFit(font, captions.HEAVY.has(font)).k));
+  const textStyle = (t, size, color, o = {}) => ({ text: t, family: o.font || st.font, pixelSize: em(size, o.font || st.font), bold: captions.HEAVY.has(o.font || st.font), italic: false, color: hex(color), outlineColor: hex(o.outline || st.outline), outlineWidth: Math.round((o.outlineWidth ?? st.outlineWidth) / 2), ...(o.box ? { box: true, boxColor: hex(o.boxColor), boxPad: 18, ...(o.radius ? { boxRadius: o.radius } : {}) } : {}) });
   // Highlight travels with each caption: the spoken word (word timings inside the caption) or chosen keywords.
   const hlMode = ['word', 'keywords'].includes(st.highlightMode) ? st.highlightMode : 'none';
   const kws = hlMode === 'keywords' ? (keywords?.length ? keywords : captions.autoKeywords(words.filter((w) => w.e > range.start && w.s < range.end))) : [];

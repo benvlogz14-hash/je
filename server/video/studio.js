@@ -202,10 +202,14 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
     const argb = (s, d) => { const h = String(s || d).replace('#', ''); return h.length === 8 ? { a: 255 - parseInt(h.slice(0, 2), 16), rgb: '#' + h.slice(2) } : { a: 0, rgb: '#' + h }; };
     const easeOut = (f) => 1 - (1 - f) ** 3;
     for (const { c, layer } of texts) {
-      const st = c.text || {}; const fc = require('./fontnames').face(st.family || 'Montserrat', st.bold !== false && require('./captions').HEAVY.has(st.family || 'Montserrat')); const col = argb(st.color, 'ffffffff'); const oc = argb(st.outlineColor, 'ff000000');
+      const st = c.text || {}; const heavy = st.bold !== false && require('./captions').HEAVY.has(st.family || 'Montserrat');
+      const fc = require('./fontnames').face(st.family || 'Montserrat', heavy);
+      // The preview's size is the em; libass's is the Windows line height, so scale it up (fit.k) and line the baseline up (fit.dy).
+      const fit = require('./fontnames').emFit(st.family || 'Montserrat', heavy); const col = argb(st.color, 'ffffffff'); const oc = argb(st.outlineColor, 'ff000000');
       const keyed = ['posX', 'posY', 'scaleX', 'rotation', 'opacity'].some((k) => hasKeys(c[k]));
       // Rounded boxes (TikTok / Instagram titles) are drawn as shapes behind the text; libass boxes are square.
-      const round = st.box && (st.boxRadius || 0) > 0 && !keyed;
+      // Boxes are drawn as shapes the same size as the preview's (rounded or square); keyframed titles keep libass boxes.
+      const round = st.box && !keyed;
       const box = st.box && !round ? argb(st.boxColor, 'cc000000') : null;
       const shad = st.shadow ? argb(st.shadowColor, 'b3000000') : null;
       const raw = (st.uppercase ? String(st.text || '').toUpperCase() : String(st.text || '')).replace(/[{}\\]/g, '');
@@ -223,14 +227,25 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       const event = ({ from, to, px, py, sc, op, rot, place, pop = '', fad = '', body = bodyAt(-1) }) => {
         const alpha = Math.round(255 - (255 - col.a) * Math.max(0, Math.min(1, op))).toString(16).padStart(2, '0');
         const look = box ? `\\3c${colTag(box.rgb)}\\3a&H${box.a.toString(16).padStart(2, '0').toUpperCase()}&\\bord${Math.round((st.boxPad ?? 18) * sc)}` : round ? '\\bord0' : `\\3c${colTag(oc.rgb)}\\bord${Math.round((st.outlineWidth || 0) * sc)}`;
-        const tags = `{\\an5${place || `\\pos(${Math.round(px)},${Math.round(py)})`}\\fn${fc.name.replace(/[{}\\,]/g, '')}\\fs${Math.max(1, Math.round((st.pixelSize || 96) * sc))}\\fsp${Math.round((st.letterSpacing || 0) * sc)}\\b${fc.bold ? 1 : 0}\\i${st.italic ? 1 : 0}\\c${colTag(col.rgb)}\\alpha&H${alpha.toUpperCase()}&${look}${shad ? `\\shad${Math.round(st.shadow * sc)}\\4c${colTag(shad.rgb)}\\4a&H${shad.a.toString(16).padStart(2, '0').toUpperCase()}&` : '\\shad0'}\\frz${-rot}${pop}${fad}}`;
-        lines.push(`Dialogue: ${layer},${t2(from)},${t2(to)},${box ? 'B' : 'T'},,0,0,0,,${tags}${body}`);
+        const size = (st.pixelSize || 96) * sc; const parts = body.split('\\N'); const lh = size * 1.15;
+        // Boxed lines: every line's box first, then the text on top (otherwise a lower line's box covers the line above).
+        for (const pass of box ? ['box', 'text'] : ['text']) parts.forEach((part, i) => {
+        // One event per line, spaced like the preview (1.15 x size), turned around the title's centre.
+        const off = (i - (parts.length - 1) / 2) * lh + fit.dy * size;
+        const at = place ? place.replace(/\\move\(([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)/, (_, a, b, c2, d) => `\\move(${a},${Math.round(+b + off)},${c2},${Math.round(+d + off)}`) : `\\pos(${Math.round(px)},${Math.round(py + off)})`;
+        const tags = `{\\an5${at}\\org(${Math.round(px)},${Math.round(py)})\\fn${fc.name.replace(/[{}\\,]/g, '')}\\fs${Math.max(1, Math.round(size * fit.k))}\\fsp${Math.round((st.letterSpacing || 0) * sc)}\\b${fc.bold ? 1 : 0}\\i${st.italic ? 1 : 0}\\c${colTag(col.rgb)}${pass === 'box' ? `\\1a&HFF&\\3a&H${box.a.toString(16).padStart(2, '0').toUpperCase()}&` : `\\alpha&H${alpha.toUpperCase()}&`}${pass === 'box' ? look : box ? '\\bord0' : look}${shad ? `\\shad${Math.round(st.shadow * sc)}\\4c${colTag(shad.rgb)}\\4a&H${shad.a.toString(16).padStart(2, '0').toUpperCase()}&` : '\\shad0'}\\frz${-rot}${pop}${fad}}`;
+        lines.push(`Dialogue: ${layer},${t2(from)},${t2(to)},${pass === 'box' ? 'B' : 'T'},,0,0,0,,${tags}${part}`);
+        });
       };
       if (round) {
-        const sc = base(c.scaleX, 1); const px = W / 2 + base(c.posX, 0), py = H / 2 + base(c.posY, 0); const fsz = Math.max(1, (st.pixelSize || 96) * sc);
-        const tl = raw.split('\n'); const m = require('./fontnames').measure(st.family || 'Montserrat', st.bold !== false && require('./captions').HEAVY.has(st.family || 'Montserrat'), fsz, tl);
-        const top = py - (tl.length * fsz) / 2; const pad = m.capH * 0.55, padX = m.capH * 0.6; const bc = argb(st.boxColor, 'ffffffff');
-        const shapes = tl.map((l, i) => { const bl = top + i * fsz + m.asc; return require('./captions').roundRect(px - m.widths[i] / 2 - padX, bl - m.capH - pad, px + m.widths[i] / 2 + padX, bl + pad * 0.95, st.boxRadius * sc); }).join(' ');
+        // Same geometry as the preview (drawText): rounded = one box per line, square = one box around all lines.
+        const sc = base(c.scaleX, 1); const px = W / 2 + base(c.posX, 0), py = H / 2 + base(c.posY, 0); const size = Math.max(1, (st.pixelSize || 96) * sc);
+        const tl = raw.split('\n'); const m = require('./fontnames').measure(st.family || 'Montserrat', heavy, size * fit.k, tl);
+        const ls = (st.letterSpacing || 0) * sc; const wOf = (i) => m.widths[i] + ls * [...tl[i]].length;
+        const lh = size * 1.15; const pad = (st.boxPad ?? 18) * sc; const bc = argb(st.boxColor, (st.boxRadius || 0) > 0 ? 'ffffffff' : 'cc000000');
+        const shapes = (st.boxRadius || 0) > 0
+          ? tl.map((l, i) => { const y = py + (i - (tl.length - 1) / 2) * lh; return require('./captions').roundRect(px - wOf(i) / 2 - pad, y - lh / 2, px + wOf(i) / 2 + pad, y + lh / 2, st.boxRadius * sc); }).join(' ')
+          : (() => { const w = Math.max(...tl.map((l, i) => wOf(i))); const hh = (tl.length * lh) / 2 + pad * 0.6; const r = (v) => Math.round(v); return `m ${r(px - w / 2 - pad)} ${r(py - hh)} l ${r(px + w / 2 + pad)} ${r(py - hh)} ${r(px + w / 2 + pad)} ${r(py + hh)} ${r(px - w / 2 - pad)} ${r(py + hh)}`; })();
         const fi = transDur(c.transIn), fo = transDur(c.transOut);
         lines.push(`Dialogue: ${layer},${t2(c.start)},${t2(c.start + c.duration)},T,,0,0,0,,{\\an7\\pos(0,0)\\org(${Math.round(px)},${Math.round(py)})\\frz${-base(c.rotation, 0)}${fi || fo ? `\\fad(${Math.round(fi * 1000)},${Math.round(fo * 1000)})` : ''}\\bord0\\shad0\\1c${colTag(bc.rgb)}\\1a&H${bc.a.toString(16).padStart(2, '0').toUpperCase()}&\\p1}${shapes}{\\p0}`);
       }

@@ -66,7 +66,9 @@ function readMetrics(file) {
     }
     map.set(code, g); return g;
   };
-  return { upem, winSum: winSum || upem, asc, capH, width: (text) => { let w = 0; for (const ch of String(text)) w += adv(glyph(ch.codePointAt(0))); return w; } };
+  const hA = b.readInt16BE(T.hhea + 4), hD = -b.readInt16BE(T.hhea + 6);
+  const winAsc = os2 != null ? b.readUInt16BE(os2 + 74) : hA, winDesc = os2 != null ? b.readUInt16BE(os2 + 76) : hD;
+  return { upem, winSum: winSum || upem, asc, capH, hA, hD, winAsc, winDesc, width: (text) => { let w = 0; for (const ch of String(text)) w += adv(glyph(ch.codePointAt(0))); return w; } };
 }
 
 /** family -> [{ full, weight }] for every bundled font. */
@@ -107,4 +109,27 @@ function measure(family, heavy, fsPx, lines) {
   return { widths: lines.map((l) => m.width(l) * k), lineH: fsPx, capH: m.capH * k, asc: m.asc * k };
 }
 
-module.exports = { face, fonts, readFont, readMetrics, measure };
+/**
+ * How to make a subtitle (libass) draw text the same size and height as the browser does.
+ * The browser's font size is the em; libass's is the Windows ascent + descent (like VSFilter), which is
+ * 1.3-1.8x the em, so subtitles at the same number came out much smaller than the preview.
+ * k: multiply a browser size by this to get the subtitle size.
+ * dy: move the subtitle down by dy x the size so its baseline sits where a canvas 'middle' baseline puts it.
+ */
+function emFit(family, heavy) {
+  const f = face(family, heavy);
+  if (!f.file) return { k: 1.12, dy: 0 }; // Windows fonts (Arial, Georgia...) are close to this
+  if (!metricsCache.has(f.file)) { try { metricsCache.set(f.file, readMetrics(f.file)); } catch { metricsCache.set(f.file, null); } }
+  const m = metricsCache.get(f.file); if (!m) return { k: 1.12, dy: 0 };
+  const canvas = m.hA / (m.hA + m.hD || 1) - 0.5; const ass = (m.winAsc - m.winDesc) / 2 / m.upem;
+  return { k: m.winSum / m.upem, dy: canvas - ass };
+}
+
+/** family -> { k (heavy), kr (regular) } for every bundled font, for previews that draw with CSS. */
+function scales() {
+  const out = {};
+  for (const fam of Object.keys(fonts())) { const a = emFit(fam, true), r = emFit(fam, false); out[fam] = { k: Math.round(a.k * 1000) / 1000, kr: Math.round(r.k * 1000) / 1000 }; }
+  return out;
+}
+
+module.exports = { face, fonts, readFont, readMetrics, measure, emFit, scales };

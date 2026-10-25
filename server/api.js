@@ -441,6 +441,8 @@ r.put('/api/grokbots', (req, b) => { const list = (Array.isArray(b.bots) ? b.bot
 r.post('/api/grokbots/task', (req, b) => require('./integrations/grokbots').send({ bot: b.bot, task: String(b.task || '').trim() || (() => { throw new HttpError(400, 'Write the task first.'); })(), title: b.title, actor: actorOf(req) }));
 r.del('/api/grokbots/task/:id', (req, b, p) => { ctx.store.remove('botTasks', p.id); return { ok: true }; });
 // Music catalog: every track by mood, a preview, and a button to download more free music.
+// How much bigger the subtitle renderer's size number is than the browser's for each font, so previews draw at the rendered size.
+r.get('/api/fonts/scale', () => { const fn = require('./video/fontnames'); const HEAVY = require('./video/captions').HEAVY; return Object.fromEntries(Object.keys(fn.fonts()).map((f) => [f, Math.round(fn.emFit(f, HEAVY.has(f)).k * 1000) / 1000])); });
 r.get('/api/music/catalog', () => ({ moods: require('./video/music').catalog() }));
 r.get('/api/music/play', async (req, res) => { const f = await require('./video/music').resolve(req.query.id); return f ? serveFile(req, res, f) : send(res, 404, { error: 'Not found' }); }, { stream: true });
 // Studio's music library: the file for a catalog track, so it can be added to a project like any other audio.
