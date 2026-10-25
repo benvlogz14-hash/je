@@ -160,6 +160,21 @@ function loadAnalysis(asset) {
   return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null;
 }
 
+/**
+ * Cut-away shots (source [start, end]) the other clips of the same video already use: what they planned for the render in
+ * progress (coverSrcs) or their current version's covers, plus B-roll edits' shots. Used so each clip gets different B-roll.
+ */
+function coversElsewhere(clip) {
+  const out = [];
+  for (const c of ctx.store.all('clips', (x) => x.assetId === clip.assetId && x.id !== clip.id)) {
+    const v = (c.versions || [])[(c.currentVersion || (c.versions || []).length) - 1];
+    const list = c.coverSrcs || (v?.covers || []).map((k) => [k.src, k.src + k.dur]);
+    out.push(...list.filter((r) => Array.isArray(r) && r[1] > r[0]));
+    if (v?.broll?.segs) out.push(...v.broll.segs.map((g) => [g.src, g.src + g.dur]));
+  }
+  return out;
+}
+
 /** A video used in Studio that isn't footage in Production: transcripts kept under <data>/studio/transcripts. */
 function studioAsset(file) {
   const workDir = path.join(paths.root, 'studio', 'transcripts'); fs.mkdirSync(workDir, { recursive: true });
@@ -289,7 +304,8 @@ queue.register('render.short', {
           const sig = await montage.signals({ asset, transcript, vision: vis, analysis: null });
           const avoid = ctx.store.all('clips', (c) => c.assetId === asset.id && c.id !== clip.id).map((c) => ({ start: c.start, end: c.end }));
           let black = []; try { black = await montage.blackIntervals(asset.path, asset.workDir); } catch { /* no scan */ }
-          covers = montage.planCovers({ start: clip.start, end: clip.end, shots: sig.shots, sents: sig.sents, avoid, black });
+          covers = montage.planCovers({ start: clip.start, end: clip.end, shots: sig.shots, sents: sig.sents, avoid, black, elsewhere: coversElsewhere(clip) });
+          ctx.store.update('clips', clip.id, { coverSrcs: covers.map((c) => [c.src, c.src + c.dur]) }); // so clips rendering at the same time see these too
           if (covers.length) {
             h.progress(0.08, `Cutting in ${covers.length} shot${covers.length > 1 ? 's' : ''}`);
             assembled = path.join(outDir, `v${n}-assembled.mp4`); fs.mkdirSync(outDir, { recursive: true });
@@ -308,7 +324,7 @@ queue.register('render.short', {
       const open = pre.filter(([a, b]) => !covers.some((c) => c.at <= a + 0.05 && c.at + c.dur >= b - 0.05));
       if (open.length) {
         const vis = require('../video/vision').cached(asset.path, asset.workDir);
-        const extra = await montage.coverBlack({ forced: open, start: clip.start, end: clip.end, duration: asset.info?.duration || clip.end, shots: vis?.shots || [], scenes: loadAnalysis(asset)?.scenes || [], black: [...open], used: covers.map((c) => [c.src, c.src + c.dur]), isDark: (a, d) => montage.darkAt(asset.path, a, d).catch(() => false) });
+        const extra = await montage.coverBlack({ forced: open, start: clip.start, end: clip.end, duration: asset.info?.duration || clip.end, shots: vis?.shots || [], scenes: loadAnalysis(asset)?.scenes || [], black: [...open], used: covers.map((c) => [c.src, c.src + c.dur]), elsewhere: coversElsewhere(clip), isDark: (a, d) => montage.darkAt(asset.path, a, d).catch(() => false) });
         if (extra.length) {
           covers = [...covers.filter((c) => !extra.some((x) => c.at < x.at + x.dur && c.at + c.dur > x.at)), ...extra].sort((a, b) => a.at - b.at);
           assembled = path.join(outDir, `v${n}-assembled.mp4`); fs.mkdirSync(outDir, { recursive: true });
@@ -337,7 +353,7 @@ queue.register('render.short', {
         const forced = montage.outputToSource(outBlack, r.segments, assembled ? clip.start : 0);
         const vis = require('../video/vision').cached(asset.path, asset.workDir);
         let srcBlack = []; try { srcBlack = await montage.blackIntervals(asset.path, asset.workDir, { cachedOnly: true }); } catch { /* no scan */ } // only a scan already saved; candidates are checked one by one (darkAt)
-        const extra = await montage.coverBlack({ forced, start: clip.start, end: clip.end, duration: asset.info?.duration || clip.end, shots: vis?.shots || [], scenes: loadAnalysis(asset)?.scenes || [], black: [...srcBlack, ...forced], used: covers.map((c) => [c.src, c.src + c.dur]), isDark: (a, d) => montage.darkAt(asset.path, a, d).catch(() => false) });
+        const extra = await montage.coverBlack({ forced, start: clip.start, end: clip.end, duration: asset.info?.duration || clip.end, shots: vis?.shots || [], scenes: loadAnalysis(asset)?.scenes || [], black: [...srcBlack, ...forced], used: covers.map((c) => [c.src, c.src + c.dur]), elsewhere: coversElsewhere(clip), isDark: (a, d) => montage.darkAt(asset.path, a, d).catch(() => false) });
         if (!extra.length) { h.log('Black frames found, but no clean shots to cover them'); break; }
         h.log(`Covering ${outBlack.length} black stretch${outBlack.length > 1 ? 'es' : ''} with ${extra.length} shot${extra.length > 1 ? 's' : ''}`);
         covers = [...covers.filter((c) => !extra.some((x) => c.at < x.at + x.dur && c.at + c.dur > x.at)), ...extra].sort((a, b) => a.at - b.at);
@@ -392,7 +408,7 @@ queue.register('render.short', {
     const xml = path.join(outDir, `v${n}.premiere.xml`);
     fs.writeFileSync(xml, exporters.toFcpXml({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end } }));
     const version = { n, path: outPath, ...(wideOut ? { wide: wideOut } : {}), thumb, duration: r.duration, renderedAt: now(), encoder: r.encoder, qc: { passed: qc.passed, issues: qc.issues }, srt: r.srtPath, velo, xml, changes: clip.pendingChanges || null, captioned: !!transcript, look: (({ font, size, hookFont }) => ({ font: font || 'Montserrat', size, hookFont }))({ ...(client.style || {}), ...(clip.style || {}) }), cuts: covers.length, covers, music: musicSheet ? { how: musicSheet.how, cues: musicSheet.cues.map((c) => ({ start: Math.round(c.start * 10) / 10, end: Math.round(c.end * 10) / 10, mood: c.mood, why: c.why || '', track: c.track || null, source: c.source || null })) } : null };
-    ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), version], currentVersion: n, pendingChanges: null }));
+    ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), version], currentVersion: n, pendingChanges: null, coverSrcs: covers.map((k) => [k.src, k.src + k.dur]) }));
     pipeline.afterQc(clip.id, qc);
     return { version: n, duration: r.duration, qc: qc.passed ? 'passed' : 'failed', encoder: r.encoder };
   },

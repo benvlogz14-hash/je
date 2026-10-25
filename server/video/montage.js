@@ -191,15 +191,31 @@ async function signals({ asset, transcript, vision, analysis }) {
  * best shots from elsewhere for 2-3 s each while the voice keeps playing.
  * Returns [{ at, dur, src }] with at/src in source seconds.
  */
-function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, black = [] }) {
+function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, black = [], elsewhere = [] }) {
   if (!shots.length) return [];
   const len = end - start;
   const touchesBlack = (a, b) => black.some(([x, y]) => x < b + 0.15 && y > a - 0.15);
+  // Variety across clips: elsewhere = [src, src+dur] cut-aways the video's other clips already use. Shots no other clip
+  // has used come first (best first), then the least-used ones, so the same drone shot doesn't open every clip.
+  const usedCount = (x) => elsewhere.filter(([a, b]) => a < x.e && b > x.s).length;
   const pool = shots.filter((x) => (x.e <= start || x.s >= end) && shotScore(x) >= 0.45 && x.e - x.s >= 2.2 && !avoid.some((a) => x.s < a.end && x.e > a.start))
-    .sort((a, b) => shotScore(b) - shotScore(a));
+    .map((x) => ({ x, n: usedCount(x), q: shotScore(x) })).sort((a, b) => a.n - b.n || b.q - a.q).map((o) => o.x);
   if (!pool.length) return [];
   // A cut-away comes from the middle of its shot (shot starts are often fades from black) and never touches black frames.
-  const take = (src, dur) => { const mid = (src.s + src.e) / 2; const a = Math.max(src.s + 0.3, mid - dur / 2); return touchesBlack(a, a + dur) ? null : Math.round(a * 100) / 100; };
+  // A shot another clip already used gives a different stretch of itself (the part farthest from what was used), when it's long enough.
+  const take = (src, dur) => {
+    const lo = src.s + 0.3, hi = src.e - 0.3 - dur; const mid = Math.max(lo, (src.s + src.e) / 2 - dur / 2);
+    const prior = elsewhere.filter(([a, b]) => a < src.e && b > src.s);
+    let best = null;
+    for (const a of prior.length && hi > lo ? [mid, ...Array.from({ length: 9 }, (_, i) => lo + ((hi - lo) * i) / 8)] : [mid]) {
+      if (a < lo - 1e-6 || touchesBlack(a, a + dur)) continue;
+      const clash = prior.reduce((m, [p, q]) => m + Math.max(0, Math.min(q, a + dur) - Math.max(p, a)), 0);
+      const dist = prior.length ? Math.min(...prior.map(([p, q]) => Math.abs((p + q) / 2 - (a + dur / 2)))) : 0;
+      const score = -clash * 10 + dist * 0.1 - Math.abs(a - mid) * 0.01;
+      if (!best || score > best.score) best = { a, score };
+    }
+    return best ? Math.round(best.a * 100) / 100 : null;
+  };
   // Every cut-away in a clip is a different shot: never the same shot twice, nor its neighbour (a few seconds away in the
   // footage, usually the same scene), nor a shot described the same way. When the good shots run out, the cut-aways stop.
   const out = []; const used = [];
@@ -248,11 +264,13 @@ async function blackIntervals(file, workDir, { loose = false, cache: useCache = 
  * at any length (split into pieces of up to 3 s). Shots come from "Look through it" when there are any, else from
  * pieces of the footage between scene cuts; never dark ones, never one already used. Returns [{ at, dur, src }].
  */
-async function coverBlack({ forced, start, end, duration, shots = [], scenes = [], black = [], used = [], isDark = null }) {
+async function coverBlack({ forced, start, end, duration, shots = [], scenes = [], black = [], used = [], isDark = null, elsewhere = [] }) {
   const pieces = shots.length ? shots.filter((x) => x.usable !== false && shotScore(x) >= 0.3) : require('./brolledit').sceneShots(scenes, duration);
   const dark = (a, b) => black.some(([x, y]) => x < b + 0.2 && y > a - 0.2);
   const taken = [...used];
-  const pool = pieces.filter((x) => x.e - x.s >= 1.4).sort((a, b) => ((a.e <= start || a.s >= end) === (b.e <= start || b.s >= end) ? (shots.length ? shotScore(b) - shotScore(a) : 0) : (a.e <= start || a.s >= end) ? -1 : 1));
+  const outside = (x) => x.e <= start || x.s >= end; const seen = (x) => elsewhere.filter(([p, q]) => p < x.e && q > x.s).length;
+  // Outside the clip first, then shots the video's other clips haven't used, then the best.
+  const pool = pieces.filter((x) => x.e - x.s >= 1.4).sort((a, b) => (outside(a) === outside(b) ? seen(a) - seen(b) || (shots.length ? shotScore(b) - shotScore(a) : 0) : outside(a) ? -1 : 1));
   const out = [];
   for (const [fa, fb] of forced) {
     const a0 = Math.max(start, fa - 0.15), b0 = Math.min(end, fb + 0.15);
