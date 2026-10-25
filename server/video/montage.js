@@ -232,9 +232,9 @@ function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, blac
 }
 
 /** Black frames in the footage (fades, flashes), cached: [[start, end], ...] in seconds. */
-async function blackIntervals(file, workDir, { loose = false, cache: useCache = true } = {}) {
+async function blackIntervals(file, workDir, { loose = false, cache: useCache = true, cachedOnly = false } = {}) {
   const cache = path.join(workDir || path.dirname(file), `${path.basename(file).replace(/\.[^.]+$/, '')}.${loose ? 'black3' : 'black2'}.json`);
-  if (useCache) { try { return JSON.parse(fs.readFileSync(cache, 'utf8')); } catch { /* measure */ } }
+  if (useCache) { try { return JSON.parse(fs.readFileSync(cache, 'utf8')); } catch { if (cachedOnly) return []; } }
   // loose: near-black too (dark fades, black with a little text on it), for checking finished clips.
   const det = loose ? 'blackdetect=d=0.25:pix_th=0.10:pic_th=0.90' : 'blackdetect=d=0.12:pix_th=0.04:pic_th=0.98';
   const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-i', file, '-an', '-vf', `fps=10,scale=240:-2,${det}`, '-f', 'null', '-'], { timeoutMs: 3600000, priority: ff.priorityValue() });
@@ -248,7 +248,7 @@ async function blackIntervals(file, workDir, { loose = false, cache: useCache = 
  * at any length (split into pieces of up to 3 s). Shots come from "Look through it" when there are any, else from
  * pieces of the footage between scene cuts; never dark ones, never one already used. Returns [{ at, dur, src }].
  */
-function coverBlack({ forced, start, end, duration, shots = [], scenes = [], black = [], used = [] }) {
+async function coverBlack({ forced, start, end, duration, shots = [], scenes = [], black = [], used = [], isDark = null }) {
   const pieces = shots.length ? shots.filter((x) => x.usable !== false && shotScore(x) >= 0.3) : require('./brolledit').sceneShots(scenes, duration);
   const dark = (a, b) => black.some(([x, y]) => x < b + 0.2 && y > a - 0.2);
   const taken = [...used];
@@ -262,6 +262,7 @@ function coverBlack({ forced, start, end, duration, shots = [], scenes = [], bla
         if (x.s < at + dur && x.e > at) continue; // not the black stretch itself
         const mid = (x.s + x.e) / 2; const src = Math.max(x.s + 0.2, Math.min(duration - dur - 0.1, mid - dur / 2));
         if (dark(src, src + dur) || taken.some(([p, q]) => src < q && src + dur > p)) continue;
+        if (isDark && await isDark(src, dur)) { black.push([src, src + dur]); continue; } // checked on the spot, no whole-video scan
         out.push({ at: Math.round(at * 100) / 100, dur: Math.round(dur * 100) / 100, src: Math.round(src * 100) / 100 }); taken.push([src, src + dur]); ok = true; break;
       }
       if (!ok) break;
@@ -303,4 +304,11 @@ async function assemble({ source, info, start, end, covers, out, signal }) {
   return out;
 }
 
-module.exports = { coverBlack, outputToSource, reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
+/** Quick look at just a few frames of one stretch: is it (near) black? Much faster than scanning a whole video. */
+async function darkAt(file, src, dur) {
+  const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-ss', src.toFixed(2), '-t', dur.toFixed(2), '-i', file, '-an', '-vf', 'fps=3,scale=96:-2,signalstats,metadata=print:key=lavfi.signalstats.YAVG', '-f', 'null', '-'], { timeoutMs: 60000, priority: ff.priorityValue() });
+  const ys = [...String(r.err || '').matchAll(/YAVG=([\d.]+)/g)].map((m) => Number(m[1]));
+  return !ys.length || ys.some((y) => y < 28);
+}
+
+module.exports = { darkAt, coverBlack, outputToSource, reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };

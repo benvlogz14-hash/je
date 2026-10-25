@@ -318,8 +318,8 @@ queue.register('render.short', {
         if (!outBlack.length) break;
         const forced = montage.outputToSource(outBlack, r.segments, assembled ? clip.start : 0);
         const vis = require('../video/vision').cached(asset.path, asset.workDir);
-        let srcBlack = []; try { srcBlack = await montage.blackIntervals(asset.path, asset.workDir, { loose: true }); } catch { /* no scan */ }
-        const extra = montage.coverBlack({ forced, start: clip.start, end: clip.end, duration: asset.info?.duration || clip.end, shots: vis?.shots || [], scenes: loadAnalysis(asset)?.scenes || [], black: [...srcBlack, ...forced], used: covers.map((c) => [c.src, c.src + c.dur]) });
+        let srcBlack = []; try { srcBlack = await montage.blackIntervals(asset.path, asset.workDir, { cachedOnly: true }); } catch { /* no scan */ } // only a scan already saved; candidates are checked one by one (darkAt)
+        const extra = await montage.coverBlack({ forced, start: clip.start, end: clip.end, duration: asset.info?.duration || clip.end, shots: vis?.shots || [], scenes: loadAnalysis(asset)?.scenes || [], black: [...srcBlack, ...forced], used: covers.map((c) => [c.src, c.src + c.dur]), isDark: (a, d) => montage.darkAt(asset.path, a, d).catch(() => false) });
         if (!extra.length) { h.log('Black frames found, but no clean shots to cover them'); break; }
         h.log(`Covering ${outBlack.length} black stretch${outBlack.length > 1 ? 'es' : ''} with ${extra.length} shot${extra.length > 1 ? 's' : ''}`);
         covers = [...covers.filter((c) => !extra.some((x) => c.at < x.at + x.dur && c.at + c.dur > x.at)), ...extra].sort((a, b) => a.at - b.at);
