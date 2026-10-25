@@ -301,12 +301,35 @@ queue.register('render.short', {
       } catch (e) { covers = []; assembled = null; h.log(`Visual cuts skipped: ${e.message}`); }
     }
     h.progress(0.12, `Rendering v${n}`);
-    const r = await render.renderShort({ facePath: src.facePath, graphics: client.graphics,
+    const pauses = (await pausesFor(asset)) || [];
+    const renderArgs = () => ({ facePath: src.facePath, graphics: client.graphics,
       source: src.source, info: src.info, range: src.range, words: src.words, style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, keywords: clip.keywords || null,
-      reframe: clip.reframe, focusX: clip.focusX, plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, silences: ((await pausesFor(asset)) || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
+      reframe: clip.reframe, focusX: clip.focusX, plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, silences: pauses.map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
       outPath, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal,
       onProgress: (p) => { h.progress(0.12 + p * 0.7, `Rendering v${n}`); const pct = Math.round((0.12 + p * 0.7) * 100); if (pct - (ctx.store.get('clips', clip.id)?.renderProgress || 0) >= 4) { ctx.store.update('clips', clip.id, { renderProgress: pct }); events.publish('clips', { id: clip.id }); } },
     });
+    let r = await render.renderShort(renderArgs());
+    // Black-frame guard: any black stretch left in the finished clip (long fades, black between scenes, footage that
+    // wasn't looked through) is covered with good picture from elsewhere while the voice keeps going, then re-checked.
+    try {
+      const montage = require('../video/montage');
+      for (let pass = 0; pass < 2; pass++) {
+        const outBlack = (await montage.blackIntervals(outPath, outDir, { loose: true, cache: false })).filter(([a, b]) => b - a >= 0.25);
+        if (!outBlack.length) break;
+        const forced = montage.outputToSource(outBlack, r.segments, assembled ? clip.start : 0);
+        const vis = require('../video/vision').cached(asset.path, asset.workDir);
+        let srcBlack = []; try { srcBlack = await montage.blackIntervals(asset.path, asset.workDir, { loose: true }); } catch { /* no scan */ }
+        const extra = montage.coverBlack({ forced, start: clip.start, end: clip.end, duration: asset.info?.duration || clip.end, shots: vis?.shots || [], scenes: loadAnalysis(asset)?.scenes || [], black: [...srcBlack, ...forced], used: covers.map((c) => [c.src, c.src + c.dur]) });
+        if (!extra.length) { h.log('Black frames found, but no clean shots to cover them'); break; }
+        h.log(`Covering ${outBlack.length} black stretch${outBlack.length > 1 ? 'es' : ''} with ${extra.length} shot${extra.length > 1 ? 's' : ''}`);
+        covers = [...covers.filter((c) => !extra.some((x) => c.at < x.at + x.dur && c.at + c.dur > x.at)), ...extra].sort((a, b) => a.at - b.at);
+        assembled = path.join(outDir, `v${n}-assembled.mp4`);
+        await montage.assemble({ source: asset.path, info: asset.info, start: clip.start, end: clip.end, covers, out: assembled, signal: h.signal });
+        src = { source: assembled, info: await ff.probe(assembled), range: { start: 0, end: clip.end - clip.start }, words: (transcript?.words || []).filter((w) => w.e > clip.start && w.s < clip.end).map((w) => ({ ...w, s: w.s - clip.start, e: w.e - clip.start })), facePath: facePath ? facePath.map((p) => ({ ...p, t: p.t - clip.start })) : null };
+        h.progress(0.6, 'Re-rendering without the black frames');
+        r = await render.renderShort(renderArgs());
+      }
+    } catch (e) { h.log(`Black-frame check skipped: ${e.message}`); }
     // Music: decides when it plays and its mood (creepy, suspense, triumphant...), ducked under the voice.
     let musicSheet = null;
     const musicOn = client.production?.music !== false && clip.music !== 'off' && ctx.setting('production.music', true) !== false;

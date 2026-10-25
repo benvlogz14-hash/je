@@ -232,12 +232,55 @@ function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, blac
 }
 
 /** Black frames in the footage (fades, flashes), cached: [[start, end], ...] in seconds. */
-async function blackIntervals(file, workDir) {
-  const cache = path.join(workDir || path.dirname(file), `${path.basename(file).replace(/\.[^.]+$/, '')}.black2.json`);
-  try { return JSON.parse(fs.readFileSync(cache, 'utf8')); } catch { /* measure */ }
-  const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-i', file, '-an', '-vf', 'fps=10,scale=240:-2,blackdetect=d=0.12:pix_th=0.04:pic_th=0.98', '-f', 'null', '-'], { timeoutMs: 3600000, priority: ff.priorityValue() });
+async function blackIntervals(file, workDir, { loose = false, cache: useCache = true } = {}) {
+  const cache = path.join(workDir || path.dirname(file), `${path.basename(file).replace(/\.[^.]+$/, '')}.${loose ? 'black3' : 'black2'}.json`);
+  if (useCache) { try { return JSON.parse(fs.readFileSync(cache, 'utf8')); } catch { /* measure */ } }
+  // loose: near-black too (dark fades, black with a little text on it), for checking finished clips.
+  const det = loose ? 'blackdetect=d=0.25:pix_th=0.10:pic_th=0.90' : 'blackdetect=d=0.12:pix_th=0.04:pic_th=0.98';
+  const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-i', file, '-an', '-vf', `fps=10,scale=240:-2,${det}`, '-f', 'null', '-'], { timeoutMs: 3600000, priority: ff.priorityValue() });
   const out = [...String(r.err || '').matchAll(/black_start:([\d.]+) black_end:([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
-  try { fs.writeFileSync(cache, JSON.stringify(out)); } catch { /* read-only */ }
+  if (useCache) { try { fs.writeFileSync(cache, JSON.stringify(out)); } catch { /* read-only */ } }
+  return out;
+}
+
+/**
+ * Cover every forced stretch (black found in a finished clip, in source seconds) with good picture from elsewhere,
+ * at any length (split into pieces of up to 3 s). Shots come from "Look through it" when there are any, else from
+ * pieces of the footage between scene cuts; never dark ones, never one already used. Returns [{ at, dur, src }].
+ */
+function coverBlack({ forced, start, end, duration, shots = [], scenes = [], black = [], used = [] }) {
+  const pieces = shots.length ? shots.filter((x) => x.usable !== false && shotScore(x) >= 0.3) : require('./brolledit').sceneShots(scenes, duration);
+  const dark = (a, b) => black.some(([x, y]) => x < b + 0.2 && y > a - 0.2);
+  const taken = [...used];
+  const pool = pieces.filter((x) => x.e - x.s >= 1.4).sort((a, b) => ((a.e <= start || a.s >= end) === (b.e <= start || b.s >= end) ? (shots.length ? shotScore(b) - shotScore(a) : 0) : (a.e <= start || a.s >= end) ? -1 : 1));
+  const out = [];
+  for (const [fa, fb] of forced) {
+    const a0 = Math.max(start, fa - 0.15), b0 = Math.min(end, fb + 0.15);
+    for (let at = a0; at < b0 - 0.05; at += 3) {
+      const dur = Math.min(3, b0 - at); let ok = false;
+      for (const x of pool) {
+        if (x.s < at + dur && x.e > at) continue; // not the black stretch itself
+        const mid = (x.s + x.e) / 2; const src = Math.max(x.s + 0.2, Math.min(duration - dur - 0.1, mid - dur / 2));
+        if (dark(src, src + dur) || taken.some(([p, q]) => src < q && src + dur > p)) continue;
+        out.push({ at: Math.round(at * 100) / 100, dur: Math.round(dur * 100) / 100, src: Math.round(src * 100) / 100 }); taken.push([src, src + dur]); ok = true; break;
+      }
+      if (!ok) break;
+    }
+  }
+  return out;
+}
+
+/** Turn stretches of a finished clip (output seconds) back into source seconds, through its jump-cut segments. */
+function outputToSource(intervals, segments, offset = 0) {
+  const out = [];
+  for (const [a, b] of intervals) {
+    let acc = 0;
+    for (const [s, e] of segments) {
+      const len = e - s; const x = Math.max(a, acc), y = Math.min(b, acc + len);
+      if (y > x) out.push([offset + s + (x - acc), offset + s + (y - acc)]);
+      acc += len;
+    }
+  }
   return out;
 }
 
@@ -260,4 +303,4 @@ async function assemble({ source, info, start, end, covers, out, signal }) {
   return out;
 }
 
-module.exports = { reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
+module.exports = { coverBlack, outputToSource, reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
