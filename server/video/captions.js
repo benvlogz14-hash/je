@@ -100,6 +100,25 @@ function chunkWords(words, style) {
 }
 
 /**
+ * Lines with their on-screen times, never overlapping: Whisper's word times often overlap a little, and a line is held
+ * for at least 0.25 s, so with 2 words per line a line used to still be up when the next started (two lines stacked and
+ * jumped). Each word now ends by the time the next starts, each line ends when the next begins, and a short pause
+ * (under 0.3 s) between lines keeps the line up instead of flashing blank.
+ */
+function timedChunks(words, style) {
+  const ws = words.slice().sort((a, b) => a.s - b.s).map((w) => ({ ...w }));
+  for (let i = 0; i < ws.length - 1; i++) if (ws[i].e > ws[i + 1].s) ws[i].e = Math.max(ws[i].s + 0.02, ws[i + 1].s);
+  const chunks = chunkWords(ws, style);
+  return chunks.map((c, i) => {
+    const start = c[0].s; const next = chunks[i + 1]?.[0].s ?? Infinity;
+    let end = Math.max(c[c.length - 1].e, start + 0.25);
+    if (next - end < 0.3) end = next; // close the small gap
+    end = Math.min(end, next);
+    return { words: c, start, end: Math.max(end, start + 0.02) };
+  });
+}
+
+/**
  * Build an ASS subtitle file for a vertical short.
  * @param words  [{w,s,e}] absolute source times
  * @param range  {start,end} absolute source range of the clip
@@ -191,8 +210,7 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
   // Keyword mode: chosen (or auto-picked) words stay in the highlight colour the whole time they're on screen.
   const keyNorm = (w) => String(w).toLowerCase().replace(/[^a-z0-9$%']/g, '');
   const keys = style.highlightMode === 'keywords' ? new Set((keywords && keywords.length ? keywords : autoKeywords(local)).map(keyNorm)) : null;
-  for (const chunk of chunkWords(local, style)) {
-    const cStart = chunk[0].s, cEnd = Math.max(chunk[chunk.length - 1].e, cStart + 0.25);
+  for (const { words: chunk, start: cStart, end: cEnd } of timedChunks(local, style)) {
     const texts = chunk.map((w) => clean(w.w, style));
     if (style.highlightMode !== 'word') {
       const pop = style.animation === 'pop' ? '{\\fscx92\\fscy92\\t(0,90,\\fscx100\\fscy100)}' : '';
@@ -202,7 +220,7 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
     }
     for (let i = 0; i < chunk.length; i++) {
       const s = i === 0 ? cStart : chunk[i].s;
-      const e = i < chunk.length - 1 ? chunk[i + 1].s : cEnd;
+      const e = i < chunk.length - 1 ? Math.min(chunk[i + 1].s, cEnd) : cEnd;
       if (e - s < 0.01) continue;
       const text = texts.map((t, j) => {
         if (j !== i) return t;
@@ -225,7 +243,7 @@ function buildSrt({ words = [], range, style: st }) {
   const style = resolveStyle(st);
   const dur = range.end - range.start;
   const local = words.filter((w) => w.e > range.start && w.s < range.end).map((w) => ({ w: w.w, s: Math.max(0, w.s - range.start), e: Math.min(dur, w.e - range.start) })).filter((w) => clean(w.w, style));
-  return chunkWords(local, style).map((c, i) => `${i + 1}\n${srtTime(c[0].s)} --> ${srtTime(c[c.length - 1].e)}\n${c.map((w) => clean(w.w, style)).join(' ')}\n`).join('\n');
+  return timedChunks(local, style).map(({ words: c, start, end }, i) => `${i + 1}\n${srtTime(start)} --> ${srtTime(end)}\n${c.map((w) => clean(w.w, style)).join(' ')}\n`).join('\n');
 }
 
 /** Caption chunks with clip-relative times; used for Velo text clips and the Studio caption track. */
@@ -233,8 +251,8 @@ function captionChunks({ words = [], range, style: st }) {
   const style = resolveStyle(st);
   const dur = range.end - range.start;
   const local = words.filter((w) => w.e > range.start && w.s < range.end).map((w) => ({ w: w.w, s: Math.max(0, w.s - range.start), e: Math.min(dur, w.e - range.start) })).filter((w) => clean(w.w, style));
-  return chunkWords(local, style).map((c) => ({ start: c[0].s, end: Math.max(c[c.length - 1].e, c[0].s + 0.25), text: c.map((w) => clean(w.w, style)).join(' '),
-    words: c.map((w) => ({ w: clean(w.w, style), s: Math.round((w.s - c[0].s) * 1000) / 1000, e: Math.round((w.e - c[0].s) * 1000) / 1000 })) }));
+  return timedChunks(local, style).map(({ words: c, start, end }) => ({ start, end, text: c.map((w) => clean(w.w, style)).join(' '),
+    words: c.map((w) => ({ w: clean(w.w, style), s: Math.round((w.s - start) * 1000) / 1000, e: Math.round((Math.min(w.e, end) - start) * 1000) / 1000 })) }));
 }
 
 module.exports = { roundRect, autoKeywords, HEAVY, DEFAULT_STYLE, DEFAULT_GRAPHICS, PRESETS, resolveStyle, resolveGraphics, buildAss, buildSrt, captionChunks, assColor };

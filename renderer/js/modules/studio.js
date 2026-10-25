@@ -297,6 +297,15 @@ function Editor({ id }) {
   const linked = (s, c) => (c.linkId && c.linkId !== '0' ? [...s.videoTracks, ...s.audioTracks].flatMap((tr) => tr.clips).filter((x) => x.linkId === c.linkId) : [c]);
 
   /** Cut clips at time `at` (all unlocked tracks, or only `pick` clips). Returns how many were cut. */
+  /** Cutting a caption: each half keeps only the words said on its side of the cut (by the middle of the word), timed from its own start. */
+  const splitWords = (left, right, off) => {
+    const st = left.text; const ws = st?.words; if (!ws?.length) return;
+    const toks = String(st.text || '').split(/\s+/).filter(Boolean); if (toks.length !== ws.length) return; // edited words: leave as is
+    const n = ws.filter((w) => (w.s + w.e) / 2 < off).length;
+    const mk = (a, b, shift) => ({ text: toks.slice(a, b).join(' '), words: ws.slice(a, b).map((w) => ({ ...w, s: Math.max(0, w.s - shift), e: Math.max(0, w.e - shift) })) });
+    left.text = { ...st, ...mk(0, n, 0) }; right.text = { ...right.text, ...mk(n, ws.length, off) };
+    for (const c of [left, right]) if (!c.renamed) c.name = c.text.text || '(pause)';
+  };
   const splitAt = (d, s, at, pick) => {
     const targets = [];
     for (const tr of [...s.videoTracks, ...s.audioTracks]) { if (tr.locked) continue; for (const c of tr.clips) if (at > c.start + 0.03 && at < c.start + c.duration - 0.03 && (!pick || pick(c))) targets.push({ c, tr }); }
@@ -305,6 +314,7 @@ function Editor({ id }) {
       const right = clone(c); right.id = nextId(d);
       const off = t - c.start; right.start = t; right.duration = c.duration - off; right.in = (c.in || 0) + off * (c.speed || 1); right.transIn = { type: 0, duration: 1 }; shiftKeys(right, -off);
       c.duration = off; c.transOut = { type: 0, duration: 1 };
+      if (c.type === 3) splitWords(c, right, off);
       if (c.linkId && c.linkId !== '0') { linkMap[c.linkId] = linkMap[c.linkId] || nextId(d); right.linkId = linkMap[c.linkId]; }
       tr.clips.push(right); tr.clips.sort((a, b) => a.start - b.start);
     }

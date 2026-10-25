@@ -1048,10 +1048,13 @@ r.post('/api/studio/captions', (req, b) => {
     const t = require('./jobs/handlers').studioTranscript(String(c.path || '')); if (!t) { missing.add(c.path); continue; }
     const speed = Math.abs(Number(c.speed) || 1); const a = Number(c.in) || 0; const z = a + (Number(c.duration) || 0) * speed;
     for (const k of captions.captionChunks({ words: t.words || [], range: { start: a, end: z }, style: st })) {
-      out.push({ start: Number(c.start) + k.start / speed, duration: Math.max(0.2, (k.end - k.start) / speed), text: k.text, words: k.words.map((w) => ({ ...w, s: w.s / speed, e: w.e / speed })) });
+      out.push({ start: Number(c.start) + k.start / speed, duration: Math.max(0.05, (k.end - k.start) / speed), text: k.text, words: k.words.map((w) => ({ ...w, s: w.s / speed, e: w.e / speed })) });
     }
   }
-  return { captions: out.sort((x, y) => x.start - y.start), missing: [...missing] };
+  // Pieces never overlap (two clips' transcripts can), so short lines don't stack on top of each other.
+  out.sort((x, y) => x.start - y.start);
+  for (let i = 0; i < out.length - 1; i++) out[i].duration = Math.max(0.05, Math.min(out[i].duration, out[i + 1].start - out[i].start));
+  return { captions: out, missing: [...missing] };
 });
 r.post('/api/studio/transcribe', (req, b) => {
   const jobs = [];
