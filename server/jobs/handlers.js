@@ -227,6 +227,13 @@ queue.register('discover', {
     if (!asset) throw permanent('Asset no longer exists');
     const client = ctx.store.get('clients', asset.clientId);
     const count = job.payload.count || client.production?.clipsPerFootage || ctx.setting('production.defaultClipCount', 6);
+    // Story text style: no talking clips; each edit tells one part of the video in text lines over its best shots.
+    if (client.production?.videoStyle === 'story' && asset.info?.hasVideo !== false) {
+      const made = pipeline.createStoryClips(asset, count);
+      ctx.store.update('assets', asset.id, { discoveredAt: now(), discoveryMethod: 'story' });
+      audit.log('system', 'clips.discovered', { clientId: asset.clientId, assetId: asset.id, count: made.length, method: 'story' });
+      return { clips: made.length, method: 'story' };
+    }
     h.progress(0.2, 'Measuring the footage');
     const transcript = loadTranscript(asset);
     const result = await intel.discoverClips(asset, transcript, { count, jobId: job.id, onProgress: (f, t) => h.progress(f, t), exclude: pipeline.usedRanges(asset.id), analysis: loadAnalysis(asset), vision: require('../video/vision').cached(asset.path, asset.workDir) });
@@ -252,16 +259,30 @@ async function renderBroll(job, h, clip) {
   let black = []; try { black = await require('../video/montage').blackIntervals(asset.path, asset.workDir); } catch { /* none */ }
   const be = require('../video/brolledit');
   h.progress(0.15, 'Choosing the music');
-  const music = require('../video/music'); const mood = clip.music && !['auto', 'off'].includes(clip.music) ? clip.music : client?.production?.brollMood || 'darkbeat';
+  const music = require('../video/music'); const mood = clip.music && !['auto', 'off'].includes(clip.music) ? clip.music : (clip.kind === 'story' ? client?.production?.storyMood || 'suspense' : client?.production?.brollMood || 'darkbeat');
   const track = clip.musicTrack ? { file: await music.resolve(clip.musicTrack) } : await music.pick(mood);
   // Shots used by this footage's earlier B-roll edits are skipped when there are enough others (so daily edits differ).
-  const avoid = ctx.store.all('clips', (c) => c.assetId === asset.id && c.kind === 'broll' && c.id !== clip.id).flatMap((c) => (c.versions || []).flatMap((v) => (v.broll?.segs || []).map((s) => [s.src, s.src + s.dur])));
+  const story = clip.kind === 'story';
+  const others = ctx.store.all('clips', (c) => c.assetId === asset.id && c.kind === clip.kind && c.id !== clip.id);
+  // Story edits avoid the other edits' current shots; B-roll edits avoid every shot earlier edits ever used (daily edits differ).
+  const avoid = others.flatMap((c) => (story ? (c.versions || []).slice(-1) : c.versions || []).flatMap((v) => (v.broll?.segs || []).map((s) => [s.src, s.src + s.dur])));
+  // Story edits: text lines written for this part of the video, shown on the cuts (story.js).
+  let lines = null;
+  const texts = story ? async (grid) => {
+    const st = require('../video/story');
+    h.progress(0.3, 'Writing the story lines');
+    const count = Math.max(4, Math.min(10, Math.round(grid.total / 6)));
+    const used = others.flatMap((c) => c.versions?.[c.versions.length - 1]?.story?.lines || []);
+    lines = clip.storyLines?.length ? { lines: clip.storyLines, by: 'edited' } : await st.lines({ shots: vis?.shots || [], words: loadTranscript(asset)?.words || [], window: clip.window, count, title: asset.name, clientId: clip.clientId, jobId: job.id, avoid: used, part: Math.max(0, (clip.part || 1) - 1) });
+    return st.writeAss({ lines: lines.lines, grid, file: path.join(outDir, `v${n}.story.ass`) }).file;
+  } : null;
   h.progress(0.2, 'Finding the beat and cutting the shots to it');
-  const r = await be.make({ source: asset.path, duration: asset.info?.duration || 0, shots: vis?.shots || [], scenes: an?.scenes || [], black, avoid, music: track?.file || null, length: clip.end - clip.start, out: outPath, volume: Number(clip.musicVol ?? 0.9), signal: h.signal });
+  const r = await be.make({ source: asset.path, duration: asset.info?.duration || 0, shots: vis?.shots || [], scenes: an?.scenes || [], black, avoid, music: track?.file || null, length: clip.end - clip.start, out: outPath, volume: Number(clip.musicVol ?? 0.9), signal: h.signal,
+    ...(story ? { raw: true, window: clip.window || null, cutBeats: 2.6, texts, strict: true } : {}) });
   const segs = r.segs;
   const qc = await ff.qualityCheck(outPath, { expectWidth: 1080, expectHeight: 1920, minSec: 3, maxSec: 180 });
   const thumb = path.join(outDir, `v${n}.jpg`); await ff.thumbnail(outPath, thumb, Math.min(1.5, r.duration / 2), 405);
-  const version = { n, path: outPath, thumb, duration: r.duration, renderedAt: now(), qc: { passed: qc.passed, issues: qc.issues }, captioned: false, broll: { shots: segs.length, mood, track: track?.source || null, bpm: r.bpm, synced: r.synced, segs } };
+  const version = { n, path: outPath, thumb, duration: r.duration, renderedAt: now(), qc: { passed: qc.passed, issues: qc.issues }, captioned: false, broll: { shots: segs.length, mood, track: track?.source || null, bpm: r.bpm, synced: r.synced, segs }, ...(lines ? { story: { lines: lines.lines, by: lines.by } } : {}) };
   ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), version], currentVersion: n, pendingChanges: null }));
   pipeline.afterQc(clip.id, qc);
   return { version: n, duration: r.duration, shots: segs.length };
@@ -272,7 +293,7 @@ queue.register('render.short', {
   heavy: true, remote: true,
   async run(job, h) {
     const clip = ctx.store.get('clips', job.payload.clipId);
-    if (clip?.kind === 'broll') return renderBroll(job, h, clip);
+    if (clip?.kind === 'broll' || clip?.kind === 'story') return renderBroll(job, h, clip);
     if (!clip) throw permanent('Clip no longer exists');
     const asset = ctx.store.get('assets', clip.assetId); const client = ctx.store.get('clients', clip.clientId);
     // Check the file itself (not just what import recorded): no picture means no short, so stop here with a clear reason.

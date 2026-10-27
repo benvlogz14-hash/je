@@ -24,34 +24,44 @@ function sceneShots(scenes = [], duration = 0) {
 /**
  * Pick the shots: the strongest ones, never two from the same moment or described the same way (and, for a daily
  * edit, not the ones used before when there are enough others), then put back in story order.
+ * Footage never repeats: each shot is split into separate pieces that don't overlap, the middle piece of every shot is
+ * tried first, a second piece of the same shot only comes from a clearly different moment of it, and when the good
+ * footage runs out the plan is simply shorter (make() then ends the edit early) instead of showing a moment twice.
  * durs: how long each shot plays (from the beat grid); returns [{ src, dur }] (source seconds).
  */
-function plan({ shots = [], scenes = [], duration, durs, black = [], avoid = [] }) {
-  const pool = (shots.length ? shots : sceneShots(scenes, duration))
-    .filter((x) => x.usable !== false && x.e - x.s >= 1.2 && !(x.bright != null && x.bright < 35))
-    .map((x) => ({ ...x, q: shots.length ? montage.shotScore(x) + (montage.isDrone(x) ? 0.2 : 0) : 0.5 + Math.random() * 0.1 }))
-    .sort((a, b) => b.q - a.q);
-  const want = durs.length; const longest = Math.max(...durs);
-  const norm = (w) => String(w || '').toLowerCase().replace(/[^a-z ]/g, '').trim();
+function plan({ shots = [], scenes = [], duration, durs, black = [], avoid = [], window = null, strict = false }) {
+  const inWin = (x) => !window || (x.s >= window[0] - 0.01 && x.e <= window[1] + 0.01);
+  const longest = Math.max(...durs); const need = longest + 0.04;
+  const base = (shots.length ? shots : sceneShots(scenes, duration))
+    .filter(inWin).filter((x) => x.usable !== false && x.e - x.s >= Math.min(1.2, need) && !(x.bright != null && x.bright < 35))
+    .map((x) => ({ ...x, q: shots.length ? montage.shotScore(x) + (montage.isDrone(x) ? 0.2 : 0) : 0.5 }));
   const touchesBlack = (a, b) => black.some(([x, y]) => x < b + 0.15 && y > a - 0.15);
-  const usedBefore = (x) => avoid.some(([a, b]) => x.s < b && x.e > a);
-  const gap = shots.length ? 3 : -0.05; // looked-through shots: never the same moment twice; scene pieces just mustn't overlap
-  const pick = (skipUsed) => {
-    const picked = [];
-    for (const x of pool) {
-      if (picked.length >= want) break;
-      if (skipUsed && usedBefore(x)) continue;
-      if (picked.some((p) => (x.s < p.e + gap && x.e > p.s - gap) || (x.what && p.what && norm(x.what) === norm(p.what)))) continue;
-      const mid = (x.s + x.e) / 2; const src = Math.max(0, Math.min(duration - longest - 0.1, Math.max(x.s + 0.2, mid - longest / 2)));
-      if (touchesBlack(src, src + longest)) continue;
-      picked.push({ ...x, src: Math.round(src * 100) / 100 });
+  const usedBefore = (a, b) => avoid.some(([x, y]) => a < y && b > x);
+  // Pieces: every shot cut into back-to-back slots of the longest shot length (away from its first/last 0.2 s).
+  const pieces = [];
+  base.forEach((x, si) => {
+    const lo = x.s + 0.08, hi = Math.min(x.e, duration) - 0.08; const n = Math.max(1, Math.floor((hi - lo) / need));
+    const mid = (lo + hi) / 2; const span = n * need; const start0 = Math.max(lo, mid - span / 2);
+    for (let k = 0; k < n; k++) { const a = start0 + k * need; if (a + longest > hi + 1e-6) continue; pieces.push({ si, a, q: x.q, mid: Math.abs(a + longest / 2 - mid), what: x.what }); }
+  });
+  const norm = (w) => String(w || '').toLowerCase().replace(/[^a-z ]/g, '').trim();
+  pieces.sort((p, q) => q.q - p.q || p.mid - q.mid);
+  const picked = [];
+  const clash = (p, gap) => picked.some((o) => p.a < o.a + longest + gap && p.a + longest + gap > o.a);
+  const pass = (rule) => {
+    for (const p of pieces) {
+      if (picked.length >= durs.length) return;
+      if (picked.includes(p) || touchesBlack(p.a, p.a + longest)) continue;
+      if (rule.fresh && usedBefore(p.a, p.a + longest)) continue;
+      if (rule.oneEach && picked.some((o) => o.si === p.si || (p.what && o.what && norm(p.what) === norm(o.what)))) continue;
+      if (clash(p, rule.gap)) continue;
+      picked.push(p);
     }
-    return picked;
   };
-  let picked = pick(true); if (picked.length < Math.min(want, 4)) picked = pick(false);
-  // Fewer good shots than beats: reuse the strongest ones from a later point inside them rather than stop early.
-  for (let i = 0; picked.length && picked.length < want; i++) { const p = picked[i % picked.length]; picked.push({ ...p, src: Math.min(duration - longest - 0.1, p.src + 1.1 * (1 + Math.floor(i / picked.length))) }); }
-  return picked.sort((a, b) => a.src - b.src).map((p, i) => ({ src: p.src, dur: durs[i] }));
+  pass({ fresh: true, oneEach: true, gap: shots.length ? 3 : 0.3 }); // different shots, not used by earlier edits
+  if (!strict) pass({ fresh: false, oneEach: true, gap: shots.length ? 3 : 0.3 }); // different shots, even if an earlier edit used them
+  pass({ fresh: !!strict, oneEach: false, gap: 1.5 }); // another moment of a shot already in (at least 1.5 s away)
+  return picked.sort((a, b) => a.a - b.a).map((p, i) => ({ src: Math.round(p.a * 100) / 100, dur: durs[i] }));
 }
 
 /** Cut times every ~2.4 s with soft crossfades (no beat grid: no music, or the beat couldn't be found). */
@@ -73,7 +83,7 @@ function durations({ cuts, total, trans }) {
 }
 
 /** Render the edit: vertical, slow push-ins (alternating in and out), cuts/transitions on the grid, moody grade, music only. */
-async function render({ source, segs, grid, music, out, volume = 0.9, signal }) {
+async function render({ source, segs, grid, music, out, volume = 0.9, signal, raw = false, ass = null }) {
   if (segs.length < 2) throw new Error('Not enough good shots in this video for a B-roll edit');
   const args = ['-hide_banner', '-y'];
   segs.forEach((s) => args.push('-ss', s.src.toFixed(3), '-t', (s.dur + 0.2).toFixed(3), '-an', '-i', source));
@@ -82,7 +92,10 @@ async function render({ source, segs, grid, music, out, volume = 0.9, signal }) 
   segs.forEach((s, i) => {
     const frames = Math.max(2, Math.round(s.dur * FPS)); const zin = i % 2 === 0;
     const z = zin ? `min(1+${(0.1 / frames).toFixed(5)}*on,1.1)` : `max(1.1-${(0.1 / frames).toFixed(5)}*on,1)`;
-    f.push(`[${i}:v]fps=${FPS},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1,`
+    // raw (story edits): the footage as filmed, like a phone video; otherwise slow push-ins and a moody grade.
+    f.push(raw
+      ? `[${i}:v]fps=${FPS},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1,trim=end_frame=${frames},setpts=PTS-STARTPTS,format=yuv420p[v${i}]`
+      : `[${i}:v]fps=${FPS},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1,`
       + `zoompan=z='${z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${W}x${H}:fps=${FPS},`
       + `trim=end_frame=${frames},setpts=PTS-STARTPTS,eq=contrast=1.12:saturation=0.82:brightness=-0.035,vignette=PI/5,format=yuv420p[v${i}]`);
   });
@@ -93,24 +106,40 @@ async function render({ source, segs, grid, music, out, volume = 0.9, signal }) 
     last = o;
   }
   const total = grid.total;
-  f.push(`[${last}]fade=t=in:st=0:d=0.25,fade=t=out:st=${Math.max(0, total - 0.6).toFixed(3)}:d=0.6[vout]`);
+  // Story edits start on a full frame (the first frame is the cover) and carry their text lines (ASS) on top.
+  const sub = ass ? `,subtitles=filename='${require('./render').rel(ass)}':fontsdir='fonts'` : '';
+  f.push(raw ? `[${last}]fade=t=out:st=${Math.max(0, total - 0.4).toFixed(3)}:d=0.4${sub}[vout]` : `[${last}]fade=t=in:st=0:d=0.25,fade=t=out:st=${Math.max(0, total - 0.6).toFixed(3)}:d=0.6${sub}[vout]`);
   if (music) f.push(`[${segs.length}:a]atrim=duration=${total.toFixed(3)},asetpts=PTS-STARTPTS,aresample=48000,volume=${volume},loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:d=0.08,afade=t=out:st=${Math.max(0, total - 1.5).toFixed(3)}:d=1.5[aout]`);
   else f.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${total.toFixed(3)}[aout]`);
   fs.mkdirSync(path.dirname(out), { recursive: true });
   args.push('-filter_complex', f.join(';'), '-map', '[vout]', '-map', '[aout]', '-t', total.toFixed(3), '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', out);
-  await run(ff.bin('ffmpeg'), args, { timeoutMs: 1800000, signal, priority: ff.priorityValue() });
+  if (ass) require('./render').ensureFonts();
+  await run(ff.bin('ffmpeg'), args, { timeoutMs: 1800000, signal, priority: ff.priorityValue(), cwd: require('../core/paths').root });
   return { outPath: out, duration: total };
 }
 
 /**
  * Plan and render a whole edit. With music, the cuts land on its beats (beats.js); without, soft crossfades every ~2.4 s.
  */
-async function make({ source, duration, shots, scenes, black, avoid, music, length = 20, out, volume, signal }) {
+async function make({ source, duration, shots, scenes, black, avoid, music, length = 20, out, volume, signal, raw = false, window = null, cutBeats = null, texts = null, strict = false }) {
   let grid = null; let bpm = null;
-  if (music) { try { const bt = await require('./beats').detect(music); const g = require('./beats').cutGrid(bt, length); if (g && g.cuts.length >= 2) { const avail = await require('./studio').xfadeSupport().catch(() => null); grid = { ...g, trans: beatTransitions(g.cuts, avail && avail.size ? avail : null) }; bpm = bt.bpm; } } catch { /* no beat: plain grid */ } }
-  if (!grid) grid = plainGrid(length);
-  const segs = plan({ shots, scenes, duration, durs: durations(grid), black, avoid });
-  const r = await render({ source, segs, grid, music, out, volume, signal });
+  if (music) { try { const bt = await require('./beats').detect(music); const g = require('./beats').cutGrid(bt, length, cutBeats); if (g && g.cuts.length >= 2) { const avail = await require('./studio').xfadeSupport().catch(() => null); grid = { ...g, trans: beatTransitions(g.cuts, avail && avail.size ? avail : null) }; bpm = bt.bpm; } } catch { /* no beat: plain grid */ } }
+  if (!grid) grid = plainGrid(length, raw ? 2.6 : 2.4);
+  if (raw) grid.trans = grid.cuts.map(() => ({ type: 'fade', d: 0.04 })); // story edits: straight cuts, like a phone edit
+  let segs = plan({ shots, scenes, duration, durs: durations(grid), black, avoid, window, strict });
+  // Too few shots in this part: widen it step by step (still never reusing another edit's shots when strict).
+  for (let k = 1; window && k <= 3 && segs.length < Math.min(grid.cuts.length + 1, 8); k++) {
+    const pad = ((window[1] - window[0]) * k) / 2; const more = plan({ shots, scenes, duration, durs: durations(grid), black, avoid, window: [Math.max(0, window[0] - pad), Math.min(duration, window[1] + pad)], strict });
+    if (more.length > segs.length) segs = more;
+  }
+  // Not enough different footage for the whole length: end the edit at the last fresh shot rather than repeat one.
+  if (segs.length >= 2 && segs.length < grid.cuts.length + 1) {
+    const k = segs.length; grid = { ...grid, total: grid.cuts[k - 1], cuts: grid.cuts.slice(0, k - 1), trans: grid.trans.slice(0, k - 1) };
+    const d = durations(grid); segs = segs.map((x, i) => ({ ...x, dur: d[i] }));
+  }
+  // texts(grid) -> an ASS file with the story lines, timed to the cuts.
+  const ass = typeof texts === 'function' ? await texts(grid) : null;
+  const r = await render({ source, segs, grid, music, out, volume, signal, raw, ass });
   return { ...r, segs, bpm, cuts: grid.cuts.length, synced: !!bpm };
 }
 

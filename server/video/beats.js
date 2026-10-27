@@ -57,10 +57,10 @@ async function detect(file) {
  * Cut times on the beat for an edit of about `length` seconds: a cut every few beats (about 1.4-2.6 s per shot),
  * starting from the first beat. Returns { start (where the music starts), cuts: [output seconds], total }.
  */
-function cutGrid({ beats, period }, length = 20) {
+function cutGrid({ beats, period }, length = 20, perShot = null) {
   if (!beats?.length || !period) return null;
-  // Beats per shot: 1, 2, 4 or 8 (musical groupings), nearest to ~2 s per shot; every 4th shot is a quick double cut.
-  const ideal = 2 / period; const per = [1, 2, 4, 8].reduce((a, b) => (Math.abs(Math.log(b / ideal)) < Math.abs(Math.log(a / ideal)) ? b : a));
+  // Beats per shot: 1, 2, 4 or 8 (musical groupings), nearest to ~2 s per shot (or perShot seconds); every 4th shot is a quick double cut.
+  const ideal = (perShot || 2) / period; const per = [1, 2, 4, 8].reduce((a, b) => (Math.abs(Math.log(b / ideal)) < Math.abs(Math.log(a / ideal)) ? b : a));
   const pattern = per >= 2 ? [per, per, per, per / 2, per / 2] : [per];
   const start = beats[0]; const cuts = []; let k = 0; let i = 0;
   for (;;) { k += pattern[i++ % pattern.length]; if (k >= beats.length) break; const t = beats[k] - start; if (t >= length - 0.5) break; cuts.push(Math.round(t * 1000) / 1000); }

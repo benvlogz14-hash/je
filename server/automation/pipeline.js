@@ -97,6 +97,28 @@ function createBrollClip(asset) {
   return clip;
 }
 
+/**
+ * Story text edits for one video (client video style "story"): n edits, each drawing its shots from its own part of the
+ * video in order (so the six edits tell six different stretches and never share shots), with its own text lines.
+ */
+function createStoryClips(asset, n) {
+  const client = ctx.store.get('clients', asset.clientId); const prod = client?.production || {};
+  const len = Math.max(15, Math.min(90, Number(prod.storySeconds) || 45)); const dur = asset.info?.duration || 0;
+  const have = ctx.store.all('clips', (c) => c.assetId === asset.id && c.kind === 'story').length;
+  const total = have + n; const out = [];
+  for (let i = have; i < total; i++) {
+    const a = dur ? (dur * i) / total : 0, b = dur ? (dur * (i + 1)) / total : 0;
+    out.push(ctx.store.insert('clips', {
+      ref: nextRef(), clientId: asset.clientId, assetId: asset.id, kind: 'story', start: 0, end: len, window: dur ? [Math.round(a * 10) / 10, Math.round(b * 10) / 10] : null, part: i + 1,
+      title: `Story ${i + 1}: ${String(asset.name || 'video').replace(/\.[^.]+$/, '')}`.slice(0, 80), hook: '', caption: '', hashtags: [],
+      method: 'story', reason: 'Text lines tell the story over the best shots of this part of the video, to intense music', music: prod.storyMood || 'suspense', status: 'queued', versions: [], currentVersion: 0, feedback: [], approvalId: null, postId: null,
+    }));
+    requestRender(out[out.length - 1], { reason: 'initial' });
+  }
+  events.publish('clips', { assetId: asset.id });
+  return out;
+}
+
 function nextRef() { const n = (ctx.store.settings._clipSeq || 100) + 1; ctx.store.settings._clipSeq = n; ctx.store.touch(); return n; }
 
 function requestRender(clip, { reason = 'render', changes = null } = {}) {
@@ -227,7 +249,7 @@ function sanitizeStyle(s) {
   if (o.size) o.size = Math.max(30, Math.min(220, o.size));
   if (o.hookSeconds != null) o.hookSeconds = Math.max(0, Math.min(15, o.hookSeconds));
   if (o.outlineWidth != null) o.outlineWidth = Math.max(0, Math.min(30, o.outlineWidth));
-  if (o.hookSize) o.hookSize = Math.max(30, Math.min(220, o.hookSize));
+  if (o.hookSize) o.hookSize = Math.max(30, Math.min(260, o.hookSize));
   if (o.hookOutlineWidth != null) o.hookOutlineWidth = Math.max(0, Math.min(30, o.hookOutlineWidth));
   if (o.hookTilt != null) o.hookTilt = Math.max(-30, Math.min(30, o.hookTilt));
   if (o.rotate != null) o.rotate = Math.max(-30, Math.min(30, o.rotate));
@@ -303,4 +325,4 @@ function quotaStatus(client) {
   return { slotsAhead: slots.length, scheduled, open: Math.max(0, slots.length - scheduled), inReview, inProduction, approvedUnscheduled, unusedFootage, perDay: client.schedule.shortsPerDay, postedToday };
 }
 
-module.exports = { createBrollClip, nextRef, clientDefaults, createClient, enforceApprovalPolicy, addAsset, usedRanges, createClips, requestRender, afterQc, decideClip, remember, sanitizeStyle, upcomingSlots, scheduleClip, unschedule, quotaStatus, portalUrl, zoned, localDate };
+module.exports = { createStoryClips, createBrollClip, nextRef, clientDefaults, createClient, enforceApprovalPolicy, addAsset, usedRanges, createClips, requestRender, afterQc, decideClip, remember, sanitizeStyle, upcomingSlots, scheduleClip, unschedule, quotaStatus, portalUrl, zoned, localDate };

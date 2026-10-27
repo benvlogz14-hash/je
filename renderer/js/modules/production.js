@@ -110,7 +110,7 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
       <div class="avatar lg" style="background:var(--teal-soft);color:var(--teal-ink)"><${Icon} name="upload" size=${20} /></div>
       <div class="grow"><b>Drop footage here</b><div class="muted" style="font-size:var(--fs-sm)">${target ? `For ${clients.find((c) => c.id === target)?.name}. Transcription and clip discovery start automatically.` : clients.length ? 'Choose the client in the menu at the top right, then drop footage.' : 'Footage is filed under a client. Create your first one (just a name) and drop away.'}</div>
         ${!clients.length ? html`<div style="margin-top:8px"><${Button} size="sm" kind="soft" icon="plus" onClick=${async () => { const c = await quickClient().catch(() => null); if (c) setClientId(c.id); }}>Create your first client</${Button}></div>` : null}
-        ${target ? html`<${ClipLength} client=${clients.find((c) => c.id === target)} /><${MusicSwitch} client=${clients.find((c) => c.id === target)} /><${AiTips} client=${clients.find((c) => c.id === target)} /><${BrollSwitch} client=${clients.find((c) => c.id === target)} />` : null}
+        ${target ? html`<${StyleSwitch} client=${clients.find((c) => c.id === target)} /><${ClipLength} client=${clients.find((c) => c.id === target)} /><${MusicSwitch} client=${clients.find((c) => c.id === target)} /><${AiTips} client=${clients.find((c) => c.id === target)} /><${BrollSwitch} client=${clients.find((c) => c.id === target)} />` : null}
         ${uploads.map((u) => html`<div style="margin-top:8px"><div class="row" style="font-size:var(--fs-sm)"><span class="grow ellipsis">${u.name}</span><span class="tnum faint">${Math.round(u.p * 100)}%</span></div><${Progress} value=${u.p} /></div>`)}</div>
       <div class="col" style="gap:6px">${(() => { const tc = clients.find((c) => c.id === target); const waitOn = tc?.production?.waitForStart !== false && !tc?.schedule?.autopilot;
           // Shows as soon as footage is uploaded (not only once it's ready): pressing it early makes clips the moment the video is ready.
@@ -165,6 +165,26 @@ function AiTips({ client }) {
 function WideSwitch({ client }) {
   const on = !!client?.production?.wide;
   return html`<div class="row" style=${{ gap: '8px', alignItems: 'center', padding: '6px 10px', borderRadius: '10px', border: '1px solid var(--line)', background: on ? 'var(--surface-2)' : 'transparent' }} title="Off: vertical clips (9:16). On: every clip comes out in both sizes, vertical and widescreen (16:9)." onClick=${(e) => e.stopPropagation()}><${Toggle} on=${on} onChange=${(x) => act(() => api.patch(`/api/clients/${client.id}`, { production: { wide: x } }), { ok: x ? 'Dual video on: every new clip comes in vertical and widescreen' : 'Dual video off: vertical only', sound: 'tap' })} label="Dual video" /><div class="col" style="gap:0"><b style="font-size:var(--fs-sm)">Dual video</b><span class="faint" style="font-size:var(--fs-xs)">${on ? 'vertical + widescreen' : 'vertical only'}</span></div></div>`;
+}
+
+/**
+ * Video style for this client (each client keeps its own): Documentary (narrator, yellow key-word captions, big title),
+ * Story text (no talking: text lines tell the story over quick cuts and intense music), or Custom (their own settings).
+ */
+function StyleSwitch({ client }) {
+  const { data: list } = useApi('/api/video-styles', []);
+  const p = client?.production || {}; const cur = p.videoStyle || 'custom';
+  const pick = (id) => act(() => api.post(`/api/clients/${client.id}/video-style`, { style: id }), { ok: id === 'custom' ? 'Custom style: your own settings' : `${client.name}: ${(list || []).find((x) => x.id === id)?.label} style for new clips`, sound: 'tap' });
+  const save = (patch, ok) => act(() => api.patch(`/api/clients/${client.id}`, { production: patch }), { ok, sound: 'tap' });
+  const opts = [...(list || []), { id: 'custom', label: 'Custom', blurb: 'Your own caption look and settings below' }];
+  return html`<div class="col" style="gap:6px;margin-top:10px;max-width:560px" onClick=${(e) => e.stopPropagation()}>
+    <div class="row wrap" style="gap:6px;align-items:center"><span class="label" style="margin-right:4px">Video style</span>
+      ${opts.map((o) => html`<button class="chip" title=${o.blurb} style=${cur === o.id ? { background: 'var(--accent-soft, #dcefeb)', borderColor: 'var(--accent, #5f9a91)', fontWeight: 700 } : {}} onClick=${() => cur !== o.id && pick(o.id)}>${o.label}</button>`)}</div>
+    <span class="faint" style="font-size:var(--fs-xs)">${opts.find((o) => o.id === cur)?.blurb || ''}. Only for ${client.name}; new clips use it.</span>
+    ${cur === 'story' ? html`<div class="row wrap" style="gap:8px;font-size:var(--fs-xs);align-items:center"><span class="faint">Length</span>
+      <select class="select" style="height:30px;font-size:var(--fs-xs);width:auto" value=${String(p.storySeconds || 45)} onChange=${(e) => save({ storySeconds: Number(e.target.value) }, `Story edits: about ${e.target.value} seconds`)} aria-label="Story length">${[20, 30, 45, 60].map((n) => html`<option value=${n}>${n} seconds</option>`)}</select>
+      <span class="faint">Music</span><select class="select" style="height:30px;font-size:var(--fs-xs);width:auto" value=${p.storyMood || 'suspense'} onChange=${(e) => save({ storyMood: e.target.value }, `Story music: ${e.target.selectedOptions[0].text}`)} aria-label="Story music">${[['suspense', 'Suspense'], ['intense', 'Intense'], ['darkbeat', 'Dark beat'], ['creepy', 'Creepy']].map(([v, l]) => html`<option value=${v}>${l}</option>`)}</select></div>` : null}
+  </div>`;
 }
 
 /** Extra B-roll edit per video: a dramatic, music-only cut-through of the best shots. Off unless switched on. */

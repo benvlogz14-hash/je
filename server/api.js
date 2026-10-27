@@ -221,6 +221,16 @@ r.get('/api/clients/:id', (req, b, p) => {
   const c = must(ctx.store.get('clients', p.id));
   return { ...clientView(c, true), contacts: ctx.store.all('contacts', (x) => x.clientId === c.id), assets: ctx.store.all('assets', (a) => a.clientId === c.id).slice(-40).reverse(), upcomingSlots: pipeline.upcomingSlots(c, 2) };
 });
+// Video styles (Production → Video style): picking one copies its look and settings onto this client only.
+r.get('/api/video-styles', () => Object.entries(require('./video/styles').PRESETS).map(([id, p]) => ({ id, label: p.label, blurb: p.blurb })));
+r.post('/api/clients/:id/video-style', (req, b, p) => {
+  const c = must(ctx.store.get('clients', p.id)); const st = require('./video/styles');
+  const patch = st.patchFor(String(b?.style || 'custom'), c);
+  if (patch.style) patch.style = { ...(c.style || {}), ...pipeline.sanitizeStyle(patch.style) };
+  const out = ctx.store.update('clients', c.id, patch); events.publish('clients', { id: c.id });
+  audit.log(actorOf(req), 'client.videoStyle', { clientId: c.id, style: b?.style });
+  return out;
+});
 r.patch('/api/clients/:id', (req, b, p) => {
   const c = must(ctx.store.get('clients', p.id));
   const patch = {};
