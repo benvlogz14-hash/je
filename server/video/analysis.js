@@ -15,7 +15,8 @@ async function analyze(asset, { onProgress, signal } = {}) {
   if (fs.existsSync(cache)) return JSON.parse(fs.readFileSync(cache, 'utf8'));
   const dur = asset.info?.duration || 0;
   const result = { scenes: [], energy: [], peaks: [], duration: dur };
-  if (asset.info?.hasVideo) {
+  // Scene cuts and loudness are read at the same time (two FFmpeg runs side by side), not one after the other.
+  const scenesRun = !asset.info?.hasVideo ? null : (async () => {
     // Scene changes on a small, low-fps proxy: cheap even for multi-hour streams.
     const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-stats_period', '1', '-i', asset.path, '-an', '-vf', "fps=6,scale=256:-2,select='gt(scene\\,0.32)',showinfo", '-f', 'null', '-'], {
       timeoutMs: 4 * 3600000, priority: ff.priorityValue(), signal,
@@ -26,7 +27,8 @@ async function analyze(asset, { onProgress, signal } = {}) {
       },
     });
     void r;
-  }
+  })();
+  scenesRun?.catch(() => {}); // its error is raised below, where it is awaited
   if (asset.info?.hasAudio) {
     // Short-term loudness once per second; peaks are moments well above the clip's median.
     // Read loudness line by line (long files print millions of lines), keeping the loudest value per second, with progress.
@@ -47,6 +49,8 @@ async function analyze(asset, { onProgress, signal } = {}) {
     for (const e of result.energy) if (e.lufs > median + 6 && e.t - lastPeak > 8) { result.peaks.push(e.t); lastPeak = e.t; }
     result.medianLufs = median;
   }
+  if (scenesRun) await scenesRun;
+  result.scenes.sort((a, b) => a - b);
   if (onProgress) onProgress(1);
   fs.writeFileSync(cache, JSON.stringify(result));
   return result;

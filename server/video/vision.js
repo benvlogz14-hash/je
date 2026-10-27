@@ -18,9 +18,11 @@ const { run } = require('../core/util');
 const KINDS = ['speaker', 'interview', 'crowd', 'aerial', 'broll', 'graphic', 'text', 'other'];
 
 /** Shot boundaries from FFmpeg's scene detection, with long takes split and tiny shots merged. */
-async function shotList(file, duration, { maxShots = 48, signal } = {}) {
-  const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-i', file, '-an', '-vf', "fps=5,scale=256:-2,select='gt(scene\\,0.3)',showinfo", '-f', 'null', '-'], { timeoutMs: 4 * 3600000, priority: ff.priorityValue(), signal });
-  const cuts = [...String(r.err).matchAll(/pts_time:([\d.]+)/g)].map((m) => Number(m[1])).filter((t) => t > 0.5 && t < duration - 0.5);
+async function shotList(file, duration, { maxShots = 48, signal, cuts: known = null } = {}) {
+  // Scene cuts already found by the analyze step are reused (reading a long video again took minutes).
+  let found = known;
+  if (!found) { const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-i', file, '-an', '-vf', "fps=5,scale=256:-2,select='gt(scene\\,0.3)',showinfo", '-f', 'null', '-'], { timeoutMs: 4 * 3600000, priority: ff.priorityValue(), signal }); found = [...String(r.err).matchAll(/pts_time:([\d.]+)/g)].map((m) => Number(m[1])); }
+  const cuts = found.filter((t) => t > 0.5 && t < duration - 0.5).sort((a, b) => a - b);
   let shots = []; let prev = 0;
   for (const t of [...cuts, duration]) { if (t - prev >= 1) { shots.push({ s: prev, e: t }); prev = t; } else if (shots.length) shots[shots.length - 1].e = t; else prev = 0; }
   if (!shots.length) shots = [{ s: 0, e: duration }];
@@ -54,7 +56,7 @@ function cacheKey(file) { const st = fs.statSync(file); return `${st.size}:${Mat
 /**
  * Look through a video file. Returns { duration, engine, shots: [{ s, e, frame, faces, bright, motion, sharp, kind, what, quality, usable }] }.
  */
-async function look(file, { workDir, maxShots = 0, onProgress = () => {}, signal, jobId, clientId, purpose = '' } = {}) {
+async function look(file, { workDir, maxShots = 0, onProgress = () => {}, signal, jobId, clientId, purpose = '', cuts = null } = {}) {
   workDir = workDir || path.dirname(file);
   const base = path.join(workDir, `${path.basename(file).replace(/\.[^.]+$/, '')}.vision`);
   const cacheFile = `${base}.json`;
@@ -63,18 +65,26 @@ async function look(file, { workDir, maxShots = 0, onProgress = () => {}, signal
   if (!info.hasVideo || !info.duration) return { duration: info.duration || 0, shots: [], engine: 'none' };
   if (!maxShots) maxShots = Math.max(48, Math.min(120, Math.round(info.duration / 18))); // long videos get more shots logged
   onProgress(0.05, 'Finding the shots');
-  const shots = await shotList(file, info.duration, { maxShots, signal });
+  const shots = await shotList(file, info.duration, { maxShots, signal, cuts });
   const dir = `${base}_frames`; fs.mkdirSync(dir, { recursive: true });
   let faceMod = null; try { const ft = require('./facetrack'); if (await ft.available()) faceMod = ft; } catch { /* no faces */ }
+  // Stills and measurements four shots at a time (each is a short, separate FFmpeg run), then sharpness and faces in order.
+  let done = 0;
+  for (let i = 0; i < shots.length; i += 4) {
+    await Promise.all(shots.slice(i, i + 4).map(async (x, k) => {
+      x.frame = path.join(dir, `shot${i + k + 1}.jpg`);
+      await run(ff.bin('ffmpeg'), ['-hide_banner', '-y', '-ss', ((x.s + x.e) / 2).toFixed(2), '-i', file, '-frames:v', '1', '-vf', 'scale=512:-2', '-q:v', '4', x.frame], { timeoutMs: 60000 }).catch(() => {});
+      Object.assign(x, await measure(file, x));
+    }));
+    done = Math.min(shots.length, i + 4); onProgress(0.05 + 0.35 * (done / shots.length), `Looking at shot ${done} of ${shots.length}`);
+  }
   for (let i = 0; i < shots.length; i++) {
-    const x = shots[i]; x.frame = path.join(dir, `shot${i + 1}.jpg`);
-    await run(ff.bin('ffmpeg'), ['-hide_banner', '-y', '-ss', ((x.s + x.e) / 2).toFixed(2), '-i', file, '-frames:v', '1', '-vf', 'scale=512:-2', '-q:v', '4', x.frame], { timeoutMs: 60000 }).catch(() => {});
-    Object.assign(x, await measure(file, x));
+    const x = shots[i];
     if (fs.existsSync(x.frame)) {
       x.sharp = await sharpness(x.frame);
       if (faceMod) { const f = await faceMod.facesInImage(x.frame); x.faces = f ? f.length : null; x.faceSize = f?.length ? Math.round(Math.max(...f.map((b) => (b.x2 - b.x1) * (b.y2 - b.y1))) * 100) / 100 : 0; }
     }
-    onProgress(0.05 + 0.5 * ((i + 1) / shots.length), `Looking at shot ${i + 1} of ${shots.length}`);
+    onProgress(0.4 + 0.15 * ((i + 1) / shots.length), `Checking shot ${i + 1} of ${shots.length}`);
   }
   let engine = 'measured';
   if (ai.canSee()) {

@@ -146,7 +146,7 @@ queue.register('analyze', {
     // Look through the picture too: every shot's still, faces, quality and (with an AI that can see) a description.
     if (ctx.setting('video.lookThrough', true) && asset.info?.hasVideo) {
       try {
-        const v = await require('../video/vision').look(asset.path, { workDir: asset.workDir, clientId: asset.clientId, jobId: job.id, signal: h.signal, purpose: 'finding short-form clips', onProgress: (p, t) => h.progress(0.6 + p * 0.38, t) });
+        const v = await require('../video/vision').look(asset.path, { workDir: asset.workDir, clientId: asset.clientId, jobId: job.id, signal: h.signal, purpose: 'finding short-form clips', cuts: a.scenes || null, onProgress: (p, t) => h.progress(0.6 + p * 0.38, t) });
         ctx.store.update('assets', asset.id, { vision: { shots: v.shots.length, engine: v.engine, usable: v.shots.filter((x) => x.usable).length } });
       } catch (e) { h.log(`Looking through the video: ${e.message}`); }
     }
@@ -173,6 +173,28 @@ function coversElsewhere(clip) {
     if (v?.broll?.segs) out.push(...v.broll.segs.map((g) => [g.src, g.src + g.dur]));
   }
   return out;
+}
+
+/**
+ * B-roll dealt out up front: the video's good cut-away shots (best first) are shared out to its clips in turn, like
+ * dealing cards, so every clip has its own pile whatever order they render in. A clip uses its own pile first and only
+ * borrows when it runs out. Returns the set of shot keys (start seconds) for this clip, or null.
+ */
+function brollPile(clip, shots) {
+  const clips = ctx.store.all('clips', (c) => c.assetId === clip.assetId && !c.kind).sort((a, b) => a.start - b.start);
+  const me = clips.findIndex((c) => c.id === clip.id); if (me < 0 || clips.length < 2) return null;
+  const inside = (x) => clips.some((c) => x.s < c.end && x.e > c.start);
+  const good = require('../video/montage');
+  const pool = shots.filter((x) => !inside(x) && good.shotScore(x) >= 0.45 && x.e - x.s >= 2.2).sort((a, b) => good.shotScore(b) - good.shotScore(a));
+  // Dealt in turn, but a clip never gets two shots from the same scene (within 3 s of each other): that one goes to the next clip.
+  const piles = clips.map(() => []); let turn = 0;
+  for (const x of pool) {
+    for (let k = 0; k < clips.length; k++) {
+      const j = (turn + k) % clips.length;
+      if (!piles[j].some((y) => x.s < y.e + 3 && x.e > y.s - 3)) { piles[j].push(x); turn = j + 1; break; }
+    }
+  }
+  return new Set(piles[me].map((x) => `${x.s}`));
 }
 
 /** A video used in Studio that isn't footage in Production: transcripts kept under <data>/studio/transcripts. */
@@ -236,7 +258,12 @@ queue.register('discover', {
     }
     h.progress(0.2, 'Measuring the footage');
     const transcript = loadTranscript(asset);
-    const result = await intel.discoverClips(asset, transcript, { count, jobId: job.id, onProgress: (f, t) => h.progress(f, t), exclude: pipeline.usedRanges(asset.id), analysis: loadAnalysis(asset), vision: require('../video/vision').cached(asset.path, asset.workDir) });
+    // Ad reads (a website plug in the intro, sponsor reads, "like and subscribe") never become clips.
+    const ads = require('../video/ads').adRanges(transcript?.words || []);
+    if (ads.length) { ctx.store.update('assets', asset.id, { ads }); h.log(`Skipping ${ads.length} ad read${ads.length > 1 ? 's' : ''}: ${ads.map((a) => `${Math.round(a.start)}-${Math.round(a.end)}s`).join(', ')}`); }
+    const result = await intel.discoverClips(asset, transcript, { count: count + (ads.length ? 2 : 0), jobId: job.id, onProgress: (f, t) => h.progress(f, t), exclude: [...pipeline.usedRanges(asset.id), ...ads], analysis: loadAnalysis(asset), vision: require('../video/vision').cached(asset.path, asset.workDir) });
+    // Any pick that still runs into an ad by more than a second is dropped (the usual check allows small overlaps).
+    result.clips = result.clips.filter((c) => !ads.some((a) => Math.min(a.end, c.end) - Math.max(a.start, c.start) > 1)).slice(0, count);
     if (!result.clips.length) { ctx.store.update('assets', asset.id, { exhausted: true }); return { clips: 0, note: 'No further usable moments found' }; }
     h.progress(0.8, `Creating ${result.clips.length} clips`);
     const clips = pipeline.createClips(asset, result);
@@ -325,7 +352,7 @@ queue.register('render.short', {
           const sig = await montage.signals({ asset, transcript, vision: vis, analysis: null });
           const avoid = ctx.store.all('clips', (c) => c.assetId === asset.id && c.id !== clip.id).map((c) => ({ start: c.start, end: c.end }));
           let black = []; try { black = await montage.blackIntervals(asset.path, asset.workDir); } catch { /* no scan */ }
-          covers = montage.planCovers({ start: clip.start, end: clip.end, shots: sig.shots, sents: sig.sents, avoid, black, elsewhere: coversElsewhere(clip) });
+          covers = montage.planCovers({ start: clip.start, end: clip.end, shots: sig.shots, sents: sig.sents, avoid, black, elsewhere: coversElsewhere(clip), mine: brollPile(clip, sig.shots) });
           ctx.store.update('clips', clip.id, { coverSrcs: covers.map((c) => [c.src, c.src + c.dur]) }); // so clips rendering at the same time see these too
           if (covers.length) {
             h.progress(0.08, `Cutting in ${covers.length} shot${covers.length > 1 ? 's' : ''}`);
@@ -341,7 +368,7 @@ queue.register('render.short', {
     // covered with good shots now, so the clip renders once. The check after rendering stays as a safety net.
     try {
       const montage = require('../video/montage');
-      const pre = (await montage.blackInRange(asset.path, clip.start, clip.end)).filter(([a, b]) => b - a >= 0.2);
+      const pre = (await montage.blackInRange(asset.path, clip.start, clip.end)).filter(([a, b]) => b - a >= 0.15);
       const open = pre.filter(([a, b]) => !covers.some((c) => c.at <= a + 0.05 && c.at + c.dur >= b - 0.05));
       if (open.length) {
         const vis = require('../video/vision').cached(asset.path, asset.workDir);
@@ -369,7 +396,8 @@ queue.register('render.short', {
     try {
       const montage = require('../video/montage');
       for (let pass = 0; pass < 2; pass++) {
-        const outBlack = (await montage.blackIntervals(outPath, outDir, { loose: true, cache: false })).filter(([a, b]) => b - a >= 0.25);
+        // The finished clip is checked the same way as the footage: black frames and fades to black, not just pure black.
+        const outBlack = (await montage.blackInRange(outPath, 0, r.duration || 600)).filter(([a, b]) => b - a >= 0.2);
         if (!outBlack.length) break;
         const forced = montage.outputToSource(outBlack, r.segments, assembled ? clip.start : 0);
         const vis = require('../video/vision').cached(asset.path, asset.workDir);

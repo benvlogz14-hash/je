@@ -230,7 +230,7 @@ r.post('/api/clients/:id/video-style', (req, b, p) => {
   const out = ctx.store.update('clients', c.id, patch); events.publish('clients', { id: c.id });
   audit.log(actorOf(req), 'client.videoStyle', { clientId: c.id, style: b?.style });
   return out;
-});
+}, { roles: OWNER });
 r.patch('/api/clients/:id', (req, b, p) => {
   const c = must(ctx.store.get('clients', p.id));
   const patch = {};
@@ -241,6 +241,8 @@ r.patch('/api/clients/:id', (req, b, p) => {
   if (b.sources) patch.sources = b.sources;
   if (patch.status === 'churned' && c.status !== 'churned') patch.churnedAt = now();
   const u = ctx.store.update('clients', c.id, patch);
+  // Dual video switched: clips still waiting to render follow it too (rendered ones keep "Also make full-frame" in their player).
+  if (b.production && b.production.wide !== undefined) for (const x of ctx.store.all('clips', (k) => k.clientId === c.id && !k.kind && !(k.versions || []).length && ['queued', 'rendering'].includes(k.status))) ctx.store.update('clips', x.id, { wide: !!b.production.wide });
   pipeline.enforceApprovalPolicy(u);
   audit.log(actorOf(req), 'client.updated', { clientId: c.id, keys: Object.keys(patch) });
   events.publish('clients', { id: c.id });

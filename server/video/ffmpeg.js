@@ -148,7 +148,8 @@ function encoderArgs(enc, crf) {
     case 'h264_qsv': return ['-c:v', 'h264_qsv', '-global_quality', String(crf + 2)];
     case 'h264_amf': return ['-c:v', 'h264_amf', '-quality', 'quality', '-rc', 'cqp', '-qp_i', String(crf), '-qp_p', String(crf + 2)];
     case 'h264_videotoolbox': return ['-c:v', 'h264_videotoolbox', '-q:v', '62'];
-    default: return ['-c:v', 'libx264', '-preset', 'medium', '-crf', String(crf)];
+    // veryfast (one step better quality to make up for it) encodes 2-3x faster than medium; TikTok/Reels re-encode anyway.
+    default: return ['-c:v', 'libx264', '-preset', ctx.setting('production.x264Preset', 'veryfast'), '-crf', String(Math.max(14, crf - 1))];
   }
 }
 

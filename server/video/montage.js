@@ -191,7 +191,7 @@ async function signals({ asset, transcript, vision, analysis }) {
  * best shots from elsewhere for 2-3 s each while the voice keeps playing.
  * Returns [{ at, dur, src }] with at/src in source seconds.
  */
-function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, black = [], elsewhere = [] }) {
+function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, black = [], elsewhere = [], mine = null }) {
   if (!shots.length) return [];
   const len = end - start;
   const touchesBlack = (a, b) => black.some(([x, y]) => x < b + 0.15 && y > a - 0.15);
@@ -199,7 +199,7 @@ function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, blac
   // has used come first (best first), then the least-used ones, so the same drone shot doesn't open every clip.
   const usedCount = (x) => elsewhere.filter(([a, b]) => a < x.e && b > x.s).length;
   const pool = shots.filter((x) => (x.e <= start || x.s >= end) && shotScore(x) >= 0.45 && x.e - x.s >= 2.2 && !avoid.some((a) => x.s < a.end && x.e > a.start))
-    .map((x) => ({ x, n: usedCount(x), q: shotScore(x) })).sort((a, b) => a.n - b.n || b.q - a.q).map((o) => o.x);
+    .map((x) => ({ x, n: usedCount(x), q: shotScore(x), m: mine && !mine.has(`${x.s}`) ? 1 : 0 })).sort((a, b) => a.m - b.m || a.n - b.n || b.q - a.q).map((o) => o.x);
   if (!pool.length) return [];
   // A cut-away comes from the middle of its shot (shot starts are often fades from black) and never touches black frames.
   // A shot another clip already used gives a different stretch of itself (the part farthest from what was used), when it's long enough.
@@ -279,7 +279,7 @@ async function coverBlack({ forced, start, end, duration, shots = [], scenes = [
       for (const x of pool) {
         if (x.s < at + dur && x.e > at) continue; // not the black stretch itself
         const mid = (x.s + x.e) / 2; const src = Math.max(x.s + 0.2, Math.min(duration - dur - 0.1, mid - dur / 2));
-        if (dark(src, src + dur) || taken.some(([p, q]) => src < q && src + dur > p)) continue;
+        if (dark(src, src + dur) || taken.some(([p, q]) => src < q + 3 && src + dur > p - 3)) continue; // never the same shot (or its moment) twice in a clip
         if (isDark && await isDark(src, dur)) { black.push([src, src + dur]); continue; } // checked on the spot, no whole-video scan
         out.push({ at: Math.round(at * 100) / 100, dur: Math.round(dur * 100) / 100, src: Math.round(src * 100) / 100 }); taken.push([src, src + dur]); ok = true; break;
       }
@@ -329,10 +329,35 @@ async function darkAt(file, src, dur) {
   return !ys.length || ys.some((y) => y < 28);
 }
 
-/** Black or near-black stretches inside one part of a video (source seconds); only that part is decoded, so it takes a second or two. */
+/**
+ * Black, near-black and fading stretches inside one part of a video (source seconds); only that part is decoded
+ * (small and at 10 fps), so it takes a second or two. Brightness is measured for every frame and compared with the
+ * ~3 s around it: frames that are nearly black count, and each stretch is widened to cover the whole fade down to it
+ * and back up (frames clearly darker than their surroundings next to it). Dark scenes that never reach black (a dark
+ * room, a dark reveal shot) are left alone, and anything over 6 s is a scene, not a fade.
+ */
 async function blackInRange(file, start, end) {
-  const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-ss', Math.max(0, start).toFixed(2), '-t', Math.max(0.5, end - start).toFixed(2), '-i', file, '-an', '-vf', 'fps=10,scale=240:-2,blackdetect=d=0.2:pix_th=0.10:pic_th=0.90', '-f', 'null', '-'], { timeoutMs: 300000, priority: ff.priorityValue() });
-  return [...String(r.err || '').matchAll(/black_start:([\d.]+) black_end:([\d.]+)/g)].map((m) => [start + Number(m[1]), start + Number(m[2])]);
+  const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-ss', Math.max(0, start).toFixed(2), '-t', Math.max(0.5, end - start).toFixed(2), '-i', file, '-an', '-vf', 'fps=10,scale=160:-2,signalstats,metadata=print:key=lavfi.signalstats.YAVG', '-f', 'null', '-'], { timeoutMs: 300000, priority: ff.priorityValue() });
+  const ys = [...String(r.err || '').matchAll(/YAVG=([\d.]+)/g)].map((m) => Number(m[1]));
+  return dips(ys, 10).map(([a, b]) => [Math.max(0, start) + a, Math.max(0, start) + b]);
 }
 
-module.exports = { blackInRange, darkAt, coverBlack, outputToSource, reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
+/** Dips to black in a brightness curve (one value per frame at fps): [[start, end], ...] seconds from the curve's start. */
+function dips(ys, fps = 10) {
+  const n = ys.length; if (!n) return [];
+  const W = Math.round(fps * 3); const med = new Array(n);
+  for (let i = 0; i < n; i++) { const w = ys.slice(Math.max(0, i - W), Math.min(n, i + W + 1)).sort((a, b) => a - b); med[i] = w[Math.floor(w.length * 0.6)]; }
+  // Only a stretch that really reaches black counts (black is ~16; a dark room or a dark reveal shot stays above ~40),
+  // then the fade down to it and back up is added.
+  const bad = ys.map((y) => y < 24);
+  // Widen each dip over the whole fade: neighbours still clearly darker than their surroundings belong to it.
+  for (let grew = true; grew;) { grew = false; for (let i = 0; i < n; i++) if (!bad[i] && (bad[i - 1] || bad[i + 1]) && ys[i] < med[i] * 0.9) { bad[i] = true; grew = true; } }
+  const out = []; let s = -1;
+  for (let i = 0; i <= n; i++) {
+    if (i < n && bad[i]) { if (s < 0) s = i; continue; }
+    if (s >= 0) { const a = s / fps, b = i / fps; const last = out[out.length - 1]; if (last && a - last[1] < 0.3) last[1] = b; else out.push([a, b]); s = -1; }
+  }
+  return out.filter(([a, b]) => b - a >= 0.15 && b - a <= 6).map(([a, b]) => [Math.round(Math.max(0, a - 0.1) * 100) / 100, Math.round((b + 0.1) * 100) / 100]);
+}
+
+module.exports = { dips, blackInRange, darkAt, coverBlack, outputToSource, reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
