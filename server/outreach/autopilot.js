@@ -68,6 +68,7 @@ function checks(p, { ignoreCap = false } = {}) {
   if (contact?.optedOut?.email) why.push('Opted out');
   const ex = excluded({ name: p.name, email: to, handle: p.handle }); if (ex) why.push(`On the exclusions list (${ex})`);
   if (!p.contactVerified) why.push('Email not confirmed on their own pages or your imported list');
+  if (p.hold) why.push(`On hold in your list (${p.hold})`);
   if (ctx.store.find('messages', (m) => m.contactId === contact?.id && m.direction === 'in')) why.push('They have already written to us');
   if (lane === 'political') {
     if (p.pkg?.status !== 'ready') why.push('Package not finished');

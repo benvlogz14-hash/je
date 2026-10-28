@@ -170,8 +170,8 @@ export function Leads({ lane }) {
   };
   return html`<div class="panel pad row wrap" style="gap:10px">
     <div class="avatar" style="background:var(--sky-soft);color:var(--sky-ink)"><${Icon} name="upload" size=${16} /></div>
-    <div class="grow"><b>Lead list</b><div class="faint" style="font-size:var(--fs-xs)">Import your spreadsheet (save it as CSV). Your columns are kept, and Export writes new leads back in the same layout.</div></div>
-    <label class="btn ghost sm" style="cursor:pointer">${busy ? 'Importing…' : 'Import CSV'}<input type="file" accept=".csv,text/csv,.tsv,.txt" style="display:none" onChange=${pick} /></label>
+    <div class="grow"><b>Lead list</b><div class="faint" style="font-size:var(--fs-xs)">Import your spreadsheet (CSV) or a JSON list, like HAL's. Your columns are kept, and Export writes new leads back in the same layout.</div></div>
+    <label class="btn ghost sm" style="cursor:pointer">${busy ? 'Importing…' : 'Import list'}<input type="file" accept=".csv,text/csv,.tsv,.txt,.json,application/json" style="display:none" onChange=${pick} /></label>
     <a class="btn ghost sm" href=${api.url(`/api/outreach/${lane}/export.csv`)}>Export CSV</a>
     <${Button} size="sm" kind="primary" icon="sparkle" onClick=${() => act(() => api.post(`/api/outreach/${lane}/start`, {}), { ok: (r) => `Started ${r.started}` })}>${lane === 'political' ? 'Make packages for new leads' : 'Write emails for new leads'}</${Button}>
   </div>`;

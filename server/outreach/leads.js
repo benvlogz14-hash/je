@@ -25,14 +25,38 @@ function parseCsv(text) {
   return rows.filter((r) => r.some((c) => String(c).trim()));
 }
 
+/**
+ * A JSON list of leads (like HAL's prospects export: [{ "name": ..., "off": ..., ... }]) becomes rows with a header,
+ * so it imports exactly like a spreadsheet.
+ */
+function jsonRows(text) {
+  let data = JSON.parse(String(text).replace(/^\uFEFF/, ''));
+  if (!Array.isArray(data)) data = Object.values(data || {}).find(Array.isArray) || [];
+  const items = data.filter((x) => x && typeof x === 'object');
+  const headers = [...new Set(items.flatMap((x) => Object.keys(x)))];
+  const cell = (v) => (v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+  return [headers, ...items.map((x) => headers.map((h) => cell(x[h])))];
+}
+
 const FIELDS = {
   name: /^(name|full name|creator|candidate|politician|lead|contact name|channel name)$/i,
   email: /^(e-?mail|email address|contact email|public email|business email|public contact|contact)$/i,
   handle: /^(handle|channel|youtube|youtube url|url|link|profile|profile url|social|website|campaign site|site)$/i,
   platform: /^(platform|network)$/i,
   followers: /^(followers|subscribers|subs|audience|follower count)$/i,
-  location: /^(office|position|title|seat|race|district|town|city|municipality|location|state|county)$/i,
-  party: /^(party)$/i,
+  location: /^(off|office|position|title|seat|race|district|town|city|municipality|location|state|county)$/i,
+  party: /^(party|pty)$/i,
+  // HAL's politician list (short column names): race rating, target type, score, suggested package, email hints.
+  rating: /^(rate|rating|race rating)$/i,
+  target: /^(st|target|target type)$/i,
+  score: /^(sc|score|priority)$/i,
+  pkg: /^(pkg|package|offer|suggested package)$/i,
+  subject: /^(subj|subject|email subject)$/i,
+  opener: /^(opener|opening line)$/i,
+  social: /^(soc|social presence)$/i,
+  ads: /^(adtxt|ads|ad activity)$/i,
+  listSource: /^(src|data source)$/i,
+  listId: /^(id|lead id|record id)$/i,
   why: /^(notes|why|reason|angle|pitch|about)$/i,
   stage: /^(status|stage)$/i,
   phone: /^(phone|phone number)$/i,
@@ -49,7 +73,7 @@ function mapHeaders(headers) {
 
 /** lane: 'political' | 'creators'. Returns { added, updated, skipped, columns }. */
 function importCsv({ lane, csv, actor }) {
-  const rows = parseCsv(csv); if (rows.length < 2) throw new Error('The file needs a header row and at least one lead.');
+  const rows = /^\s*[\[{]/.test(String(csv || '').replace(/^\uFEFF/, '')) ? jsonRows(csv) : parseCsv(csv); if (rows.length < 2) throw new Error('The file needs a header row and at least one lead.');
   const headers = rows[0].map((h) => String(h).trim()); const map = mapHeaders(headers);
   if (map.name == null) throw new Error(`No name column found. Columns seen: ${headers.join(', ')}`);
   const type = lane === 'political' ? 'political' : 'creator';
@@ -65,8 +89,22 @@ function importCsv({ lane, csv, actor }) {
     const contact = email && /@/.test(email) && !isGov(email) ? email : '';
     if (email && !contact) skipped.push(`${name}: government email not used`);
     const followers = Number(String(get('followers')).replace(/[^\d.]/g, '')) || null;
-    const ex = ctx.store.find('prospects', (p) => (contact && String(p.publicContact).toLowerCase() === contact) || (nameMatch(p.name, name) && nameMatch(name, p.name)));
+    // Same lead: the list's own id when it has one; else the same email, or the same name in the same office
+    // (two people can share a name: Jonathan Jacobson in the CT House and in the NY Assembly).
+    const listId = get('listId'); const offNow = map.location?.length ? String(r[map.location[0]] || '').trim() : '';
+    const ex = (listId && ctx.store.find('prospects', (p) => p.listId === listId))
+      || ctx.store.find('prospects', (p) => (!listId || !p.listId) && ((contact && String(p.publicContact).toLowerCase() === contact) || (nameMatch(p.name, name) && nameMatch(name, p.name) && !(offNow && p.office && p.office !== offNow))));
     const fields = { name, type, handle: get('handle'), platforms: get('platform') ? [get('platform').toLowerCase()] : [], location: loc, why: [get('party'), get('why')].filter(Boolean).join(' · '), publicContact: contact, contactVerified: !!contact, followers, imported: true, sheet: raw, verified: true, source: 'import' };
+    // HAL's research comes along: office, race rating, target type, score, suggested package, subject/opener ideas.
+    // "HOLD" leads (only a government email, only a contact form, no inbox) are kept but never emailed automatically.
+    const off = map.location?.length ? String(r[map.location[0]] || '').trim() : '';
+    const target = get('target'); const extra = {
+      listId, office: off, race: get('rating'), target, score: Number(get('score')) || null, suggestedPackage: get('pkg'),
+      emailHint: get('subject') || get('opener') ? { subject: get('subject'), opener: get('opener') } : null,
+      social: get('social'), adNote: get('ads'), listSource: get('listSource'),
+      hold: /^hold/i.test(target) ? target.replace(/^hold\s*[·:-]?\s*/i, '').trim() || 'On hold' : '',
+    };
+    Object.assign(fields, Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== '' && v != null)));
     if (ex) { ctx.store.update('prospects', ex.id, Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== '' && v != null && !(Array.isArray(v) && !v.length)))); updated++; }
     else { ctx.store.insert('prospects', { ...fields, angle: '', stage: 'new' }); added++; }
   }
