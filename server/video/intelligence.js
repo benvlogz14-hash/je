@@ -85,6 +85,38 @@ function snap(words, t, edge) {
 function cleanName(n) {
   return String(n || 'Clip').replace(/\.[^.]+$/, '').replace(/[\s_]*[[(_]?[A-Za-z0-9_-]{11}[\])_]?\s*$/, (m) => (/\d/.test(m) && /[A-Z]/.test(m) ? '' : m)).replace(/(\w)_s\b/g, "$1's").replace(/_/g, ' ').replace(/\s+/g, ' ').trim() || 'Clip';
 }
+/**
+ * The on-screen title must be a short hook about the subject ("ABANDONED FACTORY...", "WHY DID they leave it all
+ * behind..."), never a sentence quoted from what is said (that just repeats the captions and filled half the screen).
+ * cleanHook keeps a good title, shortens a long one, and replaces a quote with a title made from the video's name.
+ */
+const HOOK_STOP = new Set(['inside', 'exploring', 'explore', 'explored', 'we', 'i', 'the', 'a', 'an', 'this', 'my', 'our', 'visiting', 'touring', 'into', 'entering']);
+const HOOK_BREAK = new Set(['from', 'in', 'at', 'on', 'of', 'for', 'with', 'after', 'to', 'by', 'near', 'that', 'where', 'when', 'and', 'but']);
+function topicHook(name) {
+  const base = String(name || '').replace(/\.[a-z0-9]{2,4}$/i, '').replace(/\(\d+\)/g, '').split(/\s+[-|:·]\s+|_/)[0].replace(/[^\w' ?!]/g, ' ').trim();
+  const ws = base.split(/\s+/).filter(Boolean); let i = 0; while (i < ws.length - 1 && HOOK_STOP.has(ws[i].toLowerCase())) i++;
+  const out = []; for (const w of ws.slice(i)) { if (out.length >= 2 && HOOK_BREAK.has(w.toLowerCase())) break; out.push(w); if (out.length >= 4) break; }
+  return out.length ? `${out.join(' ')}...` : '';
+}
+function cleanHook(hook, { spoken = '', name = '' } = {}) {
+  let h = String(hook || '').replace(/["“”]/g, '').replace(/\s+/g, ' ').trim();
+  const norm = (t) => String(t).toLowerCase().replace(/[^a-z0-9' ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const first = norm(h).split(' ').slice(0, 3).join(' ');
+  const isQuote = first.split(' ').length >= 3 && norm(spoken).includes(first);
+  if (!h || isQuote) return topicHook(name) || h.split(' ').slice(0, 4).join(' ');
+  const ws = h.split(' ');
+  if (ws.length > 7 || h.length > 40) {
+    // Cut at a natural break: a comma, then a joining word ("because", "but", "when"...), then a preposition.
+    const fits = (t) => { const n = t.split(' ').length; return n >= 2 && n <= 7 && t.length <= 40; };
+    const byPunct = h.split(/[,:;—–-]\s/)[0].trim();
+    const before = (set) => { for (let i = Math.min(ws.length - 1, 7); i >= 2; i--) if (set.has(ws[i].toLowerCase().replace(/[^a-z]/g, ''))) { const t = ws.slice(0, i).join(' '); if (fits(t)) return t; } return null; };
+    h = (fits(byPunct) && byPunct) || before(new Set(['because', 'but', 'and', 'so', 'when', 'while', 'until', 'since', 'which', 'who', 'that', 'where'])) || before(HOOK_BREAK) || ws.slice(0, 5).join(' ');
+    h = h.replace(/[,.;:]+$/, '');
+    if (!/[?!]$/.test(h) && !/\.\.\.$/.test(h)) h += '...';
+  }
+  return h;
+}
+
 /** A short on-screen hook from the clip's first sentence. */
 function hookFrom(text) { const first = String(text || '').split(/(?<=[.!?])\s/)[0].replace(/[.,!?]+$/, ''); const w = first.split(/\s+/); return w.length >= 3 ? w.slice(0, 7).join(' ') : ''; }
 /** Zooms on energy peaks and scene changes, about one every 5 seconds. */
@@ -116,7 +148,7 @@ function normalizeClips(raw, { words, duration, minSec, maxSec, exclude = [], co
 
 /** Taste rules so edits don't look AI-made (adapted from reel-room by Eli Colussi, MIT). */
 const TASTE_RULES = `Don't make it look AI-edited; viewers scroll past the generic auto-edit look:
-- No clickbait hooks ("You won't believe..."). Use the speaker's actual promise in their own words, 3-7 words.
+- The hook is a short on-screen title about the subject, 2-5 words, like a video title: "Abandoned factory...", "Why did they leave it all behind...", "The town that sank...". Never a sentence quoted from what is said (the captions already show that), no clickbait like "You won't believe".
 - Zooms only on the words that carry the point: roughly one every 4-8 seconds for energetic clips, none on serious lines. Never a zoom on every sentence.
 - Never more than two things on screen besides the speaker and captions, and nothing covers the face.
 - Graphics never repeat the captions word for word. No decorative emoji.
@@ -125,7 +157,7 @@ const TASTE_RULES = `Don't make it look AI-edited; viewers scroll past the gener
 const DISCOVERY_SYSTEM = `You are the clip editor for a short-form video agency. You find the strongest standalone moments in long footage for TikTok, Reels and YouTube Shorts.
 A great clip: opens on a hook in the first 2 seconds, makes one complete point, ends on a payoff or punchline, needs no outside context, and stays between the requested min and max length.
 For political clients: keep claims accurate to what was said, never splice meaning, and avoid moments that misrepresent anyone.
-Return JSON: {"clips":[{"start":sec,"end":sec,"title":"<=60 chars, curiosity-driven","hook":"<=8 word on-screen headline","caption":"1-2 sentence social caption","hashtags":["tag",...],"score":0-100,"reason":"why it works","punchIns":[{"at":seconds_from_clip_start,"dur":1.2}],"trials":[{"name":"<=3 words","test":"the one thing this version tests","hook":"a genuinely different opening headline","start":sec}]}]}
+Return JSON: {"clips":[{"start":sec,"end":sec,"title":"<=60 chars, curiosity-driven","hook":"2-5 word on-screen title about the subject, never a quote of what is said","caption":"1-2 sentence social caption","hashtags":["tag",...],"score":0-100,"reason":"why it works","punchIns":[{"at":seconds_from_clip_start,"dur":1.2}],"trials":[{"name":"<=3 words","test":"the one thing this version tests","hook":"a genuinely different opening headline","start":sec}]}]}
 "trials": 2-3 alternative openings for the same clip, for Instagram trial reels: each opens differently (result first, question first, a bolder sentence later in the clip via a later start, or a contrarian line), never the same hook text, and every hook is paid off by the clip.
 ${TASTE_RULES}`;
 
@@ -166,7 +198,7 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
     if (tips) tipNudge(cands, tips);
     if (cands.length) {
       const name = cleanName(asset.name);
-      const fallback = (c, i) => ({ start: c.start, end: c.end, keep: c.keep, score: Math.round(c.score), title: `${name} · Part ${i + 1}`.slice(0, 80), hook: hookFrom(c.text) || name.split(/\s+[-|:·]\s+/)[0].split(/\s+/).slice(0, 7).join(' '), caption: '', hashtags: [], reason: `Picked for: ${c.why.join(', ') || 'steady speech'}`, punchIns: zoomsFor(c, analysis) });
+      const fallback = (c, i) => ({ start: c.start, end: c.end, keep: c.keep, score: Math.round(c.score), title: `${name} · Part ${i + 1}`.slice(0, 80), hook: topicHook(asset.name) || cleanHook(hookFrom(c.text), { name: asset.name }), caption: '', hashtags: [], reason: `Picked for: ${c.why.join(', ') || 'steady speech'}`, punchIns: zoomsFor(c, analysis) });
       if (ai.anyConnected()) {
         let tick = null;
         try {
@@ -183,7 +215,7 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
             if (chosen.length >= count) break;
           }
           for (const c of cands) { if (chosen.length >= count) break; if (!seen.has(c)) { seen.add(c); chosen.push(fallback(c, chosen.length)); } }
-          if (chosen.length) return { method: 'ai', clips: normalizeClips(chosen, { words, duration, minSec, maxSec, exclude, count }) };
+          if (chosen.length) return { method: 'ai', clips: normalizeClips(chosen, { words, duration, minSec, maxSec, exclude, count }).map((c) => ({ ...c, hook: cleanHook(c.hook, { name: asset.name, spoken: words.filter((w) => w.s >= c.start - 0.5 && w.s < c.end).map((w) => w.w).join(' ') }) })) };
         } catch { /* the scores decide */ } finally { clearInterval(tick); }
       }
       return { method: 'scored', clips: normalizeClips(cands.slice(0, count).map(fallback), { words, duration, minSec, maxSec, exclude, count }) };
@@ -212,7 +244,7 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
   const name = cleanName(asset.name);
   picked.forEach((c, i) => {
     c.title = `${name} · Part ${i + 1}`.slice(0, 80);
-    c.hook = name.split(/\s+[-|:·]\s+/)[0].split(/\s+/).slice(0, 7).join(' ');
+    c.hook = topicHook(asset.name) || name.split(/\s+/).slice(0, 4).join(' ');
     const beats = [...(analysis?.peaks || []), ...(analysis?.scenes || [])].filter((t) => t > c.start + 1.5 && t < c.end - 1.5).sort((a, b) => a - b);
     const zooms = []; let last = -99;
     for (const t of beats) { if (t - last >= 4.5) { zooms.push({ at: Math.round((t - c.start) * 10) / 10, dur: 1.2, zoom: 1.12 }); last = t; } }
@@ -245,4 +277,4 @@ function transcriptExcerpt(transcript, start, end, pad = 20) {
   return (transcript.segments || []).filter((s) => s.e > start - pad && s.s < end + pad).map((s) => `[${s.s.toFixed(1)}] ${s.t}`).join('\n').slice(0, 6000);
 }
 
-module.exports = { TASTE_RULES, transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };
+module.exports = { cleanHook, topicHook, TASTE_RULES, transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };

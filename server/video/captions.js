@@ -279,8 +279,10 @@ function fitHook(text, st, width = 1080) {
   };
   if (!ht.includes('\\N') && ht.includes(' ')) {
     const ws = ht.split(/\s+/); let pick = null;
-    for (const n of [1, 2, 3]) { const t = split(ws, n); if (widthOf(t, size) <= fitW) { pick = t; break; } }
-    ht = pick || split(ws, Math.min(3, ws.length));
+    for (const n of [1, 2]) { const t = split(ws, n); if (widthOf(t, size) <= fitW) { pick = t; break; } }
+    // Two lines at most when they can stay at least 70% of the size; a third line only for very long titles.
+    if (!pick) { const two = split(ws, 2); pick = (size * fitW) / Math.max(1, widthOf(two, size)) >= size * 0.7 ? two : split(ws, Math.min(3, ws.length)); }
+    ht = pick;
   }
   return { text: ht, size: Math.max(30, Math.min(size, Math.floor((size * fitW) / Math.max(1, widthOf(ht, size))))), font };
 }

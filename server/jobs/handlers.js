@@ -375,6 +375,13 @@ queue.register('render.short', {
     const outDir = paths.clientDir(client.id, 'renders', clip.id);
     const outPath = path.join(outDir, `v${n}-${slug(clip.title).slice(0, 40)}.mp4`);
     const facePath = await faceTrackFor(clip, asset, h);
+    // A title that just quotes what is said (or runs on for a sentence) is replaced by a short hook before rendering,
+    // so older clips come out right on re-render too. Short titles someone typed are kept as they are.
+    if (clip.hook) {
+      const spoken = (transcript?.words || []).filter((w) => w.s >= clip.start - 0.5 && w.s < clip.end).map((w) => w.w).join(' ');
+      const fixed = require('../video/intelligence').cleanHook(clip.hook, { spoken, name: asset.name });
+      if (fixed && fixed !== clip.hook) { h.log(`Title shortened: "${clip.hook}" -> "${fixed}"`); ctx.store.update('clips', clip.id, { hook: fixed }); clip.hook = fixed; }
+    }
     // Visual cuts: weak or static stretches get the best shots from elsewhere (drone first) while the voice keeps going.
     let src = { source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], facePath };
     let covers = []; let assembled = null;
