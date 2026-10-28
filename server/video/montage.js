@@ -138,13 +138,15 @@ function scoreWindow(s, e, sig, kept = null) {
 }
 
 /** Candidate windows that start and end on whole sentences, within min..max seconds. */
-function candidates(sig, { minSec, maxSec, duration, exclude = [], limit = 40, storyCuts = false }) {
+function candidates(sig, { minSec, maxSec, duration, exclude = [], limit = 40, storyCuts = false, endHook = false }) {
   const out = []; const S = sig.sents; const span = storyCuts ? Math.min(150, Math.max(maxSec * 2.2, maxSec + 20)) : maxSec;
   for (let i = 0; i < S.length; i++) {
     for (let j = i; j < S.length; j++) {
       const s = Math.max(0, S[i].s - 0.15); const e = Math.min(duration, S[j].e + 0.25); const len = e - s;
       if (len > span) break;
       if (exclude.some((x) => Math.min(x.end, e) - Math.max(x.start, s) > 0.2 * Math.min(len, maxSec))) continue;
+      // Highlights: the clip must end on a hook (a reveal, a question, "and then we opened the door...").
+      if (endHook && !END_HOOK.test(S[j].t)) continue;
       if (len <= maxSec) {
         if (len < minSec) continue;
         out.push({ start: Math.round(s * 100) / 100, end: Math.round(e * 100) / 100, ...scoreWindow(s, e, sig), text: S.slice(i, j + 1).map((x) => x.t).join(' ') });

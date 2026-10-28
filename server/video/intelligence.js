@@ -146,7 +146,7 @@ function tipNudge(cands, tips) {
   cands.sort((a, b) => b.score - a.score);
 }
 
-async function discoverClips(asset, transcript, { count = 6, jobId, exclude = [], analysis = null, vision = null, onProgress = () => {} } = {}) {
+async function discoverClips(asset, transcript, { count = 6, jobId, exclude = [], analysis = null, vision = null, onProgress = () => {}, storyCuts = null, endHook = false } = {}) {
   // Clip length: the client's own setting (the sliders by the upload box), else the global default.
   const prod = ctx.store.get('clients', asset.clientId)?.production || {};
   const minSec = Number(prod.minClipSec) || ctx.setting('production.minClipSec', 20); const maxSec = Math.max(minSec + 5, Number(prod.maxClipSec) || ctx.setting('production.maxClipSec', 59));
@@ -162,7 +162,7 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
     onProgress(0.25, 'Listening for voiceover');
     const sig = await montage.signals({ asset, transcript, vision, analysis });
     onProgress(0.4, 'Scoring every moment');
-    const cands = montage.candidates(sig, { minSec, maxSec, duration, exclude, limit: 24, storyCuts: prod.storyCuts === true || ctx.setting('production.storyCuts', false) === true });
+    const cands = montage.candidates(sig, { minSec, maxSec, duration, exclude, limit: 24, endHook, storyCuts: storyCuts ?? (prod.storyCuts === true || ctx.setting('production.storyCuts', false) === true) });
     if (tips) tipNudge(cands, tips);
     if (cands.length) {
       const name = cleanName(asset.name);

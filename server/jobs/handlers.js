@@ -277,11 +277,26 @@ queue.register('discover', {
     // Ad reads (a website plug in the intro, sponsor reads, "like and subscribe") never become clips.
     const ads = require('../video/ads').adRanges(transcript?.words || []);
     if (ads.length) { ctx.store.update('assets', asset.id, { ads }); h.log(`Skipping ${ads.length} ad read${ads.length > 1 ? 's' : ''}: ${ads.map((a) => `${Math.round(a.start)}-${Math.round(a.end)}s`).join(', ')}`); }
-    const want = looks ? looks.length : count;
-    const result = await intel.discoverClips(asset, transcript, { count: want + (ads.length ? 2 : 0), jobId: job.id, onProgress: (f, t) => h.progress(f, t), exclude: [...pipeline.usedRanges(asset.id), ...ads], analysis: loadAnalysis(asset), vision: require('../video/vision').cached(asset.path, asset.workDir) });
+    // Highlights (a style): the strongest sentences of a longer stretch back to back (story cuts), ending on a hook,
+    // with tighter jump cuts. Found in a pass of their own so the other styles pick exactly as before.
+    const hlCount = looks ? looks.filter((l) => l === 'highlights').length : (client.production?.videoStyle === 'highlights' ? count : 0);
+    const otherLooks = looks ? looks.filter((l) => l !== 'highlights') : null;
+    const want = looks ? otherLooks.length : (hlCount ? 0 : count);
+    const discoverOpts = { jobId: job.id, onProgress: (f, t) => h.progress(f, t), analysis: loadAnalysis(asset), vision: require('../video/vision').cached(asset.path, asset.workDir) };
+    const noAds = (list, n) => list.filter((c) => !ads.some((a) => Math.min(a.end, c.end) - Math.max(a.start, c.start) > 1)).slice(0, n);
+    const result = want ? await intel.discoverClips(asset, transcript, { ...discoverOpts, count: want + (ads.length ? 2 : 0), exclude: [...pipeline.usedRanges(asset.id), ...ads] }) : { clips: [], method: 'scored' };
     // Any pick that still runs into an ad by more than a second is dropped (the usual check allows small overlaps).
-    result.clips = result.clips.filter((c) => !ads.some((a) => Math.min(a.end, c.end) - Math.max(a.start, c.start) > 1)).slice(0, want);
-    if (looks) result.clips.forEach((c, i) => { const p = styles.PRESETS[looks[i]]; if (p) { c.style = pipeline.sanitizeStyle(p.style); c.videoStyle = looks[i]; if (p.production?.reframe) c.reframe = p.production.reframe; } });
+    result.clips = noAds(result.clips, want);
+    if (otherLooks) result.clips.forEach((c, i) => { const p = styles.PRESETS[otherLooks[i]]; if (p) { c.style = pipeline.sanitizeStyle(p.style); c.videoStyle = otherLooks[i]; if (p.production?.reframe) c.reframe = p.production.reframe; } });
+    if (hlCount) {
+      h.progress(0.6, 'Finding highlight moments');
+      const taken = () => [...pipeline.usedRanges(asset.id), ...ads, ...result.clips.map((c) => ({ start: c.start, end: c.end }))];
+      let hl = noAds((await intel.discoverClips(asset, transcript, { ...discoverOpts, count: hlCount + 2, exclude: taken(), storyCuts: true, endHook: true })).clips, hlCount);
+      // Too few moments end on a hook: fill up with tightened story-cut clips so the count you asked for still comes out.
+      if (hl.length < hlCount) { const more = noAds((await intel.discoverClips(asset, transcript, { ...discoverOpts, count: hlCount - hl.length + 2, exclude: [...taken(), ...hl.map((c) => ({ start: c.start, end: c.end }))], storyCuts: true })).clips, hlCount - hl.length); hl = [...hl, ...more]; }
+      hl.forEach((c) => { c.videoStyle = 'highlights'; c.tightCuts = true; });
+      result.clips = [...result.clips, ...hl];
+    }
     if (storyCount) { try { pipeline.createStoryClips(asset, storyCount); } catch (e) { h.log(`Story edits skipped: ${e.message}`); } }
     if (!result.clips.length) { ctx.store.update('assets', asset.id, { exhausted: true }); return { clips: 0, note: 'No further usable moments found' }; }
     h.progress(0.8, `Creating ${result.clips.length} clips`);
@@ -405,7 +420,7 @@ queue.register('render.short', {
     const pauses = (await pausesFor(asset)) || [];
     const renderArgs = () => ({ facePath: src.facePath, graphics: client.graphics,
       source: src.source, info: src.info, range: src.range, words: src.words, style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, keywords: clip.keywords || null,
-      reframe: clip.reframe, focusX: clip.focusX, plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, silences: pauses.map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
+      reframe: clip.reframe, focusX: clip.focusX, plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: !!clip.tightCuts, silences: pauses.map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
       outPath, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal,
       onProgress: (p) => { h.progress(0.12 + p * 0.7, `Rendering v${n}`); const pct = Math.round((0.12 + p * 0.7) * 100); if (pct - (ctx.store.get('clips', clip.id)?.renderProgress || 0) >= 4) { ctx.store.update('clips', clip.id, { renderProgress: pct }); events.publish('clips', { id: clip.id }); } },
     });
@@ -457,7 +472,7 @@ queue.register('render.short', {
         h.progress(0.84, 'Rendering the full-frame version');
         wideOut = outPath.replace(/\.mp4$/, '-wide.mp4');
         const rw = await render.renderShort({ graphics: client.graphics, source: src.source, info: src.info, range: src.range, words: src.words, style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, keywords: clip.keywords || null, wide: true,
-          plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, silences: ((await pausesFor(asset)) || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
+          plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: !!clip.tightCuts, silences: ((await pausesFor(asset)) || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns }, logo: client.production?.logoPath || null,
           outPath: wideOut, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal });
         if (musicSheet?.cues.some((c) => c.file) || Math.abs(voiceGain - 1) > 0.01) {
           const tmp = wideOut.replace(/\.mp4$/, '.music.mp4');

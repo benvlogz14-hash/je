@@ -74,7 +74,7 @@ function createClips(asset, discovered) {
       ref: nextRef(), clientId: asset.clientId, assetId: asset.id, start: d.start, end: d.end, title: d.title || 'Untitled clip', hook: d.hook || '', caption: d.caption || '',
       hashtags: (d.hashtags || []).map((h) => String(h).replace(/^#/, '')).slice(0, 12), score: d.score ?? null, keep: Array.isArray(d.keep) ? d.keep : null, reason: d.reason || '', method: discovered.method, agent: d.agent || null,
       // Style mix: this clip's own look (a preset's captions and title over the client's), set before it renders.
-      ...(d.style ? { style: d.style, videoStyle: d.videoStyle || null } : {}),
+      ...(d.style ? { style: d.style } : {}), ...(d.videoStyle ? { videoStyle: d.videoStyle } : {}), ...(d.tightCuts ? { tightCuts: true } : {}),
       wide: !!prod.wide, punchIns: prod.punchIns ? (d.punchIns || []) : [], reframe: d.reframe || prod.reframe || 'smart-blur', focusX: prod.focusX ?? 0.5, silenceCut: prod.silenceCut !== false, retakeCut: prod.retakeCut !== false,
       trials: (d.trials || []).filter((t) => t && t.hook && t.hook !== d.hook).slice(0, 3).map((t) => ({ name: String(t.name || 'Trial').slice(0, 30), test: String(t.test || '').slice(0, 160), hook: String(t.hook).slice(0, 80), start: Number(t.start) >= d.start && Number(t.start) < d.end - 8 ? Number(t.start) : d.start })),
       status: 'queued', versions: [], currentVersion: 0, feedback: [], approvalId: null, postId: null,

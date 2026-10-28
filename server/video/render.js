@@ -125,7 +125,7 @@ async function renderShort(o) {
     if (last && a <= last[1] + 0.35) last[1] = Math.max(last[1], b); else parts.push([a, b]); // overlapping or touching pieces become one, so captions stay in sync
   }
   const ranges = parts.length ? parts : [[start, end]];
-  let segs = ranges.flatMap(([a, b]) => (plan.silenceCut && o.words?.length ? keptSegments(o.words, a, b, 0.55, 0.12, plan.silences?.length ? plan.silences : null) : plan.silenceCut && plan.silences?.length ? cutPauses(plan.silences, a, b) : [[a, b]]));
+  let segs = ranges.flatMap(([a, b]) => (plan.silenceCut && o.words?.length ? keptSegments(o.words, a, b, plan.tight ? 0.35 : 0.55, 0.12, plan.silences?.length ? plan.silences : null) : plan.silenceCut && plan.silences?.length ? cutPauses(plan.silences, a, b) : [[a, b]]));
   // Cut repeated takes and false starts (keeps the last take of each line).
   if (plan.retakeCut !== false && o.words?.length) {
     const rt = require('./retakes'); const inRange = o.words.filter((w) => w.e > start && w.s < end);

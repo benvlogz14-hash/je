@@ -24,6 +24,13 @@ const PRESETS = {
       hook: true, hookSeconds: 3, hookFont: 'TikTok Sans', hookSize: 149, hookUpper: false, hookCapsFirst: true, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 4, hookShadow: 3, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
     production: {}, // look only: clip picking, length and cutting stay exactly as they are
   },
+  highlights: {
+    label: 'Highlights',
+    blurb: 'The normal clip, tightened: the strongest moments back to back with the dead air cut, ending on a hook',
+    // Look stays the client's own; the difference is in picking and cutting (story cuts + an ending hook + tighter jump cuts).
+    style: {},
+    production: {},
+  },
   story: {
     label: 'Story text',
     blurb: 'No talking: intense music, text lines that tell the story, quick cuts of the best shots',
