@@ -487,10 +487,25 @@ r.post('/api/clips/:id/open-velo', (req, b, p) => {
   if (ctx.openPath) { ctx.openPath(f); return { ok: true, opened: 'default' }; }
   throw new HttpError(400, 'Set the Velo executable path in Settings → System to open projects in Velo');
 });
-r.post('/api/clips/:id/studio', (req, b, p) => {
-  const c = must(ctx.store.get('clips', p.id)); const a = ctx.store.get('assets', c.assetId); const client = ctx.store.get('clients', c.clientId);
-  const words = require('./jobs/handlers').loadTranscript(a)?.words || [];
-  const data = exporters.toVelo({ name: c.title, source: a.path, info: a.info, range: { start: c.start, end: c.end }, words, style: { ...(client.style || {}), ...(c.style || {}) }, hook: c.hook, focusX: c.focusX, covers: c.versions?.[c.currentVersion - 1]?.covers || [], keywords: c.keywords });
+r.post('/api/clips/:id/studio', async (req, b, p) => {
+  const c = must(ctx.store.get('clips', p.id)); const a = must(ctx.store.get('assets', c.assetId), 'The footage for this clip is gone'); const client = ctx.store.get('clients', c.clientId);
+  const v = c.versions?.[(c.currentVersion || c.versions?.length || 1) - 1];
+  // Music files' lengths, so their clips can be trimmed and slid in Studio.
+  const durOf = async (files) => Object.fromEntries(await Promise.all([...new Set(files.filter((f) => f && fs.existsSync(f)))].map(async (f) => [f, (await require('./video/ffmpeg').probe(f).catch(() => null))?.duration || 600])));
+  let data;
+  if ((c.kind === 'broll' || c.kind === 'story') && v?.broll?.segs?.length) {
+    // A B-roll or Story edit opens as its real cut: its shots, its music on its own track, its text lines as titles.
+    const file = v.broll.musicFile && fs.existsSync(v.broll.musicFile) ? v.broll.musicFile : null; const total = v.broll.total || v.duration;
+    const music = file ? { volume: Number(c.musicVol ?? 0.9), cues: [{ file, start: 0, end: total, offset: v.broll.musicStart || 0, vol: 1 }], durations: await durOf([file]) } : null;
+    data = exporters.toVeloEdit({ name: c.title, source: a.path, info: a.info, segs: v.broll.segs, cuts: v.broll.cuts, total, music, lines: v.story?.lines || [], when: v.story?.when || [] });
+  } else {
+    const words = require('./jobs/handlers').loadTranscript(a)?.words || [];
+    // Clips rendered before the music file was saved: find their track in the music library by mood and name.
+    const libFile = (x) => (x.mood && x.track ? path.join(paths.root, 'music', String(x.mood), path.basename(String(x.track))) : null);
+    const cues = (v?.music?.cues || []).map((x) => ({ ...x, file: x.file || libFile(x) })).filter((x) => x.file && fs.existsSync(x.file));
+    const music = cues.length ? { volume: v.music.volume ?? 0.3, cues, durations: await durOf(cues.map((x) => x.file)) } : null;
+    data = exporters.toVelo({ name: c.title, source: a.path, info: a.info, range: { start: c.start, end: c.end }, words, style: { ...(client.style || {}), ...(c.style || {}) }, hook: c.hook, focusX: c.focusX, covers: v?.covers || [], keywords: c.keywords, music });
+  }
   return ctx.store.insert('projects', { name: `#${c.ref} ${c.title}`, clientId: c.clientId, clipId: c.id, data, exports: [] });
 });
 

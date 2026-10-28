@@ -320,7 +320,7 @@ async function renderBroll(job, h, clip) {
     const count = Math.max(4, Math.min(10, Math.round(grid.total / 6)));
     const used = others.flatMap((c) => c.versions?.[c.versions.length - 1]?.story?.lines || []);
     lines = clip.storyLines?.length ? { lines: clip.storyLines, by: 'edited' } : await st.lines({ shots: vis?.shots || [], words: loadTranscript(asset)?.words || [], window: clip.window, count, title: asset.name, clientId: clip.clientId, jobId: job.id, avoid: used, part: Math.max(0, (clip.part || 1) - 1) });
-    return st.writeAss({ lines: lines.lines, grid, file: path.join(outDir, `v${n}.story.ass`) }).file;
+    const w = st.writeAss({ lines: lines.lines, grid, file: path.join(outDir, `v${n}.story.ass`) }); lines.when = w.when; return w.file;
   } : null;
   h.progress(0.2, 'Finding the beat and cutting the shots to it');
   const r = await be.make({ source: asset.path, duration: asset.info?.duration || 0, shots: vis?.shots || [], scenes: an?.scenes || [], black, avoid, music: track?.file || null, length: clip.end - clip.start, out: outPath, volume: Number(clip.musicVol ?? 0.9), signal: h.signal,
@@ -328,7 +328,7 @@ async function renderBroll(job, h, clip) {
   const segs = r.segs;
   const qc = await ff.qualityCheck(outPath, { expectWidth: 1080, expectHeight: 1920, minSec: 3, maxSec: 180 });
   const thumb = path.join(outDir, `v${n}.jpg`); await ff.thumbnail(outPath, thumb, Math.min(1.5, r.duration / 2), 405);
-  const version = { n, path: outPath, thumb, duration: r.duration, renderedAt: now(), qc: { passed: qc.passed, issues: qc.issues }, captioned: false, broll: { shots: segs.length, mood, track: track?.source || null, bpm: r.bpm, synced: r.synced, segs }, ...(lines ? { story: { lines: lines.lines, by: lines.by } } : {}) };
+  const version = { n, path: outPath, thumb, duration: r.duration, renderedAt: now(), qc: { passed: qc.passed, issues: qc.issues }, captioned: false, broll: { shots: segs.length, mood, track: track?.source || null, musicFile: track?.file || null, musicStart: r.start || 0, cuts: r.grid?.cuts || null, total: r.duration, bpm: r.bpm, synced: r.synced, segs }, ...(lines ? { story: { lines: lines.lines, by: lines.by, when: lines.when || null } } : {}) };
   ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), version], currentVersion: n, pendingChanges: null }));
   pipeline.afterQc(clip.id, qc);
   return { version: n, duration: r.duration, shots: segs.length };
@@ -475,7 +475,7 @@ queue.register('render.short', {
     fs.writeFileSync(velo, JSON.stringify(exporters.toVelo({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, focusX: clip.focusX }), null, 1));
     const xml = path.join(outDir, `v${n}.premiere.xml`);
     fs.writeFileSync(xml, exporters.toFcpXml({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end } }));
-    const version = { n, path: outPath, ...(wideOut ? { wide: wideOut } : {}), thumb, duration: r.duration, renderedAt: now(), encoder: r.encoder, qc: { passed: qc.passed, issues: qc.issues }, srt: r.srtPath, velo, xml, changes: clip.pendingChanges || null, captioned: !!transcript, look: (({ font, size, hookFont }) => ({ font: font || 'Montserrat', size, hookFont }))({ ...(client.style || {}), ...(clip.style || {}) }), cuts: covers.length, covers, music: musicSheet ? { how: musicSheet.how, cues: musicSheet.cues.map((c) => ({ start: Math.round(c.start * 10) / 10, end: Math.round(c.end * 10) / 10, mood: c.mood, why: c.why || '', track: c.track || null, source: c.source || null })) } : null };
+    const version = { n, path: outPath, ...(wideOut ? { wide: wideOut } : {}), thumb, duration: r.duration, renderedAt: now(), encoder: r.encoder, qc: { passed: qc.passed, issues: qc.issues }, srt: r.srtPath, velo, xml, changes: clip.pendingChanges || null, captioned: !!transcript, look: (({ font, size, hookFont }) => ({ font: font || 'Montserrat', size, hookFont }))({ ...(client.style || {}), ...(clip.style || {}) }), cuts: covers.length, covers, music: musicSheet ? { how: musicSheet.how, volume: Number(clip.musicVol ?? client.production?.musicVolume ?? ctx.setting('production.musicVolume', 0.3)), cues: musicSheet.cues.map((c) => ({ file: c.file || null, offset: c.offset || 0, vol: c.vol ?? 1, start: Math.round(c.start * 10) / 10, end: Math.round(c.end * 10) / 10, mood: c.mood, why: c.why || '', track: c.track || null, source: c.source || null })) } : null };
     ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), version], currentVersion: n, pendingChanges: null, coverSrcs: covers.map((k) => [k.src, k.src + k.dur]) }));
     pipeline.afterQc(clip.id, qc);
     return { version: n, duration: r.duration, qc: qc.passed ? 'passed' : 'failed', encoder: r.encoder };

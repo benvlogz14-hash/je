@@ -24,7 +24,7 @@ function veloClip(o) {
 }
 
 /** Build a Velo project for one short: footage on V1/A1, captions as text clips on V2. */
-function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, covers = [], keywords = null }) {
+function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, covers = [], keywords = null, music = null }) {
   const st = captions.resolveStyle(style);
   const dur = range.end - range.start;
   const mediaId = 'm1';
@@ -55,10 +55,44 @@ function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, c
   // The render's cut-away shots (B-roll) as their own picture-only clips, so you can move, trim or delete them.
   const broll = (covers || []).filter((c) => c.at < range.end && c.at + c.dur > range.start).map((c) => veloClip({ id: nextId++, type: 0, mediaId, name: 'B-roll', start: Math.max(0, c.at - range.start), duration: c.dur, in: c.src, scale, posX: 0 }));
   const track = (type, nm, clips) => ({ type, name: nm, muted: false, locked: false, volume: animated(1), clips });
+  // The music the render added, on its own track so it can be moved, trimmed, swapped or deleted (it isn't in the footage).
+  const mu = musicClips(music, dur, () => nextId++);
   return {
     app: 'velo', version: 1,
-    media: [{ id: mediaId, path: source, name: path.basename(source), kind: info.hasVideo ? 0 : 1, duration: info.duration, width: info.width, height: info.height, fps: info.fps, hasVideo: info.hasVideo, hasAudio: info.hasAudio, srcIn: 0, srcOut: -1 }],
-    sequences: [{ id: 's1', name: name || 'Short', width: W, height: H, fps: FPS, videoTracks: [track(0, 'V1', v1), ...(broll.length ? [track(0, 'B-roll', broll)] : []), track(0, 'Captions', v2), track(0, 'Hook', v3)], audioTracks: [track(1, 'A1', a1)] }],
+    media: [{ id: mediaId, path: source, name: path.basename(source), kind: info.hasVideo ? 0 : 1, duration: info.duration, width: info.width, height: info.height, fps: info.fps, hasVideo: info.hasVideo, hasAudio: info.hasAudio, srcIn: 0, srcOut: -1 }, ...mu.media],
+    sequences: [{ id: 's1', name: name || 'Short', width: W, height: H, fps: FPS, videoTracks: [track(0, 'V1', v1), ...(broll.length ? [track(0, 'B-roll', broll)] : []), track(0, 'Captions', v2), track(0, 'Hook', v3)], audioTracks: [track(1, 'A1', a1), ...(mu.clips.length ? [track(1, 'Music', mu.clips)] : [])] }],
+    openTabs: ['s1'], activeSequence: 's1', nextClipId: String(nextId),
+  };
+}
+
+/** Music cues ({ file, start, end, offset, vol }) as Studio audio clips at their volume, with short fades. */
+function musicClips(music, dur, nid) {
+  const cues = (music?.cues || []).filter((c) => c.file && c.end > c.start && c.start < dur);
+  const files = [...new Set(cues.map((c) => c.file))];
+  const media = files.map((f, i) => ({ id: `mu${i + 1}`, path: f, name: path.basename(f), kind: 1, duration: music.durations?.[f] || 600, hasVideo: false, hasAudio: true, srcIn: 0, srcOut: -1 }));
+  const clips = cues.map((c) => ({ ...veloClip({ id: nid(), type: 1, mediaId: `mu${files.indexOf(c.file) + 1}`, name: `Music: ${path.basename(c.file).replace(/\.[^.]+$/, '')}`.slice(0, 60), start: c.start, duration: Math.min(dur, c.end) - c.start, in: c.offset || 0 }),
+    volume: animated(Math.round((c.vol ?? 1) * (music.volume ?? 0.3) * 1000) / 1000), transIn: { type: 2, duration: 0.5 }, transOut: { type: 2, duration: 1 } }));
+  return { media, clips };
+}
+
+/**
+ * Studio project for a B-roll or Story text edit: its shots in order on V1 (as cut), the music on its own track,
+ * and (story edits) each text line as a title in TikTok's plain look, at the times it showed.
+ */
+function toVeloEdit({ name, source, info, segs = [], cuts = null, total = 0, music = null, lines = [], when = [] }) {
+  const mediaId = 'm1'; let nextId = 1;
+  const scale = info.height ? Math.max(W / info.width, H / info.height) : 1;
+  const ends = segs.map((sg, i) => (cuts && cuts[i] != null ? cuts[i] : null));
+  let t = 0; const v1 = segs.map((sg, i) => { const start = t; const end = ends[i] ?? (i === segs.length - 1 && total ? total : start + sg.dur); t = end; return veloClip({ id: nextId++, type: 0, mediaId, name: `Shot ${i + 1}`, start, duration: Math.max(0.1, end - start), in: sg.src, scale }); });
+  const dur = total || t;
+  const titles = lines.map((l, i) => veloClip({ id: nextId++, type: 3, name: l, start: when[i]?.start ?? (i * dur) / lines.length, duration: Math.max(0.3, (when[i]?.end ?? ((i + 1) * dur) / lines.length) - (when[i]?.start ?? (i * dur) / lines.length)), posY: Math.round(H * 0.27 - H / 2),
+    text: { text: String(l), family: 'TikTok Sans', pixelSize: 64, bold: false, italic: false, color: '#ffffffff', outlineColor: '#ff000000', outlineWidth: 0, shadow: 3, shadowColor: '#90000000' } }));
+  const mu = musicClips(music, dur, () => nextId++);
+  const track = (type, nm, clips) => ({ type, name: nm, muted: false, locked: false, volume: animated(1), clips });
+  return {
+    app: 'velo', version: 1,
+    media: [{ id: mediaId, path: source, name: path.basename(source), kind: 0, duration: info.duration, width: info.width, height: info.height, fps: info.fps, hasVideo: true, hasAudio: info.hasAudio, srcIn: 0, srcOut: -1 }, ...mu.media],
+    sequences: [{ id: 's1', name: name || 'Edit', width: W, height: H, fps: FPS, videoTracks: [track(0, 'V1', v1), ...(titles.length ? [track(0, 'Story text', titles)] : [])], audioTracks: [track(1, 'Music', mu.clips)] }],
     openTabs: ['s1'], activeSequence: 's1', nextClipId: String(nextId),
   };
 }
@@ -100,4 +134,4 @@ function toFcpXml({ name, source, info, range }) {
 `;
 }
 
-module.exports = { toVelo, toFcpXml };
+module.exports = { toVelo, toVeloEdit, toFcpXml };

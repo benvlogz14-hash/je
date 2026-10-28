@@ -140,7 +140,7 @@ async function make({ source, duration, shots, scenes, black, avoid, music, leng
   // texts(grid) -> an ASS file with the story lines, timed to the cuts.
   const ass = typeof texts === 'function' ? await texts(grid) : null;
   const r = await render({ source, segs, grid, music, out, volume, signal, raw, ass });
-  return { ...r, segs, bpm, cuts: grid.cuts.length, synced: !!bpm };
+  return { ...r, segs, bpm, cuts: grid.cuts.length, synced: !!bpm, grid, start: grid.start || 0 };
 }
 
 module.exports = { make, plan, render, durations, plainGrid, beatTransitions, sceneShots };
