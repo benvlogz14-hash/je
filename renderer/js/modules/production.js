@@ -118,7 +118,7 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
           // Shows as soon as footage is uploaded (not only once it's ready): pressing it early makes clips the moment the video is ready.
           const waiting = assets.filter((a) => (!target || a.clientId === target) && (a.status === 'waiting' || (waitOn && !a.started && jobs.some((j) => j.payload?.assetId === a.id && ['queued', 'running'].includes(j.status)))));
           const ready = waiting.filter((a) => a.status === 'waiting').length;
-          return waiting.length ? html`<button type="button" class="btn primary" style="box-shadow:inset 0 3px 8px rgba(0,0,0,0.35);transform:translateY(2px);font-weight:700" title="Set the clip length, count and tips, then press to make the clips." onClick=${(e) => { e.stopPropagation(); act(async () => { for (const a of waiting) await api.post(`/api/assets/${a.id}/process`, {}); }, { ok: ready === waiting.length ? `Making clips from ${waiting.length} video${waiting.length > 1 ? 's' : ''}` : 'Clips will be made as soon as the footage is ready', sound: 'success' }); }}>▶ Make clips (${waiting.length} video${waiting.length > 1 ? 's' : ''}${ready < waiting.length ? ', getting ready' : ''})</button>` : null; })()}${target ? html`<${WideSwitch} client=${clients.find((c) => c.id === target)} />` : null}<${Button} size="sm" kind="primary" icon="upload" onClick=${() => input.current.click()}>Upload</${Button}><${Button} size="sm" kind="ghost" icon="folder" onClick=${addPath}>From disk</${Button}><${Button} size="sm" kind="ghost" icon="link" onClick=${addLink}>From link</${Button}></div>
+          return waiting.length ? html`<button type="button" class="btn primary" style="box-shadow:inset 0 3px 8px rgba(0,0,0,0.35);transform:translateY(2px);font-weight:700;height:auto;padding:8px 14px;white-space:normal" title="Set the clip length, count and tips, then press to make the clips." onClick=${(e) => { e.stopPropagation(); act(async () => { for (const a of waiting) await api.post(`/api/assets/${a.id}/process`, {}); }, { ok: ready === waiting.length ? `Making clips from ${waiting.length} video${waiting.length > 1 ? 's' : ''}` : 'Clips will be made as soon as the footage is ready', sound: 'success' }); }}><span class="col" style="gap:0;align-items:center;line-height:1.2"><span>▶ Make clips</span><span style="font-size:var(--fs-xs);font-weight:500;opacity:.85">${waiting.length} video${waiting.length > 1 ? 's' : ''}${ready < waiting.length ? ' · getting ready' : ' ready'}</span></span></button>` : null; })()}${target ? html`<${WideSwitch} client=${clients.find((c) => c.id === target)} />` : null}<${Button} size="sm" kind="primary" icon="upload" onClick=${() => input.current.click()}>Upload</${Button}><${Button} size="sm" kind="ghost" icon="folder" onClick=${addPath}>From disk</${Button}><${Button} size="sm" kind="ghost" icon="link" onClick=${addLink}>From link</${Button}></div>
       <input ref=${input} type="file" accept="video/*,audio/*" multiple hidden onChange=${(e) => { upload([...e.target.files]); e.target.value = ''; }} />
     </div>
     <div class="panel"><div class="panel-head"><h4 class="grow">Footage</h4><span class="faint" style="font-size:var(--fs-sm)">${active.length ? `${active.length} processing` : `${assets.length} files`}</span></div>
@@ -174,8 +174,8 @@ function WideSwitch({ client }) {
 function StyleSwitch({ client }) {
   const { data: list } = useApi('/api/video-styles', []);
   if (!client) return null;
-  const p = client.production || {};
-  const opts = [...(list || []), { id: 'custom', label: 'Custom', blurb: "the client's own caption look" }];
+  const p = client.production || {}; const cs = client.style || {};
+  const opts = [...(list || []), { id: 'custom', label: 'Custom', blurb: "This client's own caption look" }];
   // Older setups chose one style for every clip: shown here as that style times the clip count.
   const saved = Object.fromEntries(Object.entries(p.styleMix || {}).map(([k, v]) => [k, Number(v) || 0]));
   const mix = Object.values(saved).some((v) => v > 0) ? saved : { [p.videoStyle || 'custom']: p.clipsPerFootage || 6 };
@@ -186,18 +186,38 @@ function StyleSwitch({ client }) {
     act(() => api.patch(`/api/clients/${client.id}`, { production: { styleMix: next, ...(sum ? { clipsPerFootage: sum } : {}) } }), { sound: 'tap' });
   };
   const save = (patch, ok) => act(() => api.patch(`/api/clients/${client.id}`, { production: patch }), { ok, sound: 'tap' });
-  return html`<div class="col" style="gap:6px;margin-top:10px;max-width:560px;padding:10px 12px;border:1px solid var(--line);border-radius:12px" onClick=${(e) => e.stopPropagation()}>
-    <div class="row" style="gap:8px;align-items:baseline"><b>What each video makes</b>
-      <span class=${total ? 'faint' : ''} style=${{ fontSize: 'var(--fs-xs)', color: total ? undefined : 'var(--coral-ink, #b4483b)' }}>${total ? `${total} clip${total > 1 ? 's' : ''}: ${opts.filter((o) => mix[o.id] > 0).map((o) => `${mix[o.id]} ${o.label}`).join(', ')}` : 'pick at least one clip'}</span></div>
-    ${opts.map((o) => html`<div class="row" style="gap:8px;align-items:center">
-      <div class="col grow" style="gap:0;min-width:0"><span style=${{ fontWeight: mix[o.id] > 0 ? 700 : 500, fontSize: 'var(--fs-sm)' }}>${o.label}</span><span class="faint ellipsis" style="font-size:var(--fs-xs)" title=${o.blurb}>${o.blurb}</span></div>
-      <button class="chip" style="padding:0 10px" aria-label=${`Fewer ${o.label}`} disabled=${!(mix[o.id] > 0)} onClick=${() => setN(o.id, (mix[o.id] || 0) - 1)}>−</button>
-      <b class="tnum" style="min-width:18px;text-align:center">${mix[o.id] || 0}</b>
-      <button class="chip" style="padding:0 10px" aria-label=${`More ${o.label}`} onClick=${() => setN(o.id, (mix[o.id] || 0) + 1)}>+</button>
-    </div>`)}
-    ${mix.story > 0 ? html`<div class="row wrap" style="gap:8px;font-size:var(--fs-xs);align-items:center;margin-top:2px"><span class="faint">Story text length</span>
-      <select class="select" style="height:30px;font-size:var(--fs-xs);width:auto" value=${String(p.storySeconds || 45)} onChange=${(e) => save({ storySeconds: Number(e.target.value) }, `Story edits: about ${e.target.value} seconds`)} aria-label="Story length">${[20, 30, 45, 60].map((n) => html`<option value=${n}>${n} seconds</option>`)}</select>
-      <span class="faint">Music</span><select class="select" style="height:30px;font-size:var(--fs-xs);width:auto" value=${p.storyMood || 'suspense'} onChange=${(e) => save({ storyMood: e.target.value }, `Story music: ${e.target.selectedOptions[0].text}`)} aria-label="Story music">${[['suspense', 'Suspense'], ['intense', 'Intense'], ['darkbeat', 'Dark beat'], ['creepy', 'Creepy']].map(([v, l]) => html`<option value=${v}>${l}</option>`)}</select></div>` : null}
+  // Each style's colour and a tiny sample of its look, so they can be told apart at a glance.
+  const LOOK = {
+    documentary: { color: '#E8C400', sample: html`<span style="font:800 13px Montserrat;color:#fff;text-shadow:0 0 2px #000,0 1px 2px #000">ABANDONED <span style="color:#F8D800">FACTORY</span></span>` },
+    walkthrough: { color: '#E9A23B', sample: html`<span style="font:800 13px Montserrat;color:#fff;text-shadow:0 1px 3px #000">it's just <span style="color:#F5B850">crazy</span> how</span>` },
+    highlights: { color: '#3FA796', sample: html`<span class="row" style="gap:3px;align-items:center">${[26, 18, 22].map((w) => html`<i style=${`display:block;width:${w}px;height:8px;border-radius:3px;background:#7fd8c8`} />`)}<span style="font:800 13px Montserrat;color:#fff;margin-left:4px;text-shadow:0 1px 3px #000">…the door?</span></span>` },
+    story: { color: '#8B6FD6', sample: html`<span style="font:600 13px 'TikTok Sans', Inter, sans-serif;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.8)">You find something…</span>` },
+    custom: { color: '#8A9099', sample: html`<span style=${`font:800 14px '${cs.font || 'Montserrat'}', Montserrat;color:${cs.primary || '#fff'};text-shadow:0 0 2px ${cs.outline || '#000'}`}>${(cs.uppercase !== false ? 'YOUR ' : 'your ')}<span style=${`color:${cs.highlight || '#F2C14E'}`}>${cs.uppercase !== false ? 'LOOK' : 'look'}</span></span>` },
+  };
+  const colorOf = (id) => LOOK[id]?.color || '#8A9099';
+  return html`<div class="mix" onClick=${(e) => e.stopPropagation()}>
+    <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap">
+      <b style="font-size:var(--fs-md, 15px)">What each video makes</b>
+      <span class=${'mix-total' + (total ? '' : ' none')}>${total ? `${total} clip${total > 1 ? 's' : ''} per video` : 'Pick at least one'}</span>
+    </div>
+    ${total ? html`<div class="mix-bar" title=${opts.filter((o) => mix[o.id] > 0).map((o) => `${mix[o.id]} ${o.label}`).join(', ')}>${opts.filter((o) => mix[o.id] > 0).map((o) => html`<i style=${`flex:${mix[o.id]};background:${colorOf(o.id)}`} />`)}</div>` : null}
+    <div class="mix-grid">
+      ${opts.map((o) => { const n = mix[o.id] || 0; return html`<div class=${'mix-card' + (n ? ' on' : '')} style=${`--mc:${colorOf(o.id)}`}>
+        <div class="mix-sample">${LOOK[o.id]?.sample || null}</div>
+        <div class="row" style="gap:6px;align-items:center"><b class="mix-name grow">${o.label}</b>
+          <div class="mix-step">
+            <button type="button" aria-label=${`Fewer ${o.label}`} disabled=${!n} onClick=${() => setN(o.id, n - 1)}>−</button>
+            <b class="tnum">${n}</b>
+            <button type="button" aria-label=${`More ${o.label}`} onClick=${() => setN(o.id, n + 1)}>+</button>
+          </div>
+        </div>
+        <span class="faint mix-blurb" title=${o.blurb}>${o.blurb}</span>
+        ${o.id === 'story' && n ? html`<div class="row wrap" style="gap:6px;font-size:var(--fs-xs);align-items:center">
+          <select class="select" style="height:28px;font-size:var(--fs-xs);width:auto" value=${String(p.storySeconds || 45)} onChange=${(e) => save({ storySeconds: Number(e.target.value) }, `Story edits: about ${e.target.value} seconds`)} aria-label="Story length">${[20, 30, 45, 60].map((x) => html`<option value=${x}>${x} seconds</option>`)}</select>
+          <select class="select" style="height:28px;font-size:var(--fs-xs);width:auto" value=${p.storyMood || 'suspense'} onChange=${(e) => save({ storyMood: e.target.value }, `Story music: ${e.target.selectedOptions[0].text}`)} aria-label="Story music">${[['suspense', 'Suspense'], ['intense', 'Intense'], ['darkbeat', 'Dark beat'], ['creepy', 'Creepy']].map(([v, l]) => html`<option value=${v}>${l} music</option>`)}</select>
+        </div>` : null}
+      </div>`; })}
+    </div>
   </div>`;
 }
 
