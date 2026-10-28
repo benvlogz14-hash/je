@@ -190,25 +190,7 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
   hook = String(style.hookText || '').trim() || hook;
   if (hook && style.hook) {
     let ht = String(hook).replace(/[{}\\]/g, '').trim().replace(/\s*\n\s*/g, '\\N');
-    // Titles always fit the screen: a line too wide is split into 2 or 3 balanced lines (like "ABANDONED / FACTORY..."),
-    // and if a line is still too wide the title shrinks just enough. Lines you broke yourself are kept as typed.
-    const fitW = width * 0.93;
-    const widthOf = (t, fs) => Math.max(...fontnames.measure(hookFont, HEAVY.has(hookFont), fs, hookCase(t, style).split('\\N')).widths) + 2 * (style.hookBox ? 18 : style.hookOutlineWidth || 0);
-    const split = (ws, n) => {
-      if (n <= 1 || ws.length < 2) return ws.join(' ');
-      let best = null; const len = (a, z) => ws.slice(a, z).join(' ').length;
-      for (let i = 1; i < ws.length; i++) {
-        if (n === 2) { const m = Math.max(len(0, i), len(i, ws.length)); if (!best || m < best.m) best = { m, t: `${ws.slice(0, i).join(' ')}\\N${ws.slice(i).join(' ')}` }; continue; }
-        for (let j = i + 1; j < ws.length; j++) { const m = Math.max(len(0, i), len(i, j), len(j, ws.length)); if (!best || m < best.m) best = { m, t: [ws.slice(0, i), ws.slice(i, j), ws.slice(j)].map((x) => x.join(' ')).join('\\N') }; }
-      }
-      return best ? best.t : ws.join(' ');
-    };
-    if (!ht.includes('\\N') && ht.includes(' ')) {
-      const ws = ht.split(/\s+/); let pick = null;
-      for (const n of [1, 2, 3]) { const t = split(ws, n); if (widthOf(t, hookSize) <= fitW) { pick = t; break; } }
-      ht = pick || split(ws, Math.min(3, ws.length));
-    }
-    const hookFs = Math.max(30, Math.min(hookSize, Math.floor((hookSize * fitW) / Math.max(1, widthOf(ht, hookSize)))));
+    const fitted = fitHook(ht, style, width); ht = fitted.text; const hookFs = fitted.size;
     const fsTag = hookFs < hookSize ? `\\fs${hookFs}` : '';
     const text = hookCase(ht, style); const until = assTime(Math.min(style.hookSeconds, dur));
     // Fully on screen from the very first frame (that frame is also the cover on TikTok and Reels); "Bounce in" is a quick pulse from full size.
@@ -276,6 +258,33 @@ function captionChunks({ words = [], range, style: st }) {
     words: c.map((w) => ({ w: clean(w.w, style), s: Math.round((w.s - start) * 1000) / 1000, e: Math.round((Math.min(w.e, end) - start) * 1000) / 1000 })) }));
 }
 
+/**
+ * Titles always fit the screen: a line too wide is split into 2 or 3 balanced lines (like "ABANDONED / FACTORY..."),
+ * and if a line is still too wide the title shrinks just enough (93% of the width). Lines broken by hand are kept.
+ * text uses \\N between lines; size is the subtitle (libass) size. Used by renders and by clips sent to Studio.
+ */
+function fitHook(text, st, width = 1080) {
+  const font = st.hookFont || st.font || st.fallbackFont || 'Montserrat'; const size = Math.round(st.hookSize || st.size * 0.72);
+  let ht = String(text || '').replace(/[{}\\]/g, '').trim().replace(/\s*\n\s*/g, '\\N');
+  const fitW = width * 0.93;
+  const widthOf = (t, fs) => Math.max(...fontnames.measure(font, HEAVY.has(font), fs, hookCase(t, st).split('\\N')).widths) + 2 * (st.hookBox ? 18 : st.hookOutlineWidth || 0);
+  const split = (ws, n) => {
+    if (n <= 1 || ws.length < 2) return ws.join(' ');
+    let best = null; const len = (a, z) => ws.slice(a, z).join(' ').length;
+    for (let i = 1; i < ws.length; i++) {
+      if (n === 2) { const m = Math.max(len(0, i), len(i, ws.length)); if (!best || m < best.m) best = { m, t: `${ws.slice(0, i).join(' ')}\\N${ws.slice(i).join(' ')}` }; continue; }
+      for (let j = i + 1; j < ws.length; j++) { const m = Math.max(len(0, i), len(i, j), len(j, ws.length)); if (!best || m < best.m) best = { m, t: [ws.slice(0, i), ws.slice(i, j), ws.slice(j)].map((x) => x.join(' ')).join('\\N') }; }
+    }
+    return best ? best.t : ws.join(' ');
+  };
+  if (!ht.includes('\\N') && ht.includes(' ')) {
+    const ws = ht.split(/\s+/); let pick = null;
+    for (const n of [1, 2, 3]) { const t = split(ws, n); if (widthOf(t, size) <= fitW) { pick = t; break; } }
+    ht = pick || split(ws, Math.min(3, ws.length));
+  }
+  return { text: ht, size: Math.max(30, Math.min(size, Math.floor((size * fitW) / Math.max(1, widthOf(ht, size))))), font };
+}
+
 /** The opening title's capitals: all (hookUpper), the first two words (hookCapsFirst), or as typed. */
 function hookCase(t, style) {
   if (style.hookUpper) return String(t).toUpperCase();
@@ -283,4 +292,4 @@ function hookCase(t, style) {
   let n = 0; return String(t).replace(/[^\s\\]+/g, (w) => (n++ < 2 ? w.toUpperCase() : w));
 }
 
-module.exports = { hookCase, roundRect, autoKeywords, HEAVY, DEFAULT_STYLE, DEFAULT_GRAPHICS, PRESETS, resolveStyle, resolveGraphics, buildAss, buildSrt, captionChunks, assColor };
+module.exports = { fitHook, hookCase, roundRect, autoKeywords, HEAVY, DEFAULT_STYLE, DEFAULT_GRAPHICS, PRESETS, resolveStyle, resolveGraphics, buildAss, buildSrt, captionChunks, assColor };

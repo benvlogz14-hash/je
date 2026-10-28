@@ -158,6 +158,31 @@ function markCaptions(data) {
   for (const sq of data?.sequences || []) for (const tr of sq.videoTracks || []) for (const c of tr.clips || []) if (c.type === 3 && c.isCaption === undefined && !isHook(c) && (tr.name === 'Captions' || Array.isArray(c.text?.words))) c.isCaption = true;
   return data;
 }
+/**
+ * Titles wider than the frame (projects made before titles were fitted, or long text) are split into 2 or 3 balanced
+ * lines and shrunk just enough to fit, like renders do. Captions are left alone. Returns how many were changed.
+ */
+function fitTitles(data) {
+  const g = document.createElement('canvas').getContext('2d'); let changed = 0;
+  for (const sq of data?.sequences || []) {
+    const W = sq.width || 1080;
+    for (const tr of sq.videoTracks || []) for (const c of tr.clips || []) {
+      const st = c.text; if (c.type !== 3 || c.isCaption || !st?.text) continue;
+      const show = (t) => (st.uppercase ? t.toUpperCase() : t);
+      const widthOf = (t, px) => { g.font = `${st.italic ? 'italic ' : ''}${st.bold === false ? 500 : 800} ${px}px ${JSON.stringify(st.family || 'Montserrat')}, Montserrat, sans-serif`; return Math.max(...t.split('\n').map((l) => g.measureText(show(l)).width)) + 2 * (st.box ? (st.boxPad ?? 18) : st.outlineWidth || 0); };
+      const limit = (W * 0.93) / Math.max(0.1, base(c.scaleX, 1)); let px = st.pixelSize || 96; let text = String(st.text);
+      if (widthOf(text, px) <= limit) continue;
+      if (!text.includes('\n') && text.includes(' ')) {
+        const ws = text.split(/\s+/); const len = (a, z) => ws.slice(a, z).join(' ').length; let best2 = null, best3 = null;
+        for (let i = 1; i < ws.length; i++) { const m = Math.max(len(0, i), len(i, ws.length)); if (!best2 || m < best2.m) best2 = { m, t: `${ws.slice(0, i).join(' ')}\n${ws.slice(i).join(' ')}` }; for (let j = i + 1; j < ws.length; j++) { const m3 = Math.max(len(0, i), len(i, j), len(j, ws.length)); if (!best3 || m3 < best3.m) best3 = { m: m3, t: [ws.slice(0, i), ws.slice(i, j), ws.slice(j)].map((x) => x.join(' ')).join('\n') }; } }
+        text = [best2?.t, best3?.t].filter(Boolean).find((t) => widthOf(t, px) <= limit) || best3?.t || best2?.t || text;
+      }
+      px = Math.max(20, Math.min(px, Math.floor((px * limit) / widthOf(text, px))));
+      c.text = { ...st, text, pixelSize: px }; changed++;
+    }
+  }
+  return changed;
+}
 /** What a clip is called on the timeline: its name, or for titles and captions their text unless you renamed them. */
 const clipLabel = (c) => (c.type === 3 && !c.renamed ? c.text?.text || c.name || 'Title' : c.name || 'Clip');
 const TRACK_H = { 0: 48, 1: 40 };
@@ -229,7 +254,15 @@ function Editor({ id }) {
   const undo = useRef([]); const redo = useRef([]);
   const saveTimer = useRef(null);
 
-  useEffect(() => { api.get(`/api/projects/${id}`).then((p) => { setProj(p); setDataRaw(markCaptions(p.data)); }).catch((e) => toast(e.message, { kind: 'error' })); }, [id]);
+  useEffect(() => { api.get(`/api/projects/${id}`).then((p) => {
+    setProj(p); setDataRaw(markCaptions(p.data));
+    // Once the title fonts are loaded (so measuring is exact), titles running off the frame are fitted and saved.
+    const fams = [...new Set((p.data?.sequences || []).flatMap((sq) => (sq.videoTracks || []).flatMap((tr) => (tr.clips || []).filter((c) => c.type === 3 && c.text).map((c) => c.text.family || 'Montserrat'))))];
+    Promise.all(fams.map((f) => document.fonts?.load(`800 40px ${JSON.stringify(f)}`).catch(() => null))).then(() => {
+      let n = 0; setDataRaw((prev) => { const next = JSON.parse(JSON.stringify(prev)); n = fitTitles(next); return n ? next : prev; });
+      setTimeout(() => { if (n) { setDirty(true); toast(`Fitted ${n} title${n > 1 ? 's' : ''} that ran off the screen`, { kind: 'info' }); } }, 0);
+    });
+  }).catch((e) => toast(e.message, { kind: 'error' })); }, [id]);
   const seq = data ? (data.sequences.find((s) => s.id === data.activeSequence) || data.sequences[0]) : null;
   if (seq) fpsRef.current = seq.fps || 30;
   const media = useMemo(() => Object.fromEntries((data?.media || []).map((m) => [m.id, m])), [data]);
@@ -466,6 +499,16 @@ function Editor({ id }) {
   });
   const [titleEdit, setTitleEdit] = useState(null); // null | {} (new) | { clipId } | { clipId, ids } (style for many)
   const [musicOpen, setMusicOpen] = useState(false);
+  // Timeline area height: drag the bar above it (▲ ▼) to give the timeline or the preview more room; remembered.
+  const defBottom = () => Math.round(Math.max(260, window.innerHeight * 0.38));
+  const [bottomH, setBottomH] = useState(() => { try { return Number(localStorage.getItem('eu.edBottom')) || defBottom(); } catch { return defBottom(); } });
+  const setBottom = (v) => { const h = v == null ? defBottom() : Math.max(150, Math.min(window.innerHeight - 220, Math.round(v))); setBottomH(h); try { if (v == null) localStorage.removeItem('eu.edBottom'); else localStorage.setItem('eu.edBottom', String(h)); } catch { /* ignore */ } };
+  const startResize = (e) => {
+    e.preventDefault(); const y0 = e.clientY, h0 = bottomH;
+    const move = (ev) => { if (ev.buttons === 0) return up(); setBottom(h0 - (ev.clientY - y0)); };
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+  };
   /** Add a library track at the playhead on the Music track, quiet under the voice and no longer than the edit. */
   const addMusic = async (trackId, title) => {
     const { path: file } = await api.post('/api/music/file', { id: trackId });
@@ -583,7 +626,7 @@ function Editor({ id }) {
   const selected = sel.length === 1 ? findClip(seq, sel[0]) : null;
 
   const exportNow = async () => { await save(true); setExporting(true); };
-  return html`<div style="position:absolute;inset:0;display:grid;grid-template-columns:minmax(0, 1fr);grid-template-rows:46px minmax(0, 1fr) minmax(210px, 38%);background:var(--ed-bg)">
+  return html`<div style=${`position:absolute;inset:0;display:grid;grid-template-columns:minmax(0, 1fr);grid-template-rows:46px minmax(0, 1fr) ${bottomH}px;background:var(--ed-bg)`}>
     <div class="row" style="padding:0 12px;background:var(--surface);border-bottom:1px solid var(--line);gap:10px;min-width:0;overflow-x:auto">
       <${Button} kind="ghost" size="sm" icon="chevronLeft" title="All projects" onClick=${() => { if (dirty) save(true); navigate('/studio'); }} />
       <b class="ellipsis" style="max-width:260px;cursor:text" title="Click to rename the project" onClick=${renameProject}>${proj.name || 'Untitled edit'}</b><span class="faint tnum" style="font-size:var(--fs-sm)">${seq.width}×${seq.height} · ${seq.fps} fps</span>
@@ -606,7 +649,9 @@ function Editor({ id }) {
       <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} sel=${sel} edit=${edit} setSel=${setSel} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
       <${EffectControls} selected=${selected} sel=${sel} findClip=${findClip} seq=${seq} edit=${edit} media=${media} t=${t} setT=${setT} onEditTitle=${(cid, ids) => setTitleEdit({ clipId: cid, ids })} />
     </div>
-    <div style="display:flex;flex-direction:column;min-height:0"><${CaptionsBar} seq=${seq} media=${media} sel=${sel} setSel=${setSel} edit=${edit} findClip=${findClip} nextId=${nextId} />
+    <div style="display:flex;flex-direction:column;min-height:0;position:relative">
+    <div class="ed-split" title="Drag up or down to resize the timeline (double-click to reset)" onPointerDown=${startResize} onDblClick=${() => setBottom(null)}><span>▲</span><span class="ed-grip" /><span>▼</span></div>
+    <${CaptionsBar} seq=${seq} media=${media} sel=${sel} setSel=${setSel} edit=${edit} findClip=${findClip} nextId=${nextId} />
     <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onClipMenu=${clipMenu} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} /></div>
     ${exporting ? html`<${ExportDialog} id=${id} onClose=${() => setExporting(false)} />` : null}
     ${musicOpen ? html`<${MusicLibrary} onClose=${() => setMusicOpen(false)} onAdd=${addMusic} />` : null}
@@ -680,6 +725,10 @@ function lookText(v, hook) {
 }
 
 function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
+  // Open / closed (remembered), so the caption tools never crowd the timeline; the keyword word list has its own toggle.
+  const [open, setOpenRaw] = useState(() => { try { return localStorage.getItem('eu.capOpen') !== '0'; } catch { return true; } });
+  const setOpen = (v) => { setOpenRaw(v); try { localStorage.setItem('eu.capOpen', v ? '1' : '0'); } catch { /* ignore */ } };
+  const [showWords, setShowWords] = useState(false);
   const [look, setLook] = useState('signature'); const [titleLook, setTitleLook] = useState(''); const [busy, setBusy] = useState('');
   if (!seq) return null;
   const all = [...seq.videoTracks].flatMap((tr) => tr.clips.filter(isCaption));
@@ -728,7 +777,7 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
   };
   const hasHook = seq.videoTracks.some((tr) => tr.clips.some(isHook));
   const top = html`<div class="row wrap" style="gap:8px;padding:6px 12px;border-top:1px solid var(--line);background:var(--surface-2);font-size:var(--fs-sm)">
-    <b>Captions</b>
+    <button type="button" class="chip" style="font-weight:700" title=${open ? 'Hide the caption tools (more room for the timeline)' : 'Show the caption tools'} aria-expanded=${open} onClick=${() => setOpen(!open)}>${open ? '▾' : '▸'} Captions</button>
     <${Button} size="sm" kind=${all.length ? 'ghost' : 'primary'} icon="type" disabled=${!!busy} onClick=${addCaptions}>${all.length ? 'Make captions again' : 'Add captions'}</${Button}>
     <span class="faint">Captions look</span>
     <select class="select sm" style="width:auto" value=${look} onChange=${(e) => applyLook(e.target.value, 'captions')} aria-label="Caption look" title="Applies to every caption">${LOOKS.map((l) => html`<option value=${l.id}>${l.label}</option>`)}</select>
@@ -736,7 +785,7 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
     <select class="select sm" style="width:auto" value=${titleLook} onChange=${(e) => applyLook(e.target.value, 'title')} aria-label="Title look" title="Applies to the opening title (the text at the top)"><option value="" disabled>Pick…</option>${LOOKS.map((l) => html`<option value=${l.id}>${l.label}</option>`)}</select>` : null}
     ${busy ? html`<span class="badge sky">${busy}</span>` : !all.length ? html`<span class="faint">Makes captions from what's said, with the spoken word highlighted in gold.</span>` : null}
   </div>`;
-  if (!all.length) return top;
+  if (!all.length || !open) return top;
   const chosen = sel.map((id) => findClip(seq, id)?.c).filter(isCaption);
   const ids = chosen.length ? chosen.map((c) => c.id) : [];
   const forAll = (fn) => edit((d, s) => { for (const cid of ids) { const f = findClip(s, cid); if (f && isCaption(f.c)) fn(f.c); } });
@@ -784,9 +833,10 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
     <${Seg} value=${hlMode} onChange=${(v) => forTargets((c) => { c.text.hlMode = v; if (!c.text.hlColor) c.text.hlColor = '#fff2c14e'; })} options=${[{ value: 'none', label: 'Off' }, { value: 'word', label: 'Spoken word' }, { value: 'keywords', label: 'Keywords' }]} />
     ${hlMode !== 'none' ? html`<input type="color" value=${hlColor} title="Highlight colour" aria-label="Highlight colour" style="width:34px;height:26px;padding:0;border:0;background:none;cursor:pointer" onInput=${(e) => forTargets((c) => { c.text.hlColor = '#ff' + e.target.value.slice(1); })} />` : null}
     ${hlMode === 'keywords' ? html`<${Button} size="sm" kind="soft" onClick=${autoPick}>Pick keywords for me</${Button}>${keywords.length ? html`<${Button} size="sm" kind="ghost" onClick=${() => setKeywords([])}>Clear</${Button}>` : null}` : null}
+    ${hlMode === 'keywords' ? html`<button type="button" class="chip" aria-expanded=${showWords} onClick=${() => setShowWords(!showWords)} title="Show or hide the words to click">${showWords ? '▾' : '▸'} Words${keywords.length ? ` (${keywords.length} on)` : ''}</button>` : null}
     <span class="faint">${ids.length ? `for the ${ids.length} selected caption${ids.length > 1 ? 's' : ''}` : 'for all captions'}</span>
   </div>
-  ${hlMode === 'keywords' ? html`<div class="row wrap" style="gap:4px;padding:0 12px 6px;max-height:86px;overflow:auto">
+  ${hlMode === 'keywords' && showWords ? html`<div class="row wrap" style="gap:4px;padding:0 12px 6px;max-height:86px;overflow:auto">
     <span class="faint" style="font-size:var(--fs-xs)">Click words to highlight:</span>
     ${wordsShown.map((w) => html`<button type="button" class="badge ${kwSet.has(normWord(w)) ? 'gold' : ''}" style="cursor:pointer;border:1px solid var(--line)" onClick=${() => toggleWord(w)}>${w}</button>`)}
   </div>` : null}

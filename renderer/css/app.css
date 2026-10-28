@@ -596,3 +596,8 @@ h4 { font-weight: 750; letter-spacing: -0.01em; }
 .rail-btn { width: 66px; height: auto; min-height: 50px; padding: 6px 2px 5px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
 .rail-l { font: 600 10.5px/1.1 var(--font-ui); letter-spacing: .01em; text-align: center; }
 .rail-btn.on::before { left: -6px; }
+
+/* Studio: the bar between the preview and the timeline; drag it up or down to resize. */
+.ed-split { height: 12px; flex: none; display: flex; align-items: center; justify-content: center; gap: 10px; cursor: row-resize; touch-action: none; user-select: none; background: var(--ed-panel); border-top: 1px solid var(--line); color: var(--text-3, #8a9099); font-size: 8px; line-height: 1; }
+.ed-split:hover { background: var(--surface-2); color: var(--text, #222); }
+.ed-split .ed-grip { width: 44px; height: 4px; border-radius: 3px; background: currentColor; opacity: .55; }

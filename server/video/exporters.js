@@ -47,9 +47,11 @@ function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, c
     text: { ...textStyle(c.text, st.size, st.primary), hlMode, hlColor: hex(st.highlight), words: c.words, keywords: kws } }), isCaption: true }));
   // The opening banner keeps its own look: font, size, colours, box or outline, rotation, position and capitals.
   const hk = String(st.hookText || '').trim() || hook;
+  // The title is fitted to the screen the same way the render does it (split into lines, shrunk if still too wide).
+  const hookFit = captions.fitHook(hk || '', st, W);
   const hookY = st.hookPosition === 'lower' ? H * 0.28 : st.hookPosition === 'center' ? 0 : -H * 0.36;
   const v3 = hk && st.hook !== false ? [veloClip({ id: nextId++, type: 3, name: 'Hook', start: 0, duration: Math.min(st.hookSeconds, dur), posY: hookY, rotation: st.hookTilt || 0,
-    text: textStyle(captions.hookCase(hk, st), Math.round(st.hookSize || st.size * 0.72), st.hookColor, { font: st.hookFont || st.font, outline: st.hookOutline, outlineWidth: st.hookOutlineWidth, box: st.hookBox, boxColor: st.hookBg, radius: st.hookRadius || 0 }) })] : [];
+    text: textStyle(captions.hookCase(hookFit.text.replace(/\\N/g, '\n'), st), hookFit.size, st.hookColor, { font: st.hookFont || st.font, outline: st.hookOutline, outlineWidth: st.hookOutlineWidth, box: st.hookBox, boxColor: st.hookBg, radius: st.hookRadius || 0 }) })] : [];
   // The render's cut-away shots (B-roll) as their own picture-only clips, so you can move, trim or delete them.
   const broll = (covers || []).filter((c) => c.at < range.end && c.at + c.dur > range.start).map((c) => veloClip({ id: nextId++, type: 0, mediaId, name: 'B-roll', start: Math.max(0, c.at - range.start), duration: c.dur, in: c.src, scale, posX: 0 }));
   const track = (type, nm, clips) => ({ type, name: nm, muted: false, locked: false, volume: animated(1), clips });
