@@ -626,7 +626,7 @@ function Editor({ id }) {
   const selected = sel.length === 1 ? findClip(seq, sel[0]) : null;
 
   const exportNow = async () => { await save(true); setExporting(true); };
-  return html`<div style=${`position:absolute;inset:0;display:grid;grid-template-columns:minmax(0, 1fr);grid-template-rows:46px minmax(0, 1fr) ${bottomH}px;background:var(--ed-bg)`}>
+  return html`<div style=${`position:absolute;inset:0;display:grid;grid-template-columns:minmax(0, 1fr);grid-template-rows:46px minmax(0, 1fr) min(${bottomH}px, calc(100% - 46px - 260px));background:var(--ed-bg)`}>
     <div class="row" style="padding:0 12px;background:var(--surface);border-bottom:1px solid var(--line);gap:10px;min-width:0;overflow-x:auto">
       <${Button} kind="ghost" size="sm" icon="chevronLeft" title="All projects" onClick=${() => { if (dirty) save(true); navigate('/studio'); }} />
       <b class="ellipsis" style="max-width:260px;cursor:text" title="Click to rename the project" onClick=${renameProject}>${proj.name || 'Untitled edit'}</b><span class="faint tnum" style="font-size:var(--fs-sm)">${seq.width}×${seq.height} · ${seq.fps} fps</span>
@@ -644,12 +644,12 @@ function Editor({ id }) {
       <${Button} kind="ghost" size="sm" onClick=${() => save()}>Save</${Button}>
       <${Button} kind="primary" size="sm" icon="upload" onClick=${exportNow}>Export</${Button}>
     </div>
-    <div style="display:grid;grid-template-columns:260px minmax(0, 1fr) 300px;min-height:0">
+    <div style="display:grid;grid-template-columns:260px minmax(0, 1fr) 300px;grid-template-rows:minmax(0, 1fr);min-height:0;overflow:hidden">
       <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${id} />
       <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} sel=${sel} edit=${edit} setSel=${setSel} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
       <${EffectControls} selected=${selected} sel=${sel} findClip=${findClip} seq=${seq} edit=${edit} media=${media} t=${t} setT=${setT} onEditTitle=${(cid, ids) => setTitleEdit({ clipId: cid, ids })} />
     </div>
-    <div style="display:flex;flex-direction:column;min-height:0;position:relative">
+    <div style="display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative">
     <div class="ed-split" title="Drag up or down to resize the timeline (double-click to reset)" onPointerDown=${startResize} onDblClick=${() => setBottom(null)}><span>▲</span><span class="ed-grip" /><span>▼</span></div>
     <${CaptionsBar} seq=${seq} media=${media} sel=${sel} setSel=${setSel} edit=${edit} findClip=${findClip} nextId=${nextId} />
     <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onClipMenu=${clipMenu} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} /></div>
