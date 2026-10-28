@@ -1,6 +1,7 @@
 // Euclidean desktop shell.
 import { html, render, useState, useEffect, useRef, useStore, store, navigate, RouteContext, Toasts, ModalHost, Button, HoldButton, Seg, Avatar, act, toast, useEvent } from './lib/ui.js';
 import { api } from './lib/api.js';
+import { Component } from '../vendor/preact.mjs';
 import { Icon, BrandMark } from './lib/icons.js';
 import { play, setSound, soundOn } from './lib/sound.js';
 import { Messages } from './modules/messages.js';
@@ -208,14 +209,32 @@ function App() {
     <${TitleBar} onPalette=${() => { play('open'); setPalette(true); }} />
     <div class="body"><${Rail} /><main class="main tabbed">
       <${TabBar} tabs=${tabsApi.tabs} base=${base} close=${tabsApi.close} />
-      <div class="screens">${tabsApi.tabs.filter((t) => ROUTES[t.base]).map((t) => { const P = ROUTES[t.base]; const on = t.base === base; return html`<div key=${t.base} class=${'screen' + (on ? ' on' : '')} aria-hidden=${!on}><${FrozenRoute} on=${on} path=${t.path}><${P} /></${FrozenRoute}></div>`; })}
-        ${!tabsApi.tabs.some((t) => t.base === base) ? html`<div class="screen on"><${Page} key=${base} /></div>` : null}</div>
+      <div class="screens">${tabsApi.tabs.filter((t) => ROUTES[t.base]).map((t) => { const P = ROUTES[t.base]; const on = t.base === base; return html`<div key=${t.base} class=${'screen' + (on ? ' on' : '')} aria-hidden=${!on}><${FrozenRoute} on=${on} path=${t.path}><${PageGuard}><${P} /></${PageGuard}></${FrozenRoute}></div>`; })}
+        ${!tabsApi.tabs.some((t) => t.base === base) ? html`<div class="screen on"><${PageGuard} key=${base}><${Page} /></${PageGuard}></div>` : null}</div>
     </main></div>
     <${MobileNav} />
     <${StatusBar} />
     ${palette ? html`<${Palette} onClose=${() => setPalette(false)} />` : null}
     <${Toasts} /><${ModalHost} />
   </div>`;
+}
+
+/**
+ * One page hitting an error while drawing shows a message on that page only (with ways out), instead of taking the
+ * whole app down with a misleading "Could not reach the Euclidean engine".
+ */
+class PageGuard extends Component {
+  constructor() { super(); this.state = { error: null }; }
+  componentDidCatch(error) { this.setState({ error }); try { console.error(error); } catch { /* ignore */ } }
+  render({ children }, { error }) {
+    if (!error) return children;
+    const retry = () => this.setState({ error: null });
+    return html`<div style="padding:32px;display:grid;place-items:center"><div class="panel pad" style="max-width:520px">
+      <h2 style="margin-bottom:6px">This page hit a problem</h2>
+      <p class="muted" style="margin-bottom:12px">The rest of Euclidean is fine. Try again, or go to another page. If it keeps happening, send Claude this: <code>${String(error?.message || error).slice(0, 200)}</code></p>
+      <div class="row" style="gap:8px"><${Button} kind="primary" onClick=${retry}>Try again</${Button}><${Button} kind="soft" onClick=${() => { try { localStorage.removeItem('eu.prodClient'); } catch { /* ignore */ } retry(); navigate('/'); }}>Go to Messages</${Button}></div>
+    </div></div>`;
+  }
 }
 
 function Gate({ error }) {
@@ -240,13 +259,13 @@ export async function boot(demoBackend) {
   if (window.EUCLIDEAN_DEMO) theme = 'light';
   applyTheme(theme);
   if (!api.init(demoBackend)) return render(html`<${Gate} />`, root);
-  try {
-    const b = await api.get('/api/bootstrap');
-    store.set({ boot: b });
-    api.on('connections', (c) => store.set((s) => ({ boot: { ...s.boot, connections: c } })));
-    api.on('settings', () => api.get('/api/bootstrap').then((x) => store.set({ boot: x })).catch(() => {}));
-    render(html`<${App} />`, root);
-  } catch (e) { render(html`<${Gate} error=${e.status === 401 ? 'The access token is not valid. Reopen Euclidean from the desktop app.' : `Could not reach the Euclidean engine: ${e.message}`} />`, root); }
+  let b;
+  try { b = await api.get('/api/bootstrap'); } catch (e) { return render(html`<${Gate} error=${e.status === 401 ? 'The access token is not valid. Reopen Euclidean from the desktop app.' : `Could not reach the Euclidean engine: ${e.message}`} />`, root); }
+  store.set({ boot: b });
+  api.on('connections', (c) => store.set((s) => ({ boot: { ...s.boot, connections: c } })));
+  api.on('settings', () => api.get('/api/bootstrap').then((x) => store.set({ boot: x })).catch(() => {}));
+  // The engine answered: a problem drawing the app is not an engine problem, so say what it is and offer a way out.
+  try { render(html`<${App} />`, root); } catch (e) { try { localStorage.removeItem('eu.prodClient'); } catch { /* ignore */ } render(html`<${Gate} error=${`Euclidean started, but the screen hit a problem: ${e.message}. Close and reopen Euclidean; if it happens again, send Claude this message.`} />`, root); }
 }
 
 if (!window.EUCLIDEAN_DEMO) boot();

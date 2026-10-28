@@ -73,7 +73,8 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
 
   const [uploads, setUploads] = useState([]);
   const input = useRef(null);
-  const target = clientId || (clients.length === 1 ? clients[0].id : '');
+  // A remembered client that's since been deleted or archived is ignored (it used to crash the whole app on start).
+  const target = (clientId && clients.some((c) => c.id === clientId) ? clientId : '') || (clients.length === 1 ? clients[0].id : '');
   /** Make sure there's a client to file footage under: pick one, or create the first one on the spot. */
   const ensureTarget = async () => {
     if (target) return target;
@@ -173,6 +174,7 @@ function WideSwitch({ client }) {
  */
 function StyleSwitch({ client }) {
   const { data: list } = useApi('/api/video-styles', []);
+  if (!client) return null;
   const p = client?.production || {}; const cur = p.videoStyle || 'custom';
   const pick = (id) => act(() => api.post(`/api/clients/${client.id}/video-style`, { style: id }), { ok: id === 'custom' ? 'Custom style: your own settings' : `${client.name}: ${(list || []).find((x) => x.id === id)?.label} style for new clips`, sound: 'tap' });
   const save = (patch, ok) => act(() => api.patch(`/api/clients/${client.id}`, { production: patch }), { ok, sound: 'tap' });
