@@ -111,7 +111,7 @@ Built and tested end to end with sample data; live lookups were blocked in the c
 - `server/political/package.js`: the steps research → brief → creative → video_v → video_h → sheet (PDF) → email. Results are stored on `prospect.pkg`, and any step can be re-run. `vetStoryboard` drops quotes and numbers that aren't in the research.
 - Jobs: `political.package` and `political.scout` in `server/jobs/handlers.js`.
 - API: `/api/political/packages|scout|approve|steps`, `/api/prospects/:id/package`, `/api/prospects/:id/file/:kind`.
-- UI: Growth → **Political packages** (`renderer/js/modules/political.js`). The Open States and api.data.gov keys are in Settings → Connections.
+- UI: Growth → **Political packages** (`renderer/js/modules/political.js`). Names entered in Make packages get a progress bar each right under the box (`MakeProgress`: % done, the current step's note, step dots, then the result with Open; any running package shows there too); Scout shows its own bar. The Open States and api.data.gov keys are in Settings → Connections.
 - Settings live under `political.*` in `server/core/defaults.js`.
 
 **Calls and voice (built):** Twilio click-to-call (`twilio.bridgeCall`, rings the founder first), recorded voice notes, and `server/integrations/elevenlabs.js`: clone the founder's own voice (Settings → Connections → Your voice), voice notes read in that voice (`server/outreach/voicenote.js`, per lead or automatically with `voice.autoVoiceNote`), and an inbound-only ElevenLabs callback assistant on the Twilio number that says it's an AI and takes messages (`voice.callbacks`; calls are polled into Recent callbacks and move known leads to Replied). Nothing places outbound AI calls.

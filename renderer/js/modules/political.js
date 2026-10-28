@@ -23,7 +23,9 @@ export function Political({ prospects, reload }) {
   const jobFor = (id) => (jobs || []).find((j) => j.type === 'political.package' && j.payload?.prospectId === id);
   const scouting = (jobs || []).filter((j) => j.type === 'political.scout');
   const ready = list.filter((p) => p.pkg?.status === 'ready' && p.pkg?.messageId);
-  const make = () => act(() => api.post('/api/political/packages', { names }), { ok: (r) => `${r.queued} package${r.queued === 1 ? '' : 's'} started` }).then(() => { setNames(''); reload(); });
+  // Names entered here this session: their progress shows right under the box until each one is done.
+  const [tracked, setTracked] = useState([]);
+  const make = () => act(() => api.post('/api/political/packages', { names }), { ok: (r) => `${r.queued} package${r.queued === 1 ? '' : 's'} started` }).then((r) => { if (r?.ids) setTracked((t) => [...r.ids, ...t.filter((x) => !r.ids.includes(x))]); setNames(''); reload(); });
   const scout = () => act(() => api.post('/api/political/scout', { query, count, autoPackage: auto }), { ok: 'Scouting started. New leads appear below.' }).then(() => setQuery(''));
   const approve = async () => {
     const ids = [...picked].filter((id) => ready.some((p) => p.id === id));
@@ -41,13 +43,14 @@ export function Political({ prospects, reload }) {
         <div class="muted" style="font-size:var(--fs-sm)">One name per line. Add the office or state after a dash if the name is common.</div>
         <textarea class="input" rows="5" id="pol-names" placeholder=${'Jane Rivera — Texas House District 12\nJohn Smith, Ohio State Senate'} value=${names} onInput=${(e) => setNames(e.target.value)} style="resize:vertical;font-family:inherit;height:120px;min-height:90px" />
         <div class="row"><span class="faint grow" style="font-size:var(--fs-xs)">Each: brief, 2 videos, sheet, email draft</span><${Button} kind="primary" icon="sparkle" disabled=${!names.trim()} onClick=${make}>Make packages</${Button}></div>
+        <${MakeProgress} ids=${[...new Set([...tracked, ...(jobs || []).filter((j) => j.type === 'political.package' && j.payload?.prospectId).map((j) => j.payload.prospectId)])]} list=${list} jobFor=${jobFor} steps=${steps || []} onOpen=${setOpen} onClear=${(id) => setTracked((t) => t.filter((x) => x !== id))} />
       </div>
       <div class="panel pad col" style="gap:10px">
         <div class="row"><div class="avatar" style="background:var(--lav-soft);color:var(--lav-ink)"><${Icon} name="search" size=${16} /></div><h4 class="grow">Scout new leads</h4></div>
         <input class="input" id="pol-scout" placeholder="e.g. Ohio state house candidates 2026 with little video on social" value=${query} onInput=${(e) => setQuery(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && query.trim()) scout(); }} />
         <div class="row wrap" style="gap:12px"><label class="row" style="gap:6px">How many <input class="input" type="number" min="1" max="100" value=${count} onInput=${(e) => setCount(e.target.value)} style="width:72px" /></label>
           <${Toggle} on=${auto} onChange=${setAuto} label="Make packages automatically" /><div class="spacer" /><${Button} kind="lav" icon="search" disabled=${query.trim().length < 4} onClick=${scout}>Scout</${Button}></div>
-        ${scouting.length ? html`<div class="notice lav"><span class="spinner" />${scouting.map((j) => j.title).join(' · ')}</div>` : html`<div class="faint" style="font-size:var(--fs-xs)">Uses Open States (state legislators) and your research agent. Duplicates are skipped.</div>`}
+        ${scouting.length ? html`<div class="col" style="gap:8px">${scouting.map((j) => html`<div class="col" style="gap:4px"><div class="row" style="gap:8px;font-size:var(--fs-sm)"><span class="spinner" /><b class="grow ellipsis">${j.title}</b><span class="faint tnum">${j.status === 'queued' ? 'Waiting' : `${Math.round((j.progress || 0) * 100)}%`}</span></div><${Progress} value=${j.progress || 0} indeterminate=${j.status === 'queued' || !j.progress} /><div class="faint ellipsis" style="font-size:var(--fs-xs)">${j.note || 'Starting'}</div></div>`)}</div>` : html`<div class="faint" style="font-size:var(--fs-xs)">Uses Open States (state legislators) and your research agent. Duplicates are skipped.</div>`}
       </div>
     </div>
 
@@ -73,6 +76,34 @@ export function Political({ prospects, reload }) {
       </tbody></table></div>`}
     </div>
     ${cur ? html`<${PackageDrawer} p=${cur} steps=${steps || []} job=${jobFor(cur.id)} onClose=${() => setOpen(null)} reload=${reload} />` : null}
+  </div>`;
+}
+
+/**
+ * Progress for the names just entered: one bar per politician with the step it's on (Research, Brief, Videos...),
+ * the step dots, and when it's done, the result (ready to review, needs an email, needs attention) with Open.
+ */
+function MakeProgress({ ids, list, jobFor, steps, onOpen, onClear }) {
+  if (!ids.length) return null;
+  const rows = ids.map((id) => list.find((p) => p.id === id)).filter(Boolean);
+  if (!rows.length) return null;
+  return html`<div class="col" style="gap:10px;border-top:1px solid var(--line);padding-top:10px">
+    ${rows.map((p) => {
+      const j = jobFor(p.id); const st = p.pkg?.status;
+      const done = !j && st && st !== 'running'; const n = steps.length || 7;
+      const frac = j ? (j.progress || 0) : done ? 1 : 0;
+      const at = j ? Math.min(n - 1, Math.floor(frac * n)) : done ? n : -1;
+      const label = j ? (j.status === 'queued' ? 'Waiting for the last one to finish' : j.note || 'Starting') : done ? (st === 'failed' && p.pkg?.error ? `Needs attention: ${p.pkg.error}` : (STATUS[st] || ['Done'])[0]) : 'Starting';
+      const tone = done ? (st === 'ready' ? 'var(--moss, #3a9d6a)' : st === 'failed' ? 'var(--coral, #e0674f)' : 'var(--gold, #d9a520)') : null;
+      return html`<div class="col" style="gap:5px">
+        <div class="row" style="gap:8px;font-size:var(--fs-sm)">${j ? html`<span class="spinner" />` : html`<span style=${{ color: tone, fontWeight: 700 }}>${st === 'ready' ? '✓' : '!'}</span>`}
+          <b class="grow ellipsis">${p.name}</b><span class="faint tnum">${j ? (j.status === 'queued' ? 'Queued' : `${Math.round(frac * 100)}%`) : ''}</span>
+          ${done ? html`<${Button} size="sm" kind="ghost" onClick=${() => onOpen(p.id)}>Open</${Button}><button class="icon-btn" title="Hide" aria-label="Hide" onClick=${() => onClear(p.id)}>×</button>` : null}</div>
+        <${Progress} value=${frac} color=${tone} indeterminate=${!!j && (j.status === 'queued' || !j.progress)} />
+        <div class="row" style="gap:8px"><span class="faint grow ellipsis" style="font-size:var(--fs-xs)">${label}</span>
+          ${steps.length ? html`<span class="row" style="gap:3px" title=${steps.map((s) => s.label || s.id || s).join(' → ')}>${steps.map((s, i) => html`<i style=${{ display: 'block', width: '7px', height: '7px', borderRadius: '50%', background: i < at ? 'var(--teal-ink, #2a8a7a)' : i === at ? 'var(--sky-ink, #3b82c4)' : 'var(--line)' }} />`)}</span>` : null}</div>
+      </div>`;
+    })}
   </div>`;
 }
 
