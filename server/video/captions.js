@@ -42,6 +42,7 @@ const DEFAULT_STYLE = {
   hookAnim: 'fade',      // 'fade' | 'pop'
   hookText: '',          // what the banner says; empty = the clip's hook
   hookUpper: false,      // banner in CAPITALS (off = exactly as typed)
+  hookCapsFirst: false,  // only the first two words in capitals: "WHY DID they leave it all behind..." (best Stringer short)
   rotate: 0,             // caption tilt in degrees
   punctuation: false,    // keep commas/periods in captions
 };
@@ -191,10 +192,10 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
     let ht = String(hook).replace(/[{}\\]/g, '').trim().replace(/\s*\n\s*/g, '\\N');
     // A one-line title too wide for the screen is split into two balanced lines (like "ABANDONED / FACTORY...") instead of running off the edges.
     if (!ht.includes('\\N') && ht.includes(' ')) {
-      const shown = style.hookUpper ? ht.toUpperCase() : ht; const m = fontnames.measure(hookFont, HEAVY.has(hookFont), hookSize, [shown]);
+      const shown = hookCase(ht, style); const m = fontnames.measure(hookFont, HEAVY.has(hookFont), hookSize, [shown]);
       if (m.widths[0] > width * 0.86) { const ws = ht.split(' '); let best = null; for (let i = 1; i < ws.length; i++) { const a = ws.slice(0, i).join(' '), b = ws.slice(i).join(' '); const d = Math.abs(a.length - b.length); if (!best || d < best.d) best = { d, t: `${a}\\N${b}` }; } if (best) ht = best.t; }
     }
-    const text = style.hookUpper ? ht.toUpperCase() : ht; const until = assTime(Math.min(style.hookSeconds, dur));
+    const text = hookCase(ht, style); const until = assTime(Math.min(style.hookSeconds, dur));
     // Fully on screen from the very first frame (that frame is also the cover on TikTok and Reels); "Bounce in" is a quick pulse from full size.
     const pulse = style.hookAnim === 'pop' && !hookRound ? '\\t(0,120,\\fscx112\\fscy112)\\t(120,240,\\fscx100\\fscy100)' : '';
     if (hookRound) {
@@ -260,4 +261,11 @@ function captionChunks({ words = [], range, style: st }) {
     words: c.map((w) => ({ w: clean(w.w, style), s: Math.round((w.s - start) * 1000) / 1000, e: Math.round((Math.min(w.e, end) - start) * 1000) / 1000 })) }));
 }
 
-module.exports = { roundRect, autoKeywords, HEAVY, DEFAULT_STYLE, DEFAULT_GRAPHICS, PRESETS, resolveStyle, resolveGraphics, buildAss, buildSrt, captionChunks, assColor };
+/** The opening title's capitals: all (hookUpper), the first two words (hookCapsFirst), or as typed. */
+function hookCase(t, style) {
+  if (style.hookUpper) return String(t).toUpperCase();
+  if (!style.hookCapsFirst) return String(t);
+  let n = 0; return String(t).replace(/[^\s\\]+/g, (w) => (n++ < 2 ? w.toUpperCase() : w));
+}
+
+module.exports = { hookCase, roundRect, autoKeywords, HEAVY, DEFAULT_STYLE, DEFAULT_GRAPHICS, PRESETS, resolveStyle, resolveGraphics, buildAss, buildSrt, captionChunks, assColor };

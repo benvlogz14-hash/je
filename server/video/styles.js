@@ -16,6 +16,14 @@ const PRESETS = {
       hook: true, hookSeconds: 6, hookFont: 'Montserrat', hookSize: 215, hookUpper: true, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 9, hookShadow: 5, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
     production: { reframe: 'face', minClipSec: 22, maxClipSec: 40, visualCuts: true, punchIns: false },
   },
+  walkthrough: {
+    label: 'Walkthrough',
+    blurb: 'Your best Stringer short: 3 words a line with the spoken word in gold, smaller captions, a TikTok-style title for 3 s',
+    // Matched to "WHY DID they leave it all behind..." (caption and title widths measured from the video).
+    style: { font: 'Montserrat', size: 120, uppercase: false, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#F5B850', highlightMode: 'word', outline: '#000000', outlineWidth: 3, shadow: 3, position: 'lower', animation: 'none', box: false, rotate: 0,
+      hook: true, hookSeconds: 3, hookFont: 'TikTok Sans', hookSize: 149, hookUpper: false, hookCapsFirst: true, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 4, hookShadow: 3, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
+    production: {}, // look only: clip picking, length and cutting stay exactly as they are
+  },
   story: {
     label: 'Story text',
     blurb: 'No talking: intense music, text lines that tell the story, quick cuts of the best shots',
