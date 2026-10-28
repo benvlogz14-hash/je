@@ -294,7 +294,7 @@ queue.register('discover', {
       let hl = noAds((await intel.discoverClips(asset, transcript, { ...discoverOpts, count: hlCount + 2, exclude: taken(), storyCuts: true, endHook: true })).clips, hlCount);
       // Too few moments end on a hook: fill up with tightened story-cut clips so the count you asked for still comes out.
       if (hl.length < hlCount) { const more = noAds((await intel.discoverClips(asset, transcript, { ...discoverOpts, count: hlCount - hl.length + 2, exclude: [...taken(), ...hl.map((c) => ({ start: c.start, end: c.end }))], storyCuts: true })).clips, hlCount - hl.length); hl = [...hl, ...more]; }
-      hl.forEach((c) => { c.videoStyle = 'highlights'; c.tightCuts = true; });
+      hl.forEach((c) => { c.videoStyle = 'highlights'; c.tightCuts = true; if (looks) c.style = pipeline.sanitizeStyle(styles.PRESETS.highlights.style); });
       result.clips = [...result.clips, ...hl];
     }
     if (storyCount) { try { pipeline.createStoryClips(asset, storyCount); } catch (e) { h.log(`Story edits skipped: ${e.message}`); } }

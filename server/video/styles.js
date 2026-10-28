@@ -5,6 +5,8 @@
  *  - documentary: the narrator-led look of the best-performing Stringer short (drone opening under the voice, cuts every
  *    ~2-3 s, full-screen picture, big Montserrat captions two words at a time with key words in yellow, an all-caps title
  *    with a black outline at the top for the first ~6 s).
+ *  - walkthrough: Montserrat captions with the spoken word in gold, a bold TikTok Sans title.
+ *  - highlights: TikTok's own text (TikTok Sans) for captions and title.
  *  - story: no voice; intense music and short text lines that drive the story (story.js), modelled on a 6M-view video.
  *  - custom: the client's own settings, untouched.
  */
@@ -18,17 +20,19 @@ const PRESETS = {
   },
   walkthrough: {
     label: 'Walkthrough',
-    blurb: 'Your best Stringer short: 3 words a line with the spoken word in gold, smaller captions, a TikTok-style title for 3 s',
+    blurb: 'Your best Stringer short: 3 words a line with the spoken word in gold, smaller captions, a bold TikTok title for 3 s',
     // Matched to "WHY DID they leave it all behind..." (caption and title widths measured from the video).
     style: { font: 'Montserrat', size: 120, uppercase: false, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#F5B850', highlightMode: 'word', outline: '#000000', outlineWidth: 3, shadow: 3, position: 'lower', animation: 'none', box: false, rotate: 0,
-      hook: true, hookSeconds: 3, hookFont: 'TikTok Sans', hookSize: 149, hookUpper: false, hookCapsFirst: true, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 4, hookShadow: 3, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
+      hook: true, hookSeconds: 3, hookFont: 'TikTok Sans Bold', hookSize: 144, hookUpper: false, hookCapsFirst: true, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 4, hookShadow: 3, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
     production: {}, // look only: clip picking, length and cutting stay exactly as they are
   },
   highlights: {
     label: 'Highlights',
     blurb: 'The normal clip, tightened: the strongest moments back to back with the dead air cut, ending on a hook',
-    // Look stays the client's own; the difference is in picking and cutting (story cuts + an ending hook + tighter jump cuts).
-    style: {},
+    // TikTok's own text (TikTok Sans): captions 3 words a line with the spoken word in yellow, a plain white title up top.
+    // The rest of the difference is in picking and cutting (story cuts + an ending hook + tighter jump cuts).
+    style: { font: 'TikTok Sans Bold', size: 110, uppercase: false, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#FFE14D', highlightMode: 'word', outline: '#000000', outlineWidth: 4, shadow: 2, position: 'lower', animation: 'none', box: false, rotate: 0,
+      hook: true, hookSeconds: 3, hookFont: 'TikTok Sans', hookSize: 150, hookUpper: false, hookCapsFirst: false, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 3, hookShadow: 3, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
     production: {},
   },
   story: {

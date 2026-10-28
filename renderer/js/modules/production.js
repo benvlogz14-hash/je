@@ -190,7 +190,7 @@ function StyleSwitch({ client }) {
   const LOOK = {
     documentary: { color: '#E8C400', sample: html`<span style="font:800 13px Montserrat;color:#fff;text-shadow:0 0 2px #000,0 1px 2px #000">ABANDONED <span style="color:#F8D800">FACTORY</span></span>` },
     walkthrough: { color: '#E9A23B', sample: html`<span style="font:800 13px Montserrat;color:#fff;text-shadow:0 1px 3px #000">it's just <span style="color:#F5B850">crazy</span> how</span>` },
-    highlights: { color: '#3FA796', sample: html`<span class="row" style="gap:3px;align-items:center">${[26, 18, 22].map((w) => html`<i style=${`display:block;width:${w}px;height:8px;border-radius:3px;background:#7fd8c8`} />`)}<span style="font:800 13px Montserrat;color:#fff;margin-left:4px;text-shadow:0 1px 3px #000">…the door?</span></span>` },
+    highlights: { color: '#3FA796', sample: html`<span class="row" style="gap:3px;align-items:center">${[26, 18, 22].map((w) => html`<i style=${`display:block;width:${w}px;height:8px;border-radius:3px;background:#7fd8c8`} />`)}<span style="font:700 13px 'TikTok Sans Bold', 'TikTok Sans', Inter, sans-serif;color:#fff;margin-left:4px;text-shadow:0 1px 3px #000">the <span style="color:#FFE14D">door</span>?</span></span>` },
     story: { color: '#8B6FD6', sample: html`<span style="font:600 13px 'TikTok Sans', Inter, sans-serif;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.8)">You find something…</span>` },
     custom: { color: '#8A9099', sample: html`<span style=${`font:800 14px '${cs.font || 'Montserrat'}', Montserrat;color:${cs.primary || '#fff'};text-shadow:0 0 2px ${cs.outline || '#000'}`}>${(cs.uppercase !== false ? 'YOUR ' : 'your ')}<span style=${`color:${cs.highlight || '#F2C14E'}`}>${cs.uppercase !== false ? 'LOOK' : 'look'}</span></span>` },
   };
