@@ -190,24 +190,39 @@ function buildAss({ words = [], range, style: st, hook, graphics, width = 1080, 
   hook = String(style.hookText || '').trim() || hook;
   if (hook && style.hook) {
     let ht = String(hook).replace(/[{}\\]/g, '').trim().replace(/\s*\n\s*/g, '\\N');
-    // A one-line title too wide for the screen is split into two balanced lines (like "ABANDONED / FACTORY...") instead of running off the edges.
+    // Titles always fit the screen: a line too wide is split into 2 or 3 balanced lines (like "ABANDONED / FACTORY..."),
+    // and if a line is still too wide the title shrinks just enough. Lines you broke yourself are kept as typed.
+    const fitW = width * 0.93;
+    const widthOf = (t, fs) => Math.max(...fontnames.measure(hookFont, HEAVY.has(hookFont), fs, hookCase(t, style).split('\\N')).widths) + 2 * (style.hookBox ? 18 : style.hookOutlineWidth || 0);
+    const split = (ws, n) => {
+      if (n <= 1 || ws.length < 2) return ws.join(' ');
+      let best = null; const len = (a, z) => ws.slice(a, z).join(' ').length;
+      for (let i = 1; i < ws.length; i++) {
+        if (n === 2) { const m = Math.max(len(0, i), len(i, ws.length)); if (!best || m < best.m) best = { m, t: `${ws.slice(0, i).join(' ')}\\N${ws.slice(i).join(' ')}` }; continue; }
+        for (let j = i + 1; j < ws.length; j++) { const m = Math.max(len(0, i), len(i, j), len(j, ws.length)); if (!best || m < best.m) best = { m, t: [ws.slice(0, i), ws.slice(i, j), ws.slice(j)].map((x) => x.join(' ')).join('\\N') }; }
+      }
+      return best ? best.t : ws.join(' ');
+    };
     if (!ht.includes('\\N') && ht.includes(' ')) {
-      const shown = hookCase(ht, style); const m = fontnames.measure(hookFont, HEAVY.has(hookFont), hookSize, [shown]);
-      if (m.widths[0] > width * 0.86) { const ws = ht.split(' '); let best = null; for (let i = 1; i < ws.length; i++) { const a = ws.slice(0, i).join(' '), b = ws.slice(i).join(' '); const d = Math.abs(a.length - b.length); if (!best || d < best.d) best = { d, t: `${a}\\N${b}` }; } if (best) ht = best.t; }
+      const ws = ht.split(/\s+/); let pick = null;
+      for (const n of [1, 2, 3]) { const t = split(ws, n); if (widthOf(t, hookSize) <= fitW) { pick = t; break; } }
+      ht = pick || split(ws, Math.min(3, ws.length));
     }
+    const hookFs = Math.max(30, Math.min(hookSize, Math.floor((hookSize * fitW) / Math.max(1, widthOf(ht, hookSize)))));
+    const fsTag = hookFs < hookSize ? `\\fs${hookFs}` : '';
     const text = hookCase(ht, style); const until = assTime(Math.min(style.hookSeconds, dur));
     // Fully on screen from the very first frame (that frame is also the cover on TikTok and Reels); "Bounce in" is a quick pulse from full size.
     const pulse = style.hookAnim === 'pop' && !hookRound ? '\\t(0,120,\\fscx112\\fscy112)\\t(120,240,\\fscx100\\fscy100)' : '';
     if (hookRound) {
       // TikTok / Instagram style: one rounded box per line, sized to the measured text.
-      const tl = text.split('\\N'); const fsz = hookSize; const m = fontnames.measure(hookFont, HEAVY.has(hookFont), fsz, tl);
+      const tl = text.split('\\N'); const fsz = hookFs; const m = fontnames.measure(hookFont, HEAVY.has(hookFont), fsz, tl);
       const blockH = tl.length * fsz; const y0 = hookAlign === 8 ? hookMarginV : hookAlign === 5 ? (height - blockH) / 2 : height - hookMarginV - blockH;
       const cx = width / 2; const yc = y0 + blockH / 2; const pad = m.capH * 0.55; const padX = m.capH * 0.6;
       const shapes = tl.map((l, i) => { const base = y0 + i * fsz + m.asc; const w = m.widths[i]; return roundRect(cx - w / 2 - padX, base - m.capH - pad, cx + w / 2 + padX, base + pad * 0.95, style.hookRadius); }).join(' ');
       const bg = assColor(style.hookBg);
       lines.push(`Dialogue: 1,${assTime(0)},${until},Hook,,0,0,0,,{\\an7\\pos(0,0)\\org(${Math.round(cx)},${Math.round(yc)})\\fad(0,180)\\bord0\\shad0\\1c&H${bg.slice(4)}&\\1a&H${bg.slice(2, 4)}&\\p1}${shapes}{\\p0}`);
-      lines.push(`Dialogue: 2,${assTime(0)},${until},Hook,,0,0,0,,{\\an8\\pos(${Math.round(cx)},${Math.round(y0)})\\org(${Math.round(cx)},${Math.round(yc)})\\fad(0,180)}${text}`);
-    } else lines.push(`Dialogue: 1,${assTime(0)},${until},Hook,,0,0,0,,{\\fad(0,180)${pulse}}${text}`);
+      lines.push(`Dialogue: 2,${assTime(0)},${until},Hook,,0,0,0,,{\\an8\\pos(${Math.round(cx)},${Math.round(y0)})\\org(${Math.round(cx)},${Math.round(yc)})\\fad(0,180)${fsTag}}${text}`);
+    } else lines.push(`Dialogue: 1,${assTime(0)},${until},Hook,,0,0,0,,{\\fad(0,180)${fsTag}${pulse}}${text}`);
   }
   const local = words.filter((w) => w.e > range.start && w.s < range.end)
     .map((w) => ({ w: w.w, s: Math.max(0, w.s - range.start), e: Math.min(dur, w.e - range.start) }))

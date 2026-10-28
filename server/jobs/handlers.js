@@ -249,8 +249,24 @@ queue.register('discover', {
     if (!asset) throw permanent('Asset no longer exists');
     const client = ctx.store.get('clients', asset.clientId);
     const count = job.payload.count || client.production?.clipsPerFootage || ctx.setting('production.defaultClipCount', 6);
+    // Style mix (Production → Video style → Mix): e.g. 2 Walkthrough + 2 Documentary + 2 Story text from each video,
+    // all made in one go. Talking clips are found once and dealt the looks in turn; story edits are made alongside.
+    const styles = require('../video/styles');
+    const mix = Object.fromEntries(Object.entries(client.production?.styleMix || {}).map(([k, v]) => [k, Math.max(0, Math.min(10, Math.round(Number(v) || 0)))]).filter(([k, v]) => v > 0 && (styles.PRESETS[k] || k === 'custom')));
+    const mixTotal = Object.values(mix).reduce((a, b) => a + b, 0);
+    let looks = null; let storyCount = 0;
+    if (mixTotal > 0) {
+      storyCount = asset.info?.hasVideo !== false ? mix.story || 0 : 0;
+      const order = Object.entries(mix).filter(([k]) => k !== 'story'); looks = [];
+      for (let round = 0; looks.length < order.reduce((a, [, v]) => a + v, 0); round++) for (const [k, v] of order) if (round < v) looks.push(k);
+      if (!looks.length) {
+        const made = pipeline.createStoryClips(asset, storyCount);
+        ctx.store.update('assets', asset.id, { discoveredAt: now(), discoveryMethod: 'story' });
+        return { clips: made.length, method: 'story' };
+      }
+    }
     // Story text style: no talking clips; each edit tells one part of the video in text lines over its best shots.
-    if (client.production?.videoStyle === 'story' && asset.info?.hasVideo !== false) {
+    if (!looks && client.production?.videoStyle === 'story' && asset.info?.hasVideo !== false) {
       const made = pipeline.createStoryClips(asset, count);
       ctx.store.update('assets', asset.id, { discoveredAt: now(), discoveryMethod: 'story' });
       audit.log('system', 'clips.discovered', { clientId: asset.clientId, assetId: asset.id, count: made.length, method: 'story' });
@@ -261,9 +277,12 @@ queue.register('discover', {
     // Ad reads (a website plug in the intro, sponsor reads, "like and subscribe") never become clips.
     const ads = require('../video/ads').adRanges(transcript?.words || []);
     if (ads.length) { ctx.store.update('assets', asset.id, { ads }); h.log(`Skipping ${ads.length} ad read${ads.length > 1 ? 's' : ''}: ${ads.map((a) => `${Math.round(a.start)}-${Math.round(a.end)}s`).join(', ')}`); }
-    const result = await intel.discoverClips(asset, transcript, { count: count + (ads.length ? 2 : 0), jobId: job.id, onProgress: (f, t) => h.progress(f, t), exclude: [...pipeline.usedRanges(asset.id), ...ads], analysis: loadAnalysis(asset), vision: require('../video/vision').cached(asset.path, asset.workDir) });
+    const want = looks ? looks.length : count;
+    const result = await intel.discoverClips(asset, transcript, { count: want + (ads.length ? 2 : 0), jobId: job.id, onProgress: (f, t) => h.progress(f, t), exclude: [...pipeline.usedRanges(asset.id), ...ads], analysis: loadAnalysis(asset), vision: require('../video/vision').cached(asset.path, asset.workDir) });
     // Any pick that still runs into an ad by more than a second is dropped (the usual check allows small overlaps).
-    result.clips = result.clips.filter((c) => !ads.some((a) => Math.min(a.end, c.end) - Math.max(a.start, c.start) > 1)).slice(0, count);
+    result.clips = result.clips.filter((c) => !ads.some((a) => Math.min(a.end, c.end) - Math.max(a.start, c.start) > 1)).slice(0, want);
+    if (looks) result.clips.forEach((c, i) => { const p = styles.PRESETS[looks[i]]; if (p) { c.style = pipeline.sanitizeStyle(p.style); c.videoStyle = looks[i]; if (p.production?.reframe) c.reframe = p.production.reframe; } });
+    if (storyCount) { try { pipeline.createStoryClips(asset, storyCount); } catch (e) { h.log(`Story edits skipped: ${e.message}`); } }
     if (!result.clips.length) { ctx.store.update('assets', asset.id, { exhausted: true }); return { clips: 0, note: 'No further usable moments found' }; }
     h.progress(0.8, `Creating ${result.clips.length} clips`);
     const clips = pipeline.createClips(asset, result);
