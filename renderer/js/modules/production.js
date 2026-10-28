@@ -137,15 +137,12 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
 function ClipLength({ client }) {
   const p = client?.production || {};
   const [r, setR] = useState({ min: p.minClipSec || 20, max: p.maxClipSec || 59 });
-  const [n, setN] = useState(p.clipsPerFootage || 6);
-  useEffect(() => setN(p.clipsPerFootage || 6), [client?.id]);
   useEffect(() => setR({ min: p.minClipSec || 20, max: p.maxClipSec || 59 }), [client?.id]);
   const save = (next) => act(() => api.patch(`/api/clients/${client.id}`, { production: { minClipSec: next.min, maxClipSec: next.max } }), { ok: `Clips will be ${next.min} to ${next.max} seconds`, sound: 'tap' });
   const set = (k) => (e) => { const v = Number(e.target.value); setR(k === 'min' ? { min: v, max: Math.max(r.max, v + 5) } : { max: v, min: Math.min(r.min, v - 5) }); };
   return html`<div class="col" style="gap:4px;margin-top:10px;max-width:420px" onClick=${(e) => e.stopPropagation()}>
-    <span class="label">Clip length: <b class="tnum">${r.min}s to ${r.max}s</b> · ${(() => { const mixN = Object.values(client?.production?.styleMix || {}).reduce((a, b) => a + (Number(b) || 0), 0); return mixN ? html`<b class="tnum">${mixN}</b> clips per video <span class="faint">(set by Mix per video)</span>` : html`<b class="tnum">${n}</b> clip${n > 1 ? 's' : ''} per video`; })()}</span>
+    <span class="label">Clip length: <b class="tnum">${r.min}s to ${r.max}s</b></span>
     <div class="row" style="gap:8px;font-size:var(--fs-xs)"><span class="faint" style="width:56px">Shortest</span><input class="range grow" type="range" min="5" max="175" step="1" value=${r.min} onInput=${set('min')} onChange=${() => save(r)} aria-label="Shortest clip in seconds" /><b class="tnum" style="width:34px">${r.min}s</b></div>
-    <div class="row" style="gap:8px;font-size:var(--fs-xs)"><span class="faint" style="width:56px">Clips</span><input class="range grow" type="range" min="1" max="20" step="1" value=${n} onInput=${(e) => setN(Number(e.target.value))} onChange=${() => act(() => api.patch(`/api/clients/${client.id}`, { production: { clipsPerFootage: n } }), { ok: `${n} clip${n > 1 ? 's' : ''} from each video`, sound: 'tap' })} aria-label="Clips per video" /><b class="tnum" style="width:34px">${n}</b></div>
     <div class="row" style="gap:8px;font-size:var(--fs-xs)"><span class="faint" style="width:56px">Longest</span><input class="range grow" type="range" min="10" max="180" step="1" value=${r.max} onInput=${set('max')} onChange=${() => save(r)} aria-label="Longest clip in seconds" /><b class="tnum" style="width:34px">${r.max}s</b></div>
   </div>`;
 }
@@ -170,34 +167,35 @@ function WideSwitch({ client }) {
 }
 
 /**
- * Video style for this client (each client keeps its own): Documentary (narrator, yellow key-word captions, big title),
- * Story text (no talking: text lines tell the story over quick cuts and intense music), or Custom (their own settings).
+ * What each video makes, per client: how many clips of each style (Walkthrough, Documentary, Highlights, Story text,
+ * or Custom = the client's own look). One control; the total is the number of clips per video. Saved as
+ * production.styleMix (and clipsPerFootage = the total, so everything else agrees).
  */
 function StyleSwitch({ client }) {
   const { data: list } = useApi('/api/video-styles', []);
   if (!client) return null;
-  const p = client?.production || {}; const cur = p.videoStyle || 'custom';
-  const pick = (id) => act(() => api.post(`/api/clients/${client.id}/video-style`, { style: id }), { ok: id === 'custom' ? 'Custom style: your own settings' : `${client.name}: ${(list || []).find((x) => x.id === id)?.label} style for new clips`, sound: 'tap' });
+  const p = client.production || {};
+  const opts = [...(list || []), { id: 'custom', label: 'Custom', blurb: "the client's own caption look" }];
+  // Older setups chose one style for every clip: shown here as that style times the clip count.
+  const saved = Object.fromEntries(Object.entries(p.styleMix || {}).map(([k, v]) => [k, Number(v) || 0]));
+  const mix = Object.values(saved).some((v) => v > 0) ? saved : { [p.videoStyle || 'custom']: p.clipsPerFootage || 6 };
+  const total = Object.values(mix).reduce((a, b) => a + b, 0);
+  const setN = (id, n) => {
+    const next = { ...Object.fromEntries(opts.map((o) => [o.id, mix[o.id] || 0])), [id]: Math.max(0, Math.min(10, n)) };
+    const sum = Object.values(next).reduce((a, b) => a + b, 0);
+    act(() => api.patch(`/api/clients/${client.id}`, { production: { styleMix: next, ...(sum ? { clipsPerFootage: sum } : {}) } }), { sound: 'tap' });
+  };
   const save = (patch, ok) => act(() => api.patch(`/api/clients/${client.id}`, { production: patch }), { ok, sound: 'tap' });
-  const opts = [...(list || []), { id: 'custom', label: 'Custom', blurb: 'Your own caption look and settings below' }];
-  return html`<div class="col" style="gap:6px;margin-top:10px;max-width:560px" onClick=${(e) => e.stopPropagation()}>
-    <div class="row wrap" style="gap:6px;align-items:center"><span class="label" style="margin-right:4px">Video style</span>
-      ${opts.map((o) => html`<button class="chip" title=${o.blurb} style=${cur === o.id ? { background: 'var(--accent-soft, #dcefeb)', borderColor: 'var(--accent, #5f9a91)', fontWeight: 700 } : {}} onClick=${() => cur !== o.id && pick(o.id)}>${o.label}</button>`)}</div>
-    <span class="faint" style="font-size:var(--fs-xs)">${opts.find((o) => o.id === cur)?.blurb || ''}. Only for ${client.name}; new clips use it.</span>
-    ${(() => {
-      // Mix: how many clips of each style every video makes (e.g. 2 Walkthrough, 2 Documentary, 2 Story text), all in one go.
-      const mix = p.styleMix || {}; const total = Object.values(mix).reduce((a, b) => a + (Number(b) || 0), 0);
-      const setN = (id, n) => save({ styleMix: { ...mix, [id]: Math.max(0, Math.min(10, n)) } }, null);
-      return html`<div class="col" style="gap:4px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:${total ? 'var(--surface-2)' : 'transparent'}">
-        <div class="row" style="gap:6px;align-items:center"><b style="font-size:var(--fs-sm)">Mix per video</b><span class="faint" style="font-size:var(--fs-xs)">${total ? `each video makes ${total} clip${total > 1 ? 's' : ''}: ${opts.filter((o) => mix[o.id] > 0).map((o) => `${mix[o.id]} ${o.label}`).join(', ')}` : 'off: every clip uses the style picked above'}</span>
-          ${total ? html`<span class="grow" /><button class="chip" onClick=${() => save({ styleMix: {} }, 'Mix off: one style for every clip')}>Clear</button>` : null}</div>
-        <div class="row wrap" style="gap:10px">${opts.map((o) => html`<span class="row" style="gap:4px;align-items:center;font-size:var(--fs-xs)"><span style="min-width:74px">${o.label}</span>
-          <button class="chip" style="padding:0 8px" aria-label=${`Fewer ${o.label}`} onClick=${() => setN(o.id, (Number(mix[o.id]) || 0) - 1)}>−</button>
-          <b class="tnum" style="min-width:14px;text-align:center">${Number(mix[o.id]) || 0}</b>
-          <button class="chip" style="padding:0 8px" aria-label=${`More ${o.label}`} onClick=${() => setN(o.id, (Number(mix[o.id]) || 0) + 1)}>+</button></span>`)}</div>
-      </div>`;
-    })()}
-    ${cur === 'story' || (p.styleMix?.story > 0) ? html`<div class="row wrap" style="gap:8px;font-size:var(--fs-xs);align-items:center"><span class="faint">Story length</span>
+  return html`<div class="col" style="gap:6px;margin-top:10px;max-width:560px;padding:10px 12px;border:1px solid var(--line);border-radius:12px" onClick=${(e) => e.stopPropagation()}>
+    <div class="row" style="gap:8px;align-items:baseline"><b>What each video makes</b>
+      <span class=${total ? 'faint' : ''} style=${{ fontSize: 'var(--fs-xs)', color: total ? undefined : 'var(--coral-ink, #b4483b)' }}>${total ? `${total} clip${total > 1 ? 's' : ''}: ${opts.filter((o) => mix[o.id] > 0).map((o) => `${mix[o.id]} ${o.label}`).join(', ')}` : 'pick at least one clip'}</span></div>
+    ${opts.map((o) => html`<div class="row" style="gap:8px;align-items:center">
+      <div class="col grow" style="gap:0;min-width:0"><span style=${{ fontWeight: mix[o.id] > 0 ? 700 : 500, fontSize: 'var(--fs-sm)' }}>${o.label}</span><span class="faint ellipsis" style="font-size:var(--fs-xs)" title=${o.blurb}>${o.blurb}</span></div>
+      <button class="chip" style="padding:0 10px" aria-label=${`Fewer ${o.label}`} disabled=${!(mix[o.id] > 0)} onClick=${() => setN(o.id, (mix[o.id] || 0) - 1)}>−</button>
+      <b class="tnum" style="min-width:18px;text-align:center">${mix[o.id] || 0}</b>
+      <button class="chip" style="padding:0 10px" aria-label=${`More ${o.label}`} onClick=${() => setN(o.id, (mix[o.id] || 0) + 1)}>+</button>
+    </div>`)}
+    ${mix.story > 0 ? html`<div class="row wrap" style="gap:8px;font-size:var(--fs-xs);align-items:center;margin-top:2px"><span class="faint">Story text length</span>
       <select class="select" style="height:30px;font-size:var(--fs-xs);width:auto" value=${String(p.storySeconds || 45)} onChange=${(e) => save({ storySeconds: Number(e.target.value) }, `Story edits: about ${e.target.value} seconds`)} aria-label="Story length">${[20, 30, 45, 60].map((n) => html`<option value=${n}>${n} seconds</option>`)}</select>
       <span class="faint">Music</span><select class="select" style="height:30px;font-size:var(--fs-xs);width:auto" value=${p.storyMood || 'suspense'} onChange=${(e) => save({ storyMood: e.target.value }, `Story music: ${e.target.selectedOptions[0].text}`)} aria-label="Story music">${[['suspense', 'Suspense'], ['intense', 'Intense'], ['darkbeat', 'Dark beat'], ['creepy', 'Creepy']].map(([v, l]) => html`<option value=${v}>${l}</option>`)}</select></div>` : null}
   </div>`;
