@@ -284,10 +284,33 @@ queue.register('discover', {
     const want = looks ? otherLooks.length : (hlCount ? 0 : count);
     const discoverOpts = { jobId: job.id, onProgress: (f, t) => h.progress(f, t), analysis: loadAnalysis(asset), vision: require('../video/vision').cached(asset.path, asset.workDir) };
     const noAds = (list, n) => list.filter((c) => !ads.some((a) => Math.min(a.end, c.end) - Math.max(a.start, c.start) > 1)).slice(0, n);
-    const result = want ? await intel.discoverClips(asset, transcript, { ...discoverOpts, count: want + (ads.length ? 2 : 0), exclude: [...pipeline.usedRanges(asset.id), ...ads] }) : { clips: [], method: 'scored' };
-    // Any pick that still runs into an ad by more than a second is dropped (the usual check allows small overlaps).
-    result.clips = noAds(result.clips, want);
-    if (otherLooks) result.clips.forEach((c, i) => { const p = styles.PRESETS[otherLooks[i]]; if (p) { c.style = pipeline.sanitizeStyle(p.style); c.videoStyle = otherLooks[i]; if (p.production?.reframe) c.reframe = p.production.reframe; } });
+    let result;
+    if (otherLooks && otherLooks.length) {
+      // Mix: each style gets its own pass with its own recipe (Documentary: 22-40 s clips, cut-ins on, no zoom punch-ins;
+      // the others: the client's settings), so a style in the mix comes out the same as when it's the only style.
+      // Before, the mix only copied each style's text look and every clip used the client's lengths and zooms.
+      result = { clips: [], method: 'scored' };
+      for (const look of [...new Set(otherLooks)]) {
+        const n = otherLooks.filter((l) => l === look).length; const pr = styles.PRESETS[look]?.production || {};
+        const taken = [...pipeline.usedRanges(asset.id), ...ads, ...result.clips.map((c) => ({ start: c.start, end: c.end }))];
+        const r = await intel.discoverClips(asset, transcript, { ...discoverOpts, count: n + (ads.length ? 2 : 0), exclude: taken, minSec: pr.minClipSec || null, maxSec: pr.maxClipSec || null });
+        if (r.method === 'ai') result.method = 'ai';
+        for (const c of noAds(r.clips, n)) {
+          const p = styles.PRESETS[look];
+          if (p) {
+            c.style = pipeline.sanitizeStyle(p.style); c.videoStyle = look;
+            if (pr.reframe) c.reframe = pr.reframe;
+            if (pr.punchIns === false) c.punchIns = [];
+            if (pr.visualCuts != null) c.visualCuts = !!pr.visualCuts;
+          }
+          result.clips.push(c);
+        }
+      }
+    } else {
+      result = want ? await intel.discoverClips(asset, transcript, { ...discoverOpts, count: want + (ads.length ? 2 : 0), exclude: [...pipeline.usedRanges(asset.id), ...ads] }) : { clips: [], method: 'scored' };
+      // Any pick that still runs into an ad by more than a second is dropped (the usual check allows small overlaps).
+      result.clips = noAds(result.clips, want);
+    }
     if (hlCount) {
       h.progress(0.6, 'Finding highlight moments');
       const taken = () => [...pipeline.usedRanges(asset.id), ...ads, ...result.clips.map((c) => ({ start: c.start, end: c.end }))];
@@ -385,7 +408,7 @@ queue.register('render.short', {
     // Visual cuts: weak or static stretches get the best shots from elsewhere (drone first) while the voice keeps going.
     let src = { source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end }, words: transcript?.words || [], facePath };
     let covers = []; let assembled = null;
-    if (clip.visualCuts !== false && client.production?.visualCuts !== false) {
+    if (clip.visualCuts === true || (clip.visualCuts !== false && client.production?.visualCuts !== false)) { // a style's own setting wins
       try {
         const montage = require('../video/montage');
         const vis = require('../video/vision').cached(asset.path, asset.workDir);

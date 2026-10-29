@@ -178,10 +178,11 @@ function tipNudge(cands, tips) {
   cands.sort((a, b) => b.score - a.score);
 }
 
-async function discoverClips(asset, transcript, { count = 6, jobId, exclude = [], analysis = null, vision = null, onProgress = () => {}, storyCuts = null, endHook = false } = {}) {
-  // Clip length: the client's own setting (the sliders by the upload box), else the global default.
+async function discoverClips(asset, transcript, { count = 6, jobId, exclude = [], analysis = null, vision = null, onProgress = () => {}, storyCuts = null, endHook = false, minSec: minO = null, maxSec: maxO = null } = {}) {
+  // Clip length: a style's own (Documentary is 22-40 s, from the reference short), else the client's setting (the sliders
+  // by the upload box), else the global default.
   const prod = ctx.store.get('clients', asset.clientId)?.production || {};
-  const minSec = Number(prod.minClipSec) || ctx.setting('production.minClipSec', 20); const maxSec = Math.max(minSec + 5, Number(prod.maxClipSec) || ctx.setting('production.maxClipSec', 59));
+  const minSec = Number(minO) || Number(prod.minClipSec) || ctx.setting('production.minClipSec', 20); const maxSec = Math.max(minSec + 5, Number(maxO) || Number(prod.maxClipSec) || ctx.setting('production.maxClipSec', 59));
   const duration = asset.info?.duration || 0;
   const words = transcript?.words || [];
   // The editor's tips (box by the upload area): sent to the AI, and used to nudge the scores when no AI picks.
@@ -206,7 +207,7 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
           const waitSec = Number(ctx.setting('production.aiPickSeconds', 600)); const t0 = Date.now();
           tick = setInterval(() => { const left = Math.max(0, waitSec - Math.round((Date.now() - t0) / 1000)); onProgress(0.45 + 0.4 * (1 - left / waitSec), `AI choosing the best ${count} (uses the scores in ${Math.ceil(left / 60)} min if it hasn't answered)`); }, 5000);
           const r = await Promise.race([new Promise((_, no) => setTimeout(() => no(new Error('AI took too long')), waitSec * 1000).unref?.()), ai.ask({ role: 'analysis', json: true, clientId: asset.clientId, jobId, maxTokens: 3500, system: DISCOVERY_SYSTEM,
-            prompt: `Footage: "${asset.name}" (${Math.round(duration)}s). Below are the ${Math.min(cands.length, 18)} strongest candidate moments, already measured (VO = voiceover narration, which performs best; DRONE = aerial shots). Choose the ${count} that would do best as YouTube Shorts/TikToks: a scroll-stopping first line, one clear story with a payoff, curiosity, strong visuals. Skip ones that start mid-thought or are just filler.${tips ? `\n\nThe editor's tips for this footage (follow them; they beat the scores): ${tips}` : ''}\n\n${cands.slice(0, 18).map((c, i) => `#${i + 1} [${c.start.toFixed(1)}-${c.end.toFixed(1)}s] score ${Math.round(c.score)}${c.why.length ? ` (${c.why.join(', ')})` : ''}: "${c.text.slice(0, 420)}"`).join('\n')}\n\nReturn JSON: {"clips":[{"pick":1,"title":"<=60 chars, curiosity-driven","hook":"<=8 word on-screen headline in the speaker's own promise","caption":"1-2 sentence social caption","hashtags":["tag"],"reason":"why it will work","punchIns":[{"at":seconds_from_clip_start,"dur":1.2}],"trials":[{"name":"<=3 words","test":"what this version tests","hook":"a different opening headline","start":sec}]}]}` })]);
+            prompt: `Footage: "${asset.name}" (${Math.round(duration)}s). Below are the ${Math.min(cands.length, 18)} strongest candidate moments, already measured (VO = voiceover narration, which performs best; DRONE = aerial shots). Choose the ${count} that would do best as YouTube Shorts/TikToks: a scroll-stopping first line, one clear story with a payoff, curiosity, strong visuals. Skip ones that start mid-thought or are just filler.${tips ? `\n\nThe editor's tips for this footage (follow them; they beat the scores): ${tips}` : ''}\n\n${cands.slice(0, 18).map((c, i) => `#${i + 1} [${c.start.toFixed(1)}-${c.end.toFixed(1)}s] score ${Math.round(c.score)}${c.why.length ? ` (${c.why.join(', ')})` : ''}: "${c.text.slice(0, 420)}"`).join('\n')}\n\nReturn JSON: {"clips":[{"pick":1,"title":"<=60 chars, curiosity-driven","hook":"2-5 word on-screen title about what this moment shows (different for every clip, never a quote of what is said)","caption":"1-2 sentence social caption","hashtags":["tag"],"reason":"why it will work","punchIns":[{"at":seconds_from_clip_start,"dur":1.2}],"trials":[{"name":"<=3 words","test":"what this version tests","hook":"a different opening headline","start":sec}]}]}` })]);
           clearInterval(tick);
           const chosen = []; const seen = new Set();
           for (const x of r.json?.clips || []) {

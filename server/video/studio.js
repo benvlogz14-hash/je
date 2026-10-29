@@ -233,19 +233,38 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
         return raw.split('\n').map((line) => line.split(/\s+/).filter(Boolean).map((w) => { const i = k++; const on = mode === 'word' ? i === active : kw.has(normWord(w)); return on ? `{\\c${colTag(hl.rgb)}}${w}{\\c${colTag(col.rgb)}}` : w; }).join(' ')).join('\\N');
       };
       const activeAt = (lt) => { let a = -1; for (let i = 0; i < times.length; i++) if (lt >= times[i].s) a = i; return a; };
+      // Typewriter: letters appear one by one (animIn 'type') and/or delete back out at the end (animOut 'untype'). The
+      // whole title is laid out and the letters not typed (yet) are see-through, so every letter sits where it ends up.
+      const nChars = [...raw.replace(/\n/g, '')].length;
+      // Typing in and out of a short clip speeds up so the whole title is still up for at least ~30% of its time.
+      const cps = Math.max(Math.max(4, Math.min(60, Number(st.typeSpeed) || 18)), (nChars * ((st.animIn === 'type' ? 1 : 0) + (st.animOut === 'untype' ? 1 : 0))) / Math.max(0.2, c.duration * 0.7));
+      const typing = st.animIn === 'type' || st.animOut === 'untype';
+      const shownAt = (lt) => Math.max(0, Math.min(nChars, st.animIn === 'type' ? Math.floor(lt * cps + 1e-6) : nChars, st.animOut === 'untype' ? Math.floor((c.duration - lt) * cps + 1e-6) : nChars));
+      /** One line of the body with only its first n letters showing; returns [text, letters left for the next lines]. */
+      const typedPart = (part, n) => {
+        let out = ''; let seen = 0; let hidden = n <= 0;
+        if (hidden) return [`{\\alpha&HFF&}${part}`, n];
+        for (let i = 0; i < part.length; i++) {
+          if (part[i] === '{') { const j = part.indexOf('}', i); out += part.slice(i, j + 1); i = j; continue; }
+          if (!hidden && seen === n) { out += '{\\alpha&HFF&}'; hidden = true; }
+          out += part[i]; seen++;
+        }
+        return [out, n - seen];
+      };
       /** One subtitle event: either the whole title (ASS animates fades/pop/slide), or one frame of a keyframed title. */
-      const event = ({ from, to, px, py, sc, op, rot, place, pop = '', fad = '', body = bodyAt(-1) }) => {
+      const event = ({ from, to, px, py, sc, op, rot, place, pop = '', fad = '', body = bodyAt(-1), shown = null }) => {
         const alpha = Math.round(255 - (255 - col.a) * Math.max(0, Math.min(1, op))).toString(16).padStart(2, '0');
         const look = box ? `\\3c${colTag(box.rgb)}\\3a&H${box.a.toString(16).padStart(2, '0').toUpperCase()}&\\bord${Math.round((st.boxPad ?? 18) * sc)}` : round ? '\\bord0' : `\\3c${colTag(oc.rgb)}\\bord${Math.round((st.outlineWidth || 0) * sc)}`;
         const size = (st.pixelSize || 96) * sc; const parts = body.split('\\N'); const lh = size * 1.15;
         // Boxed lines: every line's box first, then the text on top (otherwise a lower line's box covers the line above).
-        for (const pass of box ? ['box', 'text'] : ['text']) parts.forEach((part, i) => {
+        for (const pass of box ? ['box', 'text'] : ['text']) { let left = shown; parts.forEach((part0, i) => {
+        let part = part0; if (pass === 'text' && shown != null) [part, left] = typedPart(part0, left);
         // One event per line, spaced like the preview (1.15 x size), turned around the title's centre.
         const off = (i - (parts.length - 1) / 2) * lh + fit.dy * size;
         const at = place ? place.replace(/\\move\(([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)/, (_, a, b, c2, d) => `\\move(${a},${Math.round(+b + off)},${c2},${Math.round(+d + off)}`) : `\\pos(${Math.round(px)},${Math.round(py + off)})`;
         const tags = `{\\an5${at}\\org(${Math.round(px)},${Math.round(py)})\\fn${fc.name.replace(/[{}\\,]/g, '')}\\fs${Math.max(1, Math.round(size * fit.k))}\\fsp${Math.round((st.letterSpacing || 0) * sc)}\\b${fc.bold ? 1 : 0}\\i${st.italic ? 1 : 0}\\c${colTag(col.rgb)}${pass === 'box' ? `\\1a&HFF&\\3a&H${box.a.toString(16).padStart(2, '0').toUpperCase()}&` : `\\alpha&H${alpha.toUpperCase()}&`}${pass === 'box' ? look : box ? '\\bord0' : look}${shad ? `\\shad${Math.round(st.shadow * sc)}\\4c${colTag(shad.rgb)}\\4a&H${shad.a.toString(16).padStart(2, '0').toUpperCase()}&` : '\\shad0'}\\frz${-rot}${pop}${fad}}`;
         lines.push(`Dialogue: ${layer},${t2(from)},${t2(to)},${pass === 'box' ? 'B' : 'T'},,0,0,0,,${tags}${part}`);
-        });
+        }); }
       };
       if (round) {
         // Same geometry as the preview (drawText): rounded = one box per line, square = one box around all lines.
@@ -262,7 +281,9 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       if (!keyed) {
         const sc = base(c.scaleX, 1); const px = Math.round(W / 2 + base(c.posX, 0)), py = Math.round(H / 2 + base(c.posY, 0));
         // Spoken-word highlight: one piece per word (the coloured word moves on as it is said); the entrance plays on the first piece, the fade-out on the last.
-        const cutsAt = mode === 'word' ? [...new Set(times.map((x) => Math.max(0, Math.min(c.duration, x.s))))].filter((x) => x > 0.01 && x < c.duration - 0.01).sort((a, b) => a - b) : [];
+        // (and with the typewriter, one piece per letter typed)
+        const typeCuts = typing ? Array.from({ length: nChars }, (_, k) => [st.animIn === 'type' ? (k + 1) / cps : -1, st.animOut === 'untype' ? c.duration - (k + 1) / cps : -1]).flat() : [];
+        const cutsAt = [...new Set([...(mode === 'word' ? times.map((x) => Math.max(0, Math.min(c.duration, x.s))) : []), ...typeCuts].map((x) => Math.round(x * 1000) / 1000))].filter((x) => x > 0.01 && x < c.duration - 0.01).sort((a, b) => a - b);
         const edges = [0, ...cutsAt, c.duration];
         for (let k = 0; k < edges.length - 1; k++) {
           const first = k === 0, last = k === edges.length - 2; const fi = first ? transDur(c.transIn) : 0, fo = last ? transDur(c.transOut) : 0;
@@ -270,7 +291,7 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
             place: first && st.animIn === 'slide' ? `\\move(${px},${py + Math.round(70 * sc)},${px},${py},0,350)` : null,
             pop: first && st.animIn === 'pop' ? '\\fscx60\\fscy60\\t(0,250,\\fscx100\\fscy100)' : '',
             fad: (fi || fo) ? `\\fad(${Math.round(fi * 1000)},${Math.round(fo * 1000)})` : '',
-            body: bodyAt(mode === 'word' ? activeAt(edges[k] + 0.001) : -1) });
+            body: bodyAt(mode === 'word' ? activeAt(edges[k] + 0.001) : -1), shown: typing ? shownAt(edges[k] + 0.001) : null });
         }
         continue;
       }
@@ -282,7 +303,7 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
         if (ti && lt < ti) op *= lt / ti; if (to && lt > c.duration - to) op *= Math.max(0, (c.duration - lt) / to);
         if (st.animIn === 'pop') sc *= 0.6 + 0.4 * easeOut(Math.min(1, lt / 0.25));
         if (st.animIn === 'slide') py += 70 * sc * (1 - easeOut(Math.min(1, lt / 0.35)));
-        event({ from: c.start + lt, to: c.start + (fr + 1) / fps, px: W / 2 + keyAt(c.posX, lt, 0), py, sc, op, rot: Math.round(keyAt(c.rotation, lt, 0) * 10) / 10, body: bodyAt(activeAt(lt)) });
+        event({ from: c.start + lt, to: c.start + (fr + 1) / fps, px: W / 2 + keyAt(c.posX, lt, 0), py, sc, op, rot: Math.round(keyAt(c.rotation, lt, 0) * 10) / 10, body: bodyAt(activeAt(lt)), shown: typing ? shownAt(lt) : null });
       }
     }
     fs.writeFileSync(assFile, lines.join('\n') + '\n');

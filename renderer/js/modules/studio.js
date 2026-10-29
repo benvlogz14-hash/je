@@ -1269,18 +1269,28 @@ function drawText(g, st, scale, local = 10, dur = 0) {
     g.fillRect(-w / 2 - pad, -(lines.length * lh) / 2 - pad * 0.6, w + pad * 2, lines.length * lh + pad * 1.2);
   }
   const lit = st.hlMode === 'word' || st.hlMode === 'keywords' ? hlLines(st, text, local, dur) : null;
+  // Typewriter (same timing as the export): only the first `left` letters show, each where it sits in the full line.
+  const N = [...text.replace(/\n/g, '')].length;
+  // A short title clip types faster so the whole title is still up for ~30% of it (same as the export).
+  const cps = Math.max(Math.max(4, Math.min(60, Number(st.typeSpeed) || 18)), dur ? (N * ((st.animIn === 'type' ? 1 : 0) + (st.animOut === 'untype' ? 1 : 0))) / Math.max(0.2, dur * 0.7) : 0);
+  let left = Math.max(0, Math.min(N, st.animIn === 'type' ? Math.floor(local * cps + 1e-6) : N, st.animOut === 'untype' && dur ? Math.floor((dur - local) * cps + 1e-6) : N));
+  const cut = (str, n) => [...str].slice(0, Math.max(0, n)).join('');
   lines.forEach((line, i) => {
     const y = (i - (lines.length - 1) / 2) * lh;
     if (st.shadow) { g.shadowColor = rgbaOf(st.shadowColor, 'b3000000'); g.shadowOffsetX = g.shadowOffsetY = st.shadow * scale; g.shadowBlur = st.shadow * scale; }
+    const len = [...line].length; const show = Math.min(len, left); left -= len;
     if (!lit) {
-      if (st.outlineWidth && !st.box) { g.lineJoin = 'round'; g.lineWidth = st.outlineWidth * 2 * scale; g.strokeStyle = rgbaOf(st.outlineColor, 'ff000000'); g.strokeText(line, 0, y); }
-      g.fillStyle = rgbaOf(st.color, 'ffffffff'); g.fillText(line, 0, y);
+      const part = show < len ? cut(line, show) : line; const x = show < len ? -g.measureText(line).width / 2 : 0; if (show < len) g.textAlign = 'left';
+      if (st.outlineWidth && !st.box && part) { g.lineJoin = 'round'; g.lineWidth = st.outlineWidth * 2 * scale; g.strokeStyle = rgbaOf(st.outlineColor, 'ff000000'); g.strokeText(part, x, y); }
+      g.fillStyle = rgbaOf(st.color, 'ffffffff'); if (part) g.fillText(part, x, y); g.textAlign = 'center';
     } else {
       // Word by word, so the lit words get the highlight colour.
       const parts = lit[i] || []; const sp = g.measureText(' ').width; const ws = parts.map((p) => g.measureText(p.w).width);
       const x0 = -(ws.reduce((n, w) => n + w, 0) + sp * Math.max(0, parts.length - 1)) / 2; g.textAlign = 'left';
-      if (st.outlineWidth && !st.box) { g.lineJoin = 'round'; g.lineWidth = st.outlineWidth * 2 * scale; g.strokeStyle = rgbaOf(st.outlineColor, 'ff000000'); let x = x0; parts.forEach((p, k) => { g.strokeText(p.w, x, y); x += ws[k] + sp; }); }
-      let x = x0; parts.forEach((p, k) => { g.fillStyle = p.hl ? rgbaOf(st.hlColor, 'fff2c14e') : rgbaOf(st.color, 'ffffffff'); g.fillText(p.w, x, y); x += ws[k] + sp; });
+      // letters of each word still to show (the space before a word counts as one)
+      let budget = show; const vis = parts.map((p, k) => { if (k) budget -= 1; const v = Math.max(0, Math.min([...p.w].length, budget)); budget -= [...p.w].length; return cut(p.w, v); });
+      if (st.outlineWidth && !st.box) { g.lineJoin = 'round'; g.lineWidth = st.outlineWidth * 2 * scale; g.strokeStyle = rgbaOf(st.outlineColor, 'ff000000'); let x = x0; parts.forEach((p, k) => { if (vis[k]) g.strokeText(vis[k], x, y); x += ws[k] + sp; }); }
+      let x = x0; parts.forEach((p, k) => { g.fillStyle = p.hl ? rgbaOf(st.hlColor, 'fff2c14e') : rgbaOf(st.color, 'ffffffff'); if (vis[k]) g.fillText(vis[k], x, y); x += ws[k] + sp; });
       g.textAlign = 'center';
     }
     g.shadowColor = 'transparent';
@@ -1303,7 +1313,7 @@ const POS_Y = { top: -0.32, center: 0, lower: 0.26, bottom: 0.36 };
 /** Every font (bundled and Windows ones), grouped like the clip panel's picker. */
 const fontOptions = () => FONT_GROUPS.map(([g, list]) => html`<optgroup label=${g}>${list.map((f) => html`<option value=${f} style=${{ fontFamily: `'${f}'` }}>${f}</option>`)}</optgroup>`);
 /** The look of a title (not its words, timing or highlight), copied when one style is applied to many titles/captions. */
-const STYLE_KEYS = ['family', 'pixelSize', 'bold', 'italic', 'uppercase', 'color', 'outlineColor', 'outlineWidth', 'shadow', 'shadowColor', 'box', 'boxColor', 'boxPad', 'boxRadius', 'letterSpacing', 'animIn', 'hlColor'];
+const STYLE_KEYS = ['family', 'pixelSize', 'bold', 'italic', 'uppercase', 'color', 'outlineColor', 'outlineWidth', 'shadow', 'shadowColor', 'box', 'boxColor', 'boxPad', 'boxRadius', 'letterSpacing', 'animIn', 'animOut', 'typeSpeed', 'hlColor'];
 const hex6 = (c, d) => '#' + String(c || d).replace('#', '').slice(-6);
 const withAlpha = (rgb, a) => '#' + Math.round(a * 255).toString(16).padStart(2, '0') + rgb.replace('#', '');
 
@@ -1322,13 +1332,14 @@ function TitleDesigner({ seq, clip, count = 1, onClose, onSave }) {
       const c = cv.current; if (!c) return;
       const W = c.width, H = c.height, k = W / seq.width; const g = c.getContext('2d');
       const grad = g.createLinearGradient(0, 0, W, H); grad.addColorStop(0, '#2c3540'); grad.addColorStop(1, '#5a6b7a'); g.fillStyle = grad; g.fillRect(0, 0, W, H);
-      const local = ((performance.now() - t0.current) / 1000) % 2.5;
+      const loop = st.animOut === 'untype' || st.animIn === 'type' ? Math.max(2.5, dur + 0.6) : 2.5; // typing: play the whole title, typing out to the end
+      const local = ((performance.now() - t0.current) / 1000) % loop;
       const a = st.animIn === 'fade' || fade ? Math.min(1, fade ? local / Math.max(0.05, fade) : local / 0.25) : 1;
-      g.save(); g.globalAlpha = st.animIn === 'none' && !fade ? 1 : a; g.translate(W / 2, H / 2 + posY * k); drawText(g, st, k, local); g.restore();
+      g.save(); g.globalAlpha = st.animIn === 'none' && !fade ? 1 : a; g.translate(W / 2, H / 2 + posY * k); drawText(g, st, k, local, dur); g.restore();
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick); return () => cancelAnimationFrame(raf);
-  }, [st, posY, fade]);
+  }, [st, posY, fade, dur]);
   const save = () => onSave({ text: { ...st, text: st.text || 'TITLE' }, posY, duration: Math.max(0.2, dur), fade: st.animIn === 'fade' ? Math.max(fade, 0.2) : fade });
   const chip = (on, label, fn, title) => html`<button type="button" class=${'chip' + (on ? ' on' : '')} title=${title} onClick=${fn}>${label}</button>`;
   const prevW = 220; const prevH = Math.round((prevW * seq.height) / seq.width);
@@ -1357,7 +1368,9 @@ function TitleDesigner({ seq, clip, count = 1, onClose, onSave }) {
         ${st.box ? html`<${ParamField} label="Box padding" p=${st.boxPad ?? 18} animatable=${false} min=${0} max=${120} smin=${0} smax=${60} unit="px" onLive=${(v) => set({ boxPad: Math.round(v.base) })} onCommit=${(v) => set({ boxPad: Math.round(v.base) })} />` : null}
         <div class="field"><span class="label">Position</span><div class="chips">${Object.entries({ top: 'Top', center: 'Centre', lower: 'Lower third', bottom: 'Bottom' }).map(([k, l]) => chip(Math.abs(posY - Math.round(seq.height * POS_Y[k])) < 2, l, () => setPosY(Math.round(seq.height * POS_Y[k]))))}</div></div>
         <${ParamField} label="Height on screen" p=${posY} animatable=${false} min=${-seq.height} max=${seq.height} smin=${-seq.height / 2} smax=${seq.height / 2} unit="px" onLive=${(v) => setPosY(Math.round(v.base))} onCommit=${(v) => setPosY(Math.round(v.base))} />
-        <div class="field"><span class="label">Entrance</span><div class="chips">${[['none', 'None'], ['fade', 'Fade in'], ['pop', 'Pop'], ['slide', 'Slide up']].map(([k, l]) => chip((st.animIn || 'none') === k, l, () => { set({ animIn: k }); if (k === 'fade' && !fade) setFade(0.3); }))}</div></div>
+        <div class="field"><span class="label">Entrance</span><div class="chips">${[['none', 'None'], ['fade', 'Fade in'], ['pop', 'Pop'], ['slide', 'Slide up'], ['type', 'Typewriter']].map(([k, l]) => chip((st.animIn || 'none') === k, l, () => { set({ animIn: k }); if (k === 'fade' && !fade) setFade(0.3); }))}</div></div>
+        <div class="field"><span class="label">Exit</span><div class="chips">${[['none', 'None'], ['untype', 'Type away']].map(([k, l]) => chip((st.animOut || 'none') === k, l, () => set({ animOut: k })))}</div></div>
+        ${st.animIn === 'type' || st.animOut === 'untype' ? html`<div class="field"><span class="label">Typing speed</span><div class="chips">${[[10, 'Slow'], [18, 'Normal'], [30, 'Fast']].map(([k, l]) => chip((st.typeSpeed || 18) === k, l, () => set({ typeSpeed: k })))}</div></div>` : null}
         <div class="form-grid" style="grid-template-columns:repeat(auto-fit, minmax(170px, 1fr))">
           <${ParamField} label="On screen for" p=${dur} animatable=${false} min=${0.2} max=${600} smin=${0.5} smax=${15} step=${0.1} digits=${1} unit="s" onLive=${(v) => setDur(v.base)} onCommit=${(v) => setDur(v.base)} />
           <${ParamField} label="Fade in/out" p=${fade} animatable=${false} min=${0} max=${5} smin=${0} smax=${2} step=${0.05} digits=${2} unit="s" onLive=${(v) => setFade(v.base)} onCommit=${(v) => setFade(v.base)} />
