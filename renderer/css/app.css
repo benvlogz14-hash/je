@@ -603,12 +603,18 @@ h4 { font-weight: 750; letter-spacing: -0.01em; }
 .ed-split .ed-grip { width: 44px; height: 4px; border-radius: 3px; background: currentColor; opacity: .55; }
 
 /* Production: "What each video makes" (one card per style; cards in use get their colour). */
-.mix { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; max-width: 900px; }
+.mix { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
 .mix-total { font-size: var(--fs-xs); font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); }
 .mix-total.none { color: var(--coral-ink, #b4483b); border-color: currentColor; }
 .mix-bar { display: flex; gap: 3px; height: 8px; border-radius: 999px; overflow: hidden; }
 .mix-bar i { display: block; height: 100%; }
-.mix-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.mix-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+/* Upload box settings under the style cards: two side-by-side boxes per row (one per row on narrow windows). */
+.set-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.set-card { border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; background: var(--surface); min-width: 0; }
+.set-card > * { margin-top: 0 !important; max-width: none !important; }
+.set-card .row { flex-wrap: wrap; }
+@media (max-width: 1100px) { .set-grid { grid-template-columns: minmax(0, 1fr); } }
 .mix-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); opacity: .72; transition: opacity .15s, border-color .15s, box-shadow .15s; }
 .mix-card:hover { opacity: 1; }
 .mix-card.on { opacity: 1; border-color: var(--mc); box-shadow: 0 0 0 1px var(--mc) inset; background: color-mix(in srgb, var(--mc) 7%, var(--surface)); }
