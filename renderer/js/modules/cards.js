@@ -30,7 +30,7 @@ const CARDS = {
     <div class="list-row click" onClick=${() => navigate(`/messages/${c.id}`)}><${Avatar} name=${c.title} size="sm" /><div class="grow"><b>${c.title}</b><div class="muted ellipsis" style="font-size:var(--fs-sm)">${c.reason || c.preview}</div></div><span class="faint" style="font-size:var(--fs-xs)">${ago(c.at)}</span></div>`)}</div>` : null,
   posts: ({ data }) => data.length ? html`<div class="list">${data.map((p) => html`
     <div class="list-row"><${Icon} name="calendar" size=${16} /><div class="grow"><b class="ellipsis">${p.title}</b><div class="muted" style="font-size:var(--fs-sm)">${p.client} · ${p.platforms.map((x) => PLATFORM_LABEL[x] || x).join(', ')}</div></div><span class="tnum">${dateTime(p.at)}</span></div>`)}</div>` : null,
-  jobs: ({ data }) => data.length ? html`<div class="list">${data.map((j) => html`<${JobRow} j=${j} />`)}</div>` : null,
+  jobs: ({ data }) => html`<${LiveJobs} snapshot=${data} />`,
   job: ({ data }) => html`<${LiveJob} id=${data.id} />`,
   message: () => null,
   agents: ({ data }) => html`<div class="list">${Object.entries(data.providers).map(([k, p]) => html`
@@ -50,6 +50,21 @@ const CARDS = {
   digest: ({ data }) => html`<div class="list">${data.rows.map((r) => html`
     <div class="list-row click" onClick=${() => navigate(`/clients/${r.id}`)}><${Avatar} name=${r.name} size="sm" /><div class="grow"><b>${r.name}</b><div class="muted" style="font-size:var(--fs-sm)">${r.postedToday} posted today · ${r.scheduled} scheduled · ${r.inReview} in review${r.open ? ` · ${r.open} open slots` : ''}</div></div><${QuotaBar} q=${r} /></div>`)}</div>`,
 };
+
+/**
+ * The /queue card, live: refreshed from the job updates the app already gets, so bars move as the work happens, finished
+ * jobs drop off and new ones show up (it used to be a snapshot from when the command ran, frozen mid-bar).
+ */
+function LiveJobs({ snapshot }) {
+  const { data } = useApi('/api/jobs?status=running,queued,waiting_agent,failed', ['job']);
+  const live = data ? [...data].sort((x, y) => (x.status === 'running' ? -1 : 1) - (y.status === 'running' ? -1 : 1)).slice(0, 15) : snapshot;
+  const finished = data ? snapshot.filter((j) => ['running', 'queued', 'waiting_agent'].includes(j.status) && !data.some((x) => x.id === j.id)).length : 0;
+  const n = (st) => (data || []).filter((j) => j.status === st).length;
+  return html`<div class="col" style="gap:6px">
+    ${data ? html`<div class="row faint" style="gap:8px;font-size:var(--fs-xs);padding:0 4px"><span class="led" style="background:var(--moss, #3a9d6a);box-shadow:none" /><span>Live · ${n('running')} running · ${n('queued')} queued${finished ? ` · ${finished} finished since` : ''}</span></div>` : null}
+    ${live.length ? html`<div class="list">${live.map((j) => html`<${JobRow} key=${j.id} j=${j} />`)}</div>` : html`<div class="faint" style="font-size:var(--fs-sm);padding:6px 4px">Nothing running or waiting.</div>`}
+  </div>`;
+}
 
 export function JobRow({ j, actions = true }) {
   return html`<div class="list-row">

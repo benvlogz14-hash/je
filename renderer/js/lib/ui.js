@@ -57,8 +57,10 @@ export function useApi(path, events = [], deps = []) {
   }, [path]);
   useEffect(() => { alive.current = true; setLoading(true); load(); return () => { alive.current = false; }; }, [path, ...deps]);
   useEffect(() => {
-    const offs = events.map((ev) => api.on(ev, () => { clearTimeout(t.current); t.current = setTimeout(load, 250); }));
-    return () => { offs.forEach((o) => o()); clearTimeout(t.current); };
+    // At most one reload every 250 ms, but always one: a debounce that restarted on every event never fired while a
+    // job kept sending progress, so live bars froze until the job ended.
+    const offs = events.map((ev) => api.on(ev, () => { if (!t.current) t.current = setTimeout(() => { t.current = null; load(); }, 250); }));
+    return () => { offs.forEach((o) => o()); clearTimeout(t.current); t.current = null; };
   }, [path, events.join(',')]);
   return { data, error, loading, reload: load, setData };
 }
