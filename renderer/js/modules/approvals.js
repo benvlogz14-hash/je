@@ -1,5 +1,5 @@
 // Approval Center: one focused queue for clips and AI-drafted messages. Keyboard-first.
-import { html, useState, useEffect, useRef, useApi, Button, HoldButton, Empty, Seg, StatusBadge, act, navigate, promptDialog } from '../lib/ui.js';
+import { html, useState, useEffect, useRef, useApi, Button, HoldButton, Empty, Seg, StatusBadge, act, navigate, promptDialog, confirmDialog, toast } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { play } from '../lib/sound.js';
@@ -23,6 +23,20 @@ export function Approvals() {
   const decideClip = async (decision, note) => { if (!cur) return; await act(() => api.post(`/api/clips/${cur.refId}/decide`, { decision, note }), { ok: decision === 'approve' ? (cur.stage === 'internal' && cur.ref?.status === 'review' ? 'Approved' : 'Approved') : decision === 'reject' ? 'Rejected' : 'Revision requested', sound: decision === 'approve' ? 'success' : 'tap' }); reload(); };
   const approveMsg = async (body) => { await act(() => api.post(`/api/messages/${cur.refId}/approve`, body ? { body } : {}), { ok: 'Approved and sending', sound: 'send' }); reload(); };
   const discardMsg = async () => { await act(() => api.post(`/api/messages/${cur.refId}/discard`), { ok: 'Discarded', sound: 'tap' }); reload(); };
+  // Reject everything in the list you're looking at (All, Videos or Messages): clips are rejected, message drafts discarded (never sent).
+  const [busy, setBusy] = useState(null);
+  const rejectAll = async () => {
+    const list = [...items]; if (!list.length) return;
+    const nClips = list.filter((a) => a.kind === 'clip').length, nMsgs = list.length - nClips;
+    const what = [nClips ? `${nClips} video${nClips > 1 ? 's' : ''}` : '', nMsgs ? `${nMsgs} message draft${nMsgs > 1 ? 's' : ''}` : ''].filter(Boolean).join(' and ');
+    if (!(await confirmDialog({ title: `Reject all ${list.length}?`, text: `This rejects ${what}.${nClips ? ' Rejected videos leave the queue (you can still find them in Production).' : ''}${nMsgs ? ' Message drafts are discarded without sending.' : ''}`, confirm: `Reject all ${list.length}`, kind: 'coral' }))) return;
+    let done = 0, failed = 0;
+    for (const a of list) {
+      setBusy(`Rejecting ${done + failed + 1} of ${list.length}…`);
+      try { if (a.kind === 'clip') await api.post(`/api/clips/${a.refId}/decide`, { decision: 'reject' }); else await api.post(`/api/messages/${a.refId}/discard`); done++; } catch { failed++; }
+    }
+    setBusy(null); play('tap'); toast(failed ? `Rejected ${done}; ${failed} couldn't be rejected` : `Rejected all ${done}`, { kind: failed ? 'warn' : 'success' }); reload();
+  };
 
   useEffect(() => {
     const k = (e) => {
@@ -43,6 +57,7 @@ export function Approvals() {
   return html`<div class="review">
     <aside class="review-list">
       <div style="padding:10px 8px 8px" class="col"><div class="row"><h2 class="grow">Approvals</h2><span class="badge coral">${(data || []).length}</span></div>
+        <${Button} size="sm" kind="ghost" icon="x" disabled=${!items.length || !!busy} onClick=${rejectAll} title="Reject every item in this list">${busy || `Reject all ${items.length || ''}`}</${Button}>
         <${Seg} value=${kind} onChange=${(v) => { setKind(v); setSel(0); }} options=${[{ value: 'all', label: 'All' }, { value: 'clip', label: 'Videos' }, { value: 'message', label: 'Messages' }]} /></div>
       ${items.map((a, i) => html`<div class=${'review-item' + (a === cur ? ' on' : '')} onClick=${() => { play('tap'); setSel(i); }}>
         ${a.kind === 'clip' ? html`<div class="th" style=${a.ref?.current ? { backgroundImage: `url(${api.url(`/api/clips/${a.refId}/thumb`)})` } : {}} />` : html`<div class="avatar sm" style="background:var(--lav-soft);color:var(--lav-ink)"><${Icon} name=${a.channel === 'email' ? 'mail' : 'messages'} size=${14} /></div>`}
