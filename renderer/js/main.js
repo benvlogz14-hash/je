@@ -1,4 +1,5 @@
 // Euclidean desktop shell.
+import { HalDock } from './modules/hal.js';
 import { html, render, useState, useEffect, useRef, useStore, store, navigate, RouteContext, Toasts, ModalHost, Button, HoldButton, Seg, Avatar, act, toast, useEvent } from './lib/ui.js';
 import { api } from './lib/api.js';
 import { Component } from '../vendor/preact.mjs';
@@ -214,6 +215,7 @@ function App() {
     </main></div>
     <${MobileNav} />
     <${StatusBar} />
+    <${HalDock} />
     ${palette ? html`<${Palette} onClose=${() => setPalette(false)} />` : null}
     <${Toasts} /><${ModalHost} />
   </div>`;

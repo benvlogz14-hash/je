@@ -120,6 +120,53 @@ r.del('/api/users/:id', (req, b, p) => {
 
 // ------------------------------------------------------------ command center
 r.get('/api/commands', () => commands.catalog());
+// ------------------------------------------------------------ HAL (the assistant in the corner of every page; server/hal)
+const HAL_KEEP = 300;
+r.get('/api/hal/history', () => ctx.store.all('halMessages').slice(-80));
+r.del('/api/hal/history', () => { for (const m of ctx.store.all('halMessages')) ctx.store.remove('halMessages', m.id); return { ok: true }; });
+r.get('/api/hal/status', async () => {
+  const ai = require('./integrations/ai'); await ai.pingOllama();
+  return { brain: require('./hal/brain').mode(), local: !!ai.ollamaState.ok, grok: ai.connected('xai'), any: ai.anyConnected() };
+});
+r.post('/api/hal/brain', (req, b) => { const brain = b.brain === 'grok' ? 'grok' : 'local'; ctx.store.setSettings({ hal: { brain } }); return { brain }; });
+r.post('/api/hal/chat', async (req, b) => {
+  const text = String(b.text || '').trim().slice(0, 4000); if (!text) throw new HttpError(400, 'Say something first.');
+  const history = ctx.store.all('halMessages').slice(-10);
+  ctx.store.insert('halMessages', { who: 'you', text, by: actorOf(req), context: b.context || null });
+  const res = await require('./hal').handle(text, { history, context: b.context || {}, actor: actorOf(req) });
+  const saved = ctx.store.insert('halMessages', { who: 'hal', text: res.text || '', by: res.by || null, draft: res.draft || null, confirm: res.confirm || null, navigate: res.navigate || null });
+  const all = ctx.store.all('halMessages'); for (const m of all.slice(0, Math.max(0, all.length - HAL_KEEP))) ctx.store.remove('halMessages', m.id);
+  events.publish('hal', { id: saved.id });
+  return { ...res, id: saved.id };
+});
+r.post('/api/hal/confirm', async (req, b) => {
+  const res = await require('./hal').confirm(String(b.id || ''), actorOf(req));
+  // the button is used up: the message no longer offers it
+  for (const m of ctx.store.all('halMessages', (x) => x.confirm?.id === b.id)) ctx.store.update('halMessages', m.id, { confirm: { ...m.confirm, done: true } });
+  const saved = ctx.store.insert('halMessages', { who: 'hal', text: res.text || 'Done.', navigate: res.navigate || null });
+  events.publish('hal', { id: saved.id });
+  return { ...res, id: saved.id };
+});
+// Talk to HAL: a recording from the panel's mic, turned into text by the same speech-to-text as footage (free Whisper).
+r.post('/api/hal/listen', async (req) => {
+  const dir = paths.tmp('hal'); const { files } = await receiveUpload(req, dir);
+  const f = files[0]; if (!f) throw new HttpError(400, 'No recording came through.');
+  const wav = path.join(dir, `${path.basename(f.path)}.wav`);
+  try {
+    await require('./video/ffmpeg').extractWav(f.path, wav);
+    const info = await require('./video/ffmpeg').probe(wav).catch(() => ({ duration: 10 }));
+    const id = `hal${Date.now()}`;
+    const t = await require('./video/intelligence').transcribe({ id, path: wav, workDir: dir, info: { duration: info.duration || 10 }, clientId: null });
+    for (const x of fs.readdirSync(dir).filter((n) => n.startsWith(id))) { try { fs.unlinkSync(path.join(dir, x)); } catch { /* temp */ } }
+    return { text: String(t.text || '').replace(/\[(?:BLANK_AUDIO|MUSIC|NOISE)[^\]]*\]/gi, '').replace(/\s+/g, ' ').trim() };
+  } catch (e) {
+    throw new HttpError(400, e.notConnected ? "Talking to me needs speech-to-text. Press Install free speech-to-text on the Production page, then try again." : `I couldn't make out the recording: ${e.message}`);
+  } finally { for (const x of [f.path, wav]) { try { fs.unlinkSync(x); } catch { /* temp */ } } }
+});
+r.get('/api/hal/calendar', () => ctx.store.all('opsEvents').sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)));
+r.del('/api/hal/calendar/:id', (req, b, p) => { ctx.store.remove('opsEvents', p.id); return { ok: true }; });
+r.get('/api/hal/protests', () => ctx.store.all('protests').slice(-200));
+
 r.post('/api/command', async (req, b) => {
   const text = String(b.text || '').trim();
   if (!text) throw new HttpError(400, 'Empty command');
