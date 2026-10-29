@@ -131,6 +131,14 @@ async function renderShort(o) {
     const rt = require('./retakes'); const inRange = o.words.filter((w) => w.e > start && w.s < end);
     const ranges = rt.retakeRanges(inRange); if (ranges.length) segs = rt.subtract(segs, ranges);
   }
+  // Every cut lands on a whole frame, and picture, sound and captions all use these same rounded times, so they can't
+  // drift apart. (Sound used to be cut in ~21 ms blocks and picture in whole frames, so each jump cut pushed the voice a
+  // little later than the captions; clips with many cuts ended up ~0.1-0.2 s off.)
+  const FPS = outFps(info.fps); const fr = FPS.includes('/') ? Number(FPS.split('/')[0]) / Number(FPS.split('/')[1]) : Number(FPS);
+  const snap = (t) => start + Math.round((t - start) * fr) / fr;
+  segs = segs.map(([a, b]) => [snap(a), Math.min(snap(b), snap(end))]).filter(([a, b]) => b - a >= 1 / fr - 1e-6)
+    .reduce((acc, sg) => { const l = acc[acc.length - 1]; if (l && sg[0] <= l[1] + 1e-6) l[1] = Math.max(l[1], sg[1]); else acc.push([...sg]); return acc; }, []);
+  if (!segs.length) segs = [[start, end]];
   const outDur = segs.reduce((s, [a, b]) => s + (b - a), 0);
 
   // Captions are generated in the cut timeline so they stay in sync after jump cuts.
@@ -149,18 +157,24 @@ async function renderShort(o) {
   const audioIdx = info.hasAudio ? 0 : (hasLogo ? 2 : 1);
 
   const f = [];
-  // Keep the footage's own frame rate (rounded to a standard one). Forcing everything to 30 repeats or drops
+  // The footage's own frame rate (rounded to a standard one, FPS above). Forcing everything to 30 repeats or drops
   // frames every so often with 24/25/60 fps footage, which looks choppy on smooth pans and drone shots.
-  const FPS = outFps(info.fps);
   // 1. Jump cuts (times relative to the input seek point). Steady the frame timing first so cuts land cleanly.
   let v = '0:v', a = `${audioIdx}:a`;
   if (segs.length > 1) {
-    const expr = segs.map(([s, e]) => `between(t,${(s - start).toFixed(3)},${(e - start).toFixed(3)})`).join('+');
+    // Frames sit at whole multiples of 1/fps; half a frame of slack picks exactly the frames from each cut's start up to its end.
+    const hf = 0.5 / fr;
+    const expr = segs.map(([s, e]) => `between(t,${(s - start - hf).toFixed(4)},${(e - start - hf).toFixed(4)})`).join('+');
     // Exactly one tick per frame after the cut (settb + setpts=N): a rounded time base made the last fps step repeat frames.
     const tb = FPS.includes('/') ? FPS.split('/').reverse().join('/') : `1/${FPS}`;
     f.push(`[0:v]fps=${FPS},select='${expr}',settb=${tb},setpts=N[vcut]`);
     v = 'vcut';
-    if (info.hasAudio) { f.push(`[0:a]aselect='${expr}',asetpts=N/SR/TB[acut]`); a = 'acut'; }
+    // Sound is cut to the exact sample at the same times (aselect only keeps or drops whole ~21 ms blocks).
+    if (info.hasAudio) {
+      f.push(`[0:a]aresample=48000:async=1:first_pts=0,asplit=${segs.length}${segs.map((_, i) => `[as${i}]`).join('')}`);
+      segs.forEach(([s, e], i) => f.push(`[as${i}]atrim=start=${(s - start).toFixed(5)}:end=${(e - start).toFixed(5)},asetpts=PTS-STARTPTS[at${i}]`));
+      f.push(`${segs.map((_, i) => `[at${i}]`).join('')}concat=n=${segs.length}:v=0:a=1[acut]`); a = 'acut';
+    }
   }
   // 2. Reframe to 9:16. With a face path the crop follows the speaker (virtual camera).
   const fx = Math.min(1, Math.max(0, o.focusX ?? 0.5));
