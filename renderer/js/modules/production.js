@@ -1,5 +1,5 @@
 // Production: footage intake and the clip board, per client.
-import { html, useRoute, useState, useEffect, useRef, useStore, useApi, navigate, Button, Empty, Loading, StatusBadge, Progress, act, toast, promptDialog, confirmDialog, Avatar, Drawer, Toggle } from '../lib/ui.js';
+import { html, useRoute, useState, useEffect, useRef, useStore, useApi, navigate, Button, Empty, Loading, StatusBadge, Progress, act, toast, promptDialog, confirmDialog, Avatar, Drawer, Toggle, Modal } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { play } from '../lib/sound.js';
@@ -71,6 +71,7 @@ function QuotaStrip({ client }) {
 
 function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setShotsOf }) {
   const [over, setOver] = useState(false);
+  const [reclip, setReclip] = useState(false);
 
   const [uploads, setUploads] = useState([]);
   const input = useRef(null);
@@ -121,7 +122,9 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
       ${target ? html`<div style="flex:1 0 100%;min-width:0"><${StyleSwitch} client=${clients.find((c) => c.id === target)} /><div class="set-grid">${[ClipLength, MusicSwitch, AiTips, BrollSwitch].map((C) => html`<div class="set-card"><${C} client=${clients.find((c) => c.id === target)} /></div>`)}</div></div>` : null}
       <input ref=${input} type="file" accept="video/*,audio/*" multiple hidden onChange=${(e) => { upload([...e.target.files]); e.target.value = ''; }} />
     </div>
-    <div class="panel"><div class="panel-head"><h4 class="grow">Footage</h4><span class="faint" style="font-size:var(--fs-sm)">${active.length ? `${active.length} processing` : `${assets.length} files`}</span></div>
+    <div class="panel"><div class="panel-head"><h4 class="grow">Footage</h4><span class="faint" style="font-size:var(--fs-sm)">${active.length ? `${active.length} processing` : `${assets.length} files`}</span>
+      <${Button} size="sm" kind="soft" icon="sparkle" disabled=${!target || !assets.some((a) => a.clientId === target && a.info?.hasVideo !== false)} title=${target ? "Pick any of this client's videos and make clips from them again, with today's styles and settings" : 'Choose a client first (menu at the top right)'} onClick=${() => setReclip(true)}>Re-clip footage</${Button}></div>
+      ${reclip ? html`<${ReclipFootage} client=${clients.find((c) => c.id === target)} assets=${assets.filter((a) => a.clientId === target && a.info?.hasVideo !== false)} onClose=${() => setReclip(false)} />` : null}
       <div class="list" style="max-height:190px;overflow:auto">${recent.length ? recent.map((a) => {
         const j = jobs.find((x) => x.payload?.assetId === a.id && x.status === 'running') || jobs.find((x) => x.payload?.assetId === a.id);
         return html`<div class="list-row" style="cursor:pointer" title="Open: steps, clips, retry, cancel" onClick=${(e) => { if (!e.target.closest('button')) setDetail(a.id); }}><div class="th" style=${{ width: '52px', height: '30px', borderRadius: '6px', background: a.thumb ? `var(--surface-3) url(${api.url(`/api/assets/${a.id}/thumb`)}) center/cover` : 'var(--surface-3)', flex: 'none' }} />
@@ -250,6 +253,47 @@ function MusicSwitch({ client }) {
       ${[['off', 'Off'], ['clean', 'Clean'], ['isolate', 'Isolate voice']].map(([k, l]) => html`<button type="button" class="chip" style=${(p.voiceClean || 'clean') === k ? { background: 'var(--teal-soft)', borderColor: 'var(--teal)' } : null} onClick=${() => save({ voiceClean: k }, k === 'off' ? 'Voice cleanup off for new clips' : k === 'clean' ? 'New clips: background noise cleaned up' : 'New clips: voice isolated')}>${l}</button>`)}</div>
     <span class="faint" style="font-size:var(--fs-xs)">${({ off: 'The sound as recorded.', clean: 'Takes out hiss, wind and hum before the music goes on. Safe for every clip.', isolate: 'Stronger: keeps the voice and lowers everything between words. For noisy footage.' })[p.voiceClean || 'clean']}</span>
   </div>`;
+}
+
+/**
+ * Re-clip footage: tick any of a client's videos (all of them, not just the recent ones) and make clips from them again
+ * with today's styles, mix, length and tips. "Best moments, made again" lets the old clips' moments be picked again
+ * (the old clips stay); "Only new moments" skips what earlier clips used (like More clips).
+ */
+function ReclipFootage({ client, assets, onClose }) {
+  const { data: clips } = useApi(`/api/clips?clientId=${client.id}`, ['clips']);
+  const [picked, setPicked] = useState(new Set());
+  const [fresh, setFresh] = useState(true);
+  const [busy, setBusy] = useState(null);
+  const count = (id) => (clips?.items || clips || []).filter((c) => c.assetId === id).length;
+  const toggle = (id) => setPicked((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const all = picked.size === assets.length;
+  const mix = Object.entries(client.production?.styleMix || {}).filter(([, v]) => v > 0);
+  const per = mix.length ? mix.reduce((n, [, v]) => n + v, 0) : client.production?.clipsPerFootage || 6;
+  const go = async () => {
+    const ids = assets.filter((a) => picked.has(a.id)).map((a) => a.id); let ok = 0, failed = 0;
+    for (const id of ids) { setBusy(`Starting ${ok + failed + 1} of ${ids.length}…`); try { await api.post(`/api/assets/${id}/process`, { fresh }); ok++; } catch { failed++; } }
+    setBusy(null); play('success');
+    toast(failed ? `Making clips from ${ok} video${ok === 1 ? '' : 's'}; ${failed} couldn't start` : `Making clips from ${ok} video${ok === 1 ? '' : 's'}. They show up below as they're ready.`, { kind: failed ? 'warn' : 'success' });
+    onClose();
+  };
+  return html`<${Modal} wide title=${`Re-clip ${client.name}'s footage`} icon="sparkle" onClose=${onClose} footer=${html`
+      <span class="faint grow" style="font-size:var(--fs-xs)">${picked.size ? `About ${per} clip${per === 1 ? '' : 's'} per video, with the styles and settings set by the upload box.` : 'Tick the videos to clip.'}</span>
+      <${Button} kind="ghost" onClick=${onClose}>Cancel</${Button}>
+      <${Button} kind="primary" icon="play" disabled=${!picked.size || !!busy} onClick=${go}>${busy || `Make clips (${picked.size} video${picked.size === 1 ? '' : 's'})`}</${Button}>`}>
+    <div class="col" style="gap:12px">
+      <div class="row wrap" style="gap:8px">
+        ${[[true, 'Best moments, made again', "Picks the strongest moments again, even ones old clips used, so you get them in today's styles. The old clips stay."], [false, 'Only new moments', 'Skips the moments earlier clips already used.']].map(([v, l, d]) => html`<button type="button" class="chip" style=${{ ...(fresh === v ? { background: 'var(--teal-soft)', borderColor: 'var(--teal)' } : {}), height: 'auto', padding: '8px 12px', textAlign: 'left', flex: '1 1 260px', maxWidth: '360px', whiteSpace: 'normal', display: 'block', borderRadius: '14px' }} onClick=${() => setFresh(v)}><b>${l}</b><div class="faint" style="font-size:var(--fs-xs);font-weight:400">${d}</div></button>`)}
+      </div>
+      <div class="row" style="gap:8px"><b class="grow">${assets.length} video${assets.length === 1 ? '' : 's'}</b><${Button} size="sm" kind="ghost" onClick=${() => setPicked(all ? new Set() : new Set(assets.map((a) => a.id)))}>${all ? 'Select none' : 'Select all'}</${Button}></div>
+      <div class="list" style="max-height:52vh;overflow:auto">${assets.map((a) => html`<label class="list-row" style="cursor:pointer;gap:10px">
+        <input type="checkbox" checked=${picked.has(a.id)} onChange=${() => toggle(a.id)} />
+        <div class="th" style=${{ width: '64px', height: '36px', borderRadius: '6px', background: a.thumb ? `var(--surface-3) url(${api.url(`/api/assets/${a.id}/thumb`)}) center/cover` : 'var(--surface-3)', flex: 'none' }} />
+        <div class="grow" style="min-width:0"><div class="ellipsis" style="font-weight:500">${a.name}</div>
+          <div class="faint" style="font-size:var(--fs-xs)">${a.info ? dur(a.info.duration) : a.status} · ${count(a.id)} clip${count(a.id) === 1 ? '' : 's'} so far${a.transcript ? '' : ' · not transcribed yet (done first)'} · ${ago(a.createdAt)}</div></div>
+      </label>`)}</div>
+    </div>
+  </${Modal}>`;
 }
 
 /** One footage file: what has happened to it, its clips, and Retry / Cancel / Delete. */

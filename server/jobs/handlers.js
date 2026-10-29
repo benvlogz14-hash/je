@@ -274,6 +274,9 @@ queue.register('discover', {
     }
     h.progress(0.2, 'Measuring the footage');
     const transcript = loadTranscript(asset);
+    // Re-clip with "best moments, made again" (fresh): the old clips' moments may be picked again (in today's styles
+    // and settings); otherwise only moments no clip of this video has used yet.
+    const used = () => (job.payload.fresh ? [] : pipeline.usedRanges(asset.id));
     // Ad reads (a website plug in the intro, sponsor reads, "like and subscribe") never become clips.
     const ads = require('../video/ads').adRanges(transcript?.words || []);
     if (ads.length) { ctx.store.update('assets', asset.id, { ads }); h.log(`Skipping ${ads.length} ad read${ads.length > 1 ? 's' : ''}: ${ads.map((a) => `${Math.round(a.start)}-${Math.round(a.end)}s`).join(', ')}`); }
@@ -292,7 +295,7 @@ queue.register('discover', {
       result = { clips: [], method: 'scored' };
       for (const look of [...new Set(otherLooks)]) {
         const n = otherLooks.filter((l) => l === look).length; const pr = styles.PRESETS[look]?.production || {};
-        const taken = [...pipeline.usedRanges(asset.id), ...ads, ...result.clips.map((c) => ({ start: c.start, end: c.end }))];
+        const taken = [...used(), ...ads, ...result.clips.map((c) => ({ start: c.start, end: c.end }))];
         const r = await intel.discoverClips(asset, transcript, { ...discoverOpts, count: n + (ads.length ? 2 : 0), exclude: taken, minSec: pr.minClipSec || null, maxSec: pr.maxClipSec || null });
         if (r.method === 'ai') result.method = 'ai';
         for (const c of noAds(r.clips, n)) {
@@ -307,13 +310,13 @@ queue.register('discover', {
         }
       }
     } else {
-      result = want ? await intel.discoverClips(asset, transcript, { ...discoverOpts, count: want + (ads.length ? 2 : 0), exclude: [...pipeline.usedRanges(asset.id), ...ads] }) : { clips: [], method: 'scored' };
+      result = want ? await intel.discoverClips(asset, transcript, { ...discoverOpts, count: want + (ads.length ? 2 : 0), exclude: [...used(), ...ads] }) : { clips: [], method: 'scored' };
       // Any pick that still runs into an ad by more than a second is dropped (the usual check allows small overlaps).
       result.clips = noAds(result.clips, want);
     }
     if (hlCount) {
       h.progress(0.6, 'Finding highlight moments');
-      const taken = () => [...pipeline.usedRanges(asset.id), ...ads, ...result.clips.map((c) => ({ start: c.start, end: c.end }))];
+      const taken = () => [...used(), ...ads, ...result.clips.map((c) => ({ start: c.start, end: c.end }))];
       let hl = noAds((await intel.discoverClips(asset, transcript, { ...discoverOpts, count: hlCount + 2, exclude: taken(), storyCuts: true, endHook: true })).clips, hlCount);
       // Too few moments end on a hook: fill up with tightened story-cut clips so the count you asked for still comes out.
       if (hl.length < hlCount) { const more = noAds((await intel.discoverClips(asset, transcript, { ...discoverOpts, count: hlCount - hl.length + 2, exclude: [...taken(), ...hl.map((c) => ({ start: c.start, end: c.end }))], storyCuts: true })).clips, hlCount - hl.length); hl = [...hl, ...more]; }

@@ -351,9 +351,10 @@ r.post('/api/assets/:id/process', (req, b, p) => {
   if (!a.info || a.status === 'importing') { ctx.store.update('assets', a.id, { error: null }); return queue.enqueue('ingest.file', { assetId: a.id, autoProcess: true }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `ingest:${a.id}:${Date.now()}`, priority: 6 }); }
   if (a.info && !a.info.hasVideo) throw new HttpError(400, 'This is an audio-only file, so there is no picture to make shorts from. Upload the video file (.mp4) instead.');
   // "Make clips" (or More clips): from now on this footage doesn't wait; clip length, count and AI tips are read now.
-  ctx.store.update('assets', a.id, { error: null, started: true, ...(a.status === 'waiting' ? { status: 'ready' } : {}) });
+  ctx.store.update('assets', a.id, { error: null, started: true, exhausted: false, ...(a.status === 'waiting' ? { status: 'ready' } : {}) });
   if (!a.transcript && a.info?.hasAudio) return queue.enqueue('transcribe', { assetId: a.id, thenDiscover: true }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `transcribe:${a.id}` });
-  return queue.enqueue('discover', { assetId: a.id, count: b.count }, { clientId: a.clientId, actor: actorOf(req) });
+  // fresh: Re-clip footage → "best moments, made again" (the old clips' moments can be picked again; the old clips stay).
+  return queue.enqueue('discover', { assetId: a.id, count: b.count, fresh: !!b.fresh }, { clientId: a.clientId, actor: actorOf(req) });
 });
 r.get('/api/assets/:id/media', (req, res, p) => serveFile(req, res, must(ctx.store.get('assets', p.id)).path), { stream: true });
 r.get('/api/assets/:id/thumb', (req, res, p) => { const a = must(ctx.store.get('assets', p.id)); return a.thumb ? serveFile(req, res, a.thumb, { cache: true }) : send(res, 404, {}); }, { stream: true });
