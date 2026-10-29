@@ -50,14 +50,14 @@ if not exist "node_modules\electron\dist\electron.exe" (
   )
 )
 
-rem Desktop shortcut so next time it is one click (always pointed at this copy, so an old copy never opens by mistake).
+rem Desktop shortcut: opens Euclidean itself (no black window); it checks for a newer version and updates every time it opens.
 (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\Euclidean.lnk'); $s.TargetPath='%~dp0Start Euclidean.bat'; $s.WorkingDirectory='%~dp0'; $s.IconLocation='%~dp0build\icon.ico'; $s.WindowStyle=7; $s.Save()" >nul 2>nul
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\Euclidean.lnk'); $s.TargetPath='%~dp0node_modules\electron\dist\electron.exe'; $s.Arguments=[char]34+'%~dp0.'+[char]34; $s.Description='Euclidean (updates itself when it opens)'; $s.WorkingDirectory='%~dp0'; $s.IconLocation='%~dp0build\icon.ico'; $s.WindowStyle=1; $s.Save()" >nul 2>nul
 )
 
 rem Start menu entry pointing at this copy too (an old installer copy used the same name).
 (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:APPDATA+'\Microsoft\Windows\Start Menu\Programs\Euclidean.lnk'); $s.TargetPath='%~dp0Start Euclidean.bat'; $s.WorkingDirectory='%~dp0'; $s.IconLocation='%~dp0build\icon.ico'; $s.WindowStyle=7; $s.Save()" >nul 2>nul
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:APPDATA+'\Microsoft\Windows\Start Menu\Programs\Euclidean.lnk'); $s.TargetPath='%~dp0node_modules\electron\dist\electron.exe'; $s.Arguments=[char]34+'%~dp0.'+[char]34; $s.Description='Euclidean (updates itself when it opens)'; $s.WorkingDirectory='%~dp0'; $s.IconLocation='%~dp0build\icon.ico'; $s.WindowStyle=1; $s.Save()" >nul 2>nul
 )
 
 rem Free speech-to-text: install it now if this copy doesn't have it yet.

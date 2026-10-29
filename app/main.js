@@ -86,6 +86,8 @@ function applyMode(mode) {
 
 app.whenReady().then(async () => {
   app.setAppUserModelId('media.euclidean.app');
+  // Newest version first (a quick check; offline or any problem just opens this copy).
+  try { if (await require('./updater').checkAndUpdate()) return; } catch { /* open this copy */ }
   const dataDir = process.env.EUCLIDEAN_DATA || path.join(app.getPath('userData'), 'data');
   const sealer = safeStorage.isEncryptionAvailable() ? { encrypt: (b) => safeStorage.encryptString(b.toString('base64')), decrypt: (b) => Buffer.from(safeStorage.decryptString(b), 'base64') } : null;
   try {

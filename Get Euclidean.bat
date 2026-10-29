@@ -24,6 +24,10 @@ for %%U in ("%LOCALAPPDATA%\Programs\Euclidean\Uninstall Euclidean.exe" "%LOCALA
   timeout /t 6 /nobreak >nul
 )
 timeout /t 2 /nobreak >nul
+rem The exact newest version (its fingerprint goes in VERSION.sha, so the app's own updater knows it is current).
+set "SHA="
+for /f "usebackq delims=" %%S in (`powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol='Tls12'; $u='https://api.github.com/repos/benvlogz14-hash/je/commits/'+[uri]::EscapeDataString('%BRANCH%'); (Invoke-RestMethod -UseBasicParsing -Headers @{Accept='application/vnd.github.sha'} -Uri $u).ToString().Trim() } catch { '' }"`) do set "SHA=%%S"
+if defined SHA set "URL=https://codeload.github.com/benvlogz14-hash/je/zip/%SHA%"
 echo   Downloading the latest version...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol='Tls12'; Invoke-WebRequest -UseBasicParsing -Uri '%URL%' -OutFile '%TMPZIP%'"
 if not exist "%TMPZIP%" (
@@ -50,6 +54,7 @@ if not exist "%DEST%" mkdir "%DEST%"
 robocopy "%SRC%" "%DEST%" /E /NFL /NDL /NJH /NJS /NP /XD node_modules >nul
 rem Version stamp: the bottom bar of the app shows it, so you can see the new copy is the one open.
 >"%DEST%\BUILD.txt" echo %date% %time:~0,5%
+if defined SHA >"%DEST%\VERSION.sha" echo %SHA%
 del /q "%TMPZIP%" >nul 2>nul
 rmdir /s /q "%TMPDIR%" >nul 2>nul
 

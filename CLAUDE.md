@@ -33,7 +33,8 @@ Desktop app for Euclidean Media (founders Ryan Rosario and Ben Gingold), a short
 - **Phone app:** `mobile/`, an Expo SDK 57 React Native remote for the engine.
   - Run it with `Start Phone App.bat` (Expo Go).
   - `.github/workflows/ios-app.yml` builds an unsigned `.ipa` for Sideloadly.
-- **Launchers:** `Start Euclidean.bat` installs Node, FFmpeg and yt-dlp, runs `npm install`, creates a desktop shortcut and starts the app. `Build Installer.bat` runs `npm run dist`. `.bat` files must keep CRLF line endings.
+- **Launchers:** `Start Euclidean.bat` installs Node, FFmpeg and yt-dlp, runs `npm install`, creates the desktop and Start menu shortcuts (straight to `node_modules\electron\dist\electron.exe` with the app folder, Euclidean icon, no console) and starts the app.
+- **Auto-update on open** (`app/updater.js`, called first in `app.whenReady`): asks GitHub for the newest commit of the working branch (`api.github.com/.../commits/<branch>` with `Accept: application/vnd.github.sha`, 5 s timeout); if it differs from `VERSION.sha`, a small "Updating Euclidean" window shows while `codeload.github.com/<repo>/zip/<sha>` downloads, unpacks (PowerShell Expand-Archive) and is copied over the app folder (never node_modules, tools or .git; the data folder is elsewhere), then `VERSION.sha`/`BUILD.txt` are written and the app relaunches. Changed dependencies: closes, runs `npm install` in a hidden window and reopens. Offline or any error: opens the current copy. Skipped for git checkouts, `EUCLIDEAN_NO_UPDATE`, or a `NO-AUTO-UPDATE.txt` in the app folder. The Get bats write `VERSION.sha` for the version they installed. `Build Installer.bat` runs `npm run dist`. `.bat` files must keep CRLF line endings.
 
 ## Production health
 - Heavy jobs (renders, ads, analysis, local transcription) wait while RAM is low: the reserve is `resources.reserveRamMb` (default 1000) capped at 12% of the PC's RAM. It used to be a fixed 6 GB, which blocked every ordinary PC.
