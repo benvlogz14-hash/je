@@ -40,7 +40,8 @@ function plan({ shots = [], scenes = [], duration, durs, black = [], avoid = [],
   // Pieces: every shot cut into back-to-back slots of the longest shot length (away from its first/last 0.2 s).
   const pieces = [];
   base.forEach((x, si) => {
-    const lo = x.s + 0.08, hi = Math.min(x.e, duration) - 0.08; const n = Math.max(1, Math.floor((hi - lo) / need));
+    // Never into the video's last moments: a piece that runs off the end comes out short and the edit froze on its last frame.
+    const lo = x.s + 0.08, hi = Math.min(x.e, duration - 0.4) - 0.08; const n = Math.max(1, Math.floor((hi - lo) / need));
     const mid = (lo + hi) / 2; const span = n * need; const start0 = Math.max(lo, mid - span / 2);
     for (let k = 0; k < n; k++) { const a = start0 + k * need; if (a + longest > hi + 1e-6) continue; pieces.push({ si, a, q: x.q, mid: Math.abs(a + longest / 2 - mid), what: x.what }); }
   });
@@ -115,6 +116,15 @@ async function render({ source, segs, grid, music, out, volume = 0.9, signal, ra
   args.push('-filter_complex', f.join(';'), '-map', '[vout]', '-map', '[aout]', '-t', total.toFixed(3), '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', out);
   if (ass) require('./render').ensureFonts();
   await run(ff.bin('ffmpeg'), args, { timeoutMs: 1800000, signal, priority: ff.priorityValue(), cwd: require('../core/paths').root });
+  // Safety net: if a shot came out short, the picture ends before the music and players hold the last frame for the rest
+  // (a long freeze at the end). End the edit where the picture really ends instead, with the music faded out there.
+  const vdur = await videoLength(out);
+  if (vdur && vdur < total - 0.2) {
+    const tmp = out.replace(/\.mp4$/, '.trim.mp4');
+    await run(ff.bin('ffmpeg'), ['-hide_banner', '-y', '-i', out, '-t', vdur.toFixed(3), '-map', '0:v', '-map', '0:a', '-c:v', 'copy', '-af', `afade=t=out:st=${Math.max(0, vdur - 1.2).toFixed(3)}:d=1.2`, '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', tmp], { timeoutMs: 300000, signal });
+    fs.renameSync(tmp, out);
+    return { outPath: out, duration: vdur, shortened: total - vdur };
+  }
   return { outPath: out, duration: total };
 }
 
@@ -140,7 +150,17 @@ async function make({ source, duration, shots, scenes, black, avoid, music, leng
   // texts(grid) -> an ASS file with the story lines, timed to the cuts.
   const ass = typeof texts === 'function' ? await texts(grid) : null;
   const r = await render({ source, segs, grid, music, out, volume, signal, raw, ass });
+  if (r.shortened) { const keep = grid.cuts.filter((x) => x < r.duration - 0.3); grid = { ...grid, total: r.duration, cuts: keep, trans: grid.trans.slice(0, keep.length) }; segs = segs.slice(0, keep.length + 1); }
   return { ...r, segs, bpm, cuts: grid.cuts.length, synced: !!bpm, grid, start: grid.start || 0 };
+}
+
+/** Length of the picture itself (not the file, which lasts as long as its longest stream). */
+async function videoLength(file) {
+  try {
+    const r = await run(ff.bin('ffprobe'), ['-v', 'error', '-select_streams', 'v:0', '-count_packets', '-show_entries', 'stream=nb_read_packets,r_frame_rate', '-of', 'csv=p=0', file], { timeoutMs: 120000 });
+    const [rate, n] = String(r.out || '').trim().split(','); const [a, b] = rate.split('/').map(Number);
+    return Number(n) > 0 && a > 0 ? Number(n) / (a / (b || 1)) : null;
+  } catch { return null; }
 }
 
 module.exports = { make, plan, render, durations, plainGrid, beatTransitions, sceneShots };
