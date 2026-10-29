@@ -7,6 +7,7 @@ import { play as sfx } from '../lib/sound.js';
 import { tc, ago, dur } from '../lib/format.js';
 import { FONT_GROUPS, HEAVY } from '../lib/fonts.js';
 import { LOOKS } from './clip.js';
+import { RETRO_EFFECTS, RETRO_IDS, retroLook, retroOverlay } from '../lib/retro.js';
 
 // ------------------------------------------------------------ Velo effect registry (mirrors src/effects/Effects.cpp)
 const EFFECTS = [
@@ -18,6 +19,7 @@ const EFFECTS = [
   { id: 'crop', name: 'Crop', cat: 'Transform', params: [['left', 'Left %', 0, 100, 0], ['right', 'Right %', 0, 100, 0], ['top', 'Top %', 0, 100, 0], ['bottom', 'Bottom %', 0, 100, 0]] },
   { id: 'vignette', name: 'Vignette', cat: 'Stylize', params: [['amount', 'Amount', 0, 100, 40]] },
   { id: 'flip', name: 'Flip', cat: 'Transform', params: [['horizontal', 'Horizontal', 0, 1, 1, 1], ['vertical', 'Vertical', 0, 1, 0, 1]] },
+  ...RETRO_EFFECTS, // VHS, camcorder, Y2K digicam, Super 8, old film, glitch, CRT, noir, night vision, 8-bit (lib/retro.js)
 ];
 // Transitions. Types 1–3 are Velo's own; the rest render with FFmpeg's xfade filter on export
 // (server/video/studio.js) and are drawn the same way in the program monitor below.
@@ -930,7 +932,7 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
           <div class="th" style=${{ width: '58px', aspectRatio: '16/9', backgroundImage: m.kind !== 1 ? `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(m.path)}&t=${m.kind >= 2 ? 0 : 1}`)})` : 'none', display: 'grid', placeItems: 'center' }}>${m.kind === 1 ? html`<${Icon} name="volume" size=${16} />` : null}</div>
           <div class="grow" style="min-width:0"><div class="ellipsis" style="font-size:var(--fs-sm);font-weight:500">${m.name}</div><div class="faint tnum" style="font-size:var(--fs-xs)">${m.kind >= 2 ? 'Image' : dur(m.duration)}${m.width ? ` · ${m.width}×${m.height}` : ''}${m.proxyPending ? ' · preparing preview…' : m.proxyError ? ' · preview unavailable' : ''}</div></div></div>`)
         : html`<div class="empty" style="padding:30px 10px"><p style="font-size:var(--fs-sm)">Import or drop video, audio and images here.</p></div>`)
-      : html`${['Blur', 'Color', 'Transform', 'Stylize'].map((cat) => html`<div class="eyebrow" style="padding:8px 6px 4px">${cat}</div>${EFFECTS.filter((f) => f.cat === cat).map((f) => html`<div class="review-item" onDblClick=${() => applyEffect(f)} onClick=${() => applyEffect(f)} title="Apply to the selected clip"><${Icon} name="wand" size=${15} /><span style="font-size:var(--fs-sm)">${f.name}</span></div>`)}`)}
+      : html`${['Retro', 'Blur', 'Color', 'Transform', 'Stylize'].map((cat) => html`<div class="eyebrow" style="padding:8px 6px 4px">${cat}</div>${EFFECTS.filter((f) => f.cat === cat).map((f) => html`<div class="review-item" onDblClick=${() => applyEffect(f)} onClick=${() => applyEffect(f)} title="Apply to the selected clip"><${Icon} name="wand" size=${15} /><span style="font-size:var(--fs-sm)">${f.name}</span></div>`)}`)}
         ${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<div class="eyebrow" style="padding:12px 6px 4px">${cat === 'Dissolve' ? 'Transitions · ' : ''}${cat}</div>${TRANSITIONS.filter((x) => x.cat === cat).map((tt) => html`<div class="review-item" style="cursor:default"><${Icon} name="layers" size=${15} /><span class="grow" style="font-size:var(--fs-sm)">${tt.name}</span><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transIn')}>In</${Button}><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transOut')}>Out</${Button}></div>`)}`)}`}
     </div></div>`;
 }
@@ -1052,7 +1054,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       g.translate(W / 2 + valAt(c.posX, local) * quality, H / 2 + valAt(c.posY, local) * quality);
       g.rotate((valAt(c.rotation, local) * Math.PI) / 180);
       const sx = valAt(c.scaleX, local, 1), sy = c.uniformScale === false ? valAt(c.scaleY, local, 1) : sx;
-      const filters = []; let flipH = 1, flipV = 1, crop = null, vig = 0;
+      const filters = []; let flipH = 1, flipV = 1, crop = null, vig = 0; const retros = [];
       for (const e of c.effects || []) {
         if (e.enabled === false) continue; const p = Object.fromEntries(Object.entries(e.params || {}).map(([k, x]) => [k, valAt(x, local)]));
         if (e.effectId === 'gaussian_blur') filters.push(`blur(${(p.radius / 2) * quality}px)`);
@@ -1062,6 +1064,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
         if (e.effectId === 'flip') { if (p.horizontal >= 0.5) flipH = -1; if (p.vertical >= 0.5) flipV = -1; }
         if (e.effectId === 'crop') crop = p;
         if (e.effectId === 'vignette') vig = p.amount / 100;
+        if (RETRO_IDS.has(e.effectId)) retros.push([e.effectId, p]);
       }
       g.filter = filters.join(' ') || 'none';
       if (c.type === 3) drawText(g, c.text || {}, sx * quality, local, c.duration);
@@ -1084,6 +1087,12 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
             if (f.clip || f.dx || f.dy) { g.translate(-nw / 2, -nh / 2); if (f.clip) g.clip(f.clip, 'evenodd'); else g.clip(new Path2D(`M0 0H${nw}V${nh}H0Z`)); g.translate(nw / 2 + f.dx, nh / 2 + f.dy); }
             pixel = Math.max(pixel, f.pixel); if (f.dip) dips.push(f.dip);
           }
+          // Retro looks: their colour filters go on the picture, their grain/lines/stamps are drawn on top below.
+          // The on-screen part of the picture (a wide video filling a tall frame has its sides off screen): stamps go there.
+          const left = W / 2 + valAt(c.posX, local) * quality - nw / 2, top = H / 2 + valAt(c.posY, local) * quality - nh / 2;
+          const vx0 = Math.max(0, -left), vy0 = Math.max(0, -top), view = { x: vx0, y: vy0, w: Math.max(16, Math.min(nw, W - left) - vx0), h: Math.max(16, Math.min(nh, H - top) - vy0) };
+          const ru = Math.min(view.w, view.h) / 1080; const looks = retros.map(([id, p]) => retroLook(id, p, local, ru));
+          for (const L of looks) { if (L.css.length) g.filter = (g.filter === 'none' ? '' : g.filter + ' ') + L.css.join(' '); if (L.pixel) pixel = Math.max(pixel, L.pixel * quality); }
           g.scale(flipH, flipV);
           if (sw > 0 && sh > 0 && g.globalAlpha > 0) {
             if (pixel > 1) {
@@ -1094,6 +1103,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
           }
           for (const d of dips) { g.filter = 'none'; g.globalAlpha = a0 * Math.max(0, Math.min(1, d.a)); g.fillStyle = d.color; g.fillRect(-nw / 2, -nh / 2, nw, nh); }
           if (vig) { g.filter = 'none'; const rg = g.createRadialGradient(0, 0, Math.min(nw, nh) * 0.25, 0, 0, Math.max(nw, nh) * 0.6); rg.addColorStop(0, 'rgba(0,0,0,0)'); rg.addColorStop(1, `rgba(0,0,0,${vig * 0.85})`); g.fillStyle = rg; g.fillRect(-nw / 2, -nh / 2, nw, nh); }
+          if (looks.length && g.globalAlpha > 0) { g.scale(flipH, flipV); for (const L of looks) retroOverlay(g, L, nw, nh, local, ru, view); }
         }
       }
       g.restore();

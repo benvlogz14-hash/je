@@ -12,6 +12,7 @@ const path = require('path');
 const paths = require('../core/paths');
 const ff = require('./ffmpeg');
 const render = require('./render');
+const retro = require('./retro');
 
 const base = (p, d) => (p && typeof p === 'object' ? (p.base ?? d) : (p ?? d));
 const keysOf = (p) => (p && typeof p === 'object' && Array.isArray(p.keys) ? p.keys.filter((k) => Array.isArray(k) && k.length >= 2).map(([t, v]) => [Number(t), Number(v)]).sort((a, b) => a[0] - b[0]) : []);
@@ -43,7 +44,7 @@ const maxAbs = (p, d) => Math.max(Math.abs(base(p, d)), ...keysOf(p).map((k) => 
 const hasKeys = (p) => p && typeof p === 'object' && Array.isArray(p.keys) && p.keys.length > 0;
 const num = (v) => (Math.round(v * 1000) / 1000).toString();
 
-function effectFilters(effects, warnings) {
+function effectFilters(effects, warnings, w = 1080, h = 1920, view = null) {
   const out = [];
   for (const e of effects || []) {
     if (e.enabled === false) continue;
@@ -70,10 +71,19 @@ function effectFilters(effects, warnings) {
       case 'vignette': if (p.amount > 0) out.push(`vignette=angle=${num(0.2 + (p.amount / 100) * 0.9)}`); break;
       case 'flip': if (p.horizontal >= 0.5) out.push('hflip'); if (p.vertical >= 0.5) out.push('vflip'); break;
       case 'gain': break; // audio effect, handled in the audio chain
-      default: warnings.add(`Effect "${e.effectId}" is not supported in Studio export`);
+      default:
+        if (retro.IDS.includes(e.effectId)) out.push(...retro.filters(e.effectId, p, w, h, view));
+        else warnings.add(`Effect "${e.effectId}" is not supported in Studio export`);
     }
   }
   return out;
+}
+
+/** The part of a clip's frame (nw x nh, placed at posX/posY in a W x H sequence) that's on screen, in the clip's pixels. */
+function onScreen(nw, nh, px, py, W, H) {
+  const left = (W - nw) / 2 + px, top = (H - nh) / 2 + py;
+  const x0 = Math.max(0, -left), y0 = Math.max(0, -top), x1 = Math.min(nw, W - left), y1 = Math.min(nh, H - top);
+  return x1 - x0 > 16 && y1 - y0 > 16 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
 }
 
 function atempoChain(speed) {
@@ -165,7 +175,7 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
         if (xin) src = xfadeEdge(src, c.transIn, Math.min(transDur(c.transIn), c.duration), c.duration, false, nw, nh, `${i}a`);
         if (xout) src = xfadeEdge(src, c.transOut, Math.min(transDur(c.transOut), c.duration), c.duration, true, nw, nh, `${i}b`);
       }
-      const chain = [...(src === `${i}:v` ? [`setpts=(PTS-STARTPTS)/${num(Math.abs(speed))}`, `fps=${fps}`, `scale=${nw}:${nh}`] : []), ...effectFilters(c.effects, warnings), 'format=yuva420p'];
+      const chain = [...(src === `${i}:v` ? [`setpts=(PTS-STARTPTS)/${num(Math.abs(speed))}`, `fps=${fps}`, `scale=${nw}:${nh}`] : []), ...effectFilters(c.effects, warnings, nw, nh, onScreen(nw, nh, base(c.posX, 0), base(c.posY, 0), W, H)), 'format=yuva420p'];
       const rot = base(c.rotation, 0);
       if (keyed.rot) chain.push(`rotate=a='${kexpr(c.rotation, 0, 't', { mul: Math.PI / 180 })}':c=none:ow='hypot(iw,ih)':oh='hypot(iw,ih)'`);
       else if (rot) chain.push(`rotate=${num((rot * Math.PI) / 180)}:c=none:ow=rotw(${num((rot * Math.PI) / 180)}):oh=roth(${num((rot * Math.PI) / 180)})`);
