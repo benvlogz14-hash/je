@@ -3,10 +3,11 @@
  * HAL inside Euclidean: your words → real actions (Part 7 of the master prompt; hal_chat in HAL_CORE_CODE.py), plus
  * control of the rest of the app through Euclidean's own commands.
  *
- * Order (as in HAL's router): a slash command typed straight in; this clip ("re-edit this", "approve this"); recall
- * what was surfaced; protest map; discover new candidates; email a prospect; pipeline stages; add a prospect; calendar;
- * content calendar / short-form / follow-up; read a link; live news and web research; anything else about the app goes
- * through the command list; everything else is chat. Facts always come from what the app fetched this turn.
+ * Order: a slash command typed straight in; this clip ("re-edit this", "approve this"); what his watch found; recall
+ * what was surfaced; discover new candidates; outreach (one person, or the whole batch, by the outreach guide);
+ * pipeline stages; add a prospect; calendar; content calendar / short-form / follow-up; read a link; live news and web
+ * research; anything else about the app goes through the command list; everything else is chat. Facts always come
+ * from what the app fetched this turn.
  *
  * Nothing leaves the building without a person: emails go to Approvals, and commands that approve, publish, reject,
  * switch on autopilot or stop/resume automation come back as a Confirm button instead of running.
@@ -18,7 +19,7 @@ const pipeline = require('../automation/pipeline');
 const { think, PERSONA, mode } = require('./brain');
 const score = require('./score');
 const web = require('./web');
-const mail = require('./email');
+const guide = require('../outreach/guide');
 
 // ------------------------------------------------------------------ confirmations (a person's click)
 const pending = new Map();
@@ -30,10 +31,14 @@ function ask(label, detail, run) {
   for (const [k, v] of pending) if (Date.now() - v.at > 30 * 60000) pending.delete(k);
   return { id, label, detail };
 }
+// Buttons on messages HAL posts by himself (his watch) are stored with the message, so they survive a restart.
+const ACTIONS = { addLeads: (a, actor) => require('./watch').addLeads(a.leads, actor) };
 async function confirm(id, actor) {
-  const p = pending.get(id); if (!p) return { text: 'That button expired. Ask me again and I\'ll set it up.' };
-  pending.delete(id); const r = await p.run(actor); audit.log(actor, 'hal.confirmed', { id });
-  return r;
+  const p = pending.get(id);
+  if (p) { pending.delete(id); const r = await p.run(actor); audit.log(actor, 'hal.confirmed', { id }); return r; }
+  const m = ctx.store.find('halMessages', (x) => x.confirm?.id === id && x.confirm.action && !x.confirm.done);
+  if (m && ACTIONS[m.confirm.action.type]) { const r = await ACTIONS[m.confirm.action.type](m.confirm.action, actor); audit.log(actor, 'hal.confirmed', { id, action: m.confirm.action.type }); return r; }
+  return { text: 'That button expired. Ask me again and I\'ll set it up.' };
 }
 
 // ------------------------------------------------------------------ helpers
@@ -121,45 +126,50 @@ async function onClip(low, text, c, actor) {
   return null;
 }
 
-async function protests(low) {
-  if (/\b(scan|run|refresh|update|triangulate|check|look|search|find|map|pull)\b/.test(low)) {
-    const last = ctx.setting('hal.lastProtestScan', 0);
-    if (last && Date.now() - last < 30 * 60000) return { text: `Just scanned. Give it about ${Math.ceil((30 * 60000 - (Date.now() - last)) / 60000)} min between scans (a couple a day is the idea).` };
-    ctx.store.setSettings({ hal: { lastProtestScan: Date.now() } });
-    const r = await web.protestScan(protestBrainParse);
-    return { text: r.msg };
-  }
-  const evs = ctx.store.all('protests').sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 8);
-  if (!evs.length) return { text: "No protests or events on the map yet. Say 'scan protests' and I'll triangulate the tri-state." };
-  return { text: `On the map right now (newest first):\n${lines(evs, (e) => `- ${e.title} · ${e.place || e.city || e.state || 'location TBD'}${e.date ? ` · ${e.date}` : ''} · ${e.time || 'TBD'}`)}\n\nSay 'scan protests' to refresh.` };
-}
-async function protestBrainParse(items) {
-  const r = await think({ json: true, maxTokens: 1400, system: `${PERSONA}\n\nTASK: you are parsing REAL news headlines into a structured list of protests and public events in the NY / NYC / Long Island / Connecticut / New Jersey area (plus nationwide actions). Return ONLY JSON {"events":[...]}. For each headline that clearly describes a protest, rally, march, demonstration, vigil, walkout, strike, convention, expo, or festival, output one object with keys: title (short), type (protest|rally|march|vigil|strike|convention|festival|other), scope (local|national), place (the most specific real location named in the headline; empty if none), city, state (NY|CT|NJ|US), date (YYYY-MM-DD only if an explicit date is in the text, else empty), time (only if explicitly stated, else 'TBD'), status (confirmed if a specific date/time/venue is given, else rumored). HARD RULES: use ONLY what is in the headline text. Do NOT invent a place, date, or time. Skip headlines that are not an actual event.`,
-    messages: [{ role: 'user', content: `Headlines:\n${items.slice(0, 18).map((it, i) => `${i}. ${it.t}${it.b ? ` :: ${it.b}` : ''}`).join('\n')}` }] });
-  const arr = r.json?.events || (Array.isArray(r.json) ? r.json : null);
-  if (!Array.isArray(arr)) return null;
-  for (const ev of arr) { const tl = String(ev.title || '').toLowerCase().slice(0, 30); const it = items.find((x) => tl && x.t.toLowerCase().includes(tl)); if (it) ev.url = it.url; }
-  return arr;
-}
-
 function recall() {
   const since = Date.now() - 3 * 864e5;
   const rec = prospects().filter((p) => p.type === 'political' && new Date(p.createdAt).getTime() > since && p.source !== 'manual').slice(-30).reverse();
   if (!rec.length) return { text: "I haven't surfaced any new prospects in the last few days. Ask me to find new NY/CT candidates and I'll log them on the board." };
-  return { text: `The ${rec.length} I've pulled onto the board lately:\n${lines(rec, (p) => `- ${p.name}${p.office ? ` · ${p.office}` : ''}${p.race ? ` · ${score.rate(p).rating}` : ''}`)}` };
+  return { text: `The ${rec.length} I've pulled onto the board lately:\n${lines(rec, (p) => `- ${p.name}${p.office ? ` · ${p.office}` : ''}${p.kit?.tier ? ` · $${p.kit.tier} tier` : ''}${p.triage === 'pending' ? ' · waiting in New prospects' : ''}`)}` };
 }
 
 async function discover(text, actor) {
   const q = text.replace(/^\s*(?:hey\s+)?hal[,\s]*/i, '').trim();
-  const query = /\b(ny|new york|ct|connecticut|nj|new jersey)\b/i.test(q) ? q : `${q} New York and Connecticut Democratic candidates 2026`;
+  const query = /\b(ny|new york|ct|connecticut|nj|new jersey)\b/i.test(q) ? q : `${q} New York and Connecticut elected officials`;
   queue.enqueue('political.scout', { query, count: 15, autoPackage: false }, { actor });
   return { text: "Hunting. I'm pulling real candidates from Open States, Ballotpedia and Wikidata; new ones land in Politics → New prospects for you to wave through. Duplicates get skipped.", navigate: null };
 }
 
+/** The outreach guide's whole kit for one person: research card, email (to Approvals), call, voicemail, DM, flags. */
+function kitText(p) {
+  const k = p.kit || {}; const d = k.drafts || {}; const c = k.card || {};
+  const parts = [];
+  if (d.email) parts.push(`EMAIL${d.email.threadReply ? ' (reply in the existing thread)' : ''}\nSubject: ${d.email.subject}\n\n${d.email.body}`);
+  if (d.followup) parts.push(`FOLLOW-UP (day 4, same thread)\n${d.followup}`);
+  if (d.call) parts.push(`LIVE CALL\n${d.call}`);
+  if (d.voicemail) parts.push(`VOICEMAIL (${d.voicemailWords} words)\n${d.voicemail}`);
+  if (d.text) parts.push(`TEXT (confirmed cell)\n${d.text}`);
+  if (d.dm) parts.push(`DM\n${d.dm}`);
+  parts.push(`CARD\n${['office', 'status', 'email', 'email_verified', 'phone', 'phone_type', 'hook_email', 'sample_topic', 'existing_vendors', 'avoid'].map((f) => `${f}: ${c[f] ?? 'UNKNOWN'}`).join('\n')}\ntier: $${k.tier} (${k.tierBasis})\nsources:\n${(c.sources || []).slice(0, 8).join('\n')}`);
+  return parts.join('\n\n');
+}
 async function email(p, text, actor) {
-  const r = await mail.draftFor(p, text, actor);
-  if (r.queued) return { text: `Drafted. ${p.name}'s email to ${r.to} is waiting in Approvals; nothing goes out until you approve it.`, draft: `Subject: ${r.subject}\n\n${r.body}` };
-  return { text: r.why, draft: `Subject: ${r.subject}\n\n${r.body}` };
+  const r = await guide.draftFor(p.id, { actor });
+  const k = r.kit || {};
+  if (k.framing === 'exclude') return { text: `Not drafting ${p.name}: ${k.excluded}.` };
+  if (k.framing === 'hold') return { text: `${p.name} is on HOLD (investigation or scandal). No pitch unless Ben overrides in writing.` };
+  const flags = (k.flags || []).length ? `\nFlags: ${k.flags.join('; ')}` : '';
+  const qa = (k.qa || []).length ? `\nQA didn't pass: ${k.qa.join('; ')}` : '';
+  const head = k.queued ? `Drafted by the guide. ${p.name}'s email is waiting in Approvals; Ben sends it by hand.` : `Drafted ${p.name}'s kit, not queued (${k.blocked}).`;
+  return { text: `${head} ${k.framing === 'post-election' ? 'Post-election note (not on the Nov 3 ballot).' : k.framing === 'only-if-win' ? 'CONTACT ONLY IF THEY WIN.' : 'Congrats-on-the-win frame.'} Internal tier $${k.tier}.${flags}${qa}`, draft: kitText(ctx.store.get('prospects', p.id)), gmail: k.gmail || null };
+}
+/** The batch run (Part 8) as a background job; HAL posts the summary when it's done. */
+function batch(low, actor) {
+  const pol = prospects().filter((x) => x.type === 'political' && x.triage !== 'pending' && !['won', 'lost', 'replied', 'meeting'].includes(x.stage));
+  const pick = /\ball\b/.test(low) ? pol : pol.filter((x) => !x.kit?.drafts);
+  if (!pick.length) return { text: 'Nobody on the Politics board needs drafting. Add names or wave some through from New prospects.' };
+  queue.enqueue('outreach.kits', { ids: pick.map((x) => x.id), hal: true }, { actor, title: `Outreach drafts for ${pick.length} politicians` });
+  return { text: `Running the guide on ${pick.length} ${pick.length === 1 ? 'person' : 'people'} in chunks of 10: research card, email, follow-up, call, voicemail, flags. I'll post the summary here with the best picks. Drafts land in Approvals; nothing sends.` };
 }
 
 const STAGE_WORDS = [[/\bcall booked|booked (?:a|the) call|call is booked\b/, 'CALL BOOKED'], [/\breplied|responded|wrote back|got a reply\b/, 'REPLIED'], [/\bcontacted|reached out|emailed|sent (?:the|an) email|pitched\b/, 'CONTACTED'], [/\bsigned|client|closed|won|onboarded\b/, 'CLIENT'], [/\bpassed|dead|no go|not interested|drop\b/, 'PASSED']];
@@ -174,9 +184,9 @@ function addProspect(text, actor) {
   const parts = body.split(/[,;–]| - /).map((x) => x.trim()).filter(Boolean);
   if (!parts.length) return null;
   const name = parts[0]; if (match(name)?.name?.toLowerCase() === name.toLowerCase()) return { text: `${name} is already on the board.` };
-  const row = ctx.store.insert('prospects', { name, type: 'political', office: parts[1] || '', race: parts[2] || '', handle: '', platforms: [], why: '', angle: '', publicContact: '', location: parts[1] || '', stage: 'new', verified: false, source: 'hal', social: 'Unknown', party: 'DEM' });
-  const r = score.rate(row); audit.log(actor, 'hal.prospect_added', { name });
-  return { text: `${name} added to the board${row.office ? ` (${row.office})` : ''}: ${r.rating}, fit ${r.fit}, ${r.tag}.` };
+  const row = ctx.store.insert('prospects', { name, type: 'political', office: parts[1] || '', notes: parts.slice(2).join(', '), handle: '', platforms: [], why: '', angle: '', publicContact: '', location: parts[1] || '', stage: 'new', verified: false, source: 'hal' });
+  audit.log(actor, 'hal.prospect_added', { name });
+  return { text: `${name} added to the board${row.office ? ` (${row.office})` : ''}. Say "email ${name}" when you want the guide to research and draft.` };
 }
 
 function calendar(text, low, actor) {
@@ -212,13 +222,14 @@ async function lookup(subject, question) {
     } catch { return { text: `Top headlines right now:\n${heads}` }; }
   }
   const p = match(subject);
-  const [news, results] = await Promise.all([p ? web.newsAbout(p.name, 4) : web.newsFor(subject, 5), web.search(subject, 6)]);
+  const [news, results, lv] = await Promise.all([p ? web.newsAbout(p.name, 4) : web.newsFor(subject, 5), web.search(subject, 6), web.live(`Find the latest news and facts about ${subject}.`).catch(() => null)]);
+  if (lv?.items.length) news.push(...lv.items);
   const heads = news.length ? lines(news, (n) => `- ${n.t} (${n.url})`) : 'none found';
   const webr = results.length ? lines(results, (x) => `- ${x.title}: ${x.snippet} (${x.url})`) : 'none found';
   if (!news.length && !results.length) return { text: `Nothing came back for "${subject}". Check the internet, or give me a link to read.` };
-  const rec = p ? `On record in our board: ${JSON.stringify({ name: p.name, office: p.office, race: p.race, social: p.social, why: p.why, ...score.rate(p) })}` : 'Not on our board.';
+  const rec = p ? `On record in our board: ${JSON.stringify({ name: p.name, office: p.office, stage: p.stage, why: p.why, hook: p.kit?.card?.hook_email, tier: p.kit?.tier })}` : 'Not on our board.';
   try {
-    const r = await think({ maxTokens: 420, search: true, messages: [{ role: 'user', content: `Ryan asked: "${question}". Subject: ${subject}.\n${rec}\nReal recent headlines the app just pulled:\n${heads}\nWeb results the app just pulled:\n${webr}\n\nAnswer in 3 to 5 short sentences: the main points and, for a candidate, who they are, their race/office and what matters for our content pitch. Use ONLY the record, headlines and results above; anything else is "unverified - needs check". Finish with the single sharpest angle. Put one real URL on its own line at the end.` }] });
+    const r = await think({ maxTokens: 420, search: true, messages: [{ role: 'user', content: `Ryan asked: "${question}". Subject: ${subject}.\n${rec}\nReal recent headlines the app just pulled:\n${heads}\nWeb results the app just pulled:\n${webr}\n\nAnswer in 3 to 5 short sentences: the main points and, for a politician, who they are, their office and what's a good hook for a short video about them. Use ONLY the record, headlines and results above; anything else is "unverified - needs check". Finish with the single sharpest angle. Put one real URL on its own line at the end.` }] });
     return { text: r.text, by: r.by };
   } catch { return { text: `${subject}${p ? ` - ${p.office || ''}` : ''}\n${news.length ? `Recent:\n${heads}` : ''}${results.length ? `\nOn the web:\n${webr}` : ''}` }; }
 }
@@ -261,18 +272,22 @@ async function handle(text, { history = [], context = {}, actor = 'user' } = {})
     }
     const onThis = await onClip(low, t, context, actor); if (onThis) return onThis;
     if (/\b(you (sent|found|added|gave|surfaced|flagged|mentioned)|the ones you|parse (through|the)|which (ones|prospect|candidate)|list (them|those|the new)|go (back|over)|what (were|was) (the|those))\b/.test(low) && /\b(prospect|candidate|lead|name|one)s?\b/.test(low)) return recall();
-    if (/\b(protests?|rally|rallies|demonstrations?|march(?:es)?|vigils?|walkouts?|day of action|unrest)\b/.test(low) && !/\b(calendar|call with|meeting|remind)\b/.test(low)) return await protests(low);
+    if (/\b(what did you find|anything new|what('?s| is) new(?! with| on| about| for)|check (?:the )?(?:news|internet|web) now|scan (?:the )?(?:news|web|internet)|run (?:your|the) watch|look for (?:new )?leads)\b/.test(low)) return await watchNow();
+    if (/\b(stop|pause|turn off) (?:your |the )?watch(?:ing)?\b/.test(low)) { ctx.store.setSettings({ hal: { watch: { on: false } } }); return { text: 'Watch off. I stop reading the web in the background until you say "start watching".' }; }
+    if (/\b(start|resume|turn on) (?:your |the )?watch(?:ing)?\b/.test(low)) { ctx.store.setSettings({ hal: { watch: { on: true } } }); return { text: `Watching again, every ${ctx.setting('hal.watch.everyMin', 60)} minutes while the app is open.` }; }
     if (/\b(find|discover|dig up|pull up|pull|source|scout|get me)\b/.test(low) && /\bnew\b/.test(low) && /\b(prospect|candidate|client|politician|lead)s?\b/.test(low)) return await discover(t, actor);
     const p = nameIn(t);
-    if (p && /\b(email|pitch|outreach|cold email|draft to|write to|reach out to)\b/.test(low) && !/\b(calendar|protest|rally|follow[- ]?up)\b/.test(low)) return await email(p, t, actor);
+    if (!p && /\b(draft|run|do|write)\b.*\b(batch|outreach|emails?|the (?:new )?(?:ones|prospects|politicians|list))\b/.test(low) && /\b(batch|all|everyone|new ones|the list|prospects|politicians)\b/.test(low)) return batch(low, actor);
+    if (p && /\b(email|pitch|outreach|cold email|draft|write to|reach out to|voicemail|call script|kit)\b/.test(low) && !/\b(calendar|follow[- ]?up)\b/.test(low)) return await email(p, t, actor);
+    if (p && /\b(won|lost)\b/.test(low) && /\b(mark|set|they|he|she|just|has|have)\b/.test(low)) { const won = /\bwon\b/.test(low); ctx.store.update('prospects', p.id, { electionResult: won ? 'won' : 'lost' }); return { text: won ? `${p.name} marked as a winner. Their drafts can go out now.` : `${p.name} marked as lost. The guide never sends to them.` }; }
     if (p && /\b(mark|move|set|update|put|add)\b/.test(low) && /\b(pipeline|pipe|stage|status|contacted|replied|booked|client|passed)\b/.test(low)) { const r = stage(p, low, actor); if (r) return r; }
     if (/^\s*(add|create|log|new)\b/.test(low) && /\b(prospect|candidate|to the board|to our board|to the list)\b/.test(low)) { const r = addProspect(t, actor); if (r) return r; }
     if (/\b(add|schedule|put|book|set up|create|remind)\b/.test(low) && /\b(calendar|cal|event|meeting|reminder|appointment|call with)\b/.test(low)) return calendar(t, low, actor);
     if (/content calendar|week of (?:posts|content)|posting (?:plan|schedule)|content plan/.test(low)) return await generate('calendar', p || match(subjectOf(low, t)), '');
     if (/\b(short[- ]?form|scripts?|hooks?|reel ideas?|video ideas?|tiktoks?)\b/.test(low) && !/\b(this|clip)\b/.test(low)) return await generate('short', p, subjectOf(low, t));
-    if (/\bfollow[- ]?up\b/.test(low) && p) { const r = await mail.followup(p, /\b7\b|second|week/.test(low) ? 'day7' : 'day3'); return { text: "Here's the follow-up. Say \"email\" plus their name if you want a fresh first-touch in Approvals instead.", draft: r.text, by: r.by }; }
+    if (/\bfollow[- ]?up\b/.test(low) && p) return { text: 'The guide\'s follow-up: one line, day 4, in the same thread. Then stop.', draft: `${String(p.name).split(/\s+/)[0]}, bumping this once. Even pointing me to the right person helps. Ben` };
     if (/\b(funnel|reply rate|close rate|how(?:'s| is) the pipeline)\b/.test(low)) { const f = score.funnel(prospects().filter((x) => x.type === 'political')); return { text: `${f.total} on the board, ${f.contacted} contacted. Reply rate ${f.replyRate}%, close rate ${f.closeRate}%. ${Object.entries(f.counts).map(([k, v]) => `${k} ${v}`).join(' · ')}.` }; }
-    if (/\b(best|top|prime|hottest)\b.*\b(targets?|prospects?|leads?)\b|\bwho should (?:we|i) (?:pitch|hit|target)\b/.test(low)) { const top = score.rank(prospects(), 8); return top.length ? { text: `Best targets on the board (fit score):\n${lines(top, ({ p: x, r }) => `- ${x.name} · ${x.office || '?'} · ${r.rating} · fit ${r.fit} · ${r.tag}`)}` } : { text: 'No political prospects on the board yet.' }; }
+    if (/\b(best|top|prime|hottest)\b.*\b(targets?|prospects?|leads?|picks?)\b|\bwho should (?:we|i) (?:pitch|hit|target|email|call)\b/.test(low)) { const top = guide.summary(prospects().filter((x) => x.type === 'political')).best; return top.length ? { text: `Best picks (the guide's order: sure to hold office, tier, hook, route, no vendor):\n${lines(top, (x) => `- ${x.name}: ${x.why}`)}` } : { text: 'No drafted politicians yet. Say "draft the batch" and I\'ll run the guide on the board first.' }; }
     const urls = urlsIn(t); if (urls.length) return await readLinks(urls, t);
     if (NEWS_SIGNAL.test(low) || LOOKUP_VERB.test(low)) return await lookup(subjectOf(low, t), t);
     if (APPISH.test(low)) return await viaCommands(t, context, actor);
@@ -280,6 +295,14 @@ async function handle(text, { history = [], context = {}, actor = 'user' } = {})
   } catch (e) {
     return { text: /brain|Ollama|Grok|xAI|AI provider|agent could/i.test(e.message) ? e.message : `A fault in my reasoning: ${e.message}` };
   }
+}
+
+/** "What did you find?": run the watch now and say what came back. */
+async function watchNow() {
+  const r = await require('./watch').run({ force: true });
+  if (r?.busy) return { text: "I'm already out reading. Give me a minute." };
+  if (!r || (!r.stories.length && !r.leads.length)) { const last = ctx.store.settings._halWatchLast; return { text: `Nothing new since my last pass${last?.at ? ` (${new Date(last.at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })})` : ''}. If that's suspicious, check the PC's internet.` }; }
+  return { text: `Done: ${r.stories.length} new stor${r.stories.length === 1 ? 'y' : 'ies'}${r.leads.length ? `, ${r.leads.length} possible lead${r.leads.length === 1 ? '' : 's'}` : ''}. Posted above.` };
 }
 
 module.exports = { handle, confirm, mode, contextFacts };

@@ -52,7 +52,7 @@ function graduated(lane) {
 }
 const sendingOn = (lane) => !!cfg(lane).autoSend || graduated(lane);
 function laneOf(p) { return p.type === 'political' ? 'political' : 'creators'; }
-function draftOf(p) { const id = p.type === 'political' ? p.pkg?.messageId : p.outreach?.messageId; return id ? ctx.store.get('messages', id) : null; }
+function draftOf(p) { const id = p.type === 'political' ? p.kit?.messageId || p.pkg?.messageId : p.outreach?.messageId; return id ? ctx.store.get('messages', id) : null; }
 
 /** Reasons a draft can't go out on its own. Empty list = safe to send. */
 function checks(p, { ignoreCap = false } = {}) {
@@ -71,6 +71,7 @@ function checks(p, { ignoreCap = false } = {}) {
   if (p.hold) why.push(`On hold in your list (${p.hold})`);
   if (ctx.store.find('messages', (m) => m.contactId === contact?.id && m.direction === 'in')) why.push('They have already written to us');
   if (lane === 'political') {
+    why.push('Political outreach is drafts only: Ben sends each one by hand (outreach guide)');
     if (p.pkg?.status !== 'ready') why.push('Package not finished');
     if (p.pkg?.creative?.hasContrast) why.push('Contrast ad: a person must review it');
     if ((p.pkg?.sources || []).length < 2 && !p.imported) why.push('Too little research');

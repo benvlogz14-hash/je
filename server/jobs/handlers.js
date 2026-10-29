@@ -862,6 +862,29 @@ queue.register('setup.ollama', { title: () => 'Turn on Ollama', maxAttempts: 1, 
 queue.register('setup.vision', { title: () => 'Download free video vision (Llama vision)', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setupVision(h) });
 queue.register('setup.ffmpeg', { title: () => 'Install FFmpeg and yt-dlp', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/production').installFfmpeg(h) });
 queue.register('music.fill', { title: () => 'Download free music (all moods)', maxAttempts: 1, run: async (job, h) => ({ tracks: await require('../video/music').fillAll((f, t) => h.progress(f, t)) }) });
+// The outreach guide's batch run (Part 8): chunks of 10, every person researched, drafted and checked; HAL posts the summary.
+queue.register('outreach.kits', {
+  title: (p) => `Outreach drafts for ${(p.ids || []).length} politician${(p.ids || []).length === 1 ? '' : 's'}`, maxAttempts: 1,
+  async run(job, h) {
+    const guide = require('../outreach/guide'); const ids = job.payload.ids || []; const done = []; const errors = [];
+    for (let i = 0; i < ids.length; i++) {
+      if (h.signal?.aborted) break;
+      const p = ctx.store.get('prospects', ids[i]); if (!p) continue;
+      h.progress(i / ids.length, `Chunk ${Math.floor(i / 10) + 1}: ${p.name}`);
+      try { await guide.draftFor(p.id, { actor: job.createdBy, refresh: !!job.payload.refresh, h: { progress: (f, t) => h.progress((i + f) / ids.length, `${p.name}: ${t}`) } }); done.push(p.id); } catch (e) { errors.push(`${p.name}: ${e.message}`); h.log(`${p.name}: ${e.message}`); }
+    }
+    const sum = guide.summary(ids.map((id) => ctx.store.get('prospects', id)).filter(Boolean));
+    if (job.payload.hal || ids.length > 1) {
+      const c = sum.counts; const ex = Object.entries(c.excluded).map(([k, v]) => `${v} ${k}`).join(', ');
+      const text = [`Batch done: ${c.drafted} drafted, ${c.queued} in Approvals for Ben, ${c.onlyIfWin} only-if-they-win, ${c.notOnBallot} not on the ballot, ${c.hold} on HOLD${ex ? `, excluded: ${ex}` : ''}.`,
+        sum.best.length ? `Best picks:\n${sum.best.map((b) => `- ${b.name}: ${b.why}`).join('\n')}` : '', sum.flags.length ? `Flags:\n${sum.flags.slice(0, 25).map((f) => `- ${f}`).join('\n')}${sum.flags.length > 25 ? `\n(${sum.flags.length - 25} more on the cards)` : ''}` : '', errors.length ? `Couldn't finish: ${errors.join('; ')}` : ''].filter(Boolean).join('\n\n');
+      const m = ctx.store.insert('halMessages', { who: 'hal', text, by: 'guide', draft: sum.table.map((r) => `${r.name} | ${r.office} | ${r.tier} | ${r.channel} | ${r.status}`).join('\n') });
+      events.publish('hal', { id: m.id });
+    }
+    return { drafted: sum.counts.drafted, queued: sum.counts.queued, errors: errors.length };
+  },
+});
+
 queue.register('setup.whisper', { title: () => 'Install free speech-to-text (Whisper)', maxAttempts: 1, run: (job, h) => require('../setup/whisper').install(h) });
 queue.register('setup.rembg', { title: () => 'Install the free photo cut-out tool', maxAttempts: 1, run: (job, h) => require('../setup/rembg').install(h) });
 

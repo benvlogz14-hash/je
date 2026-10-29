@@ -407,28 +407,21 @@ h1{font:800 34px/1.05 Pop;color:${T.ink};letter-spacing:-.02em} h1 b{color:${T.a
   return 'Sheet ready';
 }
 
+/**
+ * The first email follows the outreach guide (server/outreach/guide.js): a short, sourced "congrats on the win" note
+ * that asks for a 10-minute call in exchange for a free 30-second sample. No prices, links or attachments in a first
+ * touch, so the package's ads and sheet are kept for after they say yes. It waits in Approvals; nothing auto-sends.
+ */
 async function stepEmail(p, actor) {
-  const pkg = p.pkg; const c = pkg.creative; if (!c?.email) throw new Error('Run the storyboard step first.');
-  const to = [p.publicContact, pkg.profile?.contact, ...(pkg.profile?.emails || []).map((e) => e.email)].map((x) => String(x || '').trim().toLowerCase()).find((x) => isEmail(x) && !isGov(x)) || '';
-  if (!to) { save(p.id, () => ({ status: 'needs_contact' })); return { skip: true, note: 'No public campaign email found. Add one on the prospect, then re-run this step.' }; }
-  const ex = excluded({ name: p.name, email: to, handle: p.handle });
+  const ex = excluded({ name: p.name, email: p.publicContact, handle: p.handle });
   if (ex) { save(p.id, () => ({ status: 'excluded' })); return { skip: true, note: `On the exclusions list (${ex})` }; }
-  if (isGov(to) && !S('allowGov', false)) { save(p.id, () => ({ status: 'needs_contact' })); return { skip: true, note: `${to} is a government office address. Add a campaign or press email instead.` }; }
-  let contact = p.contactId ? ctx.store.get('contacts', p.contactId) : ctx.store.find('contacts', (x) => (x.emails || []).includes(to));
-  if (!contact) contact = ctx.store.insert('contacts', { name: p.name, phones: [], emails: [to], role: 'prospect', clientId: null, optedOut: {}, source: 'political' });
-  else if ((contact.emails || [])[0] !== to) contact = ctx.store.update('contacts', contact.id, { emails: [to, ...(contact.emails || []).filter((e) => e !== to && isEmail(e) && !isGov(e))] }); // this address first; drop links and .gov
-  if (contact.optedOut?.email) return { skip: true, note: `${p.name} opted out of email.` };
-  ctx.store.update('prospects', p.id, { contactId: contact.id });
-  // Replace an earlier unsent draft instead of stacking duplicates.
-  if (pkg.messageId) { const old = ctx.store.get('messages', pkg.messageId); if (old?.status === 'pending_approval') messaging.rejectMessage(old.id, actor); }
-  const att = attachmentsFor(pkg);
-  if (p.voiceNote && fs.existsSync(p.voiceNote)) att.push({ name: path.basename(p.voiceNote), path: p.voiceNote, size: fs.statSync(p.voiceNote).size });
-  const em = vetEmail(c.email, pkg, p, { booking: S('bookingUrl', ''), noPhoto: pkg.profile?.photoFound === false || !pkg.profile?.photo }); // house rules, also for drafts written before they existed
-  const m = messaging.createOutbound({ contactId: contact.id, channel: 'email', subject: noDashes(em.subject), body: em.body, aiGenerated: true, agent: c.agent, category: 'prospecting', actor, attachments: att });
-  save(p.id, () => ({ messageId: m.id, conversationId: m.conversationId }));
-  if ((p.stage || 'new') === 'new') ctx.store.update('prospects', p.id, { stage: 'drafted' });
-  const vn = !p.voiceNote && await require('../outreach/voicenote').auto(p);
-  return { note: `${att.length} attachments (${(att.reduce((s2, a) => s2 + a.size, 0) / 1e6).toFixed(1)} MB)${vn ? ' + voice note in your voice' : ''}` };
+  const q = await require('../outreach/guide').draftFor(p.id, { actor });
+  const k = q.kit || {};
+  if (k.messageId) save(p.id, () => ({ messageId: k.messageId, conversationId: ctx.store.get('messages', k.messageId)?.conversationId }));
+  if (k.framing === 'exclude') { save(p.id, () => ({ status: 'excluded' })); return { skip: true, note: k.excluded || 'Excluded by the outreach guide' }; }
+  if (!k.queued && /no email/.test(k.blocked || '')) { save(p.id, () => ({ status: 'needs_contact' })); return { skip: true, note: 'No campaign email found. The voicemail, call script and DM are on their outreach kit; add an email to draft one.' }; }
+  if ((p.stage || 'new') === 'new' && k.queued) ctx.store.update('prospects', p.id, { stage: 'drafted' });
+  return { note: k.queued ? `Email waiting in Approvals (${k.framing === 'post-election' ? 'post-election note' : 'congrats on the win'}, $${k.tier} tier)` : `Drafted, not queued: ${k.blocked}${k.flags?.length ? ` (${k.flags[0]})` : ''}` };
 }
 
 /** Email-sized ads plus the sheet, kept under the attachment limit (the long ad is dropped first). */

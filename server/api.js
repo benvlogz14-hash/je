@@ -134,7 +134,7 @@ r.post('/api/hal/chat', async (req, b) => {
   const history = ctx.store.all('halMessages').slice(-10);
   ctx.store.insert('halMessages', { who: 'you', text, by: actorOf(req), context: b.context || null });
   const res = await require('./hal').handle(text, { history, context: b.context || {}, actor: actorOf(req) });
-  const saved = ctx.store.insert('halMessages', { who: 'hal', text: res.text || '', by: res.by || null, draft: res.draft || null, confirm: res.confirm || null, navigate: res.navigate || null });
+  const saved = ctx.store.insert('halMessages', { who: 'hal', text: res.text || '', by: res.by || null, draft: res.draft || null, gmail: res.gmail || null, confirm: res.confirm || null, navigate: res.navigate || null });
   const all = ctx.store.all('halMessages'); for (const m of all.slice(0, Math.max(0, all.length - HAL_KEEP))) ctx.store.remove('halMessages', m.id);
   events.publish('hal', { id: saved.id });
   return { ...res, id: saved.id };
@@ -165,7 +165,14 @@ r.post('/api/hal/listen', async (req) => {
 });
 r.get('/api/hal/calendar', () => ctx.store.all('opsEvents').sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)));
 r.del('/api/hal/calendar/:id', (req, b, p) => { ctx.store.remove('opsEvents', p.id); return { ok: true }; });
-r.get('/api/hal/protests', () => ctx.store.all('protests').slice(-200));
+// HAL's watch (live news and leads through the day) and the outreach guide's kits.
+r.get('/api/hal/watch', () => require('./hal/watch').status());
+r.post('/api/hal/watch', (req, b) => { const w = {}; if (b.on != null) w.on = !!b.on; if (b.everyMin) w.everyMin = Math.max(15, Math.min(720, Number(b.everyMin) || 60)); if (b.topics != null) w.topics = String(b.topics).slice(0, 2000); if (b.useGrok != null) w.useGrok = !!b.useGrok; ctx.store.setSettings({ hal: { watch: w } }); return require('./hal/watch').status(); });
+r.post('/api/hal/watch/run', async () => { const res = await require('./hal/watch').run({ force: true }); return { stories: res?.stories?.length || 0, leads: res?.leads?.length || 0, busy: !!res?.busy }; });
+r.post('/api/prospects/:id/kit', (req, b, p) => { must(ctx.store.get('prospects', p.id)); return queue.enqueue('outreach.kits', { ids: [p.id], refresh: !!b.refresh }, { actor: actorOf(req), dedupeKey: `kit:${p.id}` }); });
+r.post('/api/political/kits', (req, b) => { const ids = (Array.isArray(b.ids) ? b.ids : []).filter((id) => ctx.store.get('prospects', id)); if (!ids.length) throw new HttpError(400, 'Pick at least one politician.'); return queue.enqueue('outreach.kits', { ids }, { actor: actorOf(req), title: `Outreach drafts for ${ids.length} politicians` }); });
+r.get('/api/political/kits/summary', () => require('./outreach/guide').summary(ctx.store.all('prospects', (x) => x.type === 'political' && x.kit)));
+r.get('/api/political/kits.csv', (req, res) => send(res, 200, '\ufeff' + require('./outreach/guide').csv(ctx.store.all('prospects', (x) => x.type === 'political' && x.kit)), { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="Outreach research cards.csv"' }), { stream: true });
 
 r.post('/api/command', async (req, b) => {
   const text = String(b.text || '').trim();

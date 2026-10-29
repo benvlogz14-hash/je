@@ -1,9 +1,8 @@
 'use strict';
 /**
- * HAL's senses (Part 2 of the master prompt): real news, web search, reading a page, and the protest scan. Nothing
- * here asks the model to remember a fact; it fetches the facts, and HAL is only allowed to use what came back.
- * News comes from Google News and Al Jazeera RSS (as in HAL's own program), web search from Euclidean's free search,
- * map pins from OpenStreetMap's geocoder (one request a second, per its rules).
+ * HAL's senses: real news, web search, reading a page, and live search through the founders' own Grok (the JEV link).
+ * Nothing here asks the model to remember a fact; it fetches the facts, and HAL is only allowed to use what came back.
+ * News comes from Google News and Al Jazeera RSS, web search from Euclidean's free search.
  */
 const ctx = require('../core/ctx');
 
@@ -62,66 +61,40 @@ async function readPage(url) {
   return { title, text: body, url };
 }
 
-// ------------------------------------------------------------------ protest map (HAL's scan, grounded)
-const PROTEST_QUERIES = [
-  '(protest OR rally OR demonstration OR march OR vigil OR walkout OR "sit-in") ("New York City" OR Manhattan OR Brooklyn OR Queens OR Bronx)',
-  '(protest OR rally OR demonstration OR march OR vigil OR walkout) ("Long Island" OR Nassau OR Suffolk)',
-  '(protest OR rally OR demonstration OR march OR vigil OR walkout) (Connecticut OR Hartford OR "New Haven" OR Bridgeport OR Stamford)',
-  '(protest OR rally OR demonstration OR march OR vigil OR walkout) ("New Jersey" OR Newark OR "Jersey City")',
-  '(convention OR expo OR "book fair" OR festival OR fan OR comic) ("New York" OR "Long Island" OR Connecticut OR "New Jersey")',
-  '(nationwide OR national) (protest OR rally OR "day of action" OR march OR strike OR walkout)',
-];
-async function protestItems(per = 8) {
-  const seen = new Set(); const out = [];
-  for (const q of PROTEST_QUERIES) for (const it of await rss(gnews(q, '7d'), 'protest', per)) { const k = it.t.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(it); } }
-  return out;
+// ------------------------------------------------------------------ the JEV link: the founders' own AI accounts
+/**
+ * Live web through the founders' own Grok login (AI apps page): Grok browses the web itself, so HAL can ask it for
+ * today's news and leads without an API key. Only used when Grok is logged in on the AI apps page, and at most
+ * `hal.watch.grokPerHour` times an hour (personal-account terms limit automated use). Returns { text, items } where
+ * items are the lines Grok gave that carry a real link; anything without a link is dropped.
+ */
+const grokSent = [];
+function grokReady() {
+  const bridge = require('../integrations/bridge');
+  if (!bridge.available() || !(ctx.store.settings._bridgeLoggedIn || {}).grok) return false;
+  const hour = Date.now() - 3600000; while (grokSent.length && grokSent[0] < hour) grokSent.shift();
+  return grokSent.length < Number(ctx.setting('hal.watch.grokPerHour', 4));
+}
+async function viaGrok(question) {
+  if (!grokReady()) return null;
+  grokSent.push(Date.now());
+  const r = await require('../integrations/bridge').ask('grok', `${question}\n\nSearch the live web now. Reply with at most 8 lines, one item per line: a short headline, then " | ", then the full source URL. Only things you actually found with a link. No commentary.`, { newChat: true, record: false, actor: 'hal', quiet: true });
+  const items = String(r.text || '').split(/\r?\n/).map((l) => { const url = (l.match(/https?:\/\/[^\s)\]>]+/) || [])[0]; if (!url) return null; const t = strip(l.replace(url, '').replace(/^[\s\-*•\d.)]+/, '').replace(/[|\s(]+$/, '')); return t ? { s: 'grok', t: t.slice(0, 200), b: '', url } : null; }).filter(Boolean);
+  return { text: r.text, items };
+}
+/** Grok through xAI with live search, when the founders added an xAI key. */
+async function viaXai(question) {
+  const ai = require('../integrations/ai');
+  if (!ai.connected('xai')) return null;
+  const r = await ai.ask({ role: 'hal', provider: 'xai', search: true, maxTokens: 700, prompt: `${question}\n\nReply with at most 8 lines: a short headline, " | ", the full source URL. Only items with a real link.` });
+  const items = String(r.text || '').split(/\r?\n/).map((l) => { const url = (l.match(/https?:\/\/[^\s)\]>]+/) || [])[0]; const t = url && strip(l.replace(url, '').replace(/^[\s\-*•\d.)]+/, '').replace(/[|\s(]+$/, '')); return t ? { s: 'xai', t: t.slice(0, 200), b: '', url } : null; }).filter(Boolean);
+  return { text: r.text, items };
+}
+/** The best live search available: Grok (your login), else xAI search, else nothing (the free feeds still work). */
+async function live(question) {
+  try { const g = await viaGrok(question); if (g?.items.length) return { ...g, via: 'Grok (your account)' }; } catch { /* not logged in or busy */ }
+  try { const x = await viaXai(question); if (x?.items.length) return { ...x, via: 'Grok (xAI live search)' }; } catch { /* no key */ }
+  return null;
 }
 
-const geoCache = new Map(); let lastGeo = 0;
-/** Place name → [lat, lng] in the US (OpenStreetMap Nominatim, 1 request a second). */
-async function geocode(place) {
-  const k = String(place || '').trim().toLowerCase(); if (!k) return null;
-  if (geoCache.has(k)) return geoCache.get(k);
-  const wait = 1100 - (Date.now() - lastGeo); if (wait > 0) await new Promise((ok) => setTimeout(ok, wait));
-  lastGeo = Date.now();
-  try {
-    const u = `https://nominatim.openstreetmap.org/search?${new URLSearchParams({ q: place, format: 'json', limit: '1', countrycodes: 'us', viewbox: '-75.6,41.9,-71.7,40.3', bounded: '0' })}`;
-    const arr = await (await fetch(u, { headers: { 'user-agent': 'EuclideanTargeting/1.0 (political ops mapping)' }, signal: AbortSignal.timeout(15000) })).json();
-    const hit = arr?.[0] ? [Number(arr[0].lat), Number(arr[0].lon)] : null; geoCache.set(k, hit); return hit;
-  } catch { geoCache.set(k, null); return null; }
-}
-
-const STATEWORDS = { 'new york city': 'NY', manhattan: 'NY', brooklyn: 'NY', queens: 'NY', bronx: 'NY', 'long island': 'NY', nassau: 'NY', suffolk: 'NY', 'new york': 'NY', connecticut: 'CT', hartford: 'CT', 'new haven': 'CT', bridgeport: 'CT', stamford: 'CT', 'new jersey': 'NJ', newark: 'NJ', 'jersey city': 'NJ' };
-/** Without a brain: a place guess from the headline, time always TBD (never invented). */
-function regexParse(items) {
-  return items.map((it) => {
-    const low = it.t.toLowerCase(); const hit = Object.keys(STATEWORDS).find((w) => low.includes(w));
-    const scope = /nationwide|national/.test(low) ? 'national' : 'local';
-    const place = hit ? hit.replace(/\b\w/g, (c) => c.toUpperCase()) : '';
-    return { title: it.t.slice(0, 120), type: 'protest', scope, place: place || (scope === 'national' ? 'United States' : ''), city: place, state: hit ? STATEWORDS[hit] : '', date: '', time: 'TBD', url: it.url, status: 'rumored' };
-  });
-}
-
-/** Scan, parse (HAL's brain if it's up, else the headline itself), geocode and merge into the map. */
-async function protestScan(brainParse) {
-  const items = await protestItems();
-  if (!items.length) return { ok: false, added: 0, total: ctx.store.all('protests').length, msg: 'No feed items came back. Check the PC\'s internet and try again.' };
-  let parsed = null; try { parsed = brainParse ? await brainParse(items) : null; } catch { parsed = null; }
-  if (!Array.isArray(parsed) || !parsed.length) parsed = regexParse(items);
-  const have = new Set(ctx.store.all('protests').map((p) => `${String(p.title).toLowerCase().slice(0, 50)}|${p.date || ''}`));
-  let added = 0;
-  for (const ev of parsed) {
-    const title = String(ev.title || '').trim(); if (!title) continue;
-    const sig = `${title.toLowerCase().slice(0, 50)}|${ev.date || ''}`; if (have.has(sig)) continue;
-    const place = String(ev.place || ev.city || '').trim(); const scope = String(ev.scope || 'local').toLowerCase();
-    let geo = place ? await geocode(place + (scope === 'national' ? ', USA' : '')) : null;
-    if (!geo && scope === 'national') geo = [39.5, -98.35]; // US centre for a nationwide action
-    if (!geo) continue; // no pin without a real place
-    ctx.store.insert('protests', { title: title.slice(0, 140), type: String(ev.type || 'protest').toLowerCase(), scope, place, city: String(ev.city || ''), state: String(ev.state || '').toUpperCase(), date: String(ev.date || ''), time: String(ev.time || 'TBD') || 'TBD', lat: geo[0], lng: geo[1], url: String(ev.url || ''), status: String(ev.status || 'rumored').toLowerCase(), src: 'scan' });
-    have.add(sig); added++;
-  }
-  const total = ctx.store.all('protests').length;
-  return { ok: true, added, total, msg: added ? `Scan complete. ${added} new event${added === 1 ? '' : 's'} pinned (${total} on the map).` : `Scan complete. Nothing new; ${total} already on the map.` };
-}
-
-module.exports = { rss, topNews, newsAbout, newsFor, researchUrl, search, readPage, protestItems, protestScan, geocode, strip };
+module.exports = { rss, topNews, newsAbout, newsFor, researchUrl, search, readPage, live, viaGrok, grokReady, strip };

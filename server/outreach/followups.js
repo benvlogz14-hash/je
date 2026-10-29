@@ -18,12 +18,12 @@ const { now } = require('../core/util');
 const learning = require('./learning');
 
 const cfg = (lane) => ctx.setting(`outreach.${lane}`, {}) || {};
-const days = (lane) => String(cfg(lane).followUpDays ?? '4, 10').split(/[,\s]+/).map(Number).filter((n) => n > 0).slice(0, 5);
+const days = (lane) => lane === 'political' ? [4] : String(cfg(lane).followUpDays ?? '4, 10').split(/[,\s]+/).map(Number).filter((n) => n > 0).slice(0, 5);
 const DONE_STAGES = ['replied', 'meeting', 'won', 'lost', 'client'];
 
 /** The thread for this lead: our sent emails, and whether they ever wrote back. */
 function thread(p) {
-  const first = p.type === 'political' ? p.pkg?.messageId : p.outreach?.messageId;
+  const first = p.type === 'political' ? p.kit?.messageId || p.pkg?.messageId : p.outreach?.messageId;
   const m = first && ctx.store.get('messages', first);
   if (!m) return null;
   const all = ctx.store.all('messages', (x) => x.conversationId === m.conversationId);
@@ -43,6 +43,8 @@ function due(p, lane) {
 }
 
 async function write(p, lane, n, t) {
+  // Politics: the outreach guide's one line, in the same thread, once (day 4). Then stop.
+  if (lane === 'political') return `${p.name.split(/\s+/)[0]}, bumping this once. Even pointing me to the right person helps. Ben`;
   const first = p.name.split(/\s+/)[0]; const agency = ctx.setting('agency.name', 'Euclidean Media');
   const sender = (lane === 'political' ? ctx.setting('political.senderName', '') : ctx.setting('creatorOffers.senderName', '')) || ctx.setting('agency.founders', [])[0]?.name || agency;
   const booking = (lane === 'political' ? ctx.setting('political.bookingUrl', '') : ctx.setting('creatorOffers.bookingUrl', '')) || '';
@@ -61,7 +63,8 @@ async function write(p, lane, n, t) {
 function blockers(p, lane, contact) {
   const why = []; const c = cfg(lane);
   const autoOn = !!c.autoSend || require('./autopilot').graduated(lane);
-  if (!autoOn) why.push('Auto-send is off');
+  if (lane === 'political') why.push('Political outreach is drafts only: Ben sends it by hand');
+  else if (!autoOn) why.push('Auto-send is off');
   if (!mailingAddress()) why.push('No mailing address');
   const to = contact?.emails?.[0] || '';
   if (!to || isGov(to)) why.push('No usable email');

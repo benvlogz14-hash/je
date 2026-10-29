@@ -14,7 +14,7 @@ module.exports = {
   },
   // HAL, the assistant in the corner of every page (server/hal). brain: 'local' (Llama on this PC) or 'grok' (xAI).
   // Offer values go into his outreach email (Part 3 of his master prompt).
-  hal: { brain: 'local', offerPrice: '899', offerNormal: '1,500', electionDay: 'November 3, 2026', lastProtestScan: 0 },
+  hal: { brain: 'local', watch: { on: true, everyMin: 60, topics: 'New York politics\nConnecticut politics\nLong Island politics', useGrok: true, grokPerHour: 4, maxStories: 8 } },
   political: {
     videoStyle: 'campaign',    // 'campaign' (modern political ad look), 'speech' (their own speeches + B-roll, graphics as fallback) or 'pop' (bubbly)
     footageClips: 4,           // public videos downloaded per lead for 'speech' ads

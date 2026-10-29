@@ -644,6 +644,9 @@ h4 { font-weight: 750; letter-spacing: -0.01em; }
 .hal-ico { width: 30px; height: 30px; border-radius: 9px; border: 0; background: transparent; color: var(--ink-2); display: grid; place-items: center; cursor: pointer; flex: none; }
 .hal-ico:hover { background: var(--surface-3, rgba(0,0,0,.06)); color: var(--ink); }
 .hal-ico.on { color: var(--teal-ink, #23665f); }
+.hal-ico.watch.on { color: #e0281c; }
+.hal-msg.watch .hal-bubble { border-left: 3px solid #e0281c; }
+.hal-draft .row { display: flex; gap: 6px; flex-wrap: wrap; }
 .hal-ico.mic.rec { background: #ff2a1a; color: #fff; animation: hal-pulse 1s ease-in-out infinite; }
 .hal-ico.send:disabled { opacity: .35; cursor: default; }
 .hal-note { font-size: var(--fs-xs); padding: 7px 12px; background: var(--gold-soft, #fff4d6); color: var(--gold-ink, #7a5a00); border-bottom: 1px solid var(--line); }

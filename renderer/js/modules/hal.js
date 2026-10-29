@@ -51,6 +51,7 @@ export function HalDock() {
   const [rec, setRec] = useState(null);
   const { data: history, reload, setData } = useApi('/api/hal/history', ['hal']);
   const { data: status, reload: reStatus } = useApi(open ? '/api/hal/status' : null, []);
+  const { data: watch, reload: reWatch } = useApi(open ? '/api/hal/watch' : null, ['hal']);
   const { context, label } = useContext();
   const list = useRef(null); const input = useRef(null);
   const toggle = (v = !open) => { setOpen(v); SAVE('eu.halOpen', v); if (v) { play('open'); setTimeout(() => input.current?.focus(), 60); } };
@@ -73,6 +74,7 @@ export function HalDock() {
     try { const r = await api.post('/api/hal/confirm', { id: m.confirm.id }); if (voice && r.text) speak(r.text); if (r.navigate) navigate(r.navigate); play('success'); } catch (e) { toast(e.message, { kind: 'warn' }); }
     reload();
   };
+  const setWatch = (on) => act(() => api.post('/api/hal/watch', { on }), { ok: on ? `HAL reads the web every ${watch?.everyMin || 60} min while the app is open` : 'HAL stopped watching the web', sound: 'tap' }).then(reWatch);
   const setBrain = (b) => act(() => api.post('/api/hal/brain', { brain: b }), { ok: b === 'grok' ? 'HAL is using Grok' : 'HAL is using the local brain on this PC', sound: 'tap' }).then(reStatus);
 
   // Talk to HAL: click the mic, speak, click again; the free speech-to-text turns it into text and sends it.
@@ -100,6 +102,7 @@ export function HalDock() {
     <button type="button" class=${'hal-fab' + (open ? ' on' : '') + (busy ? ' busy' : '')} style=${{ right: `${pos.right}px`, bottom: `${pos.bottom}px` }} title="HAL (Ctrl+Shift+H). Drag to move." aria-label="Open HAL" onPointerDown=${down} onPointerMove=${move} onPointerUp=${up} onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } }}><span class="hal-eye" /></button>
     ${open ? html`<section class="hal-panel" role="dialog" aria-label="HAL" style=${{ right: `${Math.min(pos.right, Math.max(6, window.innerWidth - 440))}px`, bottom: `${Math.min(pos.bottom + 54, Math.max(10, window.innerHeight - 640))}px` }}>
       <header class="hal-head"><span class="hal-eye sm" /><b class="grow">HAL</b>
+        <button type="button" class=${'hal-ico watch' + (watch?.on ? ' on' : '')} title=${watch?.on ? `Watching the web for news and leads every ${watch.everyMin} min${watch.grok ? ', live through your Grok login (JEV link)' : ''}${watch.last?.at ? `. Last look ${new Date(watch.last.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}. Click to stop.` : 'Not watching. Click and HAL reads the news and looks for leads through the day.'} onClick=${() => setWatch(!watch?.on)}><${Icon} name="globe" size=${15} /></button>
         <${Seg} value=${status?.brain || 'local'} onChange=${setBrain} options=${[{ value: 'local', label: 'Local' }, { value: 'grok', label: 'Grok' }]} />
         <button type="button" class=${'hal-ico' + (voice ? ' on' : '')} title=${voice ? 'Reading replies out loud' : 'Read replies out loud'} onClick=${() => { const v = !voice; setVoice(v); SAVE('eu.halSpeak', v); if (!v) window.speechSynthesis?.cancel(); }}><${Icon} name=${voice ? 'volume' : 'mute'} size=${15} /></button>
         <button type="button" class="hal-ico" title="Clear the conversation" onClick=${() => act(() => api.del('/api/hal/history'), { ok: 'Cleared', sound: 'tap' }).then(reload)}><${Icon} name="trash" size=${15} /></button>
@@ -107,16 +110,16 @@ export function HalDock() {
       ${offline ? html`<div class="hal-note">${status.brain === 'local' ? "My local brain (Llama) isn't running. Open Ollama, or switch me to Grok." : 'Grok needs your xAI key in Settings → Connections, or switch me to Local.'}${status.any ? ' Until then I use whatever AI is connected.' : ''}</div>` : null}
       ${label ? html`<div class="hal-ctx"><${Icon} name="eye" size=${12} /> Looking at ${label}</div>` : null}
       <div class="hal-list" ref=${list}>
-        ${!(history || []).length ? html`<div class="hal-empty"><span class="hal-eye lg" /><p>Good evening. I can research candidates and the news, run the pipeline and calendar, draft outreach for Approvals, and drive the app: "re-edit this clip, start at the reveal", "what's in the queue", "make clips from Stringer's new footage".</p></div>` : null}
-        ${(history || []).map((m) => html`<div key=${m.id} class=${'hal-msg ' + (m.who === 'hal' ? 'hal' : 'you')}>
+        ${!(history || []).length ? html`<div class="hal-empty"><span class="hal-eye lg" /><p>Good evening. I read the web for you while the app is open and post new stories and leads here. I can research anyone, draft outreach by the guide (Ben sends it by hand), and drive the app: "re-edit this clip, start at the reveal", "email Siela Bynoe", "what's in the queue".</p></div>` : null}
+        ${(history || []).map((m) => html`<div key=${m.id} class=${'hal-msg ' + (m.who === 'hal' ? 'hal' : 'you') + (m.watch ? ' watch' : '')}>
           <div class="hal-bubble"><${Rich} text=${m.text} /></div>
-          ${m.draft ? html`<div class="hal-draft"><pre>${m.draft}</pre><${Button} size="sm" kind="ghost" icon="paperclip" onClick=${() => { navigator.clipboard?.writeText(m.draft); toast('Copied', { kind: 'success' }); }}>Copy</${Button}></div>` : null}
+          ${m.draft ? html`<div class="hal-draft"><pre>${m.draft}</pre><div class="row gap-s"><${Button} size="sm" kind="ghost" icon="paperclip" onClick=${() => { navigator.clipboard?.writeText(m.draft); toast('Copied', { kind: 'success' }); }}>Copy</${Button}>${m.gmail ? html`<${Button} size="sm" kind="ghost" icon="mail" onClick=${() => window.open(m.gmail, '_blank')}>Open in Gmail</${Button}>` : null}</div></div>` : null}
           ${m.confirm ? html`<div class="hal-confirm">${m.confirm.done ? html`<span class="faint">Done</span>` : html`<${Button} size="sm" kind="primary" icon="check" onClick=${() => ok(m)}>Confirm: ${m.confirm.label}</${Button}>`}</div>` : null}
-          ${m.who === 'hal' && m.by ? html`<div class="hal-by">${/ollama/.test(m.by) ? 'local brain' : /xai/.test(m.by) ? 'Grok' : m.by.split(':')[0]}</div>` : null}
+          ${m.who === 'hal' && m.by ? html`<div class="hal-by">${m.by === 'watch' ? `from my watch · ${new Date(m.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : m.by === 'guide' ? 'outreach guide' : /ollama/.test(m.by) ? 'local brain' : /xai/.test(m.by) ? 'Grok' : m.by.split(':')[0]}</div>` : null}
         </div>`)}
         ${busy ? html`<div class="hal-msg hal"><div class="hal-bubble hal-dots"><i /><i /><i /></div></div>` : null}
       </div>
-      <div class="hal-chips">${[["What's in the news?", "what's in the news today"], ['Best targets', 'who are our best targets'], ['Queue', '/queue'], ['Scan protests', 'scan protests']].map(([l, q]) => html`<button type="button" class="chip" onClick=${() => send(q)}>${l}</button>`)}</div>
+      <div class="hal-chips">${[["What did you find?", 'what did you find'], ["What's in the news?", "what's in the news today"], ['Best picks', 'who are our best picks'], ['Draft the batch', 'draft the batch for the new prospects'], ['Queue', '/queue']].map(([l, q]) => html`<button type="button" class="chip" onClick=${() => send(q)}>${l}</button>`)}</div>
       <div class="hal-input">
         <textarea ref=${input} rows="1" placeholder=${rec ? 'Listening… click the mic again when you are done' : label ? 'Tell HAL what to change in this clip, or ask anything' : 'Ask HAL anything, or tell him what to do'} value=${text} onInput=${(e) => setText(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
         <button type="button" class=${'hal-ico mic' + (rec ? ' rec' : '')} title=${rec ? 'Stop and send' : 'Talk to HAL'} onClick=${mic}><${Icon} name="mic" size=${17} /></button>
