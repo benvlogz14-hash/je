@@ -44,7 +44,7 @@ export function Production() {
     </div>
     <${HealthBanner} clientId=${clientId} />
     ${client?.quota ? html`<${QuotaStrip} client=${client} />` : null}
-    <${Intake} clients=${clients || []} clientId=${clientId} setClientId=${setClientId} assets=${assets || []} jobs=${jobs || []} setDetail=${setDetail} setShotsOf=${setShotsOf} />
+    <${Intake} clients=${clients || []} clientId=${clientId} setClientId=${setClientId} assets=${assets || []} jobs=${jobs || []} clipped=${new Set((clips || []).map((c) => c.assetId))} setDetail=${setDetail} setShotsOf=${setShotsOf} />
     ${shotsOf ? html`<${ShotsDrawer} asset=${shotsOf} onClose=${() => setShotsOf(null)} />` : null}
     ${detail ? html`<${FootageDrawer} id=${detail} onClose=${() => setDetail(null)} onShots=${(a) => { setDetail(null); setShotsOf(a); }} />` : null}
     <div class="row" style="margin:22px 0 10px"><h3 class="grow">Clips</h3><span class="faint" style="font-size:var(--fs-sm)">${(clips || []).length} total</span></div>
@@ -69,7 +69,7 @@ function QuotaStrip({ client }) {
   </div>`;
 }
 
-function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setShotsOf }) {
+function Intake({ clients, clientId, setClientId, assets, jobs, clipped = new Set(), setDetail, setShotsOf }) {
   const [over, setOver] = useState(false);
   const [reclip, setReclip] = useState(false);
 
@@ -116,8 +116,12 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
         ${uploads.map((u) => html`<div style="margin-top:8px"><div class="row" style="font-size:var(--fs-sm)"><span class="grow ellipsis">${u.name}</span><span class="tnum faint">${Math.round(u.p * 100)}%</span></div><${Progress} value=${u.p} /></div>`)}</div>
       <div class="col" style="gap:6px">${(() => { const tc = clients.find((c) => c.id === target); const waitOn = tc?.production?.waitForStart !== false && !tc?.schedule?.autopilot;
           // Shows as soon as footage is uploaded (not only once it's ready): pressing it early makes clips the moment the video is ready.
-          const waiting = assets.filter((a) => (!target || a.clientId === target) && (a.status === 'waiting' || (waitOn && !a.started && jobs.some((j) => j.payload?.assetId === a.id && ['queued', 'running'].includes(j.status)))));
-          const ready = waiting.filter((a) => a.status === 'waiting').length;
+          const busy = (a) => jobs.some((j) => j.payload?.assetId === a.id && ['queued', 'running'].includes(j.status));
+          // Also footage that ended up just "ready" with no clips ever made (a step after the import hit a problem): it
+          // used to have no button at all. Only recent footage, so old videos never come back here on their own.
+          const unclipped = (a) => a.status === 'ready' && a.info?.hasVideo !== false && !a.discoveredAt && !a.started && !clipped.has(a.id) && !busy(a) && Date.now() - new Date(a.createdAt).getTime() < 7 * 864e5;
+          const waiting = assets.filter((a) => (!target || a.clientId === target) && (a.status === 'waiting' || unclipped(a) || (waitOn && !a.started && busy(a))));
+          const ready = waiting.filter((a) => a.status === 'waiting' || unclipped(a)).length;
           return waiting.length ? html`<button type="button" class="btn primary" style="box-shadow:inset 0 3px 8px rgba(0,0,0,0.35);transform:translateY(2px);font-weight:700" title="Set the clip length, count and tips, then press to make the clips." onClick=${(e) => { e.stopPropagation(); act(async () => { for (const a of waiting) await api.post(`/api/assets/${a.id}/process`, {}); }, { ok: ready === waiting.length ? `Making clips from ${waiting.length} video${waiting.length > 1 ? 's' : ''}` : 'Clips will be made as soon as the footage is ready', sound: 'success' }); }}>▶ Make clips (${waiting.length} video${waiting.length > 1 ? 's' : ''}${ready < waiting.length ? ', getting ready' : ''})</button>` : null; })()}${target ? html`<${WideSwitch} client=${clients.find((c) => c.id === target)} />` : null}<${Button} size="sm" kind="primary" icon="upload" onClick=${() => input.current.click()}>Upload</${Button}><${Button} size="sm" kind="ghost" icon="folder" onClick=${addPath}>From disk</${Button}><${Button} size="sm" kind="ghost" icon="link" onClick=${addLink}>From link</${Button}></div>
       ${target ? html`<div style="flex:1 0 100%;min-width:0"><${StyleSwitch} client=${clients.find((c) => c.id === target)} /><div class="set-grid">${[ClipLength, MusicSwitch, AiTips, BrollSwitch].map((C) => html`<div class="set-card"><${C} client=${clients.find((c) => c.id === target)} /></div>`)}</div></div>` : null}
       <input ref=${input} type="file" accept="video/*,audio/*" multiple hidden onChange=${(e) => { upload([...e.target.files]); e.target.value = ''; }} />

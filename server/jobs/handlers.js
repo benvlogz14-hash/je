@@ -141,7 +141,15 @@ queue.register('analyze', {
     const asset = ctx.store.get('assets', job.payload.assetId);
     if (!asset) throw permanent('Asset no longer exists');
     h.progress(0.05, 'Finding scene cuts and energy peaks');
-    const a = await analysis.analyze(asset, { signal: h.signal, onProgress: (p) => h.progress(0.05 + p * 0.9, 'Analyzing video and audio') });
+    let a;
+    try { a = await analysis.analyze(asset, { signal: h.signal, onProgress: (p) => h.progress(0.05 + p * 0.9, 'Analyzing video and audio') }); }
+    catch (e) {
+      if (h.signal?.aborted) throw e;
+      // Analysis is a help, not a must: without it the footage still goes on to "Make clips" (it used to stop at
+      // "ready" with no button to make clips).
+      h.log(`Analysis skipped: ${e.message}`); if (job.payload.thenDiscover) discoverOrWait(h, asset, { dedupeKey: `discover:${asset.id}:auto` });
+      return { skipped: e.message };
+    }
     ctx.store.update('assets', asset.id, { analysis: { scenes: a.scenes.length, peaks: a.peaks.length } });
     // Look through the picture too: every shot's still, faces, quality and (with an AI that can see) a description.
     if (ctx.setting('video.lookThrough', true) && asset.info?.hasVideo) {
@@ -324,7 +332,12 @@ queue.register('discover', {
       result.clips = [...result.clips, ...hl];
     }
     if (storyCount) { try { pipeline.createStoryClips(asset, storyCount); } catch (e) { h.log(`Story edits skipped: ${e.message}`); } }
-    if (!result.clips.length) { ctx.store.update('assets', asset.id, { exhausted: true }); return { clips: 0, note: 'No further usable moments found' }; }
+    if (!result.clips.length) {
+      const short = (asset.info?.duration || 0) < 45;
+      ctx.store.update('assets', asset.id, { exhausted: true, discoveredAt: now(), error: storyCount ? null : short ? 'No clips: this video is shorter than the clip length the styles need (about 30 s). Try Custom with a shorter clip length.' : 'No new moments left to clip with these settings. Re-clip footage → Best moments, made again, or try other styles or clip lengths.' });
+      events.publish('assets', { id: asset.id });
+      return { clips: 0, note: 'No further usable moments found' };
+    }
     h.progress(0.8, `Creating ${result.clips.length} clips`);
     const clips = pipeline.createClips(asset, result);
     if (client.production?.brollEdit && asset.info?.hasVideo !== false && !ctx.store.find('clips', (c) => c.assetId === asset.id && c.kind === 'broll')) { try { pipeline.createBrollClip(asset); } catch (e) { h.log(`B-roll edit skipped: ${e.message}`); } }
