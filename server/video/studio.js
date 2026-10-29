@@ -72,7 +72,11 @@ function effectFilters(effects, warnings, w = 1080, h = 1920, view = null) {
       case 'flip': if (p.horizontal >= 0.5) out.push('hflip'); if (p.vertical >= 0.5) out.push('vflip'); break;
       case 'gain': break; // audio effect, handled in the audio chain
       default:
-        if (retro.IDS.includes(e.effectId)) out.push(...retro.filters(e.effectId, p, w, h, view));
+        if (retro.IDS.includes(e.effectId)) {
+          // Intensity (1-100%): the look laid over the untouched picture at that strength (blended below in the clip's chain).
+          const mix = Math.max(0.01, Math.min(1, (p.mix ?? 100) / 100)); const fl = retro.filters(e.effectId, p, w, h, view);
+          if (mix < 0.995) out.push({ blend: fl, mix }); else out.push(...fl);
+        }
         else warnings.add(`Effect "${e.effectId}" is not supported in Studio export`);
     }
   }
@@ -175,7 +179,17 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
         if (xin) src = xfadeEdge(src, c.transIn, Math.min(transDur(c.transIn), c.duration), c.duration, false, nw, nh, `${i}a`);
         if (xout) src = xfadeEdge(src, c.transOut, Math.min(transDur(c.transOut), c.duration), c.duration, true, nw, nh, `${i}b`);
       }
-      const chain = [...(src === `${i}:v` ? [`setpts=(PTS-STARTPTS)/${num(Math.abs(speed))}`, `fps=${fps}`, `scale=${nw}:${nh}`] : []), ...effectFilters(c.effects, warnings, nw, nh, onScreen(nw, nh, base(c.posX, 0), base(c.posY, 0), W, H)), 'format=yuva420p'];
+      // Effects; a retro look below 100% intensity is made on a copy and blended over the untouched picture.
+      let chain = [...(src === `${i}:v` ? [`setpts=(PTS-STARTPTS)/${num(Math.abs(speed))}`, `fps=${fps}`, `scale=${nw}:${nh}`] : [])];
+      effectFilters(c.effects, warnings, nw, nh, onScreen(nw, nh, base(c.posX, 0), base(c.posY, 0), W, H)).forEach((x, n) => {
+        if (typeof x === 'string') { chain.push(x); return; }
+        const L = `${i}m${n}`;
+        f.push(`[${src}]${[...chain, 'format=yuv420p'].join(',')},split[${L}a][${L}b]`);
+        f.push(`[${L}b]${x.blend.join(',')},format=yuv420p[${L}c]`);
+        f.push(`[${L}a][${L}c]blend=all_expr='A*${num(1 - x.mix)}+B*${num(x.mix)}'[${L}d]`);
+        src = `${L}d`; chain = [];
+      });
+      chain.push('format=yuva420p');
       const rot = base(c.rotation, 0);
       if (keyed.rot) chain.push(`rotate=a='${kexpr(c.rotation, 0, 't', { mul: Math.PI / 180 })}':c=none:ow='hypot(iw,ih)':oh='hypot(iw,ih)'`);
       else if (rot) chain.push(`rotate=${num((rot * Math.PI) / 180)}:c=none:ow=rotw(${num((rot * Math.PI) / 180)}):oh=roth(${num((rot * Math.PI) / 180)})`);

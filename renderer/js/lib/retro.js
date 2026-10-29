@@ -2,19 +2,20 @@
 // The export does the same with FFmpeg (server/video/retro.js), with the same numbers: sizes are in the clip's own
 // pixels, scaled by u = shorter side / 1080, so the preview and the export line up.
 
-const AMOUNT = ['amount', 'Amount', 0, 100, 70];
+const AMOUNT = ['amount', 'Strength', 0, 100, 70];
+const MIX = ['mix', 'Intensity %', 1, 100, 100]; // how much of the look is laid over the untouched picture
 const STAMP = ['stamp', 'Date stamp', 0, 1, 1, 1];
 export const RETRO_EFFECTS = [
-  { id: 'vhs', name: 'VHS', cat: 'Retro', params: [AMOUNT, STAMP] },
-  { id: 'camcorder', name: '90s Camcorder', cat: 'Retro', params: [AMOUNT, STAMP] },
-  { id: 'digicam', name: 'Y2K Digicam', cat: 'Retro', params: [AMOUNT, STAMP] },
-  { id: 'super8', name: 'Super 8', cat: 'Retro', params: [AMOUNT] },
-  { id: 'oldfilm', name: 'Old Film', cat: 'Retro', params: [AMOUNT] },
-  { id: 'glitch', name: 'Glitch', cat: 'Retro', params: [AMOUNT] },
-  { id: 'crt', name: 'CRT TV', cat: 'Retro', params: [AMOUNT] },
-  { id: 'noir', name: 'Noir', cat: 'Retro', params: [AMOUNT] },
-  { id: 'nightvision', name: 'Night Vision', cat: 'Retro', params: [AMOUNT] },
-  { id: 'pixel8', name: '8-bit', cat: 'Retro', params: [AMOUNT] },
+  { id: 'vhs', name: 'VHS', cat: 'Retro', params: [MIX, AMOUNT, STAMP] },
+  { id: 'camcorder', name: '90s Camcorder', cat: 'Retro', params: [MIX, AMOUNT, STAMP] },
+  { id: 'digicam', name: 'Y2K Digicam', cat: 'Retro', params: [MIX, AMOUNT, STAMP] },
+  { id: 'super8', name: 'Super 8', cat: 'Retro', params: [MIX, AMOUNT] },
+  { id: 'oldfilm', name: 'Old Film', cat: 'Retro', params: [MIX, AMOUNT] },
+  { id: 'glitch', name: 'Glitch', cat: 'Retro', params: [MIX, AMOUNT] },
+  { id: 'crt', name: 'CRT TV', cat: 'Retro', params: [MIX, AMOUNT] },
+  { id: 'noir', name: 'Noir', cat: 'Retro', params: [MIX, AMOUNT] },
+  { id: 'nightvision', name: 'Night Vision', cat: 'Retro', params: [MIX, AMOUNT] },
+  { id: 'pixel8', name: '8-bit', cat: 'Retro', params: [MIX, AMOUNT] },
 ];
 export const RETRO_IDS = new Set(RETRO_EFFECTS.map((e) => e.id));
 
@@ -41,7 +42,7 @@ function rgbSplit(px) {
  */
 export function retroLook(id, p, local, u) {
   const k = Math.max(0, Math.min(100, p.amount ?? 70)) / 100; const st = (p.stamp ?? 1) >= 0.5;
-  const L = { css: [], grain: 0, lines: 0, vig: 0, pixel: 0, draw: [] };
+  const L = { css: [], grain: 0, lines: 0, vig: 0, pixel: 0, draw: [], mix: Math.max(0.01, Math.min(1, (p.mix ?? 100) / 100)) };
   const split = (px) => L.css.push(rgbSplit(px * u));
   switch (id) {
     case 'vhs':
@@ -109,14 +110,15 @@ function grainTile() {
  * that's on screen ({ x, y, w, h } from its top-left), so stamps and flashes sit where they're seen (same as export).
  */
 export function retroOverlay(g, L, nw, nh, local, u, view = null) {
-  g.save(); g.filter = 'none';
+  const A0 = g.globalAlpha * (L.mix ?? 1); // the clip's own opacity x the look's intensity
+  g.save(); g.filter = 'none'; g.globalAlpha = A0;
   g.beginPath(); g.rect(-nw / 2, -nh / 2, nw, nh); g.clip();
   const V = view || { x: 0, y: 0, w: nw, h: nh };
   const x0 = -nw / 2 + V.x, y0 = -nh / 2 + V.y; const fullX = -nw / 2;
   nw = V.w; nh = V.h;
-  if (L.grain) { g.globalAlpha = L.grain; g.globalCompositeOperation = 'overlay'; g.fillStyle = g.createPattern(grainTile(), 'repeat'); g.fillRect(x0, y0, nw, nh); g.globalCompositeOperation = 'source-over'; }
-  if (L.lines) { g.globalAlpha = L.lines; g.fillStyle = '#000'; const gap = Math.max(3, Math.round((nh / u) / 320)) * u; for (let y = y0; y < y0 + nh; y += gap) g.fillRect(x0, y, nw, Math.max(1, u)); }
-  g.globalAlpha = 1;
+  if (L.grain) { g.globalAlpha = A0 * L.grain; g.globalCompositeOperation = 'overlay'; g.fillStyle = g.createPattern(grainTile(), 'repeat'); g.fillRect(x0, y0, nw, nh); g.globalCompositeOperation = 'source-over'; }
+  if (L.lines) { g.globalAlpha = A0 * L.lines; g.fillStyle = '#000'; const gap = Math.max(3, Math.round((nh / u) / 320)) * u; for (let y = y0; y < y0 + nh; y += gap) g.fillRect(x0, y, nw, Math.max(1, u)); }
+  g.globalAlpha = A0;
   const fs = 64 * u; const m = 44 * u;
   for (const d of L.draw) {
     if (d.band) { const H = nh; const y = ((local * H * d.band.speed) % (H * d.band.len)) - H * d.band.off; g.fillStyle = `rgba(255,255,255,${d.band.a})`; g.fillRect(fullX, y0 + y, nw + 2 * Math.abs(fullX - x0) + 9999, H * d.band.hh); }
@@ -131,5 +133,5 @@ export function retroOverlay(g, L, nw, nh, local, u, view = null) {
     }
   }
   g.restore();
-  if (L.vig) { g.save(); g.filter = 'none'; const rg = g.createRadialGradient(0, 0, Math.min(nw, nh) * 0.25, 0, 0, Math.max(nw, nh) * 0.6); rg.addColorStop(0, 'rgba(0,0,0,0)'); rg.addColorStop(1, `rgba(0,0,0,${L.vig * 0.85})`); g.fillStyle = rg; g.fillRect(-nw / 2, -nh / 2, nw, nh); g.restore(); }
+  if (L.vig) { g.save(); g.filter = 'none'; g.globalAlpha = A0; const rg = g.createRadialGradient(0, 0, Math.min(nw, nh) * 0.25, 0, 0, Math.max(nw, nh) * 0.6); rg.addColorStop(0, 'rgba(0,0,0,0)'); rg.addColorStop(1, `rgba(0,0,0,${L.vig * 0.85})`); g.fillStyle = rg; g.fillRect(-nw / 2, -nh / 2, nw, nh); g.restore(); }
 }

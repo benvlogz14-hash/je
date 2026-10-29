@@ -16,7 +16,8 @@ const PRESETS = {
     blurb: 'Narrator over drone and B-roll, two-word captions with yellow key words, big title up top',
     style: { font: 'Montserrat', size: 150, uppercase: false, wordsPerLine: 2, primary: '#FFFFFF', highlight: '#F8D800', highlightMode: 'keywords', outline: '#000000', outlineWidth: 6, shadow: 3, position: 'lower', animation: 'none', box: false, rotate: 0,
       hook: true, hookSeconds: 6, hookFont: 'Montserrat', hookSize: 215, hookUpper: true, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 9, hookShadow: 5, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
-    production: { reframe: 'face', minClipSec: 22, maxClipSec: 40, visualCuts: true, punchIns: false },
+    // 30-42 s of footage: after the pauses are cut out it lands around 30 s (22-40 ended up ~18 s and stopped before the payoff).
+    production: { reframe: 'face', minClipSec: 30, maxClipSec: 42, visualCuts: true, punchIns: false },
   },
   walkthrough: {
     label: 'Walkthrough',
@@ -24,7 +25,7 @@ const PRESETS = {
     // Matched to "WHY DID they leave it all behind..." (caption and title widths measured from the video).
     style: { font: 'Montserrat', size: 120, uppercase: false, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#F5B850', highlightMode: 'word', outline: '#000000', outlineWidth: 3, shadow: 3, position: 'lower', animation: 'none', box: false, rotate: 0,
       hook: true, hookSeconds: 3, hookFont: 'TikTok Sans Bold', hookSize: 144, hookUpper: false, hookCapsFirst: true, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 4, hookShadow: 3, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
-    production: {}, // look only: clip picking, length and cutting stay exactly as they are
+    production: { minClipSec: 30, maxClipSec: 42 }, // ~30 s finished (like Documentary); picking and cutting otherwise as they are
   },
   highlights: {
     label: 'Highlights',

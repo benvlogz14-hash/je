@@ -1092,14 +1092,22 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
           const left = W / 2 + valAt(c.posX, local) * quality - nw / 2, top = H / 2 + valAt(c.posY, local) * quality - nh / 2;
           const vx0 = Math.max(0, -left), vy0 = Math.max(0, -top), view = { x: vx0, y: vy0, w: Math.max(16, Math.min(nw, W - left) - vx0), h: Math.max(16, Math.min(nh, H - top) - vy0) };
           const ru = Math.min(view.w, view.h) / 1080; const looks = retros.map(([id, p]) => retroLook(id, p, local, ru));
+          // Below 100% intensity the untouched picture is drawn first and the look is laid over it at that strength.
+          const plainFilter = g.filter; const lookMix = looks.length ? Math.max(...looks.map((L) => L.mix)) : 1;
           for (const L of looks) { if (L.css.length) g.filter = (g.filter === 'none' ? '' : g.filter + ' ') + L.css.join(' '); if (L.pixel) pixel = Math.max(pixel, L.pixel * quality); }
           g.scale(flipH, flipV);
           if (sw > 0 && sh > 0 && g.globalAlpha > 0) {
+            const aBefore = g.globalAlpha;
             if (pixel > 1) {
+              if (lookMix < 0.995) { const lf = g.filter; g.filter = plainFilter; g.drawImage(el, sxp, syp, sw, sh, dx, dy, dw, dh); g.filter = lf; g.globalAlpha = aBefore * lookMix; }
               const off = document.createElement('canvas'); off.width = Math.max(1, Math.round(dw / pixel)); off.height = Math.max(1, Math.round(dh / pixel));
               off.getContext('2d').drawImage(el, sxp, syp, sw, sh, 0, 0, off.width, off.height);
               g.imageSmoothingEnabled = false; g.drawImage(off, dx, dy, dw, dh); g.imageSmoothingEnabled = true;
-            } else g.drawImage(el, sxp, syp, sw, sh, dx, dy, dw, dh);
+            } else {
+              if (lookMix < 0.995) { const lf = g.filter; g.filter = plainFilter; g.drawImage(el, sxp, syp, sw, sh, dx, dy, dw, dh); g.filter = lf; g.globalAlpha = aBefore * lookMix; }
+              g.drawImage(el, sxp, syp, sw, sh, dx, dy, dw, dh);
+            }
+            g.globalAlpha = aBefore;
           }
           for (const d of dips) { g.filter = 'none'; g.globalAlpha = a0 * Math.max(0, Math.min(1, d.a)); g.fillStyle = d.color; g.fillRect(-nw / 2, -nh / 2, nw, nh); }
           if (vig) { g.filter = 'none'; const rg = g.createRadialGradient(0, 0, Math.min(nw, nh) * 0.25, 0, 0, Math.max(nw, nh) * 0.6); rg.addColorStop(0, 'rgba(0,0,0,0)'); rg.addColorStop(1, `rgba(0,0,0,${vig * 0.85})`); g.fillStyle = rg; g.fillRect(-nw / 2, -nh / 2, nw, nh); }

@@ -85,6 +85,41 @@ function outFps(src) {
   return Math.abs(best[0] - f) < 1.5 ? best[1] : f > 60 ? '60' : '30';
 }
 
+/**
+ * Voice cleanup on the clip's own sound, before any music is added (music goes on afterwards in the render job).
+ *  - 'clean' (default): gentle. Rumble below 70 Hz and steady background noise (hiss, wind, hum, fans) are reduced;
+ *    the voice itself isn't touched.
+ *  - 'isolate': stronger. Only the voice's range is kept, more noise comes out, and what's between words is softly
+ *    lowered (a gentle expander, not a gate, so words never get chopped).
+ *  - 'off': the sound as recorded.
+ */
+function voiceFilters(mode = 'clean') {
+  if (mode === 'off') return [];
+  if (mode === 'isolate') return ['highpass=f=90', 'lowpass=f=9500', 'afftdn=nr=22:nf=-40:tn=1', 'agate=threshold=0.015:ratio=2.5:attack=8:release=300:range=0.25'];
+  return ['highpass=f=70', 'afftdn=nr=12:nf=-38:tn=1'];
+}
+
+/**
+ * How late a filter chain makes the sound (FFmpeg's noise filter works in blocks and comes out ~25 ms late, which would
+ * put the voice behind its captions). Measured once per chain with a test click on this PC's FFmpeg, then cut back out.
+ */
+const delays = new Map();
+async function filterDelay(chain) {
+  if (!chain.length) return 0;
+  const key = chain.join(','); if (delays.has(key)) return delays.get(key);
+  const p = new Promise((resolve) => {
+    const { execFile } = require('child_process');
+    execFile(ff.bin('ffmpeg'), ['-hide_banner', '-v', 'error', '-f', 'lavfi', '-i', "aevalsrc='if(between(t,0.5,0.52),0.8*sin(2*PI*1000*t),0)':s=48000:d=1.2", '-af', key, '-f', 's16le', '-ac', '1', '-ar', '48000', '-'],
+      { encoding: 'buffer', maxBuffer: 1 << 24, timeout: 20000 }, (err, out) => {
+        if (err || !out?.length) return resolve(0);
+        let pk = 0; for (let i = 0; i + 1 < out.length; i += 2) pk = Math.max(pk, Math.abs(out.readInt16LE(i)));
+        for (let i = 0; i + 1 < out.length; i += 2) if (Math.abs(out.readInt16LE(i)) > pk * 0.1) return resolve(Math.max(0, Math.min(0.2, i / 2 / 48000 - 0.5)));
+        resolve(0);
+      });
+  });
+  delays.set(key, p); return p;
+}
+
 /** Map an absolute source time into the cut timeline (relative to clip start). */
 function remap(t, segs) {
   let acc = 0;
@@ -224,7 +259,9 @@ async function renderShort(o) {
   f.push(`[${v}]fps=${FPS},format=yuv420p[vout]`);
   // 6. Audio: loudness normalisation and click-free edges.
   const lufs = o.loudness ?? -14;
-  f.push(`[${a}]aresample=48000,loudnorm=I=${lufs}:TP=-1.5:LRA=11,afade=t=in:d=0.03,afade=t=out:st=${Math.max(0, outDur - 0.08).toFixed(3)}:d=0.08[aout]`);
+  const vf = voiceFilters(plan.voiceClean); const lag = await filterDelay(vf);
+  if (lag > 0.002) vf.push(`atrim=start=${lag.toFixed(4)}`, 'asetpts=PTS-STARTPTS', `apad=pad_dur=${lag.toFixed(4)}`); // back in step with the captions
+  f.push(`[${a}]aresample=48000,${vf.map((x) => x + ',').join('')}loudnorm=I=${lufs}:TP=-1.5:LRA=11,afade=t=in:d=0.03,afade=t=out:st=${Math.max(0, outDur - 0.08).toFixed(3)}:d=0.08[aout]`);
 
   const enc = ff.pickEncoder();
   args.push('-filter_complex', f.join(';'), '-map', '[vout]', '-map', '[aout]', '-t', outDur.toFixed(3),
@@ -241,4 +278,4 @@ async function renderShort(o) {
   return { outPath: o.outPath, assPath, srtPath, duration: outDur, segments: segs, encoder: enc, cutWords };
 }
 
-module.exports = { renderShort, outFps, cutPauses, keptSegments, remap, ensureFonts, rel, W, H };
+module.exports = { renderShort, outFps, cutPauses, keptSegments, remap, ensureFonts, rel, voiceFilters, W, H };

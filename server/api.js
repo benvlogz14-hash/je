@@ -390,6 +390,7 @@ r.patch('/api/clips/:id', (req, b, p) => {
   for (const k of ['title', 'hook', 'caption', 'hashtags', 'start', 'end', 'reframe', 'focusX', 'silenceCut', 'retakeCut', 'punchIns', 'music']) if (b[k] !== undefined) patch[k] = b[k];
   if (b.style !== undefined) patch.style = b.style ? pipeline.sanitizeStyle(b.style) : null;
   if (b.voiceVol !== undefined) patch.voiceVol = Math.max(0, Math.min(2, Number(b.voiceVol) || 0));
+  if (b.voiceClean !== undefined) patch.voiceClean = ['off', 'clean', 'isolate'].includes(b.voiceClean) ? b.voiceClean : null; // null = the client's setting
   if (b.musicVol !== undefined) patch.musicVol = b.musicVol === null ? null : Math.max(0, Math.min(1, Number(b.musicVol) || 0));
   if (b.musicTrack !== undefined) patch.musicTrack = b.musicTrack && /^(own|lib|gen)\/[a-z]+\/[^\\/]+$/.test(b.musicTrack) ? b.musicTrack : 'auto';
   if (b.visualCuts !== undefined) patch.visualCuts = !!b.visualCuts;

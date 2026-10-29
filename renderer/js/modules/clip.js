@@ -156,13 +156,13 @@ function ClipMusic({ clip, reload }) {
   const { data: cat, reload: reloadCat } = useApi('/api/music/catalog', ['job']);
   const { data: client } = useApi(`/api/clients/${clip.clientId}`, ['clients']);
   const clientVol = client?.production?.musicVolume ?? 0.3;
-  const init = () => ({ music: clip.music || 'auto', track: clip.musicTrack || 'auto', voice: Math.round((clip.voiceVol ?? 1) * 100), vol: Math.round((clip.musicVol ?? clientVol) * 100), cuts: clip.visualCuts !== false });
+  const init = () => ({ music: clip.music || 'auto', track: clip.musicTrack || 'auto', voice: Math.round((clip.voiceVol ?? 1) * 100), vol: Math.round((clip.musicVol ?? clientVol) * 100), cuts: clip.visualCuts !== false, clean: clip.voiceClean || 'auto' });
   const [m, setM] = useState(init);
   useEffect(() => setM(init()), [clip.id, client?.id, JSON.stringify(init())]);
   const [playing, setPlaying] = useState(null); const audio = useRef(null);
   const preview = (id) => { if (!audio.current) audio.current = new Audio(); if (playing === id) { audio.current.pause(); setPlaying(null); return; } audio.current.src = api.url(`/api/music/play?id=${encodeURIComponent(id)}`); audio.current.volume = 0.6; audio.current.play().catch(() => {}); setPlaying(id); };
   useEffect(() => () => audio.current?.pause(), []);
-  const apply = () => act(async () => { audio.current?.pause(); setPlaying(null); await api.patch(`/api/clips/${clip.id}`, { music: m.music, musicTrack: m.track, voiceVol: m.voice / 100, musicVol: m.vol / 100, visualCuts: m.cuts }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: 'Re-rendering with the new sound' }).then(reload);
+  const apply = () => act(async () => { audio.current?.pause(); setPlaying(null); await api.patch(`/api/clips/${clip.id}`, { music: m.music, musicTrack: m.track, voiceVol: m.voice / 100, musicVol: m.vol / 100, visualCuts: m.cuts, voiceClean: m.clean === 'auto' ? null : m.clean }); await api.post(`/api/clips/${clip.id}/render`); }, { ok: 'Re-rendering with the new sound' }).then(reload);
   const more = () => act(() => api.post('/api/music/fill', {}), { ok: 'Downloading free music for every mood (a few minutes)' }).then(reloadCat);
   const off = m.music === 'off';
   const dirty = JSON.stringify(m) !== JSON.stringify(init());
@@ -173,6 +173,8 @@ function ClipMusic({ clip, reload }) {
         <${Field} label=${`Voice volume: ${m.voice}%`} id="cm-voice"><input id="cm-voice" class="range" type="range" min="0" max="200" step="5" value=${m.voice} onInput=${(e) => setM({ ...m, voice: Number(e.target.value) })} /></${Field}>
         <${Field} label=${off ? 'Music volume: off' : `Music volume: ${m.vol}%`} id="cm-vol"><input id="cm-vol" class="range" type="range" min="0" max="100" step="1" value=${m.vol} disabled=${off} onInput=${(e) => setM({ ...m, vol: Number(e.target.value) })} /></${Field}>
       </div>
+      <div class="col" style="gap:4px"><span class="label">Voice cleanup</span><div class="row wrap" style="gap:6px">${[['auto', `Same as client (${({ off: 'off', clean: 'clean', isolate: 'isolate voice' })[client?.production?.voiceClean || 'clean']})`], ['off', 'Off'], ['clean', 'Clean'], ['isolate', 'Isolate voice']].map(([k, l]) => html`<button class="chip" style=${m.clean === k ? { background: 'var(--teal-soft)', borderColor: 'var(--teal)' } : null} onClick=${() => setM({ ...m, clean: k })}>${l}</button>`)}</div>
+        <span class="faint" style="font-size:var(--fs-xs)">Done to the voice before the music goes on. Clean takes out hiss, wind and hum; Isolate voice also lowers everything between words. Music mixed into the original video can't be taken out this way.</span></div>
       <div class="col" style="gap:4px"><span class="label">Mood</span><div class="row wrap" style="gap:6px">${MOODS.map(([k, l]) => html`<button class="chip" style=${m.music === k && (k === 'off' || m.track === 'auto') ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)' } : null} onClick=${() => setM({ ...m, music: k, track: 'auto' })}>${l}</button>`)}</div></div>
       ${!off ? html`<div class="col" style="gap:4px"><span class="label">Track</span>
         <div class="row" style="gap:6px"><select class="select grow" value=${m.track} onChange=${(e) => setM({ ...m, track: e.target.value, music: e.target.value === 'auto' ? m.music : 'auto' })} aria-label="Music track">
