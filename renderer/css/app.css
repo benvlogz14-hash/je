@@ -603,18 +603,18 @@ h4 { font-weight: 750; letter-spacing: -0.01em; }
 .ed-split .ed-grip { width: 44px; height: 4px; border-radius: 3px; background: currentColor; opacity: .55; }
 
 /* Production: "What each video makes" (one card per style; cards in use get their colour). */
-.mix { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; max-width: 640px; }
+.mix { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; max-width: 900px; }
 .mix-total { font-size: var(--fs-xs); font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); }
 .mix-total.none { color: var(--coral-ink, #b4483b); border-color: currentColor; }
 .mix-bar { display: flex; gap: 3px; height: 8px; border-radius: 999px; overflow: hidden; }
 .mix-bar i { display: block; height: 100%; }
-.mix-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 8px; }
+.mix-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
 .mix-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); opacity: .72; transition: opacity .15s, border-color .15s, box-shadow .15s; }
 .mix-card:hover { opacity: 1; }
 .mix-card.on { opacity: 1; border-color: var(--mc); box-shadow: 0 0 0 1px var(--mc) inset; background: color-mix(in srgb, var(--mc) 7%, var(--surface)); }
 .mix-sample { height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: linear-gradient(135deg, #3a4a5a, #1d262f 60%, #2b2420); }
 .mix-card:not(.on) .mix-sample { filter: grayscale(.6); }
-.mix-name { font-size: var(--fs-sm); }
+.mix-name { font-size: var(--fs-sm); flex: 1 0 auto; }
 .mix-blurb { font-size: 11px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .mix-step { display: flex; align-items: center; gap: 2px; flex: none; border: 1px solid var(--line); border-radius: 999px; padding: 2px; background: var(--surface); }
 .mix-step button { width: 26px; height: 26px; border-radius: 50%; border: 0; background: transparent; font-size: 16px; line-height: 1; cursor: pointer; color: inherit; }

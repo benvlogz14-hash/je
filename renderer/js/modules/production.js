@@ -108,17 +108,17 @@ function Intake({ clients, clientId, setClientId, assets, jobs, setDetail, setSh
   const active = assets.filter((a) => ['importing', 'transcribing'].includes(a.status) || jobs.some((j) => j.payload?.assetId === a.id));
   const recent = assets.slice(0, 6);
   return html`<div class="grid c2">
-    <div class=${'dropzone' + (over ? ' over' : '')} onDragOver=${(e) => { e.preventDefault(); setOver(true); }} onDragLeave=${() => setOver(false)} onDrop=${(e) => { e.preventDefault(); setOver(false); upload([...e.dataTransfer.files]); }}>
+    <div class=${'dropzone' + (over ? ' over' : '')} style="flex-wrap:wrap" onDragOver=${(e) => { e.preventDefault(); setOver(true); }} onDragLeave=${() => setOver(false)} onDrop=${(e) => { e.preventDefault(); setOver(false); upload([...e.dataTransfer.files]); }}>
       <div class="avatar lg" style="background:var(--teal-soft);color:var(--teal-ink)"><${Icon} name="upload" size=${20} /></div>
       <div class="grow"><b>Drop footage here</b><div class="muted" style="font-size:var(--fs-sm)">${target ? `For ${clients.find((c) => c.id === target)?.name}. Transcription and clip discovery start automatically.` : clients.length ? 'Choose the client in the menu at the top right, then drop footage.' : 'Footage is filed under a client. Create your first one (just a name) and drop away.'}</div>
         ${!clients.length ? html`<div style="margin-top:8px"><${Button} size="sm" kind="soft" icon="plus" onClick=${async () => { const c = await quickClient().catch(() => null); if (c) setClientId(c.id); }}>Create your first client</${Button}></div>` : null}
-        ${target ? html`<${StyleSwitch} client=${clients.find((c) => c.id === target)} /><${ClipLength} client=${clients.find((c) => c.id === target)} /><${MusicSwitch} client=${clients.find((c) => c.id === target)} /><${AiTips} client=${clients.find((c) => c.id === target)} /><${BrollSwitch} client=${clients.find((c) => c.id === target)} />` : null}
         ${uploads.map((u) => html`<div style="margin-top:8px"><div class="row" style="font-size:var(--fs-sm)"><span class="grow ellipsis">${u.name}</span><span class="tnum faint">${Math.round(u.p * 100)}%</span></div><${Progress} value=${u.p} /></div>`)}</div>
       <div class="col" style="gap:6px">${(() => { const tc = clients.find((c) => c.id === target); const waitOn = tc?.production?.waitForStart !== false && !tc?.schedule?.autopilot;
           // Shows as soon as footage is uploaded (not only once it's ready): pressing it early makes clips the moment the video is ready.
           const waiting = assets.filter((a) => (!target || a.clientId === target) && (a.status === 'waiting' || (waitOn && !a.started && jobs.some((j) => j.payload?.assetId === a.id && ['queued', 'running'].includes(j.status)))));
           const ready = waiting.filter((a) => a.status === 'waiting').length;
           return waiting.length ? html`<button type="button" class="btn primary" style="box-shadow:inset 0 3px 8px rgba(0,0,0,0.35);transform:translateY(2px);font-weight:700" title="Set the clip length, count and tips, then press to make the clips." onClick=${(e) => { e.stopPropagation(); act(async () => { for (const a of waiting) await api.post(`/api/assets/${a.id}/process`, {}); }, { ok: ready === waiting.length ? `Making clips from ${waiting.length} video${waiting.length > 1 ? 's' : ''}` : 'Clips will be made as soon as the footage is ready', sound: 'success' }); }}>▶ Make clips (${waiting.length} video${waiting.length > 1 ? 's' : ''}${ready < waiting.length ? ', getting ready' : ''})</button>` : null; })()}${target ? html`<${WideSwitch} client=${clients.find((c) => c.id === target)} />` : null}<${Button} size="sm" kind="primary" icon="upload" onClick=${() => input.current.click()}>Upload</${Button}><${Button} size="sm" kind="ghost" icon="folder" onClick=${addPath}>From disk</${Button}><${Button} size="sm" kind="ghost" icon="link" onClick=${addLink}>From link</${Button}></div>
+      ${target ? html`<div style="flex:1 0 100%;min-width:0"><${StyleSwitch} client=${clients.find((c) => c.id === target)} /><${ClipLength} client=${clients.find((c) => c.id === target)} /><${MusicSwitch} client=${clients.find((c) => c.id === target)} /><${AiTips} client=${clients.find((c) => c.id === target)} /><${BrollSwitch} client=${clients.find((c) => c.id === target)} /></div>` : null}
       <input ref=${input} type="file" accept="video/*,audio/*" multiple hidden onChange=${(e) => { upload([...e.target.files]); e.target.value = ''; }} />
     </div>
     <div class="panel"><div class="panel-head"><h4 class="grow">Footage</h4><span class="faint" style="font-size:var(--fs-sm)">${active.length ? `${active.length} processing` : `${assets.length} files`}</span></div>
@@ -204,7 +204,7 @@ function StyleSwitch({ client }) {
     <div class="mix-grid">
       ${opts.map((o) => { const n = mix[o.id] || 0; return html`<div class=${'mix-card' + (n ? ' on' : '')} style=${`--mc:${colorOf(o.id)}`}>
         <div class="mix-sample">${LOOK[o.id]?.sample || null}</div>
-        <div class="row" style="gap:6px;align-items:center"><b class="mix-name grow">${o.label}</b>
+        <div class="row" style="gap:6px;align-items:center;flex-wrap:wrap"><b class="mix-name grow">${o.label}</b>
           <div class="mix-step">
             <button type="button" aria-label=${`Fewer ${o.label}`} disabled=${!n} onClick=${() => setN(o.id, n - 1)}>−</button>
             <b class="tnum">${n}</b>
