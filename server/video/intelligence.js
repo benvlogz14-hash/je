@@ -24,14 +24,7 @@ async function transcribe(asset, { jobId, onProgress } = {}) {
   if (localBin && localModel && fs.existsSync(localBin)) {
     const wav = path.join(asset.workDir, `${asset.id}.wav`);
     await ff.extractWav(asset.path, wav);
-    const outBase = path.join(asset.workDir, `${asset.id}.whisper`);
-    // Word timing: DTW alignment gives much tighter word times (whisper.cpp 1.6+); older builds run without it.
-    const base = ['-m', localModel, '-f', wav, '-oj', '-ml', '1', '-sow', '-of', outBase];
-    const opts = { timeoutMs: 6 * 3600000, priority: ff.priorityValue(), onStderrLine: (l) => { const m = /progress\s*=\s*(\d+)%/.exec(l); if (m && onProgress) onProgress(Number(m[1]) / 100); } };
-    const dtw = /base\.en/i.test(localModel) ? 'base.en' : /small\.en/i.test(localModel) ? 'small.en' : /tiny\.en/i.test(localModel) ? 'tiny.en' : null;
-    try { await run(localBin, dtw ? [...base, '--dtw', dtw] : base, opts); } catch (e) { if (!dtw) throw e; await run(localBin, base, opts); }
-    const j = JSON.parse(fs.readFileSync(outBase + '.json', 'utf8'));
-    const words = (j.transcription || []).map((t) => ({ w: t.text.trim(), s: t.offsets.from / 1000, e: t.offsets.to / 1000 })).filter((w) => w.w);
+    const words = await whisperLocal(localBin, localModel, wav, path.join(asset.workDir, `${asset.id}.whisper`), { duration, onProgress });
     result = { engine: 'whisper.cpp (local)', text: words.map((w) => w.w).join(' '), words, segments: segmentsFromWords(words) };
     try { fs.unlinkSync(wav); } catch { /* ignore */ }
   } else if (ai.connected('openai')) {
@@ -62,6 +55,58 @@ async function transcribe(asset, { jobId, onProgress } = {}) {
   result = require('./transcript-fix').clean(result);
   fs.writeFileSync(cache, JSON.stringify(result));
   return result;
+}
+
+// ------------------------------------------------------------ local whisper.cpp, fast
+/**
+ * whisper.cpp on this PC, as fast as the machine allows without losing the timing fixes:
+ *  - all but one CPU core (whisper.cpp's own default is 4 threads),
+ *  - greedy decoding (one pass instead of 5 beams, ~2x faster; `ai.transcription.accuracy: 'best'` keeps beams),
+ *  - long videos on 8+ core PCs are split at quiet moments and the pieces run side by side (whisper stops getting
+ *    faster past ~8 threads, so two or three processes beat one), word times shifted back by each piece's start,
+ *  - `-pp` so the progress bar moves (without it whisper prints no progress and the step sat at 0%),
+ *  - DTW word timing kept; a build that can't do it is remembered so the file is never transcribed twice.
+ */
+async function whisperLocal(bin, model, wav, outBase, { duration = 0, onProgress } = {}) {
+  const os = require('os');
+  const cores = Math.max(1, (os.availableParallelism ? os.availableParallelism() : os.cpus().length) || 1);
+  const set = Number(ctx.setting('ai.transcription.threads', 0)) || 0;
+  const best = ctx.setting('ai.transcription.accuracy', 'fast') === 'best';
+  const dur = duration || 0;
+  const n = set ? 1 : dur > 240 && cores >= 8 ? Math.min(4, Math.floor(cores / 4), Math.ceil(dur / 120)) : 1;
+  const threads = set || Math.max(1, Math.min(8, Math.floor((cores - (cores > 2 ? 1 : 0)) / n)));
+  // Where to cut: the quiet moment nearest each even split point (never inside a word).
+  let cuts = [0];
+  if (n > 1) {
+    let quiet = [];
+    try { quiet = (await ff.speechWindows(wav)).silences.map(([a, b]) => (a + b) / 2); } catch { /* cut on time */ }
+    for (let i = 1; i < n; i++) {
+      const t = (dur * i) / n; const near = quiet.filter((q) => Math.abs(q - t) < 25).sort((a, b) => Math.abs(a - t) - Math.abs(b - t))[0];
+      cuts.push(near ?? t);
+    }
+  }
+  cuts = [...new Set(cuts.map((c) => Math.round(c * 100) / 100))].sort((a, b) => a - b);
+  const pieces = cuts.map((s, i) => ({ s, e: cuts[i + 1] ?? null, i }));
+  const prog = pieces.map(() => 0); const weight = pieces.map((p) => (dur ? ((p.e ?? dur) - p.s) / dur : 1 / pieces.length));
+  const report = () => onProgress && onProgress(Math.min(0.99, prog.reduce((a, v, i) => a + v * weight[i], 0)));
+  const dtw = ctx.setting('ai.transcription.noDtw', false) ? null : /base\.en/i.test(model) ? 'base.en' : /small\.en/i.test(model) ? 'small.en' : /tiny\.en/i.test(model) ? 'tiny.en' : /medium\.en/i.test(model) ? 'medium.en' : null;
+  const one = async (p) => {
+    let file = wav; const of = pieces.length > 1 ? `${outBase}.p${p.i}` : outBase;
+    if (pieces.length > 1) { file = `${of}.wav`; await run(ff.bin('ffmpeg'), ['-hide_banner', '-y', '-ss', String(p.s), ...(p.e != null ? ['-to', String(p.e)] : []), '-i', wav, '-c:a', 'pcm_s16le', file], { timeoutMs: 600000 }); }
+    const base = ['-m', model, '-f', file, '-oj', '-ml', '1', '-sow', '-pp', '-t', String(threads), ...(best ? [] : ['-bs', '1', '-bo', '1']), '-of', of];
+    const opts = { timeoutMs: 6 * 3600000, onStderrLine: (l) => { const m = /progress\s*=\s*(\d+)%/.exec(l); if (m) { prog[p.i] = Number(m[1]) / 100; report(); } } };
+    try { await run(bin, dtw ? [...base, '--dtw', dtw] : base, opts); } catch (e) {
+      if (!dtw || e.canceled) throw e;
+      ctx.store.setSettings({ ai: { transcription: { noDtw: true } } }); // this build can't do DTW: don't try again on the next video
+      await run(bin, base, opts);
+    }
+    prog[p.i] = 1; report();
+    const j = JSON.parse(fs.readFileSync(`${of}.json`, 'utf8'));
+    if (pieces.length > 1) { for (const f of [file, `${of}.json`]) { try { fs.unlinkSync(f); } catch { /* ignore */ } } }
+    return (j.transcription || []).map((t) => ({ w: t.text.trim(), s: t.offsets.from / 1000 + p.s, e: t.offsets.to / 1000 + p.s })).filter((w) => w.w);
+  };
+  const parts = await Promise.all(pieces.map(one));
+  return parts.flat().sort((a, b) => a.s - b.s);
 }
 
 function segmentsFromWords(words) {
@@ -278,4 +323,4 @@ function transcriptExcerpt(transcript, start, end, pad = 20) {
   return (transcript.segments || []).filter((s) => s.e > start - pad && s.s < end + pad).map((s) => `[${s.s.toFixed(1)}] ${s.t}`).join('\n').slice(0, 6000);
 }
 
-module.exports = { cleanHook, topicHook, TASTE_RULES, transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };
+module.exports = { whisperLocal, cleanHook, topicHook, TASTE_RULES, transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };

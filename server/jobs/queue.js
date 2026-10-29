@@ -43,7 +43,7 @@ function enqueue(type, payload = {}, opts = {}) {
   const h = handlers[type];
   const job = ctx.store.insert('jobs', {
     type, payload, clientId: opts.clientId || payload.clientId || null, title: opts.title || (h.title ? h.title(payload) : type),
-    status: h.external ? 'waiting_agent' : 'queued', priority: opts.priority ?? 5, runAt: opts.runAt || now(), attempts: 0, maxAttempts: opts.maxAttempts ?? h.maxAttempts ?? 3,
+    status: h.external ? 'waiting_agent' : 'queued', priority: opts.priority ?? h.priority ?? 5, runAt: opts.runAt || now(), attempts: 0, maxAttempts: opts.maxAttempts ?? h.maxAttempts ?? 3,
     progress: 0, note: '', log: [], result: null, error: null, parentId: opts.parentId || null, dedupeKey: opts.dedupeKey || null,
     heavy: isHeavy(h), assignee: opts.assignee || h.assignee || (h.external ? 'computer-use' : 'engine'), createdBy: opts.actor || 'system',
   });

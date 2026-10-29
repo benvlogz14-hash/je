@@ -86,6 +86,7 @@ queue.register('ingest.url', {
 // ------------------------------------------------------------ transcription & discovery
 queue.register('transcribe', {
   title: () => 'Transcribe footage',
+  priority: 7, // ahead of renders: every later step waits on the words
   // Local whisper.cpp is CPU/GPU heavy; the OpenAI path is light. Decided per run.
   heavy: () => !!(ctx.setting('ai.transcription.localWhisperPath', '') && ctx.setting('ai.transcription.localWhisperModel', '')),
   remote: true,
@@ -122,6 +123,7 @@ queue.register('transcribe', {
 
 queue.register('studio.transcribe', {
   title: (j) => `Transcribe ${path.basename(j.payload.path || '')} for captions`,
+  priority: 7,
   heavy: () => !!(ctx.setting('ai.transcription.localWhisperPath', '') && ctx.setting('ai.transcription.localWhisperModel', '')),
   async run(job, h) {
     const file = job.payload.path; if (!file || !fs.existsSync(file)) throw permanent('That video file is gone');
