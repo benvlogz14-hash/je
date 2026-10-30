@@ -639,7 +639,10 @@ function Editor({ id }) {
   if (!data || !seq) return html`<div class="page"><${Loading} /></div>`;
   const selected = sel.length === 1 ? findClip(seq, sel[0]) : null;
 
-  const exportNow = async () => { await save(true); setExporting(true); };
+  // The Export window opens straight away; the save runs alongside and the export starts only once it has landed
+  // (on a busy PC the save could take a while and the button just spun).
+  const savingFor = useRef(null);
+  const exportNow = () => { savingFor.current = save(true); setExporting(true); };
   return html`<div style=${`position:absolute;inset:0;display:grid;grid-template-columns:minmax(0, 1fr);grid-template-rows:46px minmax(0, 1fr) min(${bottomH}px, calc(100% - 46px - 260px));background:var(--ed-bg)`}>
     <div class="row" style="padding:0 12px;background:var(--surface);border-bottom:1px solid var(--line);gap:10px;min-width:0;overflow-x:auto">
       <${Button} kind="ghost" size="sm" icon="chevronLeft" title="All projects" onClick=${() => { if (dirty) save(true); navigate('/studio'); }} />
@@ -667,7 +670,7 @@ function Editor({ id }) {
     <div class="ed-split" title="Drag up or down to resize the timeline (double-click to reset)" onPointerDown=${startResize} onDblClick=${() => setBottom(null)}><span>▲</span><span class="ed-grip" /><span>▼</span></div>
     <${CaptionsBar} seq=${seq} media=${media} sel=${sel} setSel=${setSel} edit=${edit} findClip=${findClip} nextId=${nextId} />
     <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onBroll=${addBroll} onClipMenu=${clipMenu} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} /></div>
-    ${exporting ? html`<${ExportDialog} id=${id} onClose=${() => setExporting(false)} />` : null}
+    ${exporting ? html`<${ExportDialog} id=${id} saving=${savingFor.current} onClose=${() => setExporting(false)} />` : null}
     ${musicOpen ? html`<${MusicLibrary} onClose=${() => setMusicOpen(false)} onAdd=${addMusic} />` : null}
     ${titleEdit ? html`<${TitleDesigner} seq=${seq} clip=${titleEdit.clipId ? findClip(seq, titleEdit.clipId)?.c : null} count=${titleEdit.ids?.length || 1} onClose=${() => setTitleEdit(null)} onSave=${saveTitle} />` : null}
   </div>`;
@@ -901,12 +904,12 @@ function AIPanel({ aiEdit, aiUndo, projectId, selected }) {
 }
 
 // ------------------------------------------------------------ export: choose where the video is saved
-function ExportDialog({ id, onClose }) {
+function ExportDialog({ id, saving, onClose }) {
   const [d, setD] = useState(null);
   const [reveal, setReveal] = useState(true);
   useEffect(() => { api.get(`/api/projects/${id}/export-defaults`).then(setD).catch((e) => { toast(e.message, { kind: 'error' }); onClose(); }); }, [id]);
   const choose = async () => { const r = await act(() => api.post('/api/system/pick-folder', { title: 'Save the exported video in…', defaultPath: d.folder })); if (r?.path) setD({ ...d, folder: r.path }); };
-  const start = () => act(() => api.post(`/api/projects/${id}/export`, { folder: d.folder, fileName: d.fileName, reveal }), { ok: 'Exporting. The folder opens when the video is ready.' }).then(onClose);
+  const start = () => act(async () => { await saving; return api.post(`/api/projects/${id}/export`, { folder: d.folder, fileName: d.fileName, reveal }); }, { ok: 'Exporting. Progress is in the status bar; the folder opens when the video is ready.' }).then(onClose);
   return html`<${Modal} title="Export video" icon="upload" onClose=${onClose} footer=${html`<${Button} kind="ghost" onClick=${onClose}>Cancel</${Button}><${Button} kind="primary" icon="upload" disabled=${!d} onClick=${start}>Export</${Button}>`}>
     ${!d ? html`<${Loading} rows=${2} />` : html`<div class="col" style="gap:14px">
       <${Field} label="Save in" id="ex-folder"><div class="row"><input id="ex-folder" class="input mono grow" value=${d.folder} onInput=${(e) => setD({ ...d, folder: e.target.value })} />${d.desktop ? html`<${Button} kind="soft" icon="folder" onClick=${choose}>Choose folder…</${Button}>` : null}</div></${Field}>

@@ -73,8 +73,11 @@ async function whisperLocal(bin, model, wav, outBase, { duration = 0, onProgress
   const set = Number(ctx.setting('ai.transcription.threads', 0)) || 0;
   const best = ctx.setting('ai.transcription.accuracy', 'fast') === 'best';
   const dur = duration || 0;
-  const n = set ? 1 : dur > 240 && cores >= 8 ? Math.min(4, Math.floor(cores / 4), Math.ceil(dur / 120)) : 1;
-  const threads = set || Math.max(1, Math.min(8, Math.floor((cores - (cores > 2 ? 1 : 0)) / n)));
+  const n = set ? 1 : dur > 240 && cores >= 10 ? Math.min(4, Math.floor(cores / 4), Math.ceil(dur / 120)) : 1;
+  // Leave the app room to breathe: 2 cores free on 6+ core PCs (1 on smaller ones), and run below normal priority, so
+  // Studio, saving and exports stay quick while a video transcribes.
+  const spare = cores >= 6 ? 2 : cores > 2 ? 1 : 0;
+  const threads = set || Math.max(1, Math.min(8, Math.floor((cores - spare) / n)));
   // Where to cut: the quiet moment nearest each even split point (never inside a word).
   let cuts = [0];
   if (n > 1) {
@@ -94,7 +97,7 @@ async function whisperLocal(bin, model, wav, outBase, { duration = 0, onProgress
     let file = wav; const of = pieces.length > 1 ? `${outBase}.p${p.i}` : outBase;
     if (pieces.length > 1) { file = `${of}.wav`; await run(ff.bin('ffmpeg'), ['-hide_banner', '-y', '-ss', String(p.s), ...(p.e != null ? ['-to', String(p.e)] : []), '-i', wav, '-c:a', 'pcm_s16le', file], { timeoutMs: 600000 }); }
     const base = ['-m', model, '-f', file, '-oj', '-ml', '1', '-sow', '-pp', '-t', String(threads), ...(best ? [] : ['-bs', '1', '-bo', '1']), '-of', of];
-    const opts = { timeoutMs: 6 * 3600000, onStderrLine: (l) => { const m = /progress\s*=\s*(\d+)%/.exec(l); if (m) { prog[p.i] = Number(m[1]) / 100; report(); } } };
+    const opts = { timeoutMs: 6 * 3600000, priority: ff.priorityValue(), onStderrLine: (l) => { const m = /progress\s*=\s*(\d+)%/.exec(l); if (m) { prog[p.i] = Number(m[1]) / 100; report(); } } };
     try { await run(bin, dtw ? [...base, '--dtw', dtw] : base, opts); } catch (e) {
       if (!dtw || e.canceled) throw e;
       ctx.store.setSettings({ ai: { transcription: { noDtw: true } } }); // this build can't do DTW: don't try again on the next video

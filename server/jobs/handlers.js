@@ -570,6 +570,7 @@ async function faceTrackFor(clip, asset, h) {
 
 queue.register('studio.export', {
   title: () => 'Export Studio project', heavy: true,
+  priority: 8, // you're waiting on it: ahead of renders and transcription
   async run(job, h) {
     const studio = require('../video/studio');
     const proj = ctx.store.get('projects', job.payload.projectId);
