@@ -137,33 +137,128 @@ function scoreWindow(s, e, sig, kept = null) {
   return { score: Math.round(score * 10) / 10, why };
 }
 
-/** Candidate windows that start and end on whole sentences, within min..max seconds. */
+/** The parts of a clip that are actually in it: its kept sentences for a montage cut, else its whole range. */
+const piecesOf = (c) => (c.keep?.length ? c.keep.map(([a, b]) => ({ start: a, end: b })) : [{ start: c.start, end: c.end }]);
+/** Seconds two clips share, by their real pieces (a montage cut spans minutes but uses only ~30 s of them). */
+function sharedSec(a, b) { let n = 0; for (const x of piecesOf(a)) for (const y of piecesOf(b)) n += Math.max(0, Math.min(x.end, y.end) - Math.max(x.start, y.start)); return n; }
+const lengthOf = (c) => piecesOf(c).reduce((n, x) => n + (x.end - x.start), 0);
+
+/** Candidate windows that start and end on whole sentences, within min..max seconds, plus montage cuts (storyCuts). */
 function candidates(sig, { minSec, maxSec, duration, exclude = [], limit = 40, storyCuts = false, endHook = false }) {
-  const out = []; const S = sig.sents; const span = storyCuts ? Math.min(150, Math.max(maxSec * 2.2, maxSec + 20)) : maxSec;
+  const out = []; const S = sig.sents;
+  const blocked = (c) => exclude.some((x) => sharedSec(x, c) > 0.2 * Math.min(lengthOf(c), maxSec));
   for (let i = 0; i < S.length; i++) {
     for (let j = i; j < S.length; j++) {
       const s = Math.max(0, S[i].s - 0.15); const e = Math.min(duration, S[j].e + 0.25); const len = e - s;
-      if (len > span) break;
-      if (exclude.some((x) => Math.min(x.end, e) - Math.max(x.start, s) > 0.2 * Math.min(len, maxSec))) continue;
+      if (len > maxSec) break;
+      if (len < minSec) continue;
+      if (blocked({ start: s, end: e })) continue;
       // Highlights: the clip must end on a hook (a reveal, a question, "and then we opened the door...").
       if (endHook && !END_HOOK.test(S[j].t)) continue;
-      if (len <= maxSec) {
-        if (len < minSec) continue;
-        out.push({ start: Math.round(s * 100) / 100, end: Math.round(e * 100) / 100, ...scoreWindow(s, e, sig), text: S.slice(i, j + 1).map((x) => x.t).join(' ') });
-      } else if (storyCuts && j - i >= 3) {
-        // Story cut: keep the opening hook and the ending, drop the weakest whole sentences in between until it fits.
-        const kept = condense(S.slice(i, j + 1), maxSec, sig);
-        if (!kept) continue;
-        const dur = kept.reduce((n, x) => n + (x.e - x.s) + 0.3, 0); if (dur < minSec) continue;
-        const sc = scoreWindow(s, e, sig, kept);
-        out.push({ start: Math.round(s * 100) / 100, end: Math.round(e * 100) / 100, keep: kept.map((x) => [Math.round(Math.max(0, x.s - 0.12) * 100) / 100, Math.round((x.e + 0.18) * 100) / 100]), score: sc.score - 4, why: sc.why, text: kept.map((x) => x.t).join(' ') });
-      }
+      out.push({ start: Math.round(s * 100) / 100, end: Math.round(e * 100) / 100, ...scoreWindow(s, e, sig), text: S.slice(i, j + 1).map((x) => x.t).join(' ') });
     }
   }
+  if (storyCuts) for (const c of montageCuts(sig, { minSec, maxSec, duration, exclude })) if (!blocked(c)) out.push(c);
   out.sort((a, b) => b.score - a.score);
   const picked = [];
-  for (const c of out) { if (picked.every((p) => Math.min(p.end, c.end) - Math.max(p.start, c.start) < 0.15 * (c.end - c.start))) picked.push(c); if (picked.length >= limit) break; }
+  for (const c of out) { if (picked.every((p) => sharedSec(p, c) < 0.15 * lengthOf(c))) picked.push(c); if (picked.length >= limit) break; }
   return picked;
+}
+
+// ---------------------------------------------------------------- montage cuts (the usual Shorts edit)
+const DANGLING = /^["'(]?(and|but|so|or|because|cause|which|then|also|plus|like|that'?s why|anyway)\b/i;
+const REFERS = /^["'(]?(it|that|this|they|them|he|she|those|these|there|i picked (it|one)|one of them)\b/i;
+/** A montage ends on an open loop: the viewer wants the next line. Stricter than END_HOOK (which also scores windows). */
+const OPEN_LOOP = /\?\s*["']?$|\.\.\.\s*["']?$|\b(and then|but then|until|suddenly|all of a sudden|what we (found|saw|heard)|you won'?t believe|turns out|look at (this|that)|wait|no way|we heard|we saw|i heard|i saw|something (was )?(moving|there|inside|behind)|about to|what (is|was) (that|this|inside|behind)|behind (that|the) door|never (seen|expected))\b/i;
+/** Seconds a sentence lasts once the render's pause cuts take out gaps over ~0.55 s. */
+function spoken(x) { let n = 0; for (let i = 0; i < x.words.length; i++) { const w = x.words[i]; n += w.e - w.s; const nx = x.words[i + 1]; if (nx) n += Math.min(0.55, Math.max(0, nx.s - w.e)); } return n + 0.24; }
+function sentValue(x, sig) {
+  return (FILLER.test(x.t) || OUTRO.test(x.t) || x.ex ? -10 : 0) + (x.vo ? 3 : 0) + (HOOK.test(x.t) ? 2 : 0) + Math.min(2, x.words.length / 8)
+    + sig.shots.filter((sh) => sh.s < x.e && sh.e > x.s).reduce((n, sh) => Math.max(n, shotScore(sh) * 3), 0)
+    + (sig.peaks || []).filter((t) => t >= x.s && t <= x.e).length * 0.8 + (sig.bursts || []).filter((t) => t >= x.s && t <= x.e).length;
+}
+
+/**
+ * One montage cut from a section of whole sentences (chronological, the last one is the ending): the opening line,
+ * the strongest lines in between in their original order (neighbours of kept lines are preferred so it reads as a
+ * story, not a jumble), and the ending, an open hook ("and then we opened the door..."), so the clip stops before the
+ * payoff. Never cuts inside a sentence. Returns the kept sentences, or null if it can't land between tmin and tmax.
+ */
+function narrative(sec, sig, { tmin, tmax }) {
+  if (sec.length < 3) return null;
+  const end = sec.length - 1;
+  // Opening: one of the first lines that stands on its own (not "and...", "so..."), a hook if there is one.
+  let open = -1;
+  for (let k = 0; k < Math.min(4, end); k++) {
+    const x = sec[k]; if (x.ex || DANGLING.test(x.t) || REFERS.test(x.t) || FILLER.test(x.t) || x.words.length < 4) continue;
+    if (open < 0 || (HOOK.test(x.t) && !HOOK.test(sec[open].t))) open = k;
+    if (HOOK.test(x.t)) break;
+  }
+  if (open < 0) return null;
+  const keep = new Set([open, end]); let total = spoken(sec[open]) + spoken(sec[end]);
+  if (total > tmax) return null;
+  const val = sec.map((x) => sentValue(x, sig));
+  // The lines just before the ending set it up: keep the one before it whenever it fits, and the one before that too
+  // when it leans on it ("It says...", "But..."), up to three lines.
+  for (let k = end - 1, n = 0; k > open && n < 3; k--, n++) {
+    if (val[k] <= -5 || total + spoken(sec[k]) > tmax) { if (n) return null; break; }
+    keep.add(k); total += spoken(sec[k]);
+    if (!(DANGLING.test(sec[k].t) || REFERS.test(sec[k].t))) break;
+  }
+  // A tease in the middle gives the ending away: only the last line opens a loop.
+  for (let k = open + 1; k < end; k++) if (OPEN_LOOP.test(sec[k].t) && !keep.has(k)) val[k] -= 3;
+  for (;;) {
+    let best = -1; let bestV = -Infinity;
+    for (let k = open + 1; k < end; k++) {
+      if (keep.has(k) || val[k] <= -5 || total + spoken(sec[k]) > tmax) continue;
+      const v = val[k] + (keep.has(k - 1) ? 1.5 : 0) + (keep.has(k + 1) ? 1.5 : 0);
+      if (v > bestV) { bestV = v; best = k; }
+    }
+    if (best < 0) break;
+    keep.add(best); total += spoken(sec[best]);
+    if (total >= tmax - 1.5) break;
+  }
+  // A middle line that leans on the one before it ("But...", "It was...") needs that line too, or it goes.
+  for (let k = end - 1; k > open; k--) {
+    if (!keep.has(k) || keep.has(k - 1) || !(DANGLING.test(sec[k].t) || REFERS.test(sec[k].t))) continue;
+    if (k - 1 > open && val[k - 1] > -5 && total + spoken(sec[k - 1]) <= tmax) { keep.add(k - 1); total += spoken(sec[k - 1]); } else { keep.delete(k); total -= spoken(sec[k]); }
+  }
+  if (total < tmin) return null;
+  return [...keep].sort((p, q) => p - q).map((k) => sec[k]);
+}
+
+/**
+ * Montage cuts across the footage: sections of 45 s to 5 min that start on a line that stands alone and end on an
+ * open hook, each condensed by `narrative` to the clip length (20-30 s for the usual 20-59 s setting).
+ */
+function montageCuts(sig, { minSec, maxSec, duration, exclude = [] }) {
+  const S = sig.sents; const out = [];
+  // Lines inside ad reads or moments other clips already use are never taken.
+  for (const x of S) x.ex = exclude.some((r) => sharedSec(r, { start: x.s, end: x.e }) > 0.3 * (x.e - x.s));
+  const tmax = Math.min(maxSec, Math.max(minSec + 10, Number(require('../core/ctx').setting('production.montageMaxSec', 30)) || 30)); const tmin = minSec;
+  const starts = []; const ends = [];
+  for (let i = 0; i < S.length; i++) {
+    const x = S[i];
+    if (x.ex) continue;
+    if (!DANGLING.test(x.t) && !REFERS.test(x.t) && !FILLER.test(x.t) && x.words.length >= 4 && (i === 0 || x.s - S[i - 1].e > 0.6 || HOOK.test(x.t))) starts.push(i);
+    if (OPEN_LOOP.test(x.t) && !OUTRO.test(x.t) && x.words.length >= 3) ends.push(i);
+  }
+  for (const i of starts) {
+    const reach = ends.filter((j) => j > i + 2 && S[j].e - S[i].s >= Math.max(45, tmax + 10) && S[j].e - S[i].s <= 300);
+    // A handful of section lengths per start, spread out (short, medium, long).
+    const step = Math.max(1, Math.ceil(reach.length / 6));
+    for (let r = 0; r < reach.length; r += step) {
+      const j = reach[r]; const sec = S.slice(i, j + 1);
+      const kept = narrative(sec, sig, { tmin, tmax }); if (!kept) continue;
+      const s = Math.max(0, S[i].s - 0.15); const e = Math.min(duration, S[j].e + 0.25);
+      const sc = scoreWindow(s, e, sig, kept);
+      const keepR = kept.map((x) => [Math.round(Math.max(0, x.s - 0.12) * 100) / 100, Math.round((x.e + 0.18) * 100) / 100]);
+      const pieces = keepR.reduce((n, [a], k) => n + (k === 0 || a > keepR[k - 1][1] + 0.35 ? 1 : 0), 0);
+      // Montage cuts are the house style: a small lift over plain windows, less when it's chopped into many pieces.
+      out.push({ start: Math.round(s * 100) / 100, end: Math.round(e * 100) / 100, keep: keepR, score: Math.round((sc.score + 6 - 1.5 * Math.max(0, pieces - 5)) * 10) / 10, why: [...sc.why.filter((w) => w !== 'story cut'), `montage of ${Math.round(e - s)} s`], text: kept.map((x) => x.t).join(' '), lines: kept.length, span: [i, j] });
+    }
+  }
+  return out;
 }
 
 /** Whole sentences to keep for a story cut of at most maxSec: first and last always stay; filler goes first, then the weakest. */
@@ -362,4 +457,4 @@ function dips(ys, fps = 10) {
   return out.filter(([a, b]) => b - a >= 0.15 && b - a <= 6).map(([a, b]) => [Math.round(Math.max(0, a - 0.1) * 100) / 100, Math.round((b + 0.1) * 100) / 100]);
 }
 
-module.exports = { dips, blackInRange, darkAt, coverBlack, outputToSource, reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
+module.exports = { OPEN_LOOP, REFERS, narrative, montageCuts, sharedSec, piecesOf, spoken, DANGLING, END_HOOK, HOOK, FILLER, OUTRO, dips, blackInRange, darkAt, coverBlack, outputToSource, reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };

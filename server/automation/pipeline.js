@@ -62,7 +62,7 @@ function addAsset({ clientId, filePath, source = 'manual', actor = 'user', name 
   return ctx.store.get('assets', asset.id);
 }
 
-function usedRanges(assetId) { return ctx.store.all('clips', (c) => c.assetId === assetId && c.status !== 'rejected').map((c) => ({ start: c.start, end: c.end })); }
+function usedRanges(assetId) { return ctx.store.all('clips', (c) => c.assetId === assetId && c.status !== 'rejected').map((c) => ({ start: c.start, end: c.end, keep: c.keep || null })); }
 
 // ------------------------------------------------------------ clips
 function createClips(asset, discovered) {
@@ -72,7 +72,7 @@ function createClips(asset, discovered) {
   for (const d of discovered.clips) {
     const clip = ctx.store.insert('clips', {
       ref: nextRef(), clientId: asset.clientId, assetId: asset.id, start: d.start, end: d.end, title: d.title || 'Untitled clip', hook: d.hook || '', caption: d.caption || '',
-      hashtags: (d.hashtags || []).map((h) => String(h).replace(/^#/, '')).slice(0, 12), score: d.score ?? null, keep: Array.isArray(d.keep) ? d.keep : null, reason: d.reason || '', method: discovered.method, agent: d.agent || null,
+      hashtags: (d.hashtags || []).map((h) => String(h).replace(/^#/, '')).slice(0, 12), score: d.score ?? null, keep: Array.isArray(d.keep) ? d.keep : null, why: Array.isArray(d.why) ? d.why.slice(0, 8) : [], reason: d.reason || '', method: discovered.method, agent: d.agent || null,
       // Style mix: this clip's own look (a preset's captions and title over the client's), set before it renders.
       ...(d.style ? { style: d.style } : {}), ...(d.videoStyle ? { videoStyle: d.videoStyle } : {}), ...(d.tightCuts ? { tightCuts: true } : {}), ...(d.visualCuts != null ? { visualCuts: d.visualCuts } : {}),
       wide: !!prod.wide, punchIns: prod.punchIns ? (d.punchIns || []) : [], reframe: d.reframe || prod.reframe || 'smart-blur', focusX: prod.focusX ?? 0.5, silenceCut: prod.silenceCut !== false, retakeCut: prod.retakeCut !== false,
@@ -165,6 +165,8 @@ function decideClip(clipId, decision, { actor = 'user', note = '', stage } = {})
   const appr = clip.approvalId ? ctx.store.get('approvals', clip.approvalId) : null;
   stage = stage || appr?.stage || 'internal';
   const decidedAt = now();
+  // The editor learns from every decision (server/video/taste.js); a client's own approval counts the same.
+  try { require('../video/taste').record(clip, decision, note); } catch { /* learning is best-effort */ }
   if (decision === 'reject') {
     ctx.store.update('clips', clipId, { status: 'rejected' });
     if (appr) ctx.store.update('approvals', appr.id, { status: 'rejected', decidedBy: actor, decidedAt, note });

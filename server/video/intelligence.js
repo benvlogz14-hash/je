@@ -185,7 +185,8 @@ function normalizeClips(raw, { words, duration, minSec, maxSec, exclude = [], co
     end = Math.min(end, duration);
     const clip = { ...c, start: Math.round(start * 100) / 100, end: Math.round(end * 100) / 100 };
     if (end - start < Math.min(minSec, 5)) continue;
-    if ([...out, ...exclude].some((o) => overlap(o, clip) > 0.2)) continue;
+    const share = require('./montage').sharedSec; const len = (x) => (x.keep?.length ? x.keep.reduce((n, [a, b]) => n + b - a, 0) : x.end - x.start);
+    if ([...out, ...exclude].some((o) => share(o, clip) > 0.2 * Math.min(len(o), len(clip)))) continue;
     out.push(clip);
   }
   return out.sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, count);
@@ -223,6 +224,38 @@ function tipNudge(cands, tips) {
   cands.sort((a, b) => b.score - a.score);
 }
 
+/**
+ * The AI re-cuts each chosen montage clip from the whole stretch it came from: it sees every sentence (numbered, with
+ * lengths) and picks whole lines in order for a 20-30 s story that opens on a hook and ends on an open loop. Its pick
+ * is used only if it's whole sentences, in order, the right length, opens on a line that stands alone and ends on an
+ * open hook; otherwise the scored cut stays.
+ */
+async function recut(chosen, sig, { asset, jobId, minSec, maxSec, tips }) {
+  const m = require('./montage'); const S = sig.sents;
+  const tmax = Math.min(maxSec, Math.max(minSec + 10, Number(ctx.setting('production.montageMaxSec', 30)) || 30));
+  const list = chosen.filter((c) => c.keep && c.span).slice(0, 8);
+  if (!list.length) return;
+  const block = list.map((c, n) => `CLIP ${n + 1} (${c.title || ''}):\n${S.slice(c.span[0], c.span[1] + 1).map((x, k) => `${k + 1}. (${m.spoken(x).toFixed(1)}s) ${x.t}`).join('\n')}`).join('\n\n');
+  try {
+    const waitSec = Math.min(300, Number(ctx.setting('production.aiPickSeconds', 600)));
+    const r = await Promise.race([new Promise((_, no) => setTimeout(() => no(new Error('slow')), waitSec * 1000).unref?.()), ai.ask({ role: 'analysis', json: true, clientId: asset.clientId, jobId, maxTokens: 1500,
+      system: `You edit YouTube Shorts the usual way: take a long stretch of someone talking and cut it down to a short story. Rules: whole sentences only (never cut inside one), keep them in their original order, no filler, no repeats, no outros or plugs. Open on a line that grabs attention and makes sense on its own. Build up through the strongest lines. End on an open hook: a line that leaves the viewer wanting the payoff ("and then we opened the door...", a question, a reveal about to happen), never the payoff itself. Total ${minSec} to ${tmax} seconds (the seconds are next to each line).${tips ? ` The editor's tips: ${tips}` : ''}`,
+      prompt: `${block}\n\nFor every clip return the line numbers to keep. JSON: {"clips":[{"clip":1,"lines":[1,4,5,9]}]}` })]);
+    for (const x of r.json?.clips || []) {
+      const c = list[Number(x.clip) - 1]; if (!c) continue;
+      const sec = S.slice(c.span[0], c.span[1] + 1);
+      const idx = [...new Set((x.lines || []).map(Number).filter((k) => k >= 1 && k <= sec.length))].sort((a, b) => a - b);
+      if (idx.length < 2) continue;
+      const kept = idx.map((k) => sec[k - 1]); const total = kept.reduce((n, y) => n + m.spoken(y), 0);
+      if (total < minSec * 0.9 || total > tmax + 3) continue;
+      if (m.DANGLING.test(kept[0].t) || !m.OPEN_LOOP.test(kept[kept.length - 1].t) || kept.some((y) => m.OUTRO.test(y.t))) continue;
+      c.keep = kept.map((y) => [Math.round(Math.max(0, y.s - 0.12) * 100) / 100, Math.round((y.e + 0.18) * 100) / 100]);
+      c.start = c.keep[0][0]; c.end = c.keep[c.keep.length - 1][1];
+      c.reason = `${c.reason || ''} (cut by the AI from ${Math.round(sec[sec.length - 1].e - sec[0].s)} s)`.trim();
+    }
+  } catch { /* the scored cut stays */ }
+}
+
 async function discoverClips(asset, transcript, { count = 6, jobId, exclude = [], analysis = null, vision = null, onProgress = () => {}, storyCuts = null, endHook = false, minSec: minO = null, maxSec: maxO = null } = {}) {
   // Clip length: a style's own (Documentary is 22-40 s, from the reference short), else the client's setting (the sliders
   // by the upload box), else the global default.
@@ -240,11 +273,13 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
     onProgress(0.25, 'Listening for voiceover');
     const sig = await montage.signals({ asset, transcript, vision, analysis });
     onProgress(0.4, 'Scoring every moment');
-    const cands = montage.candidates(sig, { minSec, maxSec, duration, exclude, limit: 24, endHook, storyCuts: storyCuts ?? (prod.storyCuts === true || ctx.setting('production.storyCuts', false) === true) });
+    const cands = montage.candidates(sig, { minSec, maxSec, duration, exclude, limit: 24, endHook, storyCuts: storyCuts ?? (prod.storyCuts ?? ctx.setting('production.storyCuts', true)) !== false });
     if (tips) tipNudge(cands, tips);
+    // What this client's editor approved and rejected before leans the scores (and is shown to the AI below).
+    try { require('./taste').nudge(cands, asset.clientId); } catch { /* nothing learned yet */ }
     if (cands.length) {
       const name = cleanName(asset.name);
-      const fallback = (c, i) => ({ start: c.start, end: c.end, keep: c.keep, score: Math.round(c.score), title: `${name} · Part ${i + 1}`.slice(0, 80), hook: topicHook(asset.name) || cleanHook(hookFrom(c.text), { name: asset.name }), caption: '', hashtags: [], reason: `Picked for: ${c.why.join(', ') || 'steady speech'}`, punchIns: zoomsFor(c, analysis) });
+      const fallback = (c, i) => ({ start: c.start, end: c.end, keep: c.keep, why: c.why, score: Math.round(c.score), title: `${name} · Part ${i + 1}`.slice(0, 80), hook: topicHook(asset.name) || cleanHook(hookFrom(c.text), { name: asset.name }), caption: '', hashtags: [], reason: `Picked for: ${c.why.join(', ') || 'steady speech'}`, punchIns: zoomsFor(c, analysis) });
       if (ai.anyConnected()) {
         let tick = null;
         try {
@@ -252,15 +287,16 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
           const waitSec = Number(ctx.setting('production.aiPickSeconds', 600)); const t0 = Date.now();
           tick = setInterval(() => { const left = Math.max(0, waitSec - Math.round((Date.now() - t0) / 1000)); onProgress(0.45 + 0.4 * (1 - left / waitSec), `AI choosing the best ${count} (uses the scores in ${Math.ceil(left / 60)} min if it hasn't answered)`); }, 5000);
           const r = await Promise.race([new Promise((_, no) => setTimeout(() => no(new Error('AI took too long')), waitSec * 1000).unref?.()), ai.ask({ role: 'analysis', json: true, clientId: asset.clientId, jobId, maxTokens: 3500, system: DISCOVERY_SYSTEM,
-            prompt: `Footage: "${asset.name}" (${Math.round(duration)}s). Below are the ${Math.min(cands.length, 18)} strongest candidate moments, already measured (VO = voiceover narration, which performs best; DRONE = aerial shots). Choose the ${count} that would do best as YouTube Shorts/TikToks: a scroll-stopping first line, one clear story with a payoff, curiosity, strong visuals. Skip ones that start mid-thought or are just filler.${tips ? `\n\nThe editor's tips for this footage (follow them; they beat the scores): ${tips}` : ''}\n\n${cands.slice(0, 18).map((c, i) => `#${i + 1} [${c.start.toFixed(1)}-${c.end.toFixed(1)}s] score ${Math.round(c.score)}${c.why.length ? ` (${c.why.join(', ')})` : ''}: "${c.text.slice(0, 420)}"`).join('\n')}\n\nReturn JSON: {"clips":[{"pick":1,"title":"<=60 chars, curiosity-driven","hook":"2-5 word on-screen title about what this moment shows (different for every clip, never a quote of what is said)","caption":"1-2 sentence social caption","hashtags":["tag"],"reason":"why it will work","punchIns":[{"at":seconds_from_clip_start,"dur":1.2}],"trials":[{"name":"<=3 words","test":"what this version tests","hook":"a different opening headline","start":sec}]}]}` })]);
+            prompt: `Footage: "${asset.name}" (${Math.round(duration)}s). Below are the ${Math.min(cands.length, 18)} strongest candidate moments, already measured (VO = voiceover narration, which performs best; DRONE = aerial shots). Choose the ${count} that would do best as YouTube Shorts/TikToks: a scroll-stopping first line, one clear story with a payoff, curiosity, strong visuals. Skip ones that start mid-thought or are just filler.${require('./taste').promptBlock(asset.clientId)}${tips ? `\n\nThe editor's tips for this footage (follow them; they beat the scores): ${tips}` : ''}\n\n${cands.slice(0, 18).map((c, i) => `#${i + 1} [${c.start.toFixed(1)}-${c.end.toFixed(1)}s${c.keep ? `, montage: ${c.lines} whole sentences from this stretch` : ''}] score ${Math.round(c.score)}${c.why.length ? ` (${c.why.join(', ')})` : ''}: "${c.text.slice(0, 420)}"`).join('\n')}\n\nReturn JSON: {"clips":[{"pick":1,"title":"<=60 chars, curiosity-driven","hook":"2-5 word on-screen title about what this moment shows (different for every clip, never a quote of what is said)","caption":"1-2 sentence social caption","hashtags":["tag"],"reason":"why it will work","punchIns":[{"at":seconds_from_clip_start,"dur":1.2}],"trials":[{"name":"<=3 words","test":"what this version tests","hook":"a different opening headline","start":sec}]}]}` })]);
           clearInterval(tick);
           const chosen = []; const seen = new Set();
           for (const x of r.json?.clips || []) {
             const c = cands[Number(x.pick) - 1]; if (!c || seen.has(c)) continue; seen.add(c);
-            chosen.push({ ...fallback(c, chosen.length), ...x, start: c.start, end: c.end, keep: c.keep, score: Math.round(c.score), reason: `${x.reason || ''}${c.why.length ? ` (${c.why.join(', ')})` : ''}`.trim(), punchIns: Array.isArray(x.punchIns) && x.punchIns.length ? x.punchIns : zoomsFor(c, analysis), agent: `${r.provider}:${r.model}` });
+            chosen.push({ ...fallback(c, chosen.length), ...x, start: c.start, end: c.end, keep: c.keep, span: c.span, score: Math.round(c.score), reason: `${x.reason || ''}${c.why.length ? ` (${c.why.join(', ')})` : ''}`.trim(), punchIns: Array.isArray(x.punchIns) && x.punchIns.length ? x.punchIns : zoomsFor(c, analysis), agent: `${r.provider}:${r.model}` });
             if (chosen.length >= count) break;
           }
           for (const c of cands) { if (chosen.length >= count) break; if (!seen.has(c)) { seen.add(c); chosen.push(fallback(c, chosen.length)); } }
+          if (chosen.some((c) => c.keep)) { onProgress(0.86, 'AI tightening the montage cuts'); await recut(chosen, sig, { asset, jobId, minSec, maxSec, tips }); }
           if (chosen.length) return { method: 'ai', clips: normalizeClips(chosen, { words, duration, minSec, maxSec, exclude, count }).map((c) => ({ ...c, hook: cleanHook(c.hook, { name: asset.name, spoken: words.filter((w) => w.s >= c.start - 0.5 && w.s < c.end).map((w) => w.w).join(' ') }) })) };
         } catch { /* the scores decide */ } finally { clearInterval(tick); }
       }

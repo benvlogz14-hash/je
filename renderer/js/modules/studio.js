@@ -499,6 +499,18 @@ function Editor({ id }) {
     if (m.hasAudio && m.kind !== 2) place(s, 'a', s.audioTracks[audioIdx] ? audioIdx : 0, mk(1), { replace, dir });
     sfx('press');
   });
+  /** A B-roll bank shot (Studio → B-roll): picture only, from the middle of the shot, on the dropped video track or,
+   *  double-clicked, on a "B-roll" track above everything at the playhead. */
+  const addBroll = async (item, vi = null, at = null) => {
+    const [m] = await importPaths([item.path]); if (!m) return;
+    edit((d, s) => {
+      if (vi == null) { vi = s.videoTracks.findIndex((tr) => tr.name === 'B-roll'); if (vi < 0) { s.videoTracks.push({ type: 0, name: 'B-roll', muted: false, locked: false, volume: { base: 1 }, clips: [] }); vi = s.videoTracks.length - 1; } }
+      const inS = Math.max(0, item.s || 0); const len = Math.max(0.5, item.e ? item.e - inS : Math.min(3, m.duration || 3));
+      const W = s.width, H = s.height; const fit = m.width ? Math.max(W / m.width, H / m.height) : 1;
+      place(s, 'v', vi, { id: nextId(d), type: m.kind === 2 || m.kind === 3 ? 2 : 0, mediaId: m.id, name: item.what ? `B-roll: ${item.what}`.slice(0, 60) : `B-roll ${m.name}`, start: at ?? t, duration: len, in: inS, speed: 1, preservePitch: false, linkId: '0', enabled: true, posX: anim(0), posY: anim(0), scaleX: anim(fit), scaleY: anim(fit), rotation: anim(0), opacity: anim(1), volume: anim(0), uniformScale: true, effects: [], transIn: { type: 0, duration: 1 }, transOut: { type: 0, duration: 1 } }, { replace: true });
+    });
+    sfx('press');
+  };
   const [titleEdit, setTitleEdit] = useState(null); // null | {} (new) | { clipId } | { clipId, ids } (style for many)
   const [musicOpen, setMusicOpen] = useState(false);
   // Timeline area height: drag the bar above it (▲ ▼) to give the timeline or the preview more room; remembered.
@@ -647,14 +659,14 @@ function Editor({ id }) {
       <${Button} kind="primary" size="sm" icon="upload" onClick=${exportNow}>Export</${Button}>
     </div>
     <div style="display:grid;grid-template-columns:260px minmax(0, 1fr) 300px;grid-template-rows:minmax(0, 1fr);min-height:0;overflow:hidden">
-      <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${id} />
+      <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${id} onBroll=${addBroll} />
       <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} sel=${sel} edit=${edit} setSel=${setSel} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
       <${EffectControls} selected=${selected} sel=${sel} findClip=${findClip} seq=${seq} edit=${edit} media=${media} t=${t} setT=${setT} onEditTitle=${(cid, ids) => setTitleEdit({ clipId: cid, ids })} />
     </div>
     <div style="display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative">
     <div class="ed-split" title="Drag up or down to resize the timeline (double-click to reset)" onPointerDown=${startResize} onDblClick=${() => setBottom(null)}><span>▲</span><span class="ed-grip" /><span>▼</span></div>
     <${CaptionsBar} seq=${seq} media=${media} sel=${sel} setSel=${setSel} edit=${edit} findClip=${findClip} nextId=${nextId} />
-    <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onClipMenu=${clipMenu} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} /></div>
+    <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onBroll=${addBroll} onClipMenu=${clipMenu} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} /></div>
     ${exporting ? html`<${ExportDialog} id=${id} onClose=${() => setExporting(false)} />` : null}
     ${musicOpen ? html`<${MusicLibrary} onClose=${() => setMusicOpen(false)} onAdd=${addMusic} />` : null}
     ${titleEdit ? html`<${TitleDesigner} seq=${seq} clip=${titleEdit.clipId ? findClip(seq, titleEdit.clipId)?.c : null} count=${titleEdit.ids?.length || 1} onClose=${() => setTitleEdit(null)} onSave=${saveTitle} />` : null}
@@ -905,7 +917,7 @@ function ExportDialog({ id, onClose }) {
 }
 
 // ------------------------------------------------------------ left: project bin + effects
-function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, importPaths, importing, aiEdit, aiUndo, projectId }) {
+function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, importPaths, importing, aiEdit, aiUndo, projectId, onBroll }) {
   const fileRef = useRef(null);
   const busy = importing;
   const importDisk = async () => {
@@ -924,10 +936,10 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
     sfx('success');
   };
   return html`<div style="display:flex;flex-direction:column;min-height:0;background:var(--ed-panel);border-right:1px solid var(--line)">
-    <div class="row" style="padding:8px 10px;border-bottom:1px solid var(--line)"><${Seg} value=${tab} onChange=${setTab} options=${[{ value: 'media', label: 'Project' }, { value: 'effects', label: 'Effects' }, { value: 'ai', label: 'AI' }]} /><div class="spacer" />${tab === 'media' ? html`<${Button} size="sm" kind="soft" icon="plus" busy=${busy} title="Import media" onClick=${importDisk} />` : null}</div>
+    <div class="row" style="padding:8px 10px;border-bottom:1px solid var(--line)"><${Seg} value=${tab} onChange=${setTab} options=${[{ value: 'media', label: 'Project' }, { value: 'broll', label: 'B-roll' }, { value: 'effects', label: 'Effects' }, { value: 'ai', label: 'AI' }]} /><div class="spacer" />${tab === 'media' ? html`<${Button} size="sm" kind="soft" icon="plus" busy=${busy} title="Import media" onClick=${importDisk} />` : null}</div>
     <input type="file" ref=${fileRef} multiple accept="video/*,audio/*,image/*" hidden onChange=${(e) => { importFiles([...e.target.files]); e.target.value = ''; }} />
     <div style="flex:1;overflow:auto;padding:8px" onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); importFiles([...e.dataTransfer.files]); } }}>
-      ${tab === 'ai' ? html`<${AIPanel} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${projectId} selected=${selected} />` : tab === 'media' ? (data.media.length ? data.media.map((m) => html`
+      ${tab === 'ai' ? html`<${AIPanel} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${projectId} selected=${selected} />` : tab === 'broll' ? html`<${BrollBank} projectId=${projectId} clientId=${data.clientId} onAdd=${onBroll} />` : tab === 'media' ? (data.media.length ? data.media.map((m) => html`
         <div class="review-item" draggable="true" onDragStart=${(e) => e.dataTransfer.setData('text/x-media', m.id)} onDblClick=${() => onAdd(m)} title="Double-click to add at the end of V1, or drag onto a track">
           <div class="th" style=${{ width: '58px', aspectRatio: '16/9', backgroundImage: m.kind !== 1 ? `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(m.path)}&t=${m.kind >= 2 ? 0 : 1}`)})` : 'none', display: 'grid', placeItems: 'center' }}>${m.kind === 1 ? html`<${Icon} name="volume" size=${16} />` : null}</div>
           <div class="grow" style="min-width:0"><div class="ellipsis" style="font-size:var(--fs-sm);font-weight:500">${m.name}</div><div class="faint tnum" style="font-size:var(--fs-xs)">${m.kind >= 2 ? 'Image' : dur(m.duration)}${m.width ? ` · ${m.width}×${m.height}` : ''}${m.proxyPending ? ' · preparing preview…' : m.proxyError ? ' · preview unavailable' : ''}</div></div></div>`)
@@ -935,6 +947,29 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
       : html`${['Retro', 'Blur', 'Color', 'Transform', 'Stylize'].map((cat) => html`<div class="eyebrow" style="padding:8px 6px 4px">${cat}</div>${EFFECTS.filter((f) => f.cat === cat).map((f) => html`<div class="review-item" onDblClick=${() => applyEffect(f)} onClick=${() => applyEffect(f)} title="Apply to the selected clip"><${Icon} name="wand" size=${15} /><span style="font-size:var(--fs-sm)">${f.name}</span></div>`)}`)}
         ${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<div class="eyebrow" style="padding:12px 6px 4px">${cat === 'Dissolve' ? 'Transitions · ' : ''}${cat}</div>${TRANSITIONS.filter((x) => x.cat === cat).map((tt) => html`<div class="review-item" style="cursor:default"><${Icon} name="layers" size=${15} /><span class="grow" style="font-size:var(--fs-sm)">${tt.name}</span><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transIn')}>In</${Button}><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transOut')}>Out</${Button}></div>`)}`)}`}
     </div></div>`;
+}
+
+// ------------------------------------------------------------ B-roll bank
+/** The client's best cut-away shots (drone first, from Look through) and your own B-roll files: drag one onto a video
+ *  track, or double-click to drop it at the playhead on the B-roll track. */
+function BrollBank({ projectId, clientId, onAdd }) {
+  const { data, reload } = useApi(`/api/broll/bank?projectId=${projectId}`, ['assets']);
+  const [kind, setKind] = useState('all');
+  const addFiles = async () => {
+    const r = await api.post('/api/system/pick', { multi: true, filters: [{ name: 'Video and images', extensions: ['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', 'mts', 'png', 'jpg', 'jpeg', 'webp'] }] }).catch(() => null);
+    if (r?.paths?.length) act(() => api.post('/api/broll/bank', { paths: r.paths, clientId: data?.clientId || clientId || null }), { ok: 'Added to your B-roll bank', sound: 'success' }).then(reload);
+  };
+  const hide = (it) => act(() => api.post('/api/broll/bank/hide', { key: it.key }), { ok: 'Removed from the bank', sound: 'tap' }).then(reload);
+  const items = (data?.items || []).filter((it) => kind === 'all' || (kind === 'drone' ? it.kind === 'drone' : kind === 'file' ? it.kind === 'file' : it.kind !== 'drone' && it.kind !== 'file'));
+  const thumb = (it) => api.url(`/api/media/thumb?path=${encodeURIComponent(it.path)}&t=${it.e ? ((it.s + it.e) / 2).toFixed(1) : 1}`);
+  return html`<div class="col" style="gap:6px">
+    <div class="row" style="gap:6px;flex-wrap:wrap"><${Seg} value=${kind} onChange=${setKind} options=${[{ value: 'all', label: 'All' }, { value: 'drone', label: 'Drone' }, { value: 'broll', label: 'Shots' }, { value: 'file', label: 'Mine' }]} /><div class="spacer" />${window.euclidean?.pickFiles ? html`<${Button} size="sm" kind="soft" icon="plus" onClick=${addFiles}>Add B-roll</${Button}>` : null}</div>
+    <p class="faint" style="font-size:var(--fs-xs);margin:0">Drag a shot onto a video track, or double-click to put it at the playhead. ${data ? `${data.looked} of ${data.footage} videos looked through.` : ''}</p>
+    ${!data ? html`<div class="faint" style="padding:10px">Loading…</div>` : !items.length ? html`<div class="empty" style="padding:24px 8px"><p style="font-size:var(--fs-sm)">${data.footage ? 'No B-roll shots yet. Press "Look through" on footage in Production and its drone and cut-away shots show up here.' : 'No footage for this client yet.'}</p></div>`
+      : html`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${items.map((it) => html`<div key=${it.key} class="broll-card" draggable="true" onDragStart=${(e) => { e.dataTransfer.setData('text/x-broll', JSON.stringify({ path: it.path, s: it.s, e: it.e, what: it.what })); e.dataTransfer.effectAllowed = 'copy'; }} onDblClick=${() => onAdd(it)} title=${`${it.what || it.kind} · ${it.from}${it.e ? ` · ${(it.e - it.s).toFixed(1)} s` : ''}. Drag onto a track or double-click.`}>
+          <div class="broll-th" style=${{ backgroundImage: `url(${thumb(it)})` }}>${it.kind === 'drone' ? html`<span class="broll-tag">Drone</span>` : it.kind === 'file' ? html`<span class="broll-tag">Mine</span>` : null}<button type="button" class="broll-x" title="Remove from the bank" onClick=${(e) => { e.stopPropagation(); hide(it); }}>×</button></div>
+          <div class="ellipsis" style="font-size:11px;padding:2px 2px 0">${it.what || it.from}</div></div>`)}</div>`}
+  </div>`;
 }
 
 // ------------------------------------------------------------ program monitor (canvas compositor)
@@ -1514,7 +1549,7 @@ function EffectControls({ selected, sel = [], findClip, seq, edit, media, t, set
 }
 
 // ------------------------------------------------------------ timeline
-function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom, duration, edit, findClip, linked, onAdd, onDropFiles, onClipMenu, onEditTitle }) {
+function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom, duration, edit, findClip, linked, onAdd, onDropFiles, onBroll, onClipMenu, onEditTitle }) {
   const scroller = useRef(null);
   const [drag, setDrag] = useState(null);
   // Box select: drag on empty timeline space to select every clip the box touches (Shift/Ctrl adds to the selection).
@@ -1663,6 +1698,8 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
   const onDropMedia = (e, lane) => {
     const r = scroller.current.getBoundingClientRect(); const at = doSnap(sOf(e.clientX - r.left + scroller.current.scrollLeft - HEAD_W), e.altKey);
     if (e.dataTransfer.files?.length) { e.preventDefault(); if (lane.tr.locked) return toast('That track is locked', { kind: 'warn' }); onDropFiles(e.dataTransfer.files, lane, at, e.ctrlKey || e.metaKey, e.shiftKey ? 'up' : 'down'); return; }
+    const br = e.dataTransfer.getData('text/x-broll');
+    if (br) { e.preventDefault(); if (lane.type === 1) return toast('B-roll goes on a video track', { kind: 'warn' }); if (lane.tr.locked) return toast('That track is locked', { kind: 'warn' }); try { onBroll(JSON.parse(br), lane.i, at); } catch { /* bad drag */ } return; }
     const mid = e.dataTransfer.getData('text/x-media'); if (!mid || !media[mid]) return; e.preventDefault();
     onAdd(media[mid], lane.type === 0 ? lane.i : 0, at, lane.type === 1 ? lane.i : 0, e.ctrlKey || e.metaKey, e.shiftKey ? 'up' : 'down');
   };

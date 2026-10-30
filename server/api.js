@@ -1119,6 +1119,43 @@ function emptyProject(b) {
   return { app: 'velo', version: 1, media: [], sequences: [{ id: 's1', name: 'Sequence 1', width: W, height: H, fps: b.fps || 30, videoTracks: [track(0, 'V1'), track(0, 'V2'), track(0, 'V3')], audioTracks: [track(1, 'A1'), track(1, 'A2')] }], openTabs: ['s1'], activeSequence: 's1', nextClipId: '1' };
 }
 r.get('/api/projects/:id', (req, b, p) => must(ctx.store.get('projects', p.id)));
+// B-roll bank (Studio → B-roll tab): the good cut-away shots of a client's footage (drone first), found by Look
+// through, plus B-roll files you add yourself. Drag one onto the timeline and it goes in, picture only.
+r.get('/api/broll/bank', (req) => {
+  const proj = req.query.projectId ? ctx.store.get('projects', String(req.query.projectId)) : null;
+  const clientId = String(req.query.clientId || proj?.clientId || '');
+  const vision = require('./video/vision'); const m = require('./video/montage');
+  const hidden = new Set(ctx.store.settings.brollHidden || []);
+  const assets = ctx.store.all('assets', (a) => (!clientId || a.clientId === clientId) && a.path && fs.existsSync(a.path) && a.info?.hasVideo !== false).slice(-60);
+  const shots = [];
+  for (const a of assets) {
+    let v = null; try { v = vision.cached(a.path, a.workDir); } catch { /* not looked through */ }
+    for (const x of v?.shots || []) {
+      if (x.usable === false || x.e - x.s < 1.2 || (x.bright != null && x.bright < 40)) continue;
+      const cut = m.isDrone(x) || ['broll', 'aerial'].includes(x.kind) || x.faces === 0; if (!cut) continue;
+      const key = `${a.id}:${x.s.toFixed(1)}`; if (hidden.has(key)) continue;
+      const mid = (x.s + x.e) / 2; const len = Math.min(3, x.e - x.s);
+      shots.push({ key, path: a.path, assetId: a.id, from: a.name, s: Math.max(x.s, mid - len / 2), e: Math.min(x.e, mid + len / 2), shotS: x.s, shotE: x.e, kind: m.isDrone(x) ? 'drone' : x.kind || 'broll', what: x.what || '', score: Math.round(m.shotScore(x) * 100) + (m.isDrone(x) ? 30 : 0) });
+    }
+  }
+  shots.sort((p, q) => q.score - p.score);
+  const own = (ctx.store.settings.brollBank || []).filter((x) => !x.clientId || !clientId || x.clientId === clientId).filter((x) => fs.existsSync(x.path)).map((x) => ({ key: `file:${x.path}`, path: x.path, from: 'Your B-roll', s: 0, e: null, kind: 'file', what: x.name || path.basename(x.path), score: 1000 }));
+  const looked = assets.filter((a) => { try { return !!vision.cached(a.path, a.workDir); } catch { return false; } }).length;
+  return { clientId: clientId || null, items: [...own, ...shots.slice(0, 160)], footage: assets.length, looked };
+});
+r.post('/api/broll/bank', (req, b) => {
+  const list = (Array.isArray(b.paths) ? b.paths : []).map(String).filter((f) => fs.existsSync(f));
+  if (!list.length) throw new HttpError(400, 'Pick one or more video files.');
+  const have = ctx.store.settings.brollBank || [];
+  ctx.store.settings.brollBank = [...have, ...list.filter((f) => !have.some((x) => x.path === f)).map((f) => ({ path: f, name: path.basename(f), clientId: b.clientId || null, addedAt: new Date().toISOString() }))]; ctx.store.touch();
+  return { ok: true, added: list.length };
+});
+r.post('/api/broll/bank/hide', (req, b) => {
+  const key = String(b.key || ''); if (!key) throw new HttpError(400, 'Nothing to remove');
+  if (key.startsWith('file:')) ctx.store.settings.brollBank = (ctx.store.settings.brollBank || []).filter((x) => `file:${x.path}` !== key);
+  else ctx.store.settings.brollHidden = [...new Set([...(ctx.store.settings.brollHidden || []), key])].slice(-5000);
+  ctx.store.touch(); return { ok: true };
+});
 // ---- AI editing (Studio's AI box, agents, and anything with an agent token)
 const editOps = require('./video/edit-ops');
 r.get('/api/projects/:id/summary', (req, b, p) => ({ text: editOps.summarize(must(ctx.store.get('projects', p.id))) }));
@@ -1278,7 +1315,7 @@ r.get('/api/media', (req, res) => {
 }, { stream: true });
 r.get('/api/media/thumb', async (req, res) => {
   const f = String(req.query.path || ''); const still = /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(f); const t = still ? 0 : Number(req.query.t || 1);
-  const allowed = ctx.store.all('projects').some((p) => (p.data?.media || []).some((m) => m.path === f));
+  const allowed = ctx.store.all('projects').some((p) => (p.data?.media || []).some((m) => m.path === f)) || !!ctx.store.find('assets', (a) => a.path === f) || (ctx.store.settings.brollBank || []).some((x) => x.path === f);
   if (!allowed) return send(res, 403, {});
   const out = path.join(paths.tmp('thumbs'), crypto.createHash('md5').update(f + t).digest('hex') + '.jpg');
   if (!fs.existsSync(out)) { try { await ff.thumbnail(f, out, t, 240); } catch { /* retry from the first frame below */ } }

@@ -296,7 +296,7 @@ queue.register('discover', {
     const otherLooks = looks ? looks.filter((l) => l !== 'highlights') : null;
     const want = looks ? otherLooks.length : (hlCount ? 0 : count);
     const discoverOpts = { jobId: job.id, onProgress: (f, t) => h.progress(f, t), analysis: loadAnalysis(asset), vision: require('../video/vision').cached(asset.path, asset.workDir) };
-    const noAds = (list, n) => list.filter((c) => !ads.some((a) => Math.min(a.end, c.end) - Math.max(a.start, c.start) > 1)).slice(0, n);
+    const noAds = (list, n) => list.filter((c) => !ads.some((a) => require('../video/montage').sharedSec(a, c) > 1)).slice(0, n); // by the clip's real pieces
     let result;
     if (otherLooks && otherLooks.length) {
       // Mix: each style gets its own pass with its own recipe (Documentary: 22-40 s clips, cut-ins on, no zoom punch-ins;
@@ -305,7 +305,7 @@ queue.register('discover', {
       result = { clips: [], method: 'scored' };
       for (const look of [...new Set(otherLooks)]) {
         const n = otherLooks.filter((l) => l === look).length; const pr = styles.PRESETS[look]?.production || {};
-        const taken = [...used(), ...ads, ...result.clips.map((c) => ({ start: c.start, end: c.end }))];
+        const taken = [...used(), ...ads, ...result.clips.map((c) => ({ start: c.start, end: c.end, keep: c.keep || null }))];
         const r = await intel.discoverClips(asset, transcript, { ...discoverOpts, count: n + (ads.length ? 2 : 0), exclude: taken, minSec: pr.minClipSec || null, maxSec: pr.maxClipSec || null });
         if (r.method === 'ai') result.method = 'ai';
         for (const c of noAds(r.clips, n)) {
@@ -326,10 +326,10 @@ queue.register('discover', {
     }
     if (hlCount) {
       h.progress(0.6, 'Finding highlight moments');
-      const taken = () => [...used(), ...ads, ...result.clips.map((c) => ({ start: c.start, end: c.end }))];
+      const taken = () => [...used(), ...ads, ...result.clips.map((c) => ({ start: c.start, end: c.end, keep: c.keep || null }))];
       let hl = noAds((await intel.discoverClips(asset, transcript, { ...discoverOpts, count: hlCount + 2, exclude: taken(), storyCuts: true, endHook: true })).clips, hlCount);
       // Too few moments end on a hook: fill up with tightened story-cut clips so the count you asked for still comes out.
-      if (hl.length < hlCount) { const more = noAds((await intel.discoverClips(asset, transcript, { ...discoverOpts, count: hlCount - hl.length + 2, exclude: [...taken(), ...hl.map((c) => ({ start: c.start, end: c.end }))], storyCuts: true })).clips, hlCount - hl.length); hl = [...hl, ...more]; }
+      if (hl.length < hlCount) { const more = noAds((await intel.discoverClips(asset, transcript, { ...discoverOpts, count: hlCount - hl.length + 2, exclude: [...taken(), ...hl.map((c) => ({ start: c.start, end: c.end, keep: c.keep || null }))], storyCuts: true })).clips, hlCount - hl.length); hl = [...hl, ...more]; }
       hl.forEach((c) => { c.videoStyle = 'highlights'; c.tightCuts = true; if (looks) c.style = pipeline.sanitizeStyle(styles.PRESETS.highlights.style); });
       result.clips = [...result.clips, ...hl];
     }
