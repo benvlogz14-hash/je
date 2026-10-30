@@ -5,6 +5,7 @@ import { html, useState, useEffect, useRef, useApi, useRoute, navigate, Button, 
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { play } from '../lib/sound.js';
+import { openArcade, halMood, moodWord } from './arcade.js';
 
 const PREF = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
 const SAVE = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private window */ } };
@@ -63,9 +64,10 @@ export function HalDock() {
     setText(''); setBusy(true);
     setData([...(history || []), { id: `tmp${Date.now()}`, who: 'you', text: t }]);
     try {
-      const r = await api.post('/api/hal/chat', { text: t, context });
+      const r = await api.post('/api/hal/chat', { text: t, context: { ...context, mood: halMood() } });
       if (voice && r.text) speak(r.text);
       if (r.navigate) navigate(r.navigate);
+      if (r.arcade) openArcade(r.arcade);
       play('receive');
     } catch (e) { toast(e.message, { kind: 'warn' }); }
     setBusy(false); reload();
@@ -102,6 +104,7 @@ export function HalDock() {
     <button type="button" class=${'hal-fab' + (open ? ' on' : '') + (busy ? ' busy' : '')} style=${{ right: `${pos.right}px`, bottom: `${pos.bottom}px` }} title="HAL (Ctrl+Shift+H). Drag to move." aria-label="Open HAL" onPointerDown=${down} onPointerMove=${move} onPointerUp=${up} onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } }}><span class="hal-eye" /></button>
     ${open ? html`<section class="hal-panel" role="dialog" aria-label="HAL" style=${{ right: `${Math.min(pos.right, Math.max(6, window.innerWidth - 440))}px`, bottom: `${Math.min(pos.bottom + 54, Math.max(10, window.innerHeight - 640))}px` }}>
       <header class="hal-head"><span class="hal-eye sm" /><b class="grow">HAL</b>
+        <button type="button" class="hal-ico" title=${`Play a game with HAL (he's ${moodWord(halMood())})`} onClick=${() => openArcade()}><${Icon} name="gamepad" size=${15} /></button>
         <button type="button" class=${'hal-ico watch' + (watch?.on ? ' on' : '')} title=${watch?.on ? `Watching the web for news and leads every ${watch.everyMin} min${watch.grok ? ', live through your Grok login (JEV link)' : ''}${watch.last?.at ? `. Last look ${new Date(watch.last.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}. Click to stop.` : 'Not watching. Click and HAL reads the news and looks for leads through the day.'} onClick=${() => setWatch(!watch?.on)}><${Icon} name="globe" size=${15} /></button>
         <${Seg} value=${status?.brain || 'local'} onChange=${setBrain} options=${[{ value: 'local', label: 'Local' }, { value: 'grok', label: 'Grok' }]} />
         <button type="button" class=${'hal-ico' + (voice ? ' on' : '')} title=${voice ? 'Reading replies out loud' : 'Read replies out loud'} onClick=${() => { const v = !voice; setVoice(v); SAVE('eu.halSpeak', v); if (!v) window.speechSynthesis?.cancel(); }}><${Icon} name=${voice ? 'volume' : 'mute'} size=${15} /></button>

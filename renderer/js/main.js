@@ -1,5 +1,6 @@
 // Euclidean desktop shell.
 import { HalDock } from './modules/hal.js';
+import { ArcadeDock, openArcade } from './modules/arcade.js';
 import { html, render, useState, useEffect, useRef, useStore, store, navigate, RouteContext, Toasts, ModalHost, Button, HoldButton, Seg, Avatar, act, toast, useEvent } from './lib/ui.js';
 import { api } from './lib/api.js';
 import { Component } from '../vendor/preact.mjs';
@@ -113,6 +114,7 @@ function StatusBar() {
     <span class="item click" onClick=${() => navigate('/system?tab=health')} title="Automation health"><span class=${'led ' + (!online ? 'err' : hl)} />${!online ? 'Engine offline: reconnecting' : health ? `${health.error ? `${health.error} error${health.error > 1 ? 's' : ''}` : health.warn ? `${health.warn} warning${health.warn > 1 ? 's' : ''}` : 'All systems normal'}` : 'Checking'}</span>
     <span class="item click" onClick=${() => navigate('/system?tab=queue')} title="Job queue">${q.running ? html`<span class="led live" />` : html`<${Icon} name="layers" size=${13} />`}${q.paused ? 'Paused' : `${q.running || 0} running · ${q.queued || 0} queued`}${q.waitingAgent ? ` · ${q.waitingAgent} for Astra` : ''}</span>
     ${busy ? html`<span class="item"><span class="led live" />${busy} agent call${busy > 1 ? 's' : ''}</span>` : null}
+    <span class="item click" onClick=${() => openArcade()} title="Arcade: games to play with HAL (Ctrl+Shift+G)"><${Icon} name="gamepad" size=${14} />Arcade</span>
     <div class="spacer" />
     ${res ? html`
       <span class="item hide-sm" title="CPU"><span class="faint">CPU</span><span class="meter"><i style=${{ width: res.cpu + '%', background: res.cpu > 85 ? 'var(--coral)' : 'var(--slate)' }} /></span><span class="tnum">${res.cpu}%</span></span>
@@ -216,6 +218,7 @@ function App() {
     <${MobileNav} />
     <${StatusBar} />
     <${HalDock} />
+    <${ArcadeDock} />
     ${palette ? html`<${Palette} onClose=${() => setPalette(false)} />` : null}
     <${Toasts} /><${ModalHost} />
   </div>`;

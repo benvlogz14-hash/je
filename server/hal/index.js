@@ -103,6 +103,7 @@ function contextFacts(c = {}) {
   const pend = ctx.store.all('approvals', (a) => a.status === 'pending').length;
   const st = queue.stats();
   out.push(`Right now: ${pend} item${pend === 1 ? '' : 's'} waiting in Approvals, ${st.running} job${st.running === 1 ? '' : 's'} running, ${st.queued} queued${st.paused ? ', automation is STOPPED' : ''}.`);
+  if (c.mood != null) out.push(`Your mood from the arcade games Ryan plays with you: ${c.mood}/100 (${c.mood >= 65 ? 'happy, he has been playing with you' : c.mood >= 40 ? 'fine' : 'bored, nobody has played with you lately; you may mention it once, dryly'}).`);
   const clients = ctx.store.all('clients', (x) => x.status !== 'archived').map((x) => x.name);
   if (clients.length) out.push(`Clients: ${clients.slice(0, 12).join(', ')}.`);
   return out.join(' ');
@@ -260,6 +261,17 @@ async function chat(text, history, c) {
   return { text: r.text, by: r.by };
 }
 
+/** "Let's play pong" / "open the arcade": the games window opens on the screen (renderer/js/modules/arcade.js). */
+const GAMES = [['pong', /\bpong\b/], ['snake', /\bsnake\b/], ['breakout', /\bbreakout|brick/], ['blocks', /\btetris|blocks\b/], ['invaders', /\binvaders?|space\s*shoot/], ['flappy', /\bflappy\b/], ['ttt', /tic[- ]?tac[- ]?toe|noughts/]];
+function arcade(low) {
+  const g = GAMES.find(([, re]) => re.test(low));
+  const short = g && low.split(/\s+/).length <= 4; // "pong?", "tic tac toe"
+  if ((!short && !/\b(play|game|games|arcade|rematch|bored)\b/.test(low)) || /\b(play(?:ing)? (?:the |this )?(?:clip|video|song|music|track))\b/.test(low)) return null;
+  if (!g && !/\b(arcade|a game|some games|play something|let'?s play|wanna play|want to play|bored)\b/.test(low)) return null;
+  const lines = { pong: 'Pong. First to seven. I never miss on purpose.', ttt: "Tic-tac-toe. You'll find I don't lose.", snake: 'Snake. Mind the walls; I certainly would.', breakout: "Breakout. I'll be watching the bricks.", blocks: 'Blocks. Clear lines, not excuses.', invaders: 'Eye Invaders. Those are my eyes, by the way.', flappy: 'Flappy Eye. Gravity is undefeated.' };
+  return { text: g ? lines[g[0]] : "The arcade's open. Pick your poison.", arcade: g ? g[0] : 'launcher' };
+}
+
 /** One message from Ryan or Ben. Returns { text, by?, confirm?, navigate?, card?, draft? }. */
 async function handle(text, { history = [], context = {}, actor = 'user' } = {}) {
   const t = String(text || '').trim(); if (!t) return { text: 'Say something and I will consider it.' };
@@ -271,6 +283,7 @@ async function handle(text, { history = [], context = {}, actor = 'user' } = {})
       return runCommand(t, actor);
     }
     const onThis = await onClip(low, t, context, actor); if (onThis) return onThis;
+    const game = arcade(low); if (game) return game;
     if (/\b(you (sent|found|added|gave|surfaced|flagged|mentioned)|the ones you|parse (through|the)|which (ones|prospect|candidate)|list (them|those|the new)|go (back|over)|what (were|was) (the|those))\b/.test(low) && /\b(prospect|candidate|lead|name|one)s?\b/.test(low)) return recall();
     if (/\b(what did you find|anything new|what('?s| is) new(?! with| on| about| for)|check (?:the )?(?:news|internet|web) now|scan (?:the )?(?:news|web|internet)|run (?:your|the) watch|look for (?:new )?leads)\b/.test(low)) return await watchNow();
     if (/\b(stop|pause|turn off) (?:your |the )?watch(?:ing)?\b/.test(low)) { ctx.store.setSettings({ hal: { watch: { on: false } } }); return { text: 'Watch off. I stop reading the web in the background until you say "start watching".' }; }
