@@ -53,7 +53,7 @@
 
   /* Studio (editor) surfaces stay light but slightly cooler for long sessions */
   --ed-bg: #eceef1; --ed-panel: #f8f9fa; --ed-track: #e3e6ea; --ed-track-alt: #dde1e6;
-  --clip-v: #b9ddd8; --clip-v-line: #7fbfb7; --clip-a: #cfe1c9; --clip-a-line: #93b98b; --clip-t: #e7dcf2; --clip-t-line: #b6a3d6;
+  --clip-v: #b9ddd8; --clip-v-line: #7fbfb7; --clip-a: #cfe1c9; --clip-a-line: #93b98b; --clip-t: #e7dcf2; --clip-t-line: #b6a3d6; --clip-fx: #f6e3c4; --clip-fx-line: #d9a85a;
   --playhead: #d0715f;
   color-scheme: light;
 }
@@ -78,7 +78,7 @@
     --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3); --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25); --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.5);
     --scrim: rgba(0, 0, 0, 0.5);
     --ed-bg: #121518; --ed-panel: #1a1e22; --ed-track: #20252a; --ed-track-alt: #252b31;
-    --clip-v: #2c4f4b; --clip-v-line: #3f726c; --clip-a: #33482f; --clip-a-line: #4c6a45; --clip-t: #3a3350; --clip-t-line: #5a4f7d;
+    --clip-v: #2c4f4b; --clip-v-line: #3f726c; --clip-a: #33482f; --clip-a-line: #4c6a45; --clip-t: #3a3350; --clip-t-line: #5a4f7d; --clip-fx: #4a3a1c; --clip-fx-line: #a07a32;
     color-scheme: dark;
   }
 }
@@ -96,7 +96,7 @@
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3); --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25); --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.5);
   --scrim: rgba(0, 0, 0, 0.5);
   --ed-bg: #121518; --ed-panel: #1a1e22; --ed-track: #20252a; --ed-track-alt: #252b31;
-  --clip-v: #2c4f4b; --clip-v-line: #3f726c; --clip-a: #33482f; --clip-a-line: #4c6a45; --clip-t: #3a3350; --clip-t-line: #5a4f7d;
+  --clip-v: #2c4f4b; --clip-v-line: #3f726c; --clip-a: #33482f; --clip-a-line: #4c6a45; --clip-t: #3a3350; --clip-t-line: #5a4f7d; --clip-fx: #4a3a1c; --clip-fx-line: #a07a32;
   color-scheme: dark;
 }
 
@@ -704,3 +704,5 @@ h4 { font-weight: 750; letter-spacing: -0.01em; }
 .arc-game b { font-size: 13px; }
 .arc-game:hover { border-color: #ff2a1a; background: #1a0d0d; }
 .arc-best { color: #ffb000; font-size: 11px; }
+
+.fx-layer-tip { display: flex; flex-direction: column; gap: 6px; padding: 6px 6px 10px; font-size: var(--fs-xs); border-bottom: 1px solid var(--line); margin-bottom: 4px; }

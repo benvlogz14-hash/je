@@ -31,7 +31,7 @@
   --shadow-1: none; --shadow-2: 0 0 0 1px rgba(255, 42, 42, 0.08), 0 8px 24px rgba(0, 0, 0, 0.6); --shadow-3: 0 0 0 1px var(--red-dim), 0 0 28px rgba(255, 42, 42, 0.18), 0 20px 60px rgba(0, 0, 0, 0.8);
   --scrim: rgba(12, 0, 0, 0.72);
   --ed-bg: #050505; --ed-panel: #0c0909; --ed-track: #140c0c; --ed-track-alt: #1a0e0e;
-  --clip-v: #3a0c0c; --clip-v-line: #ff2a2a; --clip-a: #1c1c1c; --clip-a-line: #bdbdbd; --clip-t: #26101a; --clip-t-line: #ff4f6d;
+  --clip-v: #3a0c0c; --clip-v-line: #ff2a2a; --clip-a: #1c1c1c; --clip-a-line: #bdbdbd; --clip-t: #26101a; --clip-t-line: #ff4f6d; --clip-fx: #2a1a06; --clip-fx-line: #ffb347;
   --playhead: #ffffff;
   --r-xs: 0; --r-sm: 0; --r-md: 0; --r-lg: 0; --r-xl: 0; --r-pill: 0;
   --font-ui: "Chakra Petch", "Segoe UI", system-ui, sans-serif;

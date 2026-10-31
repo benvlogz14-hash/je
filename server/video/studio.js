@@ -154,11 +154,28 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
     return outL;
   };
 
+  // Effect layers (like Premiere's adjustment layer): the picture built so far (every track below) is copied for the
+  // layer's time, run through its effects, and laid back over the top at the layer's opacity (times each retro look's
+  // intensity). Titles are burned in last, so they're never affected. Effect times run from the layer's start, as in
+  // the preview.
+  let fxN = 0;
+  const fxLayer = (c) => {
+    const fl = effectFilters(c.effects, warnings, W, H, null);
+    let mix = Math.max(0, Math.min(1, base(c.opacity, 1))); const chain = [];
+    for (const x of fl) { if (typeof x === 'string') chain.push(x); else { chain.push(...x.blend); mix *= x.mix; } }
+    if (!chain.length || mix <= 0.001 || !(c.duration > 0)) return;
+    const n = fxN++; const s0 = num(c.start), e0 = num(c.start + c.duration);
+    f.push(`[${last}]split[fx${n}a][fx${n}b]`);
+    f.push(`[fx${n}b]trim=start=${s0}:end=${e0},setpts=PTS-STARTPTS,${chain.join(',')},scale=${W}:${H},format=yuva420p${mix < 0.999 ? `,colorchannelmixer=aa=${num(mix)}` : ''},setpts=PTS+${s0}/TB[fx${n}c]`);
+    f.push(`[fx${n}a][fx${n}c]overlay=0:0:enable='between(t,${s0},${e0})':eof_action=pass[fx${n}o]`);
+    last = `fx${n}o`;
+  };
   seq.videoTracks.forEach((track, ti) => {
     if (track.muted) return; // hidden track
     for (const c of track.clips) {
       if (c.enabled === false) continue;
       if (c.type === 3) { texts.push({ c, layer: ti }); continue; }
+      if (c.type === 5) { fxLayer(c); continue; }
       if (c.type === 4) { warnings.add('Nested sequences are skipped in Studio export (open in Velo)'); continue; }
       const m = media[c.mediaId];
       if (!m || !fs.existsSync(m.path)) { warnings.add(`Missing media: ${m ? m.name : c.mediaId}`); continue; }

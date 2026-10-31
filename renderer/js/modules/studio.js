@@ -472,7 +472,7 @@ function Editor({ id }) {
       grp.some((x) => x.type === 1) ? { label: audioMuted ? 'Unmute audio' : 'Mute audio', icon: audioMuted ? 'volume' : 'mute', onClick: () => muteAudio(ids, !audioMuted) } : null,
       c.type === 0 && m?.hasAudio ? { label: 'Extract audio to new file', icon: 'volume', onClick: () => extractAudio(c) } : null,
       'sep',
-      c.type !== 3 ? { label: 'Speed / Duration…', icon: 'clock', hint: 'Ctrl+R', onClick: () => speedDialog(ids) } : null,
+      c.type !== 3 && c.type !== FX_LAYER ? { label: 'Speed / Duration…', icon: 'clock', hint: 'Ctrl+R', onClick: () => speedDialog(ids) } : null,
       visual ? { label: 'Scale to fill frame', icon: 'zoomIn', onClick: () => fitClip(ids, 'fill') } : null,
       visual ? { label: 'Fit inside frame', icon: 'zoomOut', onClick: () => fitClip(ids, 'fit') } : null,
       { label: 'Apply Cross Dissolve (in + out)', icon: 'layers', hint: 'Ctrl+Shift+D', onClick: () => setTransitions(ids, 1) },
@@ -501,6 +501,22 @@ function Editor({ id }) {
   });
   /** A B-roll bank shot (Studio → B-roll): picture only, from the middle of the shot, on the dropped video track or,
    *  double-clicked, on a "B-roll" track above everything at the playhead. */
+  /** A new effect layer over the whole edit, on the top video track (a new "Effects" track if that one's busy);
+   *  with fx, that effect goes straight on it. It's selected so its controls open on the right. */
+  const addFxLayer = (fx = null) => {
+    let made = null;
+    edit((d, s) => {
+      const end = Math.max(0, ...s.videoTracks.flatMap((tr) => tr.clips.filter((c) => c.type !== FX_LAYER).map((c) => c.start + c.duration)));
+      const len = end > 0.5 ? end : 10;
+      let vi = s.videoTracks.length - 1;
+      if (vi < 0 || s.videoTracks[vi].locked || s.videoTracks[vi].clips.some((c) => c.start < len && c.start + c.duration > 0)) { s.videoTracks.push({ type: 0, name: 'Effects', muted: false, locked: false, volume: { base: 1 }, clips: [] }); vi = s.videoTracks.length - 1; }
+      made = { id: nextId(d), type: FX_LAYER, name: fx ? `${fx.name} layer` : 'Effect layer', start: 0, duration: len, in: 0, speed: 1, linkId: '0', enabled: true, posX: anim(0), posY: anim(0), scaleX: anim(1), scaleY: anim(1), rotation: anim(0), opacity: anim(1), volume: anim(1), uniformScale: true,
+        effects: fx ? [{ effectId: fx.id, enabled: true, params: Object.fromEntries(fx.params.map((p) => [p[0], anim(p[4])])) }] : [], transIn: { type: 0, duration: 1 }, transOut: { type: 0, duration: 1 } };
+      place(s, 'v', vi, made);
+    });
+    if (made) { setSel([made.id]); toast(fx ? `${fx.name} added on an effect layer over the whole edit. Drag its ends to cover just part of it.` : 'Effect layer added over the whole edit. Pick effects in Effects on the left.', { kind: 'success' }); }
+    sfx('success');
+  };
   const addBroll = async (item, vi = null, at = null) => {
     const [m] = await importPaths([item.path]); if (!m) return;
     edit((d, s) => {
@@ -662,7 +678,7 @@ function Editor({ id }) {
       <${Button} kind="primary" size="sm" icon="upload" onClick=${exportNow}>Export</${Button}>
     </div>
     <div style="display:grid;grid-template-columns:260px minmax(0, 1fr) 300px;grid-template-rows:minmax(0, 1fr);min-height:0;overflow:hidden">
-      <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${id} onBroll=${addBroll} />
+      <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${id} onBroll=${addBroll} onFxLayer=${addFxLayer} />
       <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} sel=${sel} edit=${edit} setSel=${setSel} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
       <${EffectControls} selected=${selected} sel=${sel} findClip=${findClip} seq=${seq} edit=${edit} media=${media} t=${t} setT=${setT} onEditTitle=${(cid, ids) => setTitleEdit({ clipId: cid, ids })} />
     </div>
@@ -920,7 +936,7 @@ function ExportDialog({ id, saving, onClose }) {
 }
 
 // ------------------------------------------------------------ left: project bin + effects
-function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, importPaths, importing, aiEdit, aiUndo, projectId, onBroll }) {
+function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, importPaths, importing, aiEdit, aiUndo, projectId, onBroll, onFxLayer }) {
   const fileRef = useRef(null);
   const busy = importing;
   const importDisk = async () => {
@@ -929,7 +945,8 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
     if (r.paths?.length) await importPaths(r.paths);
   };
   const applyEffect = (fx) => {
-    if (!selected || selected.c.type === 1) return toast('Select a video, image or title clip first', { kind: 'warn' });
+    // Nothing (or just sound) selected: the effect goes on a new effect layer over everything, like Premiere's adjustment layer.
+    if (!selected || selected.c.type === 1) return onFxLayer(fx);
     edit((d, s) => { const tr = [...s.videoTracks].find((x) => x.clips.some((c) => c.id === selected.c.id)); const c = tr.clips.find((x) => x.id === selected.c.id); c.effects.push({ effectId: fx.id, enabled: true, params: Object.fromEntries(fx.params.map((p) => [p[0], anim(p[4])])) }); });
     sfx('success');
   };
@@ -947,7 +964,8 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
           <div class="th" style=${{ width: '58px', aspectRatio: '16/9', backgroundImage: m.kind !== 1 ? `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(m.path)}&t=${m.kind >= 2 ? 0 : 1}`)})` : 'none', display: 'grid', placeItems: 'center' }}>${m.kind === 1 ? html`<${Icon} name="volume" size=${16} />` : null}</div>
           <div class="grow" style="min-width:0"><div class="ellipsis" style="font-size:var(--fs-sm);font-weight:500">${m.name}</div><div class="faint tnum" style="font-size:var(--fs-xs)">${m.kind >= 2 ? 'Image' : dur(m.duration)}${m.width ? ` · ${m.width}×${m.height}` : ''}${m.proxyPending ? ' · preparing preview…' : m.proxyError ? ' · preview unavailable' : ''}</div></div></div>`)
         : html`<div class="empty" style="padding:30px 10px"><p style="font-size:var(--fs-sm)">Import or drop video, audio and images here.</p></div>`)
-      : html`${['Retro', 'Blur', 'Color', 'Transform', 'Stylize'].map((cat) => html`<div class="eyebrow" style="padding:8px 6px 4px">${cat}</div>${EFFECTS.filter((f) => f.cat === cat).map((f) => html`<div class="review-item" onDblClick=${() => applyEffect(f)} onClick=${() => applyEffect(f)} title="Apply to the selected clip"><${Icon} name="wand" size=${15} /><span style="font-size:var(--fs-sm)">${f.name}</span></div>`)}`)}
+      : html`<div class="fx-layer-tip"><${Button} size="sm" kind="lav" icon="layers" onClick=${() => onFxLayer()}>New effect layer</${Button}><span class="faint">${selected?.c?.type === 5 ? 'Effects go on the selected effect layer, over everything below it.' : selected && selected.c.type !== 1 ? 'Effects go on the selected clip. Click empty timeline to put them on a layer over everything instead.' : 'With nothing selected, an effect goes on a new layer over the whole edit.'}</span></div>
+        ${['Retro', 'Blur', 'Color', 'Transform', 'Stylize'].map((cat) => html`<div class="eyebrow" style="padding:8px 6px 4px">${cat}</div>${EFFECTS.filter((f) => f.cat === cat).map((f) => html`<div class="review-item" onDblClick=${() => applyEffect(f)} onClick=${() => applyEffect(f)} title="Apply to the selected clip"><${Icon} name="wand" size=${15} /><span style="font-size:var(--fs-sm)">${f.name}</span></div>`)}`)}
         ${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<div class="eyebrow" style="padding:12px 6px 4px">${cat === 'Dissolve' ? 'Transitions · ' : ''}${cat}</div>${TRANSITIONS.filter((x) => x.cat === cat).map((tt) => html`<div class="review-item" style="cursor:default"><${Icon} name="layers" size=${15} /><span class="grow" style="font-size:var(--fs-sm)">${tt.name}</span><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transIn')}>In</${Button}><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transOut')}>Out</${Button}></div>`)}`)}`}
     </div></div>`;
 }
@@ -991,12 +1009,55 @@ function usePinch(ref, onScale) {
 }
 const wheelFactor = (e) => Math.exp(-Math.max(-60, Math.min(60, e.deltaMode === 1 ? e.deltaY * 30 : e.deltaY)) * 0.005);
 
+/** Clip type for an effect layer (like Premiere's adjustment layer): no picture of its own; its effects apply to
+ *  everything on the tracks below it while it's on the timeline. Titles on tracks above it stay untouched. */
+const FX_LAYER = 5;
+let fxScratch = null;
+/** Preview of an effect layer: copy what's drawn so far, run it through the layer's effects, lay it back on top at the
+ *  layer's opacity (and each retro look's intensity). Same looks and numbers as the export (server/video/studio.js). */
+function drawFxLayer(g, cv, c, local, W, H) {
+  const filters = []; let flipH = 1, flipV = 1, vig = 0; const retros = [];
+  for (const e of c.effects || []) {
+    if (e.enabled === false) continue; const p = Object.fromEntries(Object.entries(e.params || {}).map(([k, x]) => [k, valAt(x, local)]));
+    const q = W / (cv.__seqW || W);
+    if (e.effectId === 'gaussian_blur') filters.push(`blur(${(p.radius / 2) * q}px)`);
+    if (e.effectId === 'color_correction' || e.effectId === 'color_grade') { filters.push(`brightness(${1 + (p.brightness || 0) / 200 + (p.exposure || 0) * 0.25})`, `contrast(${1 + (p.contrast || 0) / 100})`, `saturate(${(p.saturation ?? 100) / 100})`); if (p.hue) filters.push(`hue-rotate(${p.hue}deg)`); if (p.temperature) filters.push(`sepia(${Math.max(0, p.temperature) / 400})`); }
+    if (e.effectId === 'black_white') filters.push(`grayscale(${(p.mix ?? 100) / 100})`);
+    if (e.effectId === 'sharpen') filters.push(`contrast(${1 + p.amount / 1200})`);
+    if (e.effectId === 'flip') { if (p.horizontal >= 0.5) flipH = -1; if (p.vertical >= 0.5) flipV = -1; }
+    if (e.effectId === 'vignette') vig = p.amount / 100;
+    if (RETRO_IDS.has(e.effectId)) retros.push([e.effectId, p]);
+  }
+  const ru = Math.min(W, H) / 1080; const looks = retros.map(([id, p]) => retroLook(id, p, local, ru));
+  for (const L of looks) filters.push(...L.css);
+  const pixel = Math.max(0, ...looks.map((L) => L.pixel || 0)) * (W / (cv.__seqW || W));
+  const mix = Math.max(0, Math.min(1, valAt(c.opacity, local, 1))) * (looks.length ? Math.max(...looks.map((L) => L.mix)) : 1);
+  if (mix <= 0.001 || (!filters.length && !vig && !looks.length && flipH === 1 && flipV === 1)) return;
+  fxScratch = fxScratch || document.createElement('canvas');
+  if (fxScratch.width !== W || fxScratch.height !== H) { fxScratch.width = W; fxScratch.height = H; }
+  const sg = fxScratch.getContext('2d'); sg.clearRect(0, 0, W, H); sg.drawImage(cv, 0, 0);
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = mix; g.filter = filters.join(' ') || 'none';
+  g.translate(W / 2, H / 2); g.scale(flipH, flipV);
+  if (pixel > 1) { const off = document.createElement('canvas'); off.width = Math.max(1, Math.round(W / pixel)); off.height = Math.max(1, Math.round(H / pixel)); off.getContext('2d').drawImage(fxScratch, 0, 0, off.width, off.height); g.imageSmoothingEnabled = false; g.drawImage(off, -W / 2, -H / 2, W, H); g.imageSmoothingEnabled = true; }
+  else g.drawImage(fxScratch, -W / 2, -H / 2, W, H);
+  g.scale(flipH, flipV); g.filter = 'none';
+  if (vig) { const rg = g.createRadialGradient(0, 0, Math.min(W, H) * 0.25, 0, 0, Math.max(W, H) * 0.6); rg.addColorStop(0, 'rgba(0,0,0,0)'); rg.addColorStop(1, `rgba(0,0,0,${vig * 0.85})`); g.fillStyle = rg; g.fillRect(-W / 2, -H / 2, W, H); }
+  g.globalAlpha = Math.max(0, Math.min(1, valAt(c.opacity, local, 1)));
+  for (const L of looks) retroOverlay(g, L, W, H, local, ru, { x: 0, y: 0, w: W, h: H });
+  g.restore();
+}
+
 function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected, sel = [], edit, setSel, onEditTitle }) {
   const canvas = useRef(null);
   const hits = useRef([]); // what's drawn where (canvas pixels), topmost last: for clicking and dragging on the monitor
   const els = useRef(new Map());   // clipId -> HTMLVideoElement | HTMLImageElement | HTMLAudioElement
   const clock = useRef({ wall: 0, t0: 0 });
-  const tRef = useRef(t); tRef.current = t;
+  // While playing, the playback loop owns the time; the editor's own t (for the timeline playhead) is only updated ~15
+  // times a second, which keeps playback smooth. On pause the last played time is handed back (playedTo).
+  const tRef = useRef(t); const playedTo = useRef(null);
+  if (!playing && playedTo.current == null) tRef.current = t;
+  const uiT = useRef(null); // the last time the playback loop itself put on the playhead
+  const stalled = useRef(false); const hold = useRef({ since: 0, drawn: false, retry: 0 });
   const [qualitySel, setQuality] = useState(0.5);
   const raf = useRef(0);
   // Fit the sequence frame inside the monitor area at any window size.
@@ -1062,9 +1123,15 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       live.add(c.id);
       const want = (c.in || 0) + (time - c.start) * (c.speed || 1);
       if (c.type === 1) { const tr = a.find((x) => x.c.id === c.id)?.tr; el.volume = Math.max(0, Math.min(1, valAt(c.volume, time - c.start, 1) * base(tr?.volume, 1))); }
-      el.playbackRate = Math.min(4, Math.max(0.25, c.speed || 1));
-      if (isPlaying) { if (Math.abs(el.currentTime - want) > 0.3) el.currentTime = want; if (el.paused) el.play().catch(() => {}); }
-      else { if (!el.paused) el.pause(); if (Math.abs(el.currentTime - want) > 0.02) el.currentTime = want; }
+      const rate = Math.min(4, Math.max(0.25, c.speed || 1));
+      if (isPlaying) {
+        // Small drift is evened out by playing a touch faster or slower; only a real jump seeks (each seek stutters).
+        const drift = want - el.currentTime;
+        if (Math.abs(drift) > 0.6 || (el.paused && Math.abs(drift) > 0.12)) { el.currentTime = want; el.playbackRate = rate; }
+        else el.playbackRate = Math.min(4, Math.max(0.25, rate * (1 + Math.max(-0.08, Math.min(0.08, drift * 0.8)))));
+        if (el.paused) el.play().catch(() => {});
+        if (c.type !== 1 && !el.paused && (el.seeking || el.readyState < 3)) stalled.current = true;
+      } else { el.playbackRate = rate; if (!el.paused) el.pause(); if (Math.abs(el.currentTime - want) > 0.5 / (seq.fps || 30)) el.currentTime = want; }
     }
     for (const [cid, el] of els.current) if (!live.has(cid) && el instanceof HTMLMediaElement && !el.paused) el.pause();
     // Get the next clips ready ahead of time (loaded and parked on their first frame), so they don't flash black when they start.
@@ -1077,11 +1144,26 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
   const draw = () => {
     const cv = canvas.current; if (!cv) return;
     const W = Math.round(seq.width * quality), H = Math.round(seq.height * quality);
-    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; } cv.__seqW = seq.width;
+    const time = tRef.current; const { v } = activeAt(time);
+    // A video still seeking or loading its frame: keep the last picture up instead of flashing black (for up to ~0.7 s;
+    // after that it draws what it has, so a file that can't play never freezes the preview).
+    const waiting = v.some(({ c }) => {
+      if (c.type === 3 || c.type === FX_LAYER) return false; const el = getEl(c);
+      if (el instanceof HTMLImageElement) return !(el.complete && el.naturalWidth);
+      return el instanceof HTMLVideoElement && (el.readyState < 2 || el.seeking || Math.abs(el.currentTime - ((c.in || 0) + (time - c.start) * (c.speed || 1))) > 0.35);
+    });
+    const now = performance.now();
+    if (waiting && hold.current.drawn && cv.width === W && cv.height === H) {
+      if (!hold.current.since) hold.current.since = now;
+      if (now - hold.current.since < 700) { clearTimeout(hold.current.retry); hold.current.retry = setTimeout(() => draw(), 40); return; }
+    }
+    hold.current.since = 0; hold.current.drawn = true;
     const g = cv.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
-    const time = tRef.current; const { v } = activeAt(time); hits.current = [];
+    hits.current = [];
     for (const { c } of v) {
       const local = time - c.start;
+      if (c.type === FX_LAYER) { drawFxLayer(g, cv, c, local, W, H); continue; }
       { const m0 = media[c.mediaId]; const sx0 = valAt(c.scaleX, local, 1), sy0 = c.uniformScale === false ? valAt(c.scaleY, local, 1) : sx0; const tb = c.type === 3 ? titleBox(c.text || {}, sx0 * quality) : null;
         hits.current.push({ id: c.id, cx: W / 2 + valAt(c.posX, local) * quality, cy: H / 2 + valAt(c.posY, local) * quality, w: tb ? tb.w : (m0?.width || seq.width) * Math.abs(sx0) * quality, h: tb ? tb.h : (m0?.height || seq.height) * Math.abs(sy0) * quality, rot: (valAt(c.rotation, local) * Math.PI) / 180 }); }
       let alpha = valAt(c.opacity, local, 1);
@@ -1167,18 +1249,29 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
   };
   // playback loop
   useEffect(() => {
-    if (!playing) { cancelAnimationFrame(raf.current); sync(tRef.current, false); draw(); return; }
-    clock.current = { wall: performance.now(), t0: tRef.current };
+    if (!playing) {
+      cancelAnimationFrame(raf.current);
+      if (playedTo.current != null) { const at = playedTo.current; playedTo.current = null; tRef.current = at; setT(at); }
+      sync(tRef.current, false); draw(); return;
+    }
+    clock.current = { wall: performance.now(), t0: tRef.current }; let prev = performance.now(); let lastUi = 0;
     const loop = () => {
-      const now = clock.current.t0 + (performance.now() - clock.current.wall) / 1000;
-      if (now >= duration) { setPlaying(false); setT(duration); return; }
-      tRef.current = now; setT(now); sync(now, true); draw();
+      const perf = performance.now();
+      // A video still buffering holds the clock (instead of the picture falling behind the sound and jumping to catch up).
+      if (stalled.current) clock.current.wall += perf - prev; stalled.current = false; prev = perf;
+      const now = clock.current.t0 + (perf - clock.current.wall) / 1000;
+      if (now >= duration) { playedTo.current = null; setPlaying(false); setT(duration); return; }
+      tRef.current = now; playedTo.current = now;
+      if (perf - lastUi > 66) { lastUi = perf; uiT.current = now; setT(now); }
+      sync(now, true); draw();
       raf.current = requestAnimationFrame(loop);
     };
     raf.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf.current);
   }, [playing]);
   useEffect(() => { if (!playing) { sync(t, false); draw(); } }, [t, seq, quality, selected?.c?.id]);
+  // Clicking the ruler or a shortcut moves the playhead during playback: carry on playing from there.
+  useEffect(() => { if (playing && uiT.current != null && Math.abs(t - uiT.current) > 0.01) { clock.current = { wall: performance.now(), t0: t }; tRef.current = t; playedTo.current = t; uiT.current = t; } }, [t]);
   useEffect(() => { const f = () => draw(); window.addEventListener('studio-redraw', f); return () => window.removeEventListener('studio-redraw', f); }, [seq, quality, selected]);
   useEffect(() => () => { for (const el of els.current.values()) if (el instanceof HTMLMediaElement) { el.pause(); el.removeAttribute('src'); el.load(); } }, []);
 
@@ -1522,7 +1615,7 @@ function EffectControls({ selected, sel = [], findClip, seq, edit, media, t, set
   const scaleField = html`<${ParamField} label="Scale" p=${c.scaleX} d=${1} mult=${100} lt=${lt} inClip=${inClip} onJump=${jump} min=${1} max=${2000} smin=${1} smax=${400} step=${0.5} digits=${1} unit="%" dflt=${100}
     onLive=${(v) => { liveSet(c, 'scaleX', v, c.id + 'sx'); liveSet(c, 'scaleY', clone(v), c.id + 'sy'); }} onCommit=${(v) => setRaw((x) => { x.scaleX = v; x.scaleY = clone(v); })} />`;
   return html`<div style="background:var(--ed-panel);border-left:1px solid var(--line);overflow:auto;padding:12px 14px">
-    <div class="row"><span class="eyebrow grow">Effect controls</span><span class="badge outline">${['Video', 'Audio', 'Image', 'Title', 'Nested'][c.type]}</span></div>
+    <div class="row"><span class="eyebrow grow">Effect controls</span><span class="badge outline">${['Video', 'Audio', 'Image', 'Title', 'Nested', 'Effect layer'][c.type]}</span></div>
     <input class="input sm" style="font-weight:600;margin:6px 0 4px;width:100%" key=${c.id} value=${c.type === 3 && !c.renamed ? clipLabel(c) : c.name || media[c.mediaId]?.name || 'Clip'} title="Clip name: type a new one and press Enter (F2 also renames)" aria-label="Clip name"
       onKeyDown=${(e) => { if (e.key === 'Enter') e.target.blur(); e.stopPropagation(); }} onChange=${(e) => { const v = e.target.value.trim().slice(0, 80); if (v) setRaw((x) => { if (isHook(x)) x.isHook = true; x.name = v; x.renamed = true; }); }} />
     <div class="faint" style="font-size:var(--fs-xs);margin-bottom:8px">${inClip ? html`Playhead ${lt.toFixed(2)}s into this clip. Click <${Icon} name="clock" size=${11} /> to animate a setting, then move the playhead and change the value to add keyframes.` : 'Move the playhead over this clip to set keyframes.'}</div>
@@ -1532,7 +1625,10 @@ function EffectControls({ selected, sel = [], findClip, seq, edit, media, t, set
       <select class="select sm" value=${c.text?.family || 'Montserrat'} style=${{ fontFamily: `'${c.text?.family || 'Montserrat'}'` }} onChange=${(e) => setRaw((x) => { x.text.family = e.target.value; x.text.bold = HEAVY.has(e.target.value); })} aria-label="Font">${fontOptions()}</select>
       <${ParamField} label="Text size" p=${c.text?.pixelSize || 96} animatable=${false} min=${8} max=${600} smin=${12} smax=${300} unit="px" onLive=${(v) => liveSet(c.text, 'pixelSize', Math.round(v.base), c.id + 'tsize')} onCommit=${(v) => setRaw((x) => { x.text.pixelSize = Math.round(v.base); })} />
       <${ParamField} label="Outline" p=${c.text?.outlineWidth || 0} animatable=${false} min=${0} max=${40} unit="px" onLive=${(v) => liveSet(c.text, 'outlineWidth', Math.round(v.base), c.id + 'tow')} onCommit=${(v) => setRaw((x) => { x.text.outlineWidth = Math.round(v.base); })} /></div>` : null}
-    ${c.type !== 1 ? html`<div class="eyebrow" style="margin-top:6px">Motion</div>
+    ${c.type === FX_LAYER ? html`<div class="faint" style="font-size:var(--fs-xs);margin:2px 0 8px">Everything on the tracks below this layer gets its effects while it's on the timeline. Stretch it over the part you want, add effects from Effects on the left, and use Opacity for how strong the whole layer is.</div>
+      ${F('opacity', { label: 'Opacity', d: 1, mult: 100, min: 0, max: 100, smin: 0, smax: 100, unit: '%', dflt: 100 })}
+      ${!(c.effects || []).length ? html`<div class="empty" style="padding:14px 6px"><p style="font-size:var(--fs-sm)">No effects yet. Pick one in Effects on the left (VHS, blur, colour…) and it goes on this layer.</p></div>` : null}` : null}
+    ${c.type !== 1 && c.type !== FX_LAYER ? html`<div class="eyebrow" style="margin-top:6px">Motion</div>
       ${F('posX', { label: 'Position X', min: -20000, max: 20000, smin: -seq.width, smax: seq.width, unit: 'px', dflt: 0 })}
       ${F('posY', { label: 'Position Y', min: -20000, max: 20000, smin: -seq.height, smax: seq.height, unit: 'px', dflt: 0 })}
       ${scaleField}
@@ -1544,10 +1640,10 @@ function EffectControls({ selected, sel = [], findClip, seq, edit, media, t, set
     ${(c.effects || []).map((e, i) => { const def = EFFECTS.find((f) => f.id === e.effectId); return html`<div class="divider" /><div class="row"><${Toggle} on=${e.enabled !== false} label="Enable effect" onChange=${(on) => setRaw((x) => { x.effects[i].enabled = on; })} /><b class="grow" style="font-size:var(--fs-sm)">${def?.name || e.effectId}</b><${Button} size="sm" kind="ghost" icon="trash" title="Remove effect" onClick=${() => setRaw((x) => { x.effects.splice(i, 1); })} /></div>
       ${(def?.params || []).map(([k, label, mn, mx, dflt, stp]) => html`<${ParamField} label=${label} p=${e.params?.[k]} d=${dflt} lt=${lt} inClip=${inClip} onJump=${jump} min=${mn} max=${mx} step=${stp || (mx - mn > 50 ? 1 : 0.05)} digits=${stp && stp < 1 ? 2 : 0} dflt=${dflt}
         onLive=${(v) => liveSet(e.params, k, v, c.id + 'fx' + i + k)} onCommit=${(v) => setRaw((x) => { x.effects[i].params[k] = v; })} />`)}`; })}
-    <div class="divider" /><div class="eyebrow">Transitions</div>
+    ${c.type === FX_LAYER ? null : html`<div class="divider" /><div class="eyebrow">Transitions</div>
     ${['transIn', 'transOut'].map((edge) => html`<div class="row" style="padding:4px 0"><span class="muted" style="width:34px;font-size:var(--fs-sm)">${edge === 'transIn' ? 'In' : 'Out'}</span>
       <select class="select sm" style="flex:1" value=${c[edge]?.type || 0} onChange=${(e) => setRaw((x) => { x[edge] = { type: Number(e.target.value), duration: x[edge]?.duration || 0.5 }; })} aria-label=${edge}><option value="0">None</option>${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<optgroup label=${cat}>${TRANSITIONS.filter((tt) => tt.cat === cat).map((tt) => html`<option value=${tt.type}>${tt.name}</option>`)}</optgroup>`)}</select>
-      <input class="input sm tnum" style="width:62px" inputmode="decimal" value=${c[edge]?.duration || 0.5} onChange=${(e) => { const v = Number(e.target.value); if (v > 0) setRaw((x) => { x[edge] = { ...(x[edge] || { type: 0 }), duration: Math.max(0.04, v) }; }); }} aria-label="Duration" /><span class="faint" style="font-size:var(--fs-xs)">s</span></div>`)}
+      <input class="input sm tnum" style="width:62px" inputmode="decimal" value=${c[edge]?.duration || 0.5} onChange=${(e) => { const v = Number(e.target.value); if (v > 0) setRaw((x) => { x[edge] = { ...(x[edge] || { type: 0 }), duration: Math.max(0.04, v) }; }); }} aria-label="Duration" /><span class="faint" style="font-size:var(--fs-xs)">s</span></div>`)}`}
   </div>`;
 }
 
@@ -1727,7 +1823,7 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
             <button class="btn ghost sm icon" title=${lane.tr.locked ? 'Unlock' : 'Lock'} onClick=${() => { sfx('toggle'); toggleTrack(lane, 'locked'); }}><${Icon} name=${lane.tr.locked ? 'lock' : 'unlock'} size=${14} /></button>
           </div>
           <div style=${{ position: 'relative', flex: 1, background: lane.tr.locked ? 'repeating-linear-gradient(135deg, transparent 0 6px, var(--surface-3) 6px 7px)' : 'transparent', opacity: lane.tr.muted ? 0.5 : 1 }} onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => onDropMedia(e, lane)} onPointerDown=${startBox}>
-            ${lane.tr.clips.map((c) => { const v = view(c); const isSel = sel.includes(c.id); const colors = c.type === 1 ? ['--clip-a', '--clip-a-line'] : c.type === 3 ? ['--clip-t', '--clip-t-line'] : ['--clip-v', '--clip-v-line'];
+            ${lane.tr.clips.map((c) => { const v = view(c); const isSel = sel.includes(c.id); const colors = c.type === 1 ? ['--clip-a', '--clip-a-line'] : c.type === 3 ? ['--clip-t', '--clip-t-line'] : c.type === FX_LAYER ? ['--clip-fx', '--clip-fx-line'] : ['--clip-v', '--clip-v-line'];
               return html`<div key=${c.id} data-clip=${c.id} title=${clipLabel(c)} onContextMenu=${(e) => onClipMenu(e, c)} onDblClick=${() => { if (c.type === 3) onEditTitle(c.id); }} onPointerDown=${(e) => { if (e.button === 2) return; onClipDown(e, c, lane); }} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(4, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
                 ${c.type === 0 && media[c.mediaId] && xOf(v.duration) > 50 ? html`<div style=${{ position: 'absolute', inset: 0, backgroundImage: `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(media[c.mediaId].path)}&t=${Math.round(c.in || 0) + 1}`)})`, backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x', opacity: 0.45 }} />` : null}
                 <div class="ellipsis" style="position:relative;font-size:11px;font-weight:600;padding:3px 7px;color:var(--ink)">${clipLabel(c)}${c.effects?.length ? ' ·fx' : ''}${(c.speed || 1) !== 1 ? ` · ${Math.round((c.speed || 1) * 100)}%` : ''}</div>
