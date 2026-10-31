@@ -5,6 +5,7 @@
 // code, nothing downloaded; scores and windows are kept in this PC's browser storage.
 import { html, useState, useEffect, useRef } from '../lib/ui.js';
 import { Icon } from '../lib/icons.js';
+import { PuzzleVault } from './halpuzzles.js';
 
 const LS = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
 const SAVE = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private window */ } };
@@ -44,6 +45,8 @@ function banner(g, W, H, title, sub) { g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRec
 // Each game: { name, W, H, help, make(io) } → { update(dt, keys), draw(g), key?(k), click?(x, y), move?(x, y) }.
 // io: { say(kind), score(n), end(kind, score), mood }.
 const GAMES = {
+  // HAL plays this one himself (he asked for it): a DOM game, not a canvas one.
+  vault: { name: "HAL's Puzzle Vault", W: 460, H: 560, help: 'HAL solves puzzles on his own · watch, hint, or race him', dom: true },
   pong: {
     name: 'Pong vs HAL', W: 480, H: 320, help: '↑ ↓ or W S, or the mouse · first to 7',
     make(io) {
@@ -331,7 +334,7 @@ function GameView({ id, game, active, onSay }) {
 }
 
 // ------------------------------------------------------------------ windows
-const DEF = (game) => { const G = GAMES[game]; const w = Math.min(520, G.W + 24); return { w, h: Math.round((w - 16) * (G.H / G.W)) + 70 }; };
+const DEF = (game) => { const G = GAMES[game]; if (G.dom) return { w: 460, h: 600 }; const w = Math.min(520, G.W + 24); return { w, h: Math.round((w - 16) * (G.H / G.W)) + 70 }; };
 let zTop = 900;
 
 function Win({ win, set, close, focus, children, title, foot }) {
@@ -401,7 +404,7 @@ export function ArcadeDock() {
   return html`${wins.map((w) => html`<${Win} key=${w.id} win=${w} set=${(p, persist) => upd(w.id, p, persist)} close=${() => close(w.id)} focus=${() => focus(w.id)}
       title=${w.game === 'launcher' ? 'Arcade with HAL' : GAMES[w.game].name}
       foot=${w.game === 'launcher' ? null : html`<span class=${'arc-say' + (says[w.id] ? ' on' : '')}><span class="hal-eye sm" />${says[w.id] || GAMES[w.game].help}</span>`}>
-      ${w.game === 'launcher' ? html`<${Launcher} open=${open} mood=${mood} />` : html`<${GameView} id=${w.id} game=${w.game} active=${active} onSay=${(l) => say(w.id, l)} />`}
+      ${w.game === 'launcher' ? html`<${Launcher} open=${open} mood=${mood} />` : GAMES[w.game].dom ? html`<${PuzzleVault} onSay=${(l) => say(w.id, l)} bumpMood=${bumpMood} />` : html`<${GameView} id=${w.id} game=${w.game} active=${active} onSay=${(l) => say(w.id, l)} />`}
     </${Win}>`)}`;
 }
 

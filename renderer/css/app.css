@@ -707,3 +707,24 @@ h4 { font-weight: 750; letter-spacing: -0.01em; }
 
 .fx-layer-tip { display: flex; flex-direction: column; gap: 6px; padding: 6px 6px 10px; font-size: var(--fs-xs); border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 .tl-marker { position: absolute; top: 2px; width: 10px; height: 12px; background: #f2b33d; clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%); cursor: pointer; z-index: 2; }
+
+/* HAL's Puzzle Vault (renderer/js/modules/halpuzzles.js) */
+.pv { display: flex; flex-direction: column; gap: 10px; padding: 12px; width: 100%; font-size: 13px; color: #e8e8ea; }
+.pv-top { display: flex; align-items: center; gap: 8px; } .pv-top .grow { flex: 1; }
+.pv-auto { display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer; }
+.pv-msg { display: flex; flex-wrap: wrap; gap: 6px; font: 600 13px "Share Tech Mono", ui-monospace, monospace; letter-spacing: .06em; color: #555; }
+.pv-msg .on { color: #ff6b5e; text-shadow: 0 0 8px rgba(255,42,26,.6); }
+.pv-card { border: 1px solid #3a0d0d; border-radius: 10px; padding: 12px; background: #120808; }
+.pv-title { font: 700 12px "Share Tech Mono", monospace; text-transform: uppercase; letter-spacing: .1em; color: #ff6b5e; margin-bottom: 6px; }
+.pv-prompt { white-space: pre-wrap; font: 15px/1.45 "Share Tech Mono", ui-monospace, monospace; margin: 0 0 8px; color: #fff; word-break: break-word; }
+.pv-clue { font-style: italic; color: #aaa; } .pv-hint { margin-top: 6px; color: #ffb347; font-size: 12px; }
+.pv-log { display: flex; flex-direction: column; gap: 6px; min-height: 40px; }
+.pv-try { display: flex; gap: 8px; align-items: flex-start; padding: 8px; border-radius: 8px; background: #16161c; }
+.pv-try.ok { box-shadow: inset 3px 0 0 #5cf2a0; } .pv-try.no { box-shadow: inset 3px 0 0 #ff2a1a; }
+.pv-think { color: #bbb; font-size: 12px; margin-bottom: 3px; }
+.pv-pulse { animation: hal-pulse 1s ease-in-out infinite; }
+.pv-act { display: flex; flex-direction: column; gap: 6px; }
+.pv-in { background: #0e0e12; border: 1px solid #2a2a33; border-radius: 8px; padding: 7px 9px; color: #eee; font-size: 12px; }
+.pv-btn { align-self: flex-start; background: #ff2a1a; color: #fff; border: 0; border-radius: 8px; padding: 7px 12px; font-weight: 600; cursor: pointer; }
+.pv-reveal { display: flex; flex-direction: column; gap: 8px; align-items: center; text-align: center; padding: 28px 10px; border: 1px solid #ff2a1a; border-radius: 12px; background: radial-gradient(#2a0606, #0a0a0d); }
+.pv-reveal b { font: 700 20px "Share Tech Mono", monospace; color: #ff6b5e; letter-spacing: .08em; }

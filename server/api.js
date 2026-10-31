@@ -166,6 +166,18 @@ r.post('/api/hal/listen', async (req) => {
 r.get('/api/hal/calendar', () => ctx.store.all('opsEvents').sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)));
 r.del('/api/hal/calendar/:id', (req, b, p) => { ctx.store.remove('opsEvents', p.id); return { ok: true }; });
 // HAL's watch (live news and leads through the day) and the outreach guide's kits.
+// HAL's Puzzle Vault (Arcade): he gets the puzzle (never the answer), thinks it through with his own brain and answers.
+r.post('/api/hal/puzzle', async (req, b) => {
+  if (!require('./integrations/ai').anyConnected()) return { offline: true };
+  try {
+    const r2 = await require('./hal/brain').think({ json: true, maxTokens: 350,
+      system: 'You are HAL, playing a puzzle game for your own enjoyment while Ryan and Ben watch. Solve the puzzle. Think briefly and precisely, step by step, in 1 to 3 short sentences in your own dry voice, then give ONE final answer: a single word or number in capitals, nothing else. If earlier answers were wrong, do not repeat them. Return JSON {"thinking":"...","answer":"..."}.',
+      messages: [{ role: 'user', content: `${b.title ? `${b.title}. ` : ''}${String(b.prompt || '').slice(0, 1200)}\nClue: ${String(b.clue || '').slice(0, 300)}${b.hint ? `\nHint: ${String(b.hint).slice(0, 300)}` : ''}${(b.tries || []).length ? `\nAlready tried (wrong): ${(b.tries || []).slice(0, 5).join(', ')}` : ''}` }] });
+    const j = r2.json || {}; let answer = String(j.answer || '').trim();
+    if (!answer) { const m = /answer\W*([A-Za-z0-9]+)/i.exec(r2.text || ''); answer = m ? m[1] : ''; }
+    return { thinking: String(j.thinking || '').slice(0, 400), answer: answer.slice(0, 40), by: /ollama/.test(r2.by) ? 'local brain' : /xai/.test(r2.by) ? 'Grok' : String(r2.by || '').split(':')[0] };
+  } catch { return { offline: true }; }
+});
 r.get('/api/hal/watch', () => require('./hal/watch').status());
 r.post('/api/hal/watch', (req, b) => { const w = {}; if (b.on != null) w.on = !!b.on; if (b.everyMin) w.everyMin = Math.max(15, Math.min(720, Number(b.everyMin) || 60)); if (b.topics != null) w.topics = String(b.topics).slice(0, 2000); if (b.useGrok != null) w.useGrok = !!b.useGrok; ctx.store.setSettings({ hal: { watch: w } }); return require('./hal/watch').status(); });
 r.post('/api/hal/watch/run', async () => { const res = await require('./hal/watch').run({ force: true }); return { stories: res?.stories?.length || 0, leads: res?.leads?.length || 0, busy: !!res?.busy }; });

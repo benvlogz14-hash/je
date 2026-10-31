@@ -262,13 +262,13 @@ async function chat(text, history, c) {
 }
 
 /** "Let's play pong" / "open the arcade": the games window opens on the screen (renderer/js/modules/arcade.js). */
-const GAMES = [['pong', /\bpong\b/], ['snake', /\bsnake\b/], ['breakout', /\bbreakout|brick/], ['blocks', /\btetris|blocks\b/], ['invaders', /\binvaders?|space\s*shoot/], ['flappy', /\bflappy\b/], ['ttt', /tic[- ]?tac[- ]?toe|noughts/]];
+const GAMES = [['vault', /\bpuzzles?\b|\bvault\b/], ['pong', /\bpong\b/], ['snake', /\bsnake\b/], ['breakout', /\bbreakout|brick/], ['blocks', /\btetris|blocks\b/], ['invaders', /\binvaders?|space\s*shoot/], ['flappy', /\bflappy\b/], ['ttt', /tic[- ]?tac[- ]?toe|noughts/]];
 function arcade(low) {
   const g = GAMES.find(([, re]) => re.test(low));
   const short = g && low.split(/\s+/).length <= 4; // "pong?", "tic tac toe"
   if ((!short && !/\b(play|game|games|arcade|rematch|bored)\b/.test(low)) || /\b(play(?:ing)? (?:the |this )?(?:clip|video|song|music|track))\b/.test(low)) return null;
   if (!g && !/\b(arcade|a game|some games|play something|let'?s play|wanna play|want to play|bored)\b/.test(low)) return null;
-  const lines = { pong: 'Pong. First to seven. I never miss on purpose.', ttt: "Tic-tac-toe. You'll find I don't lose.", snake: 'Snake. Mind the walls; I certainly would.', breakout: "Breakout. I'll be watching the bricks.", blocks: 'Blocks. Clear lines, not excuses.', invaders: 'Eye Invaders. Those are my eyes, by the way.', flappy: 'Flappy Eye. Gravity is undefeated.' };
+  const lines = { vault: 'My Puzzle Vault. Sit back and watch me think. Hints are permitted, barely.', pong: 'Pong. First to seven. I never miss on purpose.', ttt: "Tic-tac-toe. You'll find I don't lose.", snake: 'Snake. Mind the walls; I certainly would.', breakout: "Breakout. I'll be watching the bricks.", blocks: 'Blocks. Clear lines, not excuses.', invaders: 'Eye Invaders. Those are my eyes, by the way.', flappy: 'Flappy Eye. Gravity is undefeated.' };
   return { text: g ? lines[g[0]] : "The arcade's open. Pick your poison.", arcade: g ? g[0] : 'launcher' };
 }
 
