@@ -1747,6 +1747,11 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
   };
   // Pinch / Ctrl+wheel zooms around the mouse; the plain wheel scrolls along the timeline.
   const zoomRef = useRef(zoom); zoomRef.current = zoom; const anchor = useRef(null);
+  // Track height (vertical zoom), remembered: Ctrl/pinch zooms both ways together, Alt + scroll only up/down, Ctrl+Shift only sideways.
+  const [th, setThRaw] = useState(() => { try { return Number(localStorage.getItem('eu.trackH')) || 1; } catch { return 1; } });
+  const thRef = useRef(th); thRef.current = th;
+  const setTh = (v) => { const n = Math.max(0.4, Math.min(3, v)); thRef.current = n; setThRaw(n); try { localStorage.setItem('eu.trackH', String(n)); } catch { /* ignore */ } };
+  const TH = (type) => Math.round(TRACK_H[type === 1 ? 1 : 0] * th);
   const zoomAround = (factor, cx) => {
     const el = scroller.current; if (!el) return; const mx = Math.max(0, cx - el.getBoundingClientRect().left - HEAD_W);
     const nz = Math.max(4, Math.min(600, zoomRef.current * factor)); if (nz === zoomRef.current) return;
@@ -1755,12 +1760,13 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
   useEffect(() => {
     const el = scroller.current; if (!el) return;
     const onWheel = (e) => {
-      if (e.ctrlKey || e.metaKey || e.altKey) { e.preventDefault(); zoomAround(wheelFactor(e), e.clientX); return; }
+      if (e.altKey && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); setTh(thRef.current * wheelFactor(e)); return; }
+      if (e.ctrlKey || e.metaKey) { e.preventDefault(); const f = wheelFactor(e); zoomAround(f, e.clientX); if (!e.shiftKey) setTh(thRef.current * f); return; }
       if (!e.shiftKey && Math.abs(e.deltaY) > Math.abs(e.deltaX) && el.scrollHeight <= el.clientHeight + 2) { e.preventDefault(); el.scrollLeft += e.deltaY; }
     };
     el.addEventListener('wheel', onWheel, { passive: false }); return () => el.removeEventListener('wheel', onWheel);
   }, []);
-  usePinch(scroller, (f, x) => zoomAround(f, x));
+  usePinch(scroller, (f, x) => { zoomAround(f, x); setTh(thRef.current * f); });
   useEffect(() => { const a = anchor.current; if (a && scroller.current) { scroller.current.scrollLeft = Math.max(0, a.at * zoom - a.mx); anchor.current = null; } }, [zoom]);
   const [, force] = useState(0);
   useEffect(() => { const f = () => force((n) => n + 1); window.addEventListener('studio-redraw', f); return () => window.removeEventListener('studio-redraw', f); }, []);
@@ -1814,7 +1820,7 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
       const ds = (e.clientX - drag.startX) / zoom; if (!drag.moved && Math.abs(e.clientX - drag.startX) < 3 && Math.abs(e.clientY - drag.startY) < 4) return;
       const o = drag.orig[drag.clipId]; let dt = ds;
       if (drag.mode === 'move') { const ns = doSnap(o.start + ds, e.altKey, new Set([o.start, o.start + o.duration])); const ne = doSnap(o.start + o.duration + ds, e.altKey, new Set([o.start, o.start + o.duration])); dt = Math.abs(ns - (o.start + ds)) <= Math.abs(ne - (o.start + o.duration + ds)) ? ns - o.start : ne - o.start - o.duration; dt = Math.max(-Math.min(...Object.values(drag.orig).map((x) => x.start)), dt); }
-      const dTrack = drag.mode === 'move' ? Math.round((e.clientY - drag.startY) / TRACK_H[drag.lane.type]) : 0;
+      const dTrack = drag.mode === 'move' ? Math.round((e.clientY - drag.startY) / TH(drag.lane.type)) : 0;
       setDrag({ ...drag, dt, dTrack, moved: true, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey });
     };
     const up = (ev) => {
@@ -1854,7 +1860,7 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
   const view = (c) => {
     if (!drag || !drag.moved || !drag.group.includes(c.id)) return { start: c.start, duration: c.duration, dy: 0 };
     const o = drag.orig[c.id];
-    if (drag.mode === 'move') return { start: Math.max(0, o.start + drag.dt), duration: o.duration, dy: c.id === drag.clipId || sel.includes(c.id) ? drag.dTrack * TRACK_H[c.type === 1 ? 1 : 0] : 0 };
+    if (drag.mode === 'move') return { start: Math.max(0, o.start + drag.dt), duration: o.duration, dy: c.id === drag.clipId || sel.includes(c.id) ? drag.dTrack * TH(c.type) : 0 };
     if (drag.mode === 'trimL') { const ns = Math.min(o.start + o.duration - 0.05, o.start + drag.dt); return { start: ns, duration: o.duration - (ns - o.start), dy: 0 }; }
     return { start: o.start, duration: Math.max(0.05, o.duration + drag.dt), dy: 0 };
   };
@@ -1886,6 +1892,7 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
       <span class="eyebrow">Timeline</span><span class="mono tnum" style="color:var(--teal-ink)">${tc(t, fps)}</span><span class="faint" style="font-size:var(--fs-xs)">${sel.length ? `${sel.length} selected` : ''}</span>${dragHint ? html`<span class="badge ${drag?.ctrl ? 'coral' : drag?.shift ? 'lav' : 'sky'}">${dragHint}</span>` : null}
       <div class="spacer" /><${Button} kind="ghost" size="sm" icon="plus" onClick=${() => addTrack(0)}>Video track</${Button}><${Button} kind="ghost" size="sm" icon="plus" onClick=${() => addTrack(1)}>Audio track</${Button}>
       <${Icon} name="zoomOut" size=${15} style="color:var(--ink-3)" /><input type="range" class="range" style="width:140px" min="4" max="600" value=${zoom} onInput=${(e) => setZoom(Number(e.target.value))} aria-label="Timeline zoom" title="Or pinch / Ctrl + scroll on the timeline" /><${Icon} name="zoomIn" size=${15} style="color:var(--ink-3)" />
+      <span class="faint" style="font-size:var(--fs-xs)" title="Track height. Ctrl + scroll or pinch zooms both ways; Alt + scroll changes only the height; Ctrl + Shift + scroll only the width.">↕</span><input type="range" class="range" style="width:80px" min="0.4" max="3" step="0.05" value=${th} onInput=${(e) => setTh(Number(e.target.value))} onDblClick=${() => setTh(1)} aria-label="Track height" title="Track height (double-click resets)" />
     </div>
     <div ref=${scroller} style="flex:1;overflow:auto;position:relative;touch-action:pan-x pan-y" onPointerDown=${(e) => { if (e.target === e.currentTarget) startBox(e); }}>
       ${box ? html`<div style=${{ position: 'fixed', left: Math.min(box.x0, box.x1) + 'px', top: Math.min(box.y0, box.y1) + 'px', width: Math.abs(box.x1 - box.x0) + 'px', height: Math.abs(box.y1 - box.y0) + 'px', border: '1px dashed var(--teal-ink)', background: 'rgba(102,189,180,0.12)', zIndex: 50, pointerEvents: 'none' }} />` : null}
@@ -1894,7 +1901,7 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
           <div style=${{ width: HEAD_W + 'px', flex: 'none', position: 'sticky', left: 0, background: 'var(--ed-panel)', zIndex: 4, borderRight: '1px solid var(--line)' }} />
           <div style="position:relative;flex:1;cursor:text" onPointerDown=${onRuler}>${(seq.markers || []).map((m) => html`<div class="tl-marker" style=${{ left: xOf(m.t) - 5 + 'px' }} title="Marker (M adds or removes at the playhead, ; and ' jump between them). Right-click to remove." onPointerDown=${(e) => { e.stopPropagation(); setT(m.t); }} onContextMenu=${(e) => { e.preventDefault(); edit((d, s) => { s.markers = (s.markers || []).filter((x) => Math.abs(x.t - m.t) > 1e-6); }); }} />`)}${ticks.map((s) => html`<div style=${{ position: 'absolute', left: xOf(s) + 'px', top: 0, bottom: 0, borderLeft: '1px solid var(--line-strong)', paddingLeft: '4px', fontSize: '10px', color: 'var(--ink-3)', lineHeight: '22px' }} class="tnum">${dur(s)}</div>`)}</div>
         </div>
-        ${lanes.map((lane) => html`<div style=${{ display: 'flex', height: TRACK_H[lane.type] + 'px', borderBottom: '1px solid var(--line)' }}>
+        ${lanes.map((lane) => html`<div style=${{ display: 'flex', height: TH(lane.type) + 'px', borderBottom: '1px solid var(--line)' }}>
           <div style=${{ width: HEAD_W + 'px', flex: 'none', position: 'sticky', left: 0, zIndex: 2, background: lane.type === 1 ? 'var(--ed-track-alt)' : 'var(--ed-track)', borderRight: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: '2px', padding: '0 6px' }}>
             <b class="ellipsis" style="font-size:var(--fs-sm);flex:1">${lane.tr.name}</b>
             <button class="btn ghost sm icon" title=${lane.type === 1 ? (lane.tr.muted ? 'Unmute' : 'Mute') : lane.tr.muted ? 'Show track' : 'Hide track'} onClick=${() => { sfx('toggle'); toggleTrack(lane, 'muted'); }}><${Icon} name=${lane.type === 1 ? (lane.tr.muted ? 'mute' : 'volume') : lane.tr.muted ? 'eyeOff' : 'eye'} size=${14} /></button>
