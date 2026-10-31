@@ -706,3 +706,4 @@ h4 { font-weight: 750; letter-spacing: -0.01em; }
 .arc-best { color: #ffb000; font-size: 11px; }
 
 .fx-layer-tip { display: flex; flex-direction: column; gap: 6px; padding: 6px 6px 10px; font-size: var(--fs-xs); border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.tl-marker { position: absolute; top: 2px; width: 10px; height: 12px; background: #f2b33d; clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%); cursor: pointer; z-index: 2; }

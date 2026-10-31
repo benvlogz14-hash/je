@@ -598,7 +598,7 @@ function Editor({ id }) {
   }, [id]);
   const addText = () => setTitleEdit({});
   const saveTitle = ({ text, posY, duration, fade }) => {
-    const tid = titleEdit?.clipId;
+    const tid = titleEdit?.clipId; let newTitle = null;
     if (titleEdit?.ids?.length > 1) {
       // One style for many: every selected title/caption gets the look (and the position, if you moved it); words and timing stay.
       const first = findClip(seq, tid)?.c; const movedY = first && Math.abs(valAt(first.posY, 0) - posY) > 1;
@@ -607,8 +607,9 @@ function Editor({ id }) {
     }
     edit((d, s) => {
       if (tid) { const f = findClip(s, tid); if (!f) return; const c = f.c; c.text = text; c.name = text.text.slice(0, 40); c.duration = duration; c.posY = isAnimated(c.posY) ? c.posY : anim(posY); c.transIn = { type: fade ? 2 : 0, duration: fade || 0.25 }; c.transOut = { type: fade ? 2 : 0, duration: fade || 0.25 }; return; }
-      place(s, 'v', s.videoTracks.length - 1, { id: nextId(d), type: 3, mediaId: '', name: text.text.slice(0, 40), start: t, duration, in: 0, speed: 1, preservePitch: false, linkId: '0', enabled: true, posX: anim(0), posY: anim(posY), scaleX: anim(1), scaleY: anim(1), rotation: anim(0), opacity: anim(1), volume: anim(1), uniformScale: true, effects: [], transIn: { type: fade ? 2 : 0, duration: fade || 0.25 }, transOut: { type: fade ? 2 : 0, duration: fade || 0.25 }, text });
+      newTitle = nextId(d); place(s, 'v', s.videoTracks.length - 1, { id: newTitle, type: 3, mediaId: '', name: text.text.slice(0, 40), start: t, duration, in: 0, speed: 1, preservePitch: false, linkId: '0', enabled: true, posX: anim(0), posY: anim(posY), scaleX: anim(1), scaleY: anim(1), rotation: anim(0), opacity: anim(1), volume: anim(1), uniformScale: true, effects: [], transIn: { type: fade ? 2 : 0, duration: fade || 0.25 }, transOut: { type: fade ? 2 : 0, duration: fade || 0.25 }, text });
     });
+    if (newTitle) setSel([newTitle]); // selected, so text animations and effects go straight on it
     setTitleEdit(null); sfx('success');
   };
 
@@ -635,6 +636,8 @@ function Editor({ id }) {
       else if (key === 's' && !mod) { e.preventDefault(); split(e.shiftKey); }
       else if (mod && key === 'b') { e.preventDefault(); split(true); }
       else if (mod && key === 'a') { e.preventDefault(); setSel([...seq.videoTracks, ...seq.audioTracks].filter((tr) => !tr.locked).flatMap((tr) => tr.clips.map((c) => c.id))); }
+      else if (key === 'm' && !mod) { e.preventDefault(); const at = Math.round(t * 1000) / 1000; edit((d, s) => { const ms = s.markers || []; s.markers = ms.some((m) => Math.abs(m.t - at) < 0.05) ? ms.filter((m) => Math.abs(m.t - at) >= 0.05) : [...ms, { t: at }].sort((a, b) => a.t - b.t); }); sfx('tap'); }
+      else if ((key === ';' || key === "'") && !mod) { e.preventDefault(); const ms = (seq.markers || []).map((m) => m.t); const nx = key === "'" ? ms.find((x) => x > t + 0.01) : [...ms].reverse().find((x) => x < t - 0.01); if (nx != null) setT(nx); }
       else if (key === 'q' && !mod) { e.preventDefault(); trimToPlayhead('before'); }
       else if (key === 'w' && !mod) { e.preventDefault(); trimToPlayhead('after'); }
       else if (key === 'v') setTool('select');
@@ -678,7 +681,7 @@ function Editor({ id }) {
       <${Button} kind="primary" size="sm" icon="upload" onClick=${exportNow}>Export</${Button}>
     </div>
     <div style="display:grid;grid-template-columns:260px minmax(0, 1fr) 300px;grid-template-rows:minmax(0, 1fr);min-height:0;overflow:hidden">
-      <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${id} onBroll=${addBroll} onFxLayer=${addFxLayer} />
+      <${LeftPanel} tab=${leftTab} setTab=${setLeftTab} data=${data} onAdd=${addMedia} selected=${selected} edit=${edit} importFiles=${importFiles} importPaths=${importPaths} importing=${importing} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${id} onBroll=${addBroll} onFxLayer=${addFxLayer} selIds=${sel} t=${t} />
       <${Monitor} seq=${seq} media=${media} t=${t} setT=${setT} playing=${playing} setPlaying=${setPlaying} duration=${duration} selected=${selected} sel=${sel} edit=${edit} setSel=${setSel} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} />
       <${EffectControls} selected=${selected} sel=${sel} findClip=${findClip} seq=${seq} edit=${edit} media=${media} t=${t} setT=${setT} onEditTitle=${(cid, ids) => setTitleEdit({ clipId: cid, ids })} />
     </div>
@@ -768,7 +771,10 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
   const lookV = (LOOKS.find((l) => l.id === look) || LOOKS[0]).v;
   // Captions follow what you hear: the clips on the audio tracks (or the video clips when there are none).
   const sources = () => {
-    const pick = (tracks, type) => tracks.filter((tr) => !tr.muted).flatMap((tr) => tr.clips).filter((c) => c.type === type && c.enabled !== false && media[c.mediaId]?.path);
+    // Never the music: the Music track, library tracks and muted clips have no words to caption (asking for them used
+    // to send the song off to be transcribed and the button just waited).
+    const isMusic = (tr, c) => /^music/i.test(tr.name || '') || /[\\/]music[\\/]/i.test(media[c.mediaId]?.path || '') || base(c.volume, 1) === 0;
+    const pick = (tracks, type) => tracks.filter((tr) => !tr.muted).flatMap((tr) => tr.clips.filter((c) => !isMusic(tr, c))).filter((c) => c.type === type && c.enabled !== false && media[c.mediaId]?.path);
     const a = pick(seq.audioTracks, 1); return (a.length ? a : pick(seq.videoTracks.filter((tr) => tr.name !== 'B-roll'), 0)).map((c) => ({ path: media[c.mediaId].path, in: c.in || 0, duration: c.duration, start: c.start, speed: c.speed || 1 }));
   };
   const insert = (caps) => edit((d, s) => {
@@ -792,7 +798,11 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
         await api.post('/api/studio/transcribe', { paths: r.missing });
         setBusy('Transcribing the audio (a few minutes for long videos)…');
         const t0 = Date.now();
-        while (r.missing.length && Date.now() - t0 < 45 * 60000) { await new Promise((ok) => setTimeout(ok, 6000)); r = await api.post('/api/studio/captions', req); }
+        while (r.missing.length && Date.now() - t0 < 45 * 60000) {
+          await new Promise((ok) => setTimeout(ok, 6000)); r = await api.post('/api/studio/captions', req);
+          if (r.failed?.length) throw new Error(`Couldn't turn the speech into text: ${r.failed[0]}`);
+          setBusy(`Transcribing the audio${r.progress != null ? ` (${Math.round(r.progress * 100)}%)` : ''}…`);
+        }
         if (r.missing.length) throw new Error('Transcribing is taking a long time. Check Production → jobs, then press Add captions again.');
       }
       if (!r.captions.length) throw new Error('No speech was found in these clips.');
@@ -936,7 +946,7 @@ function ExportDialog({ id, saving, onClose }) {
 }
 
 // ------------------------------------------------------------ left: project bin + effects
-function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, importPaths, importing, aiEdit, aiUndo, projectId, onBroll, onFxLayer }) {
+function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, importPaths, importing, aiEdit, aiUndo, projectId, onBroll, onFxLayer, selIds = [], t = 0 }) {
   const fileRef = useRef(null);
   const busy = importing;
   const importDisk = async () => {
@@ -949,6 +959,27 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
     if (!selected || selected.c.type === 1) return onFxLayer(fx);
     edit((d, s) => { const tr = [...s.videoTracks].find((x) => x.clips.some((c) => c.id === selected.c.id)); const c = tr.clips.find((x) => x.id === selected.c.id); c.effects.push({ effectId: fx.id, enabled: true, params: Object.fromEntries(fx.params.map((p) => [p[0], anim(p[4])])) }); });
     sfx('success');
+  };
+  /** Motion presets: zoom keyframes made for you on the selected video or image clip. */
+  const applyMotion = (kind, label) => {
+    if (!selected || ![0, 2].includes(selected.c.type)) return toast('Select a video or image clip first.', { kind: 'warn' });
+    edit((d, s) => { for (const tr of s.videoTracks) { const c = tr.clips.find((x) => x.id === selected.c.id); if (!c) continue;
+      const b = valAt(c.scaleX, 0, 1); const dur = c.duration; const lt = Math.max(0.05, Math.min(dur - 0.05, t - c.start)); let keys;
+      if (kind === 'in') keys = [[0, b], [qt(dur), b * 1.15]];
+      else if (kind === 'out') keys = [[0, b * 1.15], [qt(dur), b]];
+      else { const end = Math.min(dur, lt + 1.5); keys = [[qt(Math.max(0, lt - 0.04)), b], [qt(lt), b * 1.18], [qt(Math.max(lt, end - 0.04)), b * 1.18], [qt(end), b]]; }
+      c.scaleX = { base: b, keys }; c.scaleY = { base: b, keys: keys.map((k) => [...k]) }; } });
+    sfx('success'); toast(`${label} added. The keyframes are on Scale in Effect controls if you want to tweak them.`, { kind: 'success' });
+  };
+  /** Text animations: on every selected title or caption at once. */
+  const applyText = (key, k, label) => {
+    if (!selected || selected.c.type !== 3) return toast('Select a title or captions on the timeline first (Shift-click for several, or "Select all captions").', { kind: 'warn' });
+    edit((d, s) => { for (const tr of s.videoTracks) for (const c of tr.clips) if ((selIds.includes(c.id) || c.id === selected.c.id) && c.type === 3 && c.text) {
+      c.text[key] = k; if (key === 'animIn' && k === 'fade') c.transIn = { type: 2, duration: 0.3 }; if (key === 'animOut' && k === 'fadeout') c.transOut = { type: 0, duration: 0.3 };
+      if (k === 'type' || k === 'untype') { if (c.text.typeSound === undefined) c.text.typeSound = true; }
+    } });
+    if (k === 'type' || k === 'untype') typeClick();
+    sfx('success'); toast(`${label} on ${Math.max(1, selIds.length)} title${selIds.length > 1 ? 's' : ''}.${k === 'type' ? ' Typing sound is on; change it in Edit title.' : ''}`, { kind: 'success' });
   };
   const applyTransition = (tt, edge) => {
     if (!selected) return toast('Select a clip first', { kind: 'warn' });
@@ -965,6 +996,9 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
           <div class="grow" style="min-width:0"><div class="ellipsis" style="font-size:var(--fs-sm);font-weight:500">${m.name}</div><div class="faint tnum" style="font-size:var(--fs-xs)">${m.kind >= 2 ? 'Image' : dur(m.duration)}${m.width ? ` · ${m.width}×${m.height}` : ''}${m.proxyPending ? ' · preparing preview…' : m.proxyError ? ' · preview unavailable' : ''}</div></div></div>`)
         : html`<div class="empty" style="padding:30px 10px"><p style="font-size:var(--fs-sm)">Import or drop video, audio and images here.</p></div>`)
       : html`<div class="fx-layer-tip"><${Button} size="sm" kind="lav" icon="layers" onClick=${() => onFxLayer()}>New effect layer</${Button}><span class="faint">${selected?.c?.type === 5 ? 'Effects go on the selected effect layer, over everything below it.' : selected && selected.c.type !== 1 ? 'Effects go on the selected clip. Click empty timeline to put them on a layer over everything instead.' : 'With nothing selected, an effect goes on a new layer over the whole edit.'}</span></div>
+        <div class="eyebrow" style="padding:8px 6px 4px">Motion</div>${[['in', 'Slow zoom in'], ['out', 'Slow zoom out'], ['punch', 'Punch-in at the playhead']].map(([k, l]) => html`<div class="review-item" onClick=${() => applyMotion(k, l)} title="Apply to the selected clip"><${Icon} name="zoomIn" size=${15} /><span style="font-size:var(--fs-sm)">${l}</span></div>`)}
+        <div class="eyebrow" style="padding:8px 6px 4px">Text animations · in</div>${TEXT_IN.filter(([k]) => k !== 'none').map(([k, l]) => html`<div class="review-item" onClick=${() => applyText('animIn', k, l)} title="Apply to the selected titles"><${Icon} name="type" size=${15} /><span style="font-size:var(--fs-sm)">${l}${k === 'type' ? ' (with typing sound)' : ''}</span></div>`)}
+        <div class="eyebrow" style="padding:8px 6px 4px">Text animations · out</div>${TEXT_OUT.filter(([k]) => k !== 'none').map(([k, l]) => html`<div class="review-item" onClick=${() => applyText('animOut', k, l)} title="Apply to the selected titles"><${Icon} name="type" size=${15} /><span style="font-size:var(--fs-sm)">${l}</span></div>`)}
         ${['Retro', 'Blur', 'Color', 'Transform', 'Stylize'].map((cat) => html`<div class="eyebrow" style="padding:8px 6px 4px">${cat}</div>${EFFECTS.filter((f) => f.cat === cat).map((f) => html`<div class="review-item" onDblClick=${() => applyEffect(f)} onClick=${() => applyEffect(f)} title="Apply to the selected clip"><${Icon} name="wand" size=${15} /><span style="font-size:var(--fs-sm)">${f.name}</span></div>`)}`)}
         ${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<div class="eyebrow" style="padding:12px 6px 4px">${cat === 'Dissolve' ? 'Transitions · ' : ''}${cat}</div>${TRANSITIONS.filter((x) => x.cat === cat).map((tt) => html`<div class="review-item" style="cursor:default"><${Icon} name="layers" size=${15} /><span class="grow" style="font-size:var(--fs-sm)">${tt.name}</span><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transIn')}>In</${Button}><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transOut')}>Out</${Button}></div>`)}`)}`}
     </div></div>`;
@@ -1056,6 +1090,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
   // times a second, which keeps playback smooth. On pause the last played time is handed back (playedTo).
   const tRef = useRef(t); const playedTo = useRef(null);
   if (!playing && playedTo.current == null) tRef.current = t;
+  const typedSeen = useRef(new Map()); // typewriter titles: letters showing at the last frame (for the key clicks)
   const uiT = useRef(null); // the last time the playback loop itself put on the playhead
   const stalled = useRef(false); const hold = useRef({ since: 0, drawn: false, retry: 0 });
   const [qualitySel, setQuality] = useState(0.5);
@@ -1187,7 +1222,16 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
         if (RETRO_IDS.has(e.effectId)) retros.push([e.effectId, p]);
       }
       g.filter = filters.join(' ') || 'none';
-      if (c.type === 3) drawText(g, c.text || {}, sx * quality, local, c.duration);
+      if (c.type === 3) {
+        drawText(g, c.text || {}, sx * quality, local, c.duration);
+        // Typewriter sound while playing: a click for each new letter (softer when typing away).
+        const stt = c.text || {};
+        if ((stt.animIn === 'type' || stt.animOut === 'untype') && stt.typeSound !== false) {
+          const shown = typedCount(stt, stt.uppercase ? String(stt.text || '').toUpperCase() : stt.text || '', local, c.duration); const prev = typedSeen.current.get(c.id);
+          if (playing && prev != null && shown !== prev && Math.abs(shown - prev) <= 3) typeClick(shown < prev, stt.typeVol ?? 0.7);
+          typedSeen.current.set(c.id, shown);
+        }
+      }
       else {
         const el = getEl(c); const m = media[c.mediaId];
         // A player still on the wrong spot (catching up after a jump) is skipped, so the layer underneath shows instead of a wrong or black frame.
@@ -1388,6 +1432,38 @@ function hlLines(st, text, local, dur) {
   return lines.map((ws) => ws.map((w) => { const i = k++; return { w, hl: mode === 'word' ? i === active : mode === 'keywords' && kw.has(normWord(w)) }; }));
 }
 
+/** Title entrances and exits (same numbers as the export, server/video/studio.js textAnim). */
+const IN_S = { pop: 0.25, slide: 0.35, drop: 0.35, zoom: 0.3, blur: 0.35 }; const OUT_S = 0.3;
+function textAnim(st, lt, dur) {
+  const r = { sc: 1, dy: 0, op: 1, blur: 0 };
+  const ai = st.animIn; const pi = IN_S[ai] ? easeOut(Math.min(1, Math.max(0, lt) / IN_S[ai])) : 1;
+  if (ai === 'pop') r.sc *= 0.6 + 0.4 * pi; if (ai === 'slide') r.dy += 70 * (1 - pi); if (ai === 'drop') r.dy -= 70 * (1 - pi);
+  if (ai === 'zoom') { r.sc *= 1.6 - 0.6 * pi; r.op *= pi; } if (ai === 'blur') { r.blur += 18 * (1 - pi); r.op *= pi; }
+  const ao = st.animOut; if (ao && ao !== 'none' && ao !== 'untype' && dur) {
+    const po = Math.min(1, Math.max(0, (lt - (dur - OUT_S)) / OUT_S)); const e = po * po;
+    if (ao === 'popout') r.sc *= 1 - 0.7 * e; if (ao === 'zoomout') r.sc *= 1 + 0.7 * e; if (ao === 'slideout') r.dy += 70 * e; if (ao === 'blurout') r.blur += 18 * e;
+    r.op *= 1 - po;
+  }
+  return r;
+}
+/** How many letters of a typewriter title show at `local` (same timing as the export). */
+function typedCount(st, text, local, dur) {
+  const N = [...String(text).replace(/\n/g, '')].length;
+  const cps = Math.max(Math.max(4, Math.min(60, Number(st.typeSpeed) || 18)), dur ? (N * ((st.animIn === 'type' ? 1 : 0) + (st.animOut === 'untype' ? 1 : 0))) / Math.max(0.2, dur * 0.7) : 0);
+  return Math.max(0, Math.min(N, st.animIn === 'type' ? Math.floor(local * cps + 1e-6) : N, st.animOut === 'untype' && dur ? Math.floor((dur - local) * cps + 1e-6) : N));
+}
+/** The typewriter's key click in the preview (made with Web Audio, like the export's). */
+let typeAC = null;
+function typeClick(soft = false, vol = 0.7) {
+  try {
+    typeAC = typeAC || new (window.AudioContext || window.webkitAudioContext)(); const ac = typeAC; const t0 = ac.currentTime;
+    const len = Math.round(ac.sampleRate * 0.045); const b = ac.createBuffer(1, len, ac.sampleRate); const d = b.getChannelData(0); const f = 150 + Math.random() * 90; let lp = 0;
+    const g = (soft ? 0.35 : 0.7) * (0.75 + Math.random() * 0.5) * vol;
+    for (let i = 0; i < len; i++) { const x = i / ac.sampleRate; lp += 0.55 * ((Math.random() * 2 - 1) - lp); d[i] = g * (lp * Math.exp(-x * 160) * 0.9 + Math.sin(2 * Math.PI * f * x) * Math.exp(-x * 70) * 0.5); }
+    const src = ac.createBufferSource(); src.buffer = b; src.connect(ac.destination); src.start(t0);
+  } catch { /* no audio */ }
+}
+
 /** Draw a title centred on the current origin. local = seconds into the clip (for pop / slide-up and the spoken-word highlight). */
 function drawText(g, st, scale, local = 10, dur = 0) {
   const size = (st.pixelSize || 96) * scale;
@@ -1395,8 +1471,7 @@ function drawText(g, st, scale, local = 10, dur = 0) {
   g.font = `${st.italic ? 'italic ' : ''}${st.bold === false ? 500 : 800} ${size}px ${JSON.stringify(st.family || 'Montserrat')}, Montserrat, "Segoe UI", sans-serif`;
   g.textAlign = 'center'; g.textBaseline = 'middle';
   try { g.letterSpacing = `${(st.letterSpacing || 0) * scale}px`; } catch { /* older engines */ }
-  if (st.animIn === 'pop') { const k = 0.6 + 0.4 * easeOut(Math.min(1, Math.max(0, local) / 0.25)); g.scale(k, k); }
-  if (st.animIn === 'slide') g.translate(0, 70 * scale * (1 - easeOut(Math.min(1, Math.max(0, local) / 0.35))));
+  { const an = textAnim(st, local, dur); if (an.sc !== 1) g.scale(an.sc, an.sc); if (an.dy) g.translate(0, an.dy * scale); if (an.op < 1) g.globalAlpha *= Math.max(0, an.op); if (an.blur > 0.2) g.filter = `${g.filter && g.filter !== 'none' ? g.filter + ' ' : ''}blur(${(an.blur * scale) / 2}px)`; }
   const lines = text.split('\n'); const lh = size * 1.15;
   if (st.box && st.boxRadius > 0) {
     // Rounded box per line (TikTok / Instagram titles), as in the export.
@@ -1452,7 +1527,9 @@ const POS_Y = { top: -0.32, center: 0, lower: 0.26, bottom: 0.36 };
 /** Every font (bundled and Windows ones), grouped like the clip panel's picker. */
 const fontOptions = () => FONT_GROUPS.map(([g, list]) => html`<optgroup label=${g}>${list.map((f) => html`<option value=${f} style=${{ fontFamily: `'${f}'` }}>${f}</option>`)}</optgroup>`);
 /** The look of a title (not its words, timing or highlight), copied when one style is applied to many titles/captions. */
-const STYLE_KEYS = ['family', 'pixelSize', 'bold', 'italic', 'uppercase', 'color', 'outlineColor', 'outlineWidth', 'shadow', 'shadowColor', 'box', 'boxColor', 'boxPad', 'boxRadius', 'letterSpacing', 'animIn', 'animOut', 'typeSpeed', 'hlColor'];
+const STYLE_KEYS = ['family', 'pixelSize', 'bold', 'italic', 'uppercase', 'color', 'outlineColor', 'outlineWidth', 'shadow', 'shadowColor', 'box', 'boxColor', 'boxPad', 'boxRadius', 'letterSpacing', 'animIn', 'animOut', 'typeSpeed', 'typeSound', 'typeVol', 'hlColor'];
+const TEXT_IN = [['none', 'None'], ['fade', 'Fade in'], ['pop', 'Pop'], ['slide', 'Slide up'], ['drop', 'Drop in'], ['zoom', 'Zoom in'], ['blur', 'Blur in'], ['type', 'Typewriter']];
+const TEXT_OUT = [['none', 'None'], ['fadeout', 'Fade out'], ['popout', 'Pop out'], ['slideout', 'Slide down'], ['zoomout', 'Zoom out'], ['blurout', 'Blur out'], ['untype', 'Type away']];
 const hex6 = (c, d) => '#' + String(c || d).replace('#', '').slice(-6);
 const withAlpha = (rgb, a) => '#' + Math.round(a * 255).toString(16).padStart(2, '0') + rgb.replace('#', '');
 
@@ -1507,9 +1584,10 @@ function TitleDesigner({ seq, clip, count = 1, onClose, onSave }) {
         ${st.box ? html`<${ParamField} label="Box padding" p=${st.boxPad ?? 18} animatable=${false} min=${0} max=${120} smin=${0} smax=${60} unit="px" onLive=${(v) => set({ boxPad: Math.round(v.base) })} onCommit=${(v) => set({ boxPad: Math.round(v.base) })} />` : null}
         <div class="field"><span class="label">Position</span><div class="chips">${Object.entries({ top: 'Top', center: 'Centre', lower: 'Lower third', bottom: 'Bottom' }).map(([k, l]) => chip(Math.abs(posY - Math.round(seq.height * POS_Y[k])) < 2, l, () => setPosY(Math.round(seq.height * POS_Y[k]))))}</div></div>
         <${ParamField} label="Height on screen" p=${posY} animatable=${false} min=${-seq.height} max=${seq.height} smin=${-seq.height / 2} smax=${seq.height / 2} unit="px" onLive=${(v) => setPosY(Math.round(v.base))} onCommit=${(v) => setPosY(Math.round(v.base))} />
-        <div class="field"><span class="label">Entrance</span><div class="chips">${[['none', 'None'], ['fade', 'Fade in'], ['pop', 'Pop'], ['slide', 'Slide up'], ['type', 'Typewriter']].map(([k, l]) => chip((st.animIn || 'none') === k, l, () => { set({ animIn: k }); if (k === 'fade' && !fade) setFade(0.3); }))}</div></div>
-        <div class="field"><span class="label">Exit</span><div class="chips">${[['none', 'None'], ['untype', 'Type away']].map(([k, l]) => chip((st.animOut || 'none') === k, l, () => set({ animOut: k })))}</div></div>
-        ${st.animIn === 'type' || st.animOut === 'untype' ? html`<div class="field"><span class="label">Typing speed</span><div class="chips">${[[10, 'Slow'], [18, 'Normal'], [30, 'Fast']].map(([k, l]) => chip((st.typeSpeed || 18) === k, l, () => set({ typeSpeed: k })))}</div></div>` : null}
+        <div class="field"><span class="label">Entrance</span><div class="chips">${TEXT_IN.map(([k, l]) => chip((st.animIn || 'none') === k, l, () => { set({ animIn: k }); if (k === 'fade' && !fade) setFade(0.3); }))}</div></div>
+        <div class="field"><span class="label">Exit</span><div class="chips">${TEXT_OUT.map(([k, l]) => chip((st.animOut || 'none') === k, l, () => set({ animOut: k })))}</div></div>
+        ${st.animIn === 'type' || st.animOut === 'untype' ? html`<div class="field"><span class="label">Typing speed</span><div class="chips">${[[10, 'Slow'], [18, 'Normal'], [30, 'Fast']].map(([k, l]) => chip((st.typeSpeed || 18) === k, l, () => set({ typeSpeed: k })))}</div></div>
+          <div class="field"><span class="label">Typing sound</span><div class="row" style="gap:10px"><${Toggle} on=${st.typeSound !== false} label="Typing sound" onChange=${(on) => { set({ typeSound: on }); if (on) typeClick(false, st.typeVol ?? 0.7); }} />${st.typeSound !== false ? html`<input type="range" class="range" min="0.1" max="1.5" step="0.05" value=${st.typeVol ?? 0.7} onInput=${(e) => set({ typeVol: Number(e.target.value) })} onChange=${() => typeClick(false, st.typeVol ?? 0.7)} aria-label="Typing sound volume" style="width:140px" /><span class="faint" style="font-size:var(--fs-xs)">volume</span>` : null}</div></div>` : null}
         <div class="form-grid" style="grid-template-columns:repeat(auto-fit, minmax(170px, 1fr))">
           <${ParamField} label="On screen for" p=${dur} animatable=${false} min=${0.2} max=${600} smin=${0.5} smax=${15} step=${0.1} digits=${1} unit="s" onLive=${(v) => setDur(v.base)} onCommit=${(v) => setDur(v.base)} />
           <${ParamField} label="Fade in/out" p=${fade} animatable=${false} min=${0} max=${5} smin=${0} smax=${2} step=${0.05} digits=${2} unit="s" onLive=${(v) => setFade(v.base)} onCommit=${(v) => setFade(v.base)} />
@@ -1602,7 +1680,7 @@ function EffectControls({ selected, sel = [], findClip, seq, edit, media, t, set
   const texts = findClip ? sel.map((id) => findClip(seq, id)?.c).filter((x) => x && x.type === 3 && x.text) : [];
   if (texts.length > 1 && texts.length === sel.length) return html`<${MultiTextControls} texts=${texts} seq=${seq} edit=${edit} onEditTitle=${onEditTitle} />`;
   if (!selected) return html`<div style="background:var(--ed-panel);border-left:1px solid var(--line);padding:14px"><div class="eyebrow">Effect controls</div><p class="faint" style="font-size:var(--fs-sm);margin-top:10px">Select a clip on the timeline to adjust and animate position, scale, rotation, opacity, volume, speed, effects and transitions.</p>
-    <div class="divider" /><div class="eyebrow">Shortcuts</div><div class="col" style="gap:4px;margin-top:8px;font-size:var(--fs-sm)" class="muted">${[['Space', 'Play / pause'], ['J K L', 'Shuttle'], ['S', 'Split selected'], ['Shift S / Ctrl B', 'Split all tracks'], ['Ctrl A', 'Select everything'], ['Drag on empty space', 'Box-select clips'], ['Q / W', 'Delete everything before / after the playhead'], ['Del', 'Delete'], ['Alt / Shift Del', 'Ripple delete (closes the gap)'], ['V / C / T', 'Select / razor / title'], ['Ctrl Z', 'Undo'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl V a YouTube link', 'Puts its audio on the timeline'], ['Ctrl D', 'Duplicate'], ['Ctrl R', 'Speed / duration'], ['F2', 'Rename clip'], ['Shift E', 'Enable / disable'], ['Right-click', 'All clip tools'], ['Drop on a clip', 'Pushes it down a layer'], ['Shift + drop', 'Pushes it up instead'], ['Ctrl + drop', 'Replaces it'], ['+ / −', 'Zoom timeline']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="faint">${d}</span></div>`)}</div></div>`;
+    <div class="divider" /><div class="eyebrow">Shortcuts</div><div class="col" style="gap:4px;margin-top:8px;font-size:var(--fs-sm)" class="muted">${[['Space', 'Play / pause'], ['J K L', 'Shuttle'], ['S', 'Split selected'], ['Shift S / Ctrl B', 'Split all tracks'], ['Ctrl A', 'Select everything'], ['Drag on empty space', 'Box-select clips'], ['Q / W', 'Delete everything before / after the playhead'], ['Del', 'Delete'], ['Alt / Shift Del', 'Ripple delete (closes the gap)'], ['V / C / T', 'Select / razor / title'], ['Ctrl Z', 'Undo'], ['Ctrl C / X / V', 'Copy / cut / paste'], ['Ctrl V a YouTube link', 'Puts its audio on the timeline'], ['Ctrl D', 'Duplicate'], ['Ctrl R', 'Speed / duration'], ['F2', 'Rename clip'], ['Shift E', 'Enable / disable'], ['Right-click', 'All clip tools'], ['Drop on a clip', 'Pushes it down a layer'], ['Shift + drop', 'Pushes it up instead'], ['Ctrl + drop', 'Replaces it'], ['+ / −', 'Zoom timeline'], ['M', 'Add / remove a marker'], ['; and \'', 'Previous / next marker']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="faint">${d}</span></div>`)}</div></div>`;
   const c = selected.c;
   // Live-preview while dragging a slider (mutate in place); commit one undo step on release.
   const [, force] = useState(0);
@@ -1691,7 +1769,7 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
   const xOf = (s) => s * zoom; const sOf = (x) => Math.max(0, x / zoom);
   const fps = seq.fps || 30;
   // Snap to clip edges, the playhead, and the keyframes of selected clips.
-  const snapPoints = () => [t, 0, ...[...seq.videoTracks, ...seq.audioTracks].flatMap((tr) => tr.clips.flatMap((c) => [c.start, c.start + c.duration, ...(sel.includes(c.id) ? keyTimesOf(c).map((k) => c.start + k) : [])]))];
+  const snapPoints = () => [t, 0, ...(seq.markers || []).map((m) => m.t), ...[...seq.videoTracks, ...seq.audioTracks].flatMap((tr) => tr.clips.flatMap((c) => [c.start, c.start + c.duration, ...(sel.includes(c.id) ? keyTimesOf(c).map((k) => c.start + k) : [])]))];
   const doSnap = (s, alt, exclude = new Set()) => {
     if (!snap || alt) return Math.round(s * fps) / fps;
     let best = s, bd = 8 / zoom;
@@ -1814,7 +1892,7 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
       <div style=${{ width: width + HEAD_W + 'px', position: 'relative', minHeight: '100%' }} onPointerDown=${(e) => { if (e.target === e.currentTarget) startBox(e); }}>
         <div style=${{ position: 'sticky', top: 0, zIndex: 3, display: 'flex', height: '24px', background: 'var(--ed-panel)', borderBottom: '1px solid var(--line)' }}>
           <div style=${{ width: HEAD_W + 'px', flex: 'none', position: 'sticky', left: 0, background: 'var(--ed-panel)', zIndex: 4, borderRight: '1px solid var(--line)' }} />
-          <div style="position:relative;flex:1;cursor:text" onPointerDown=${onRuler}>${ticks.map((s) => html`<div style=${{ position: 'absolute', left: xOf(s) + 'px', top: 0, bottom: 0, borderLeft: '1px solid var(--line-strong)', paddingLeft: '4px', fontSize: '10px', color: 'var(--ink-3)', lineHeight: '22px' }} class="tnum">${dur(s)}</div>`)}</div>
+          <div style="position:relative;flex:1;cursor:text" onPointerDown=${onRuler}>${(seq.markers || []).map((m) => html`<div class="tl-marker" style=${{ left: xOf(m.t) - 5 + 'px' }} title="Marker (M adds or removes at the playhead, ; and ' jump between them). Right-click to remove." onPointerDown=${(e) => { e.stopPropagation(); setT(m.t); }} onContextMenu=${(e) => { e.preventDefault(); edit((d, s) => { s.markers = (s.markers || []).filter((x) => Math.abs(x.t - m.t) > 1e-6); }); }} />`)}${ticks.map((s) => html`<div style=${{ position: 'absolute', left: xOf(s) + 'px', top: 0, bottom: 0, borderLeft: '1px solid var(--line-strong)', paddingLeft: '4px', fontSize: '10px', color: 'var(--ink-3)', lineHeight: '22px' }} class="tnum">${dur(s)}</div>`)}</div>
         </div>
         ${lanes.map((lane) => html`<div style=${{ display: 'flex', height: TRACK_H[lane.type] + 'px', borderBottom: '1px solid var(--line)' }}>
           <div style=${{ width: HEAD_W + 'px', flex: 'none', position: 'sticky', left: 0, zIndex: 2, background: lane.type === 1 ? 'var(--ed-track-alt)' : 'var(--ed-track)', borderRight: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: '2px', padding: '0 6px' }}>

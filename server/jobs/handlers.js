@@ -217,6 +217,11 @@ function studioTranscript(file) {
   const a = ctx.store.find('assets', (x) => x.path === file);
   try { return loadTranscript(a || studioAsset(file)); } catch { return null; }
 }
+/** Same, with the words put back on the voice (Studio's Add captions). */
+async function studioTranscriptAligned(file) {
+  const a = ctx.store.find('assets', (x) => x.path === file);
+  try { return await alignedTranscript(a || studioAsset(file)); } catch { return studioTranscript(file); }
+}
 
 /**
  * After import, transcription and analysis, pick clips now, or (the default) wait for "Make clips" so the clip
@@ -228,6 +233,14 @@ function discoverOrWait(h, asset, opts = {}) {
     ctx.store.update('assets', a.id, { status: 'waiting' }); events.publish('assets', { id: a.id }); h.log('Ready. Waiting for "Make clips".'); return;
   }
   h.enqueue('discover', { assetId: a.id }, { title: `Find clips in ${a.name}`, ...opts });
+}
+
+/** The transcript with its words put back on the voice where speech-to-text drifted (once per transcript, saved). */
+async function alignedTranscript(asset) {
+  const t = loadTranscript(asset); if (!t || t.voiceAligned) return t;
+  const a = await require('../video/align').alignFile(t, asset.path, asset.workDir);
+  try { fs.writeFileSync(path.join(asset.workDir, `${asset.id}.transcript.json`), JSON.stringify(a)); } catch { /* read-only */ }
+  return a;
 }
 
 function loadTranscript(asset) {
@@ -283,7 +296,7 @@ queue.register('discover', {
       return { clips: made.length, method: 'story' };
     }
     h.progress(0.2, 'Measuring the footage');
-    const transcript = loadTranscript(asset);
+    const transcript = await alignedTranscript(asset);
     // Re-clip with "best moments, made again" (fresh): the old clips' moments may be picked again (in today's styles
     // and settings); otherwise only moments no clip of this video has used yet.
     const used = () => (job.payload.fresh ? [] : pipeline.usedRanges(asset.id));
@@ -411,7 +424,7 @@ queue.register('render.short', {
     if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
     ctx.store.update('clips', clip.id, { renderProgress: 0, error: null });
     if (!ctx.capabilities.libass) h.log('Warning: this FFmpeg build lacks libass; captions cannot be burned in.');
-    const transcript = loadTranscript(asset);
+    const transcript = await alignedTranscript(asset);
     const n = (clip.versions || []).length + 1;
     const outDir = paths.clientDir(client.id, 'renders', clip.id);
     const outPath = path.join(outDir, `v${n}-${slug(clip.title).slice(0, 40)}.mp4`);
@@ -967,4 +980,4 @@ queue.register('backup', {
   async run() { const f = ctx.store.backup(paths.backups()); audit.log('system', 'backup.created', { file: path.basename(f) }); return { file: f }; },
 });
 
-module.exports = { loadTranscript, studioTranscript, loadAnalysis, faceTrackFor };
+module.exports = { studioTranscriptAligned, alignedTranscript, loadTranscript, studioTranscript, loadAnalysis, faceTrackFor };

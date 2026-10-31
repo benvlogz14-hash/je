@@ -11,7 +11,12 @@ const { run, safeJson, clamp } = require('../core/util');
 async function transcribe(asset, { jobId, onProgress } = {}) {
   const dir = path.dirname(asset.path);
   const cache = path.join(asset.workDir || dir, `${asset.id}.transcript.json`);
-  if (fs.existsSync(cache)) { const raw = JSON.parse(fs.readFileSync(cache, 'utf8')); const t = require('./transcript-fix').clean(raw); if (t !== raw) { try { fs.writeFileSync(cache, JSON.stringify(t)); } catch { /* read-only */ } } return t; }
+  if (fs.existsSync(cache)) {
+    const raw = JSON.parse(fs.readFileSync(cache, 'utf8')); let t = require('./transcript-fix').clean(raw);
+    if (!t.voiceAligned) t = await require('./align').alignFile(t, asset.path, asset.workDir); // words back on the voice where they drifted
+    if (t !== raw) { try { fs.writeFileSync(cache, JSON.stringify(t)); } catch { /* read-only */ } }
+    return t;
+  }
   const duration = asset.info?.duration || 0;
   // No speech-to-text yet: install the free one (whisper.cpp) right here instead of stopping.
   if (!ai.connected('openai')) {
@@ -53,6 +58,7 @@ async function transcribe(asset, { jobId, onProgress } = {}) {
     if (off > 0.02) { result.words = result.words.map((w) => ({ ...w, s: w.s + off, e: w.e + off })); result.segments = (result.segments || []).map((x) => ({ ...x, s: x.s + off, e: x.e + off })); result.audioOffset = off; }
   } catch { /* keep as is */ }
   result = require('./transcript-fix').clean(result);
+  try { result = await require('./align').alignFile(result, asset.path, asset.workDir); } catch { /* keep as is */ }
   fs.writeFileSync(cache, JSON.stringify(result));
   return result;
 }
@@ -71,7 +77,9 @@ async function whisperLocal(bin, model, wav, outBase, { duration = 0, onProgress
   const os = require('os');
   const cores = Math.max(1, (os.availableParallelism ? os.availableParallelism() : os.cpus().length) || 1);
   const set = Number(ctx.setting('ai.transcription.threads', 0)) || 0;
-  const best = ctx.setting('ai.transcription.accuracy', 'fast') === 'best';
+  // Beam search (whisper's own default) is the default again: greedy decoding was faster but let word times drift in
+  // some videos. 'fast' brings greedy back for anyone who wants speed over timing.
+  const best = ctx.setting('ai.transcription.accuracy', 'best') !== 'fast';
   const dur = duration || 0;
   const n = set ? 1 : dur > 240 && cores >= 10 ? Math.min(4, Math.floor(cores / 4), Math.ceil(dur / 120)) : 1;
   // Leave the app room to breathe: 2 cores free on 6+ core PCs (1 on smaller ones), and run below normal priority, so

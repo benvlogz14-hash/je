@@ -1187,11 +1187,13 @@ r.post('/api/studio/link', async (req, b) => {
 });
 // Studio "Add captions": caption pieces (with word timings) for the video clips on the timeline, from each video's
 // transcript. Videos without one are listed in `missing`; /api/studio/transcribe makes them.
-r.post('/api/studio/captions', (req, b) => {
+r.post('/api/studio/captions', async (req, b) => {
   const captions = require('./video/captions'); const st = { wordsPerLine: Math.max(1, Math.min(8, Number(b.wordsPerLine) || 3)), uppercase: b.uppercase !== false };
-  const out = []; const missing = new Set();
+  const out = []; const missing = new Set(); const seen = new Map();
   for (const c of (b.clips || []).slice(0, 500)) {
-    const t = require('./jobs/handlers').studioTranscript(String(c.path || '')); if (!t) { missing.add(c.path); continue; }
+    const file = String(c.path || '');
+    if (!seen.has(file)) seen.set(file, await require('./jobs/handlers').studioTranscriptAligned(file));
+    const t = seen.get(file); if (!t) { missing.add(c.path); continue; }
     const speed = Math.abs(Number(c.speed) || 1); const a = Number(c.in) || 0; const z = a + (Number(c.duration) || 0) * speed;
     for (const k of captions.captionChunks({ words: t.words || [], range: { start: a, end: z }, style: st })) {
       out.push({ start: Number(c.start) + k.start / speed, duration: Math.max(0.05, (k.end - k.start) / speed), text: k.text, words: k.words.map((w) => ({ ...w, s: w.s / speed, e: w.e / speed })) });
@@ -1200,7 +1202,16 @@ r.post('/api/studio/captions', (req, b) => {
   // Pieces never overlap (two clips' transcripts can), so short lines don't stack on top of each other.
   out.sort((x, y) => x.start - y.start);
   for (let i = 0; i < out.length - 1; i++) out[i].duration = Math.max(0.05, Math.min(out[i].duration, out[i + 1].start - out[i].start));
-  return { captions: out, missing: [...missing] };
+  // Still transcribing: how far along, and whether it failed (so the Captions bar stops waiting and says why).
+  const failed = []; let progress = null;
+  for (const file of missing) {
+    const a = ctx.store.find('assets', (x) => x.path === file);
+    const jobs = ctx.store.all('jobs', (j) => (a ? j.type === 'transcribe' && j.payload?.assetId === a.id : j.type === 'studio.transcribe' && j.payload?.path === file));
+    const last = jobs[jobs.length - 1];
+    if (last?.status === 'failed') failed.push(String(last.error || 'the transcription job failed').slice(0, 200));
+    else if (last && ['queued', 'running'].includes(last.status)) progress = Math.min(progress ?? 1, last.progress || 0);
+  }
+  return { captions: out, missing: [...missing], failed, progress };
 });
 r.post('/api/studio/transcribe', (req, b) => {
   const jobs = [];

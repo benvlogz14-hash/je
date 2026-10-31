@@ -132,6 +132,74 @@ async function xfadeSupport() {
   return xfadeNames;
 }
 
+/**
+ * The typewriter's key sound, made here (no sound files): each letter a short click with a low "thock", slightly
+ * different every time like a real keyboard; letters typed away (deleting) are softer. Written as one WAV per title.
+ */
+function typingTrack(hits, dur, file) {
+  const sr = 48000; const n = Math.max(1, Math.ceil((dur + 0.2) * sr)); const pcm = new Float32Array(n);
+  let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  for (const { t, soft } of hits) {
+    const at = Math.round(t * sr); const g = (soft ? 0.35 : 0.7) * (0.75 + rnd() * 0.5); const f = 150 + rnd() * 90; const nlen = Math.round(0.045 * sr);
+    let lp = 0;
+    for (let i = 0; i < nlen && at + i < n; i++) {
+      const x = i / sr; lp += 0.55 * ((rnd() * 2 - 1) - lp); // a little filtered noise: the click
+      pcm[at + i] += g * (lp * Math.exp(-x * 160) * 0.9 + Math.sin(2 * Math.PI * f * x) * Math.exp(-x * 70) * 0.5);
+    }
+  }
+  const buf = Buffer.alloc(44 + n * 2);
+  buf.write('RIFF', 0); buf.writeUInt32LE(36 + n * 2, 4); buf.write('WAVEfmt ', 8); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(sr, 24); buf.writeUInt32LE(sr * 2, 28); buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34); buf.write('data', 36); buf.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) buf.writeInt16LE(Math.max(-32767, Math.min(32767, Math.round(pcm[i] * 32767))), 44 + i * 2);
+  fs.writeFileSync(file, buf);
+  return file;
+}
+/**
+ * Title entrances and exits at a moment (lt seconds into a dur-second title): scale, vertical shift (x size), opacity
+ * and blur. Same numbers as the Studio preview (renderer/js/modules/studio.js textAnim).
+ * In: pop, slide (up), drop (down), zoom, blur, type (fade in is the title's fade).  Out: fadeout, popout, slideout, zoomout, blurout, untype.
+ */
+const IN_S = { pop: 0.25, slide: 0.35, drop: 0.35, zoom: 0.3, blur: 0.35 }; const OUT_S = 0.3;
+function textAnim(st, lt, dur) {
+  const eo = (f) => 1 - (1 - f) ** 3; const r = { sc: 1, dy: 0, op: 1, blur: 0 };
+  const ai = st.animIn; const pi = IN_S[ai] ? eo(Math.min(1, Math.max(0, lt) / IN_S[ai])) : 1;
+  if (ai === 'pop') r.sc *= 0.6 + 0.4 * pi; if (ai === 'slide') r.dy += 70 * (1 - pi); if (ai === 'drop') r.dy -= 70 * (1 - pi);
+  if (ai === 'zoom') { r.sc *= 1.6 - 0.6 * pi; r.op *= pi; } if (ai === 'blur') { r.blur += 18 * (1 - pi); r.op *= pi; }
+  const ao = st.animOut; if (ao && ao !== 'none' && ao !== 'untype' && dur) {
+    const po = Math.min(1, Math.max(0, (lt - (dur - OUT_S)) / OUT_S)); const e = po * po;
+    if (ao === 'popout') r.sc *= 1 - 0.7 * e; if (ao === 'zoomout') r.sc *= 1 + 0.7 * e; if (ao === 'slideout') r.dy += 70 * e; if (ao === 'blurout') r.blur += 18 * e;
+    r.op *= 1 - po;
+  }
+  return r;
+}
+/** The same as ASS tags for a whole subtitle piece (first piece: entrance; last piece: exit; L = piece length in ms). */
+function animTags(st, first, last, L, px, py, sc) {
+  let place = null, tags = '', fi = 0, fo = 0;
+  if (first) {
+    if (st.animIn === 'slide') place = `\\move(${px},${py + Math.round(70 * sc)},${px},${py},0,350)`;
+    if (st.animIn === 'drop') place = `\\move(${px},${py - Math.round(70 * sc)},${px},${py},0,350)`;
+    if (st.animIn === 'pop') tags += '\\fscx60\\fscy60\\t(0,250,\\fscx100\\fscy100)';
+    if (st.animIn === 'zoom') { tags += '\\fscx160\\fscy160\\t(0,300,\\fscx100\\fscy100)'; fi = 0.3; }
+    if (st.animIn === 'blur') { tags += '\\blur18\\t(0,350,\\blur0)'; fi = 0.35; }
+  }
+  if (last && st.animOut && st.animOut !== 'none' && st.animOut !== 'untype') {
+    const a = Math.max(0, L - 300); fo = 0.3;
+    if (st.animOut === 'popout') tags += `\\t(${a},${L},\\fscx30\\fscy30)`;
+    if (st.animOut === 'zoomout') tags += `\\t(${a},${L},\\fscx170\\fscy170)`;
+    if (st.animOut === 'blurout') tags += `\\t(${a},${L},\\blur18)`;
+    if (st.animOut === 'slideout' && !place) place = `\\move(${px},${py},${px},${py + Math.round(70 * sc)},${a},${L})`;
+  }
+  return { place, tags, fi, fo };
+}
+
+/** When each letter appears (typing in) and goes (typing away), the same timing as the picture. */
+function typeHits(st, dur, nChars, cps, chars) {
+  const hits = [];
+  if (st.animIn === 'type') for (let k = 0; k < nChars; k++) if (/\S/.test(chars[k] || '')) hits.push({ t: k / cps + 1 / cps, soft: false });
+  if (st.animOut === 'untype') for (let k = 0; k < nChars; k++) if (/\S/.test(chars[nChars - 1 - k] || '')) hits.push({ t: dur - (k + 1) / cps, soft: true });
+  return hits.filter((h) => h.t >= 0 && h.t <= dur);
+}
+
 async function exportProject(project, outPath, { signal, onProgress } = {}) {
   render.ensureFonts();
   const seq = project.sequences.find((s) => s.id === project.activeSequence) || project.sequences[0];
@@ -142,7 +210,7 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
   const dur = Math.max(0.5, ...all.map((c) => c.start + c.duration));
   const warnings = new Set();
   const args = ['-f', 'lavfi', '-i', `color=c=black:s=${W}x${H}:r=${fps}:d=${num(dur)}`, '-f', 'lavfi', '-t', num(dur), '-i', 'anullsrc=r=48000:cl=stereo'];
-  let idx = 2; const f = []; let last = '0:v'; const audio = ['1:a']; const texts = [];
+  let idx = 2; const f = []; let last = '0:v'; const audio = ['1:a']; const texts = []; const typeSounds = [];
   const xf = await xfadeSupport();
   /** xfade against a transparent frame: an In edge brings the clip in, an Out edge takes it out. */
   const xfadeEdge = (label, trans, d, cdur, isOut, w, h, n) => {
@@ -270,6 +338,11 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       // Typing in and out of a short clip speeds up so the whole title is still up for at least ~30% of its time.
       const cps = Math.max(Math.max(4, Math.min(60, Number(st.typeSpeed) || 18)), (nChars * ((st.animIn === 'type' ? 1 : 0) + (st.animOut === 'untype' ? 1 : 0))) / Math.max(0.2, c.duration * 0.7));
       const typing = st.animIn === 'type' || st.animOut === 'untype';
+      // The typing sound (on unless switched off in the title designer), mixed in with the rest of the sound below.
+      if (typing && st.typeSound !== false) {
+        const chars = [...raw.replace(/\n/g, '')]; const hits = typeHits(st, c.duration, nChars, cps, chars);
+        if (hits.length) typeSounds.push({ file: typingTrack(hits, c.duration, path.join(path.dirname(outPath), `${path.basename(outPath, '.mp4')}.type${typeSounds.length}.wav`)), start: c.start, vol: Math.max(0, Math.min(2, st.typeVol ?? 0.7)) });
+      }
       const shownAt = (lt) => Math.max(0, Math.min(nChars, st.animIn === 'type' ? Math.floor(lt * cps + 1e-6) : nChars, st.animOut === 'untype' ? Math.floor((c.duration - lt) * cps + 1e-6) : nChars));
       /** One line of the body with only its first n letters showing; returns [text, letters left for the next lines]. */
       const typedPart = (part, n) => {
@@ -315,12 +388,15 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
         // (and with the typewriter, one piece per letter typed)
         const typeCuts = typing ? Array.from({ length: nChars }, (_, k) => [st.animIn === 'type' ? (k + 1) / cps : -1, st.animOut === 'untype' ? c.duration - (k + 1) / cps : -1]).flat() : [];
         const cutsAt = [...new Set([...(mode === 'word' ? times.map((x) => Math.max(0, Math.min(c.duration, x.s))) : []), ...typeCuts].map((x) => Math.round(x * 1000) / 1000))].filter((x) => x > 0.01 && x < c.duration - 0.01).sort((a, b) => a - b);
-        const edges = [0, ...cutsAt, c.duration];
+        // An exit gets its own last piece (its last 0.3 s), so it plays at the end even when the words highlight before it.
+        const outCut = st.animOut && !['none', 'untype'].includes(st.animOut) && c.duration > OUT_S + 0.05 ? [Math.round((c.duration - OUT_S) * 1000) / 1000] : [];
+        const edges = [0, ...[...new Set([...cutsAt, ...outCut])].sort((a, b) => a - b), c.duration];
         for (let k = 0; k < edges.length - 1; k++) {
-          const first = k === 0, last = k === edges.length - 2; const fi = first ? transDur(c.transIn) : 0, fo = last ? transDur(c.transOut) : 0;
+          const first = k === 0, last = k === edges.length - 2;
+          const an = animTags(st, first, last, Math.round((edges[k + 1] - edges[k]) * 1000), px, py, sc);
+          const fi = first ? Math.max(transDur(c.transIn), an.fi) : 0, fo = last ? Math.max(transDur(c.transOut), an.fo) : 0;
           event({ from: c.start + edges[k], to: c.start + edges[k + 1], px, py, sc, op: base(c.opacity, 1), rot: base(c.rotation, 0),
-            place: first && st.animIn === 'slide' ? `\\move(${px},${py + Math.round(70 * sc)},${px},${py},0,350)` : null,
-            pop: first && st.animIn === 'pop' ? '\\fscx60\\fscy60\\t(0,250,\\fscx100\\fscy100)' : '',
+            place: an.place, pop: an.tags,
             fad: (fi || fo) ? `\\fad(${Math.round(fi * 1000)},${Math.round(fo * 1000)})` : '',
             body: bodyAt(mode === 'word' ? activeAt(edges[k] + 0.001) : -1), shown: typing ? shownAt(edges[k] + 0.001) : null });
         }
@@ -332,8 +408,7 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
         const lt = fr / fps;
         let sc = keyAt(c.scaleX, lt, 1), op = keyAt(c.opacity, lt, 1); let py = H / 2 + keyAt(c.posY, lt, 0);
         if (ti && lt < ti) op *= lt / ti; if (to && lt > c.duration - to) op *= Math.max(0, (c.duration - lt) / to);
-        if (st.animIn === 'pop') sc *= 0.6 + 0.4 * easeOut(Math.min(1, lt / 0.25));
-        if (st.animIn === 'slide') py += 70 * sc * (1 - easeOut(Math.min(1, lt / 0.35)));
+        const an = textAnim(st, lt, c.duration); sc *= an.sc; op *= an.op; py += an.dy * sc;
         event({ from: c.start + lt, to: c.start + (fr + 1) / fps, px: W / 2 + keyAt(c.posX, lt, 0), py, sc, op, rot: Math.round(keyAt(c.rotation, lt, 0) * 10) / 10, body: bodyAt(activeAt(lt)), shown: typing ? shownAt(lt) : null });
       }
     }
@@ -364,6 +439,10 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       audio.push(`a${i}`);
     }
   });
+  for (const ts of typeSounds) {
+    args.push('-i', ts.file); const i = idx++; const ms = Math.round(ts.start * 1000);
+    f.push(`[${i}:a]aresample=48000,aformat=channel_layouts=stereo,volume=${num(ts.vol)},adelay=${ms}|${ms}[ty${i}]`); audio.push(`ty${i}`);
+  }
   f.push(`${audio.map((a) => `[${a}]`).join('')}amix=inputs=${audio.length}:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95[aout]`);
 
   const enc = ff.pickEncoder();
