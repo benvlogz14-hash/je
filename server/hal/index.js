@@ -97,7 +97,7 @@ function contextFacts(c = {}) {
   if (page) out.push(`Ryan is on the ${page.replace(/^\//, '') || 'messages'} page.`);
   if (c.clipId) {
     const clip = ctx.store.get('clips', c.clipId);
-    if (clip) out.push(`He has clip #${clip.ref} open: "${clip.title}" (${clip.status}${clip.videoStyle ? `, ${clip.videoStyle} style` : ''}, ${Math.round(clip.end - clip.start)} s, client ${ctx.store.get('clients', clip.clientId)?.name || '?'}). "This video" or "this clip" means #${clip.ref}.`);
+    if (clip) out.push(`He has clip #${clip.ref} open: "${clip.title}" (${clip.status}${clip.videoStyle ? `, ${clip.videoStyle} style` : ''}, ${Math.round(clip.versions?.[(clip.currentVersion || clip.versions.length) - 1]?.duration || (clip.keep?.length ? clip.keep.reduce((n, [a, b]) => n + (b - a), 0) : clip.end - clip.start))} s, client ${ctx.store.get('clients', clip.clientId)?.name || '?'}). "This video" or "this clip" means #${clip.ref}.`);
   }
   if (c.prospectId) { const p = ctx.store.get('prospects', c.prospectId); if (p) out.push(`He has ${p.name}'s card open (${p.office || p.location || 'office unknown'}).`); }
   const pend = ctx.store.all('approvals', (a) => a.status === 'pending').length;

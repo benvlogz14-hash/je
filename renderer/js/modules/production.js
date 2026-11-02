@@ -8,6 +8,9 @@ import { ClipDrawer } from './clip.js';
 import { QuotaBar } from './cards.js';
 import { HealthBanner } from './health.js';
 
+/** A clip's real length: the finished video, else its kept lines (montage clips span minutes of footage), else its range. */
+export const clipLen = (c) => c.versions?.[(c.currentVersion || c.versions.length) - 1]?.duration || (c.keep?.length ? c.keep.reduce((n, [a, b]) => n + (b - a), 0) : (c.end || 0) - (c.start || 0));
+
 /** Quick "new client" so Production works on a fresh install; the full profile lives in Clients. */
 async function quickClient() {
   const name = await promptDialog({ title: 'New client', label: 'Client or creator name (you can fill in the rest of their profile in Clients later)', placeholder: 'Stringer Media', confirm: 'Create client' });
@@ -320,7 +323,7 @@ function FootageDrawer({ id, onClose, onShots }) {
         <span class="grow" /><${Button} kind="ghost" icon="trash" onClick=${() => cancel(true)}>Delete</${Button}>
       </div>
       <${Transcript} a=${a} />
-      <div><h4>Clips from this video</h4>${data.clips.length ? html`<div class="list">${data.clips.map((c) => html`<div class="list-row" style="cursor:pointer" onClick=${() => { onClose(); navigate(`/production?clip=${c.id}`); }}><b class="grow">${c.title}</b><span class="faint tnum">${dur(c.end - c.start)}</span><${StatusBadge} status=${c.status} /></div>`)}</div>` : html`<div class="faint">No clips yet. They appear here and on the board below as they're made.</div>`}</div>
+      <div><h4>Clips from this video</h4>${data.clips.length ? html`<div class="list">${data.clips.map((c) => html`<div class="list-row" style="cursor:pointer" onClick=${() => { onClose(); navigate(`/production?clip=${c.id}`); }}><b class="grow">${c.title}</b><span class="faint tnum">${dur(clipLen(c))}</span><${StatusBadge} status=${c.status} /></div>`)}</div>` : html`<div class="faint">No clips yet. They appear here and on the board below as they're made.</div>`}</div>
       ${data.jobs.length ? html`<details><summary class="faint">History</summary><div class="col" style="gap:4px;font-size:var(--fs-xs);margin-top:6px">${data.jobs.slice().reverse().map((j) => html`<div><b>${j.title}</b> · ${j.status}${j.error ? `: ${j.error}` : ''}</div>`)}</div></details>` : null}
     </div></${Drawer}>`;
 }
@@ -369,7 +372,7 @@ function ClipCard({ c, showClient }) {
     <button class="clip-x" title="Delete clip" aria-label="Delete clip" onClick=${remove}><${Icon} name="x" size=${14} /></button>
     <div class="th" style=${thumb ? { backgroundImage: `url(${thumb})` } : null}>${!thumb ? (c.status === 'rendering' ? html`<span class="spinner" />` : html`<${Icon} name="film" size=${16} />`) : null}</div>
     <div style="min-width:0"><div class="t">${c.title}</div>
-      <div class="m"><span class="tnum">#${c.ref}</span><span>${Math.round(c.end - c.start)}s</span>${showClient ? html`<span class="ellipsis">${c.client}</span>` : null}</div>
+      <div class="m"><span class="tnum">#${c.ref}</span><span>${Math.round(clipLen(c))}s</span>${showClient ? html`<span class="ellipsis">${c.client}</span>` : null}</div>
       <div class="m">${c.status === 'rendering' ? html`<span class="badge sky tnum">${c.renderProgress ? `${c.renderProgress}%` : 'Waiting'}</span>` : null}${c.status === 'failed' ? html`<span class="badge coral" title=${c.error || ''}>Failed: open for why</span>` : null}${c.current?.qc && !c.current.qc.passed ? html`<span class="badge coral">QC</span>` : null}${c.status === 'revising' ? html`<span class="badge teal">Revising</span>` : null}${c.current?.n > 1 ? html`<span class="badge outline">v${c.current.n}</span>` : null}${c.method === 'ai' ? html`<span class="badge lav">AI</span>` : null}${c.post?.scheduledAt && c.status === 'scheduled' ? html`<span class="faint">${new Date(c.post.scheduledAt).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>` : null}</div>
     </div></div>`;
 }

@@ -177,10 +177,12 @@ function cleanHook(hook, { spoken = '', name = '' } = {}) {
 function hookFrom(text) { const first = String(text || '').split(/(?<=[.!?])\s/)[0].replace(/[.,!?]+$/, ''); const w = first.split(/\s+/); return w.length >= 3 ? w.slice(0, 7).join(' ') : ''; }
 /** Zooms on energy peaks and scene changes, about one every 5 seconds. */
 function zoomsFor(c, analysis) {
+  // Montage clips keep only some lines of a long stretch: beats count only inside the kept lines, at their time in the clip.
+  const pieces = c.keep?.length ? c.keep : [[c.start, c.end]]; const outOf = (t) => { let o = 0; for (const [a, b] of pieces) { if (t >= a && t <= b) return o + (t - a); o += b - a; } return null; };
   const beats = [...(analysis?.peaks || []), ...(analysis?.scenes || [])].filter((t) => t > c.start + 1.5 && t < c.end - 1.5).sort((a, b) => a - b);
   const z = []; let last = -99;
-  for (const t of beats) if (t - last >= 4.5) { z.push({ at: Math.round((t - c.start) * 10) / 10, dur: 1.2, zoom: 1.12 }); last = t; }
-  for (let t = 2.5; t < c.end - c.start - 2 && z.length < Math.ceil((c.end - c.start) / 6); t += 6) if (!z.some((x) => Math.abs(x.at - t) < 3)) z.push({ at: t, dur: 1.2, zoom: 1.1 });
+  for (const t of beats) { const at = outOf(t); if (at != null && at - last >= 4.5) { z.push({ at: Math.round(at * 10) / 10, dur: 1.2, zoom: 1.12 }); last = at; } }
+  for (let t = 2.5, L = c.keep?.length ? c.keep.reduce((n, [a, b]) => n + (b - a), 0) : c.end - c.start; t < L - 2 && z.length < Math.ceil(L / 6); t += 6) if (!z.some((x) => Math.abs(x.at - t) < 3)) z.push({ at: t, dur: 1.2, zoom: 1.1 });
   return z.sort((a, b) => a.at - b.at).slice(0, 10);
 }
 function overlap(a, b) { const i = Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start)); return i / Math.min(a.end - a.start, b.end - b.start); }

@@ -393,7 +393,7 @@ r.get('/api/production/health', (req) => require('./setup/production').health(re
 r.get('/api/assets/:id/detail', (req, b, p) => {
   const a = must(ctx.store.get('assets', p.id));
   const jobs = ctx.store.all('jobs', (j) => j.payload?.assetId === a.id).slice(-12).map((j) => ({ id: j.id, type: j.type, title: j.title, status: j.status, progress: j.progress, note: j.note, error: j.error, at: j.finishedAt || j.startedAt || j.createdAt }));
-  const clips = ctx.store.all('clips', (c) => c.assetId === a.id).map((c) => ({ id: c.id, title: c.title, status: c.status, start: c.start, end: c.end }));
+  const clips = ctx.store.all('clips', (c) => c.assetId === a.id).map((c) => ({ id: c.id, title: c.title, status: c.status, start: c.start, end: c.end, keep: c.keep || null, currentVersion: c.currentVersion, versions: (c.versions || []).map((v) => ({ duration: v.duration })) }));
   const done = (t) => jobs.some((j) => j.type === t && j.status === 'done');
   const steps = [['Import', a.status !== 'importing' && !!a.info], ['Speech to text', !!a.transcript || done('transcribe')], ['Look through it', !!a.vision || done('analyze')], ['Find clips', clips.length > 0 || done('discover')], ['Make the shorts', clips.some((c) => !['draft', 'rendering', 'queued'].includes(c.status))]].map(([label, ok]) => ({ label, ok }));
   return { asset: { id: a.id, name: a.name, status: a.status, error: a.error || null, info: a.info, source: a.source, createdAt: a.createdAt, thumb: !!a.thumb }, steps, jobs, clips };

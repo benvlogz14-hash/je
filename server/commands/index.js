@@ -44,7 +44,7 @@ function findClip(q) {
 function splitFirst(text) { const t = String(text || '').trim(); const i = t.indexOf(' '); return i < 0 ? [t, ''] : [t.slice(0, i), t.slice(i + 1).trim()]; }
 /** Allow "for <client>" suffixes: "/ingest C:\x.mp4 for stringer" */
 function forClient(text, c) { const m = /\s+(?:for|to)\s+(.+)$/i.exec(text); if (m) return [text.slice(0, m.index).trim(), findClient(m[1])]; return [text.trim(), c.clientId ? ctx.store.get('clients', c.clientId) : null]; }
-const clipCard = (clips) => ({ type: 'clips', data: clips.map((c) => ({ id: c.id, ref: c.ref, title: c.title, status: c.status, client: ctx.store.get('clients', c.clientId)?.name, duration: Math.round(c.end - c.start), score: c.score, version: c.currentVersion, thumb: c.versions?.[c.currentVersion - 1]?.thumb ? `/api/clips/${c.id}/thumb` : null })) });
+const clipCard = (clips) => ({ type: 'clips', data: clips.map((c) => ({ id: c.id, ref: c.ref, title: c.title, status: c.status, client: ctx.store.get('clients', c.clientId)?.name, duration: Math.round(c.versions?.[(c.currentVersion || c.versions.length) - 1]?.duration || (c.keep?.length ? c.keep.reduce((n, [a, b]) => n + (b - a), 0) : c.end - c.start)), score: c.score, version: c.currentVersion, thumb: c.versions?.[c.currentVersion - 1]?.thumb ? `/api/clips/${c.id}/thumb` : null })) });
 
 // ------------------------------------------------------------ communication
 cmd('inbox', 'Communication', '/inbox', 'Unread conversations and messages waiting for approval', async () => {

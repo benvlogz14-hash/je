@@ -448,6 +448,8 @@ queue.register('render.short', {
           const avoid = ctx.store.all('clips', (c) => c.assetId === asset.id && c.id !== clip.id).map((c) => ({ start: c.start, end: c.end }));
           let black = []; try { black = await montage.blackIntervals(asset.path, asset.workDir); } catch { /* no scan */ }
           covers = montage.planCovers({ start: clip.start, end: clip.end, shots: sig.shots, sents: sig.sents, avoid, black, elsewhere: coversElsewhere(clip), mine: brollPile(clip, sig.shots) });
+          // Montage clips: cut-aways only where the clip's kept lines are (the rest of the stretch never shows).
+          if (clip.keep?.length) covers = covers.filter((k) => clip.keep.some(([a, b]) => k.at >= a - 0.05 && k.at + k.dur <= b + 0.05));
           ctx.store.update('clips', clip.id, { coverSrcs: covers.map((c) => [c.src, c.src + c.dur]) }); // so clips rendering at the same time see these too
           if (covers.length) {
             h.progress(0.08, `Cutting in ${covers.length} shot${covers.length > 1 ? 's' : ''}`);
