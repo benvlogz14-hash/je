@@ -200,6 +200,7 @@ const playUrl = (m, still) => api.url(`/api/media?path=${encodeURIComponent((!st
 function liveSet(obj, key, val, id) { if (!live.has(id)) live.set(id, { obj, key, orig: clone(obj[key]) }); obj[key] = val; redraw(); }
 function revertLive() { for (const { obj, key, orig } of live.values()) obj[key] = orig; live.clear(); }
 const HEAD_W = 132;
+const SNAP_BACK_TIP = (on) => (on ? 'Snap back is on: when you delete, everything after it slides back to fill the space (and to 0:00), on every track so captions stay in sync. Click to turn off.' : 'Snap back: turn on and anything you delete leaves no empty space; everything after it slides back to fill it. Turning it on also closes the gaps already there.');
 
 export function Studio() {
   const route = useRoute();
@@ -248,6 +249,13 @@ function Editor({ id }) {
   /** The playhead always sits exactly on a frame, so keyframes, splits and edits line up with what's shown. */
   const setT = useCallback((v) => setTRaw((prev) => { const x = typeof v === 'function' ? v(prev) : v; const f = fpsRef.current || 30; return Math.max(0, Math.round(x * f) / f); }), []);
   const [playing, setPlaying] = useState(false);
+  // Leaving the Studio tab (or the window being hidden) stops playback, so its sound doesn't carry on under other pages.
+  const edRoot = useRef(null);
+  useEffect(() => {
+    const away = () => { const scr = edRoot.current?.closest('.screen'); if (document.hidden || (scr && !scr.classList.contains('on'))) setPlaying(false); };
+    window.addEventListener('eu:screens', away); document.addEventListener('visibilitychange', away);
+    return () => { window.removeEventListener('eu:screens', away); document.removeEventListener('visibilitychange', away); };
+  }, []);
   const [tool, setTool] = useState('select');
   const [snap, setSnap] = useState(true);
   // Close gaps (magnet for deletes): on, deleting anything slides what comes after it back, so no hole is left.
@@ -390,6 +398,7 @@ function Editor({ id }) {
   });
 
   /** Slide everything back over every stretch where nothing is on any track (and to 0:00), keeping tracks in sync. */
+  const toggleSnapBack = () => { const v = !closeGapsOn; setCloseGapsOn(v); try { localStorage.setItem('eu.closeGaps', v ? '1' : '0'); } catch { /* ignore */ } sfx('toggle'); if (v) closeGaps(); };
   const closeGaps = (quiet = false) => {
     let closed = 0;
     edit((d, s) => {
@@ -683,7 +692,7 @@ function Editor({ id }) {
   // (on a busy PC the save could take a while and the button just spun).
   const savingFor = useRef(null);
   const exportNow = () => { savingFor.current = save(true); setExporting(true); };
-  return html`<div style=${`position:absolute;inset:0;display:grid;grid-template-columns:minmax(0, 1fr);grid-template-rows:46px minmax(0, 1fr) min(${bottomH}px, calc(100% - 46px - 260px));background:var(--ed-bg)`}>
+  return html`<div ref=${edRoot} style=${`position:absolute;inset:0;display:grid;grid-template-columns:minmax(0, 1fr);grid-template-rows:46px minmax(0, 1fr) min(${bottomH}px, calc(100% - 46px - 260px));background:var(--ed-bg)`}>
     <div class="row" style="padding:0 12px;background:var(--surface);border-bottom:1px solid var(--line);gap:10px;min-width:0;overflow-x:auto">
       <${Button} kind="ghost" size="sm" icon="chevronLeft" title="All projects" onClick=${() => { if (dirty) save(true); navigate('/studio'); }} />
       <b class="ellipsis" style="max-width:260px;cursor:text" title="Click to rename the project" onClick=${renameProject}>${proj.name || 'Untitled edit'}</b><span class="faint tnum" style="font-size:var(--fs-sm)">${seq.width}×${seq.height} · ${seq.fps} fps</span>
@@ -691,7 +700,7 @@ function Editor({ id }) {
       <div class="spacer" />
       <div class="btn-group"><button class=${tool === 'select' ? 'on' : ''} title="Selection (V)" onClick=${() => { sfx('tap'); setTool('select'); }}><${Icon} name="pointer" size=${14} /></button><button class=${tool === 'razor' ? 'on' : ''} title="Razor (C)" onClick=${() => { sfx('tap'); setTool('razor'); }}><${Icon} name="scissors" size=${14} /></button><button title="Add title (T)" onClick=${addText}><${Icon} name="type" size=${14} /></button></div>
       <button class=${'chip' + (snap ? ' on' : '')} title="Snapping (hold Alt to bypass)" onClick=${() => { sfx('toggle'); setSnap(!snap); }}><${Icon} name="magnet" size=${13} />Snap</button>
-      <button class=${'chip' + (closeGapsOn ? ' on' : '')} title=${closeGapsOn ? 'Close gaps is on: deleting slides everything after it back, so no empty space is left. Click to turn off.' : 'Close gaps: turn on and deleting slides everything after it back. Turning it on also closes the gaps already there.'} onClick=${() => { const v = !closeGapsOn; setCloseGapsOn(v); try { localStorage.setItem('eu.closeGaps', v ? '1' : '0'); } catch { /* ignore */ } sfx('toggle'); if (v) closeGaps(); }}><${Icon} name="layers" size=${13} />Close gaps</button>
+      <button class=${'chip' + (closeGapsOn ? ' on' : '')} title=${SNAP_BACK_TIP(closeGapsOn)} onClick=${toggleSnapBack}><${Icon} name="layers" size=${13} />Snap back${closeGapsOn ? ': on' : ''}</button>
       <${Button} kind="ghost" size="sm" icon="scissors" title="Split at playhead (S, Shift+S for all tracks)" onClick=${() => split(false)} />
       <${Button} kind="ghost" size="sm" icon="undo" title="Undo (Ctrl+Z)" disabled=${!undo.current.length} onClick=${doUndo} />
       <${Button} kind="ghost" size="sm" icon="redo" title="Redo (Ctrl+Shift+Z)" disabled=${!redo.current.length} onClick=${doRedo} />
@@ -710,7 +719,7 @@ function Editor({ id }) {
     <div style="display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative">
     <div class="ed-split" title="Drag up or down to resize the timeline (double-click to reset)" onPointerDown=${startResize} onDblClick=${() => setBottom(null)}><span>▲</span><span class="ed-grip" /><span>▼</span></div>
     <${CaptionsBar} seq=${seq} media=${media} sel=${sel} setSel=${setSel} edit=${edit} findClip=${findClip} nextId=${nextId} />
-    <${Timeline} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onBroll=${addBroll} onClipMenu=${clipMenu} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} /></div>
+    <${Timeline} snapBack=${closeGapsOn} onSnapBack=${toggleSnapBack} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onBroll=${addBroll} onClipMenu=${clipMenu} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} /></div>
     ${exporting ? html`<${ExportDialog} id=${id} saving=${savingFor.current} onClose=${() => setExporting(false)} />` : null}
     ${musicOpen ? html`<${MusicLibrary} onClose=${() => setMusicOpen(false)} onAdd=${addMusic} />` : null}
     ${titleEdit ? html`<${TitleDesigner} seq=${seq} clip=${titleEdit.clipId ? findClip(seq, titleEdit.clipId)?.c : null} count=${titleEdit.ids?.length || 1} onClose=${() => setTitleEdit(null)} onSave=${saveTitle} />` : null}
@@ -1757,7 +1766,7 @@ function EffectControls({ selected, sel = [], findClip, seq, edit, media, t, set
 }
 
 // ------------------------------------------------------------ timeline
-function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom, duration, edit, findClip, linked, onAdd, onDropFiles, onBroll, onClipMenu, onEditTitle }) {
+function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom, duration, edit, findClip, linked, onAdd, onDropFiles, onBroll, onClipMenu, onEditTitle }) {
   const scroller = useRef(null);
   const [drag, setDrag] = useState(null);
   // Box select: drag on empty timeline space to select every clip the box touches (Shift/Ctrl adds to the selection).
@@ -1923,7 +1932,7 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
       ${box ? html`<div style=${{ position: 'fixed', left: Math.min(box.x0, box.x1) + 'px', top: Math.min(box.y0, box.y1) + 'px', width: Math.abs(box.x1 - box.x0) + 'px', height: Math.abs(box.y1 - box.y0) + 'px', border: '1px dashed var(--teal-ink)', background: 'rgba(102,189,180,0.12)', zIndex: 50, pointerEvents: 'none' }} />` : null}
       <div style=${{ width: width + HEAD_W + 'px', position: 'relative', minHeight: '100%' }} onPointerDown=${(e) => { if (e.target === e.currentTarget) startBox(e); }}>
         <div style=${{ position: 'sticky', top: 0, zIndex: 3, display: 'flex', height: '24px', background: 'var(--ed-panel)', borderBottom: '1px solid var(--line)' }}>
-          <div style=${{ width: HEAD_W + 'px', flex: 'none', position: 'sticky', left: 0, background: 'var(--ed-panel)', zIndex: 4, borderRight: '1px solid var(--line)' }} />
+          <div style=${{ width: HEAD_W + 'px', flex: 'none', position: 'sticky', left: 0, background: 'var(--ed-panel)', zIndex: 4, borderRight: '1px solid var(--line)', display: 'flex', alignItems: 'center', padding: '0 4px' }}>${onSnapBack ? html`<button type="button" class=${'chip' + (snapBack ? ' on' : '')} style="height:18px;padding:0 7px;font-size:10px;gap:4px" title=${SNAP_BACK_TIP(snapBack)} onClick=${onSnapBack}><${Icon} name="layers" size=${11} />Snap back</button>` : null}</div>
           <div style="position:relative;flex:1;cursor:text" onPointerDown=${onRuler}>${(seq.markers || []).map((m) => html`<div class="tl-marker" style=${{ left: xOf(m.t) - 5 + 'px' }} title="Marker (M adds or removes at the playhead, ; and ' jump between them). Right-click to remove." onPointerDown=${(e) => { e.stopPropagation(); setT(m.t); }} onContextMenu=${(e) => { e.preventDefault(); edit((d, s) => { s.markers = (s.markers || []).filter((x) => Math.abs(x.t - m.t) > 1e-6); }); }} />`)}${ticks.map((s) => html`<div style=${{ position: 'absolute', left: xOf(s) + 'px', top: 0, bottom: 0, borderLeft: '1px solid var(--line-strong)', paddingLeft: '4px', fontSize: '10px', color: 'var(--ink-3)', lineHeight: '22px' }} class="tnum">${dur(s)}</div>`)}</div>
         </div>
         ${lanes.map((lane) => html`<div style=${{ display: 'flex', height: TH(lane.type) + 'px', borderBottom: '1px solid var(--line)' }}>

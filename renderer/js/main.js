@@ -158,6 +158,27 @@ function useTabs(route) {
 }
 
 /** Gives a screen the live route while it's visible, and its own last route while hidden. */
+// Screens you switch away from stay open (so they keep their place) but must go quiet: every video or sound started
+// on a screen remembers that screen, and switching tabs pauses whatever belongs to the ones now hidden. Sounds made
+// with new Audio() (music previews) aren't on the page, so they belong to the screen that was showing when they began.
+const mediaOwner = new WeakMap(); const playingMedia = new Set();
+if (!HTMLMediaElement.prototype._euPlay) {
+  const orig = HTMLMediaElement.prototype.play; HTMLMediaElement.prototype._euPlay = orig;
+  HTMLMediaElement.prototype.play = function (...a) {
+    const scr = this.closest?.('.screen') || document.querySelector('.screen.on');
+    if (scr) mediaOwner.set(this, scr); playingMedia.add(this);
+    return orig.apply(this, a);
+  };
+}
+function quietHiddenScreens() {
+  for (const m of [...playingMedia]) {
+    if (m.paused) { playingMedia.delete(m); continue; }
+    const scr = m.isConnected ? m.closest('.screen') || mediaOwner.get(m) : mediaOwner.get(m);
+    if (scr && !scr.classList.contains('on')) { try { m.pause(); } catch { /* gone */ } playingMedia.delete(m); }
+  }
+  window.dispatchEvent(new Event('eu:screens'));
+}
+
 function FrozenRoute({ on, path, children }) {
   const live = useStore((s) => s.route);
   const kept = useRef(live);
@@ -183,6 +204,8 @@ function App() {
   const [palette, setPalette] = useState(false);
   const tabsApi = useTabs(route);
   const tabsRef = useRef(tabsApi); tabsRef.current = tabsApi;
+  // Leaving a tab pauses its video and sound (after the screens have switched).
+  useEffect(() => { const id = setTimeout(quietHiddenScreens, 0); return () => clearTimeout(id); }, [tabsApi.base]);
   useEffect(() => {
     const k = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Tab') { e.preventDefault(); tabsRef.current.cycle(e.shiftKey ? -1 : 1); return; }
