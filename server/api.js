@@ -358,6 +358,16 @@ r.post('/api/assets', (req, b) => {
   return a;
 });
 // Your own Grok / Claude / ChatGPT accounts through the desktop app (no API keys).
+// SEO lab: research files, stats and the title and description machine.
+const seo = () => require('./seo');
+r.get('/api/seo', () => seo().overview());
+r.post('/api/seo/docs', (req, b) => { const files = Array.isArray(b.files) ? b.files : [b]; const out = files.map((f) => seo().addDoc({ name: f.name, text: f.text, actor: req.user?.name })); events.publish('seo', {}); return out; });
+r.get('/api/seo/docs/:id', (req, b, p) => ({ ...must(ctx.store.get('seoDocs', p.id)), text: seo().docText(p.id) }));
+r.del('/api/seo/docs/:id', (req, b, p) => { seo().removeDoc(p.id); events.publish('seo', {}); return { ok: true }; });
+r.post('/api/seo/generate', async (req, b) => { const run = await seo().generate({ ...b, actor: req.user?.name }); events.publish('seo', {}); return run; });
+r.post('/api/seo/score', (req, b) => seo().scoreTitle(String(b.title || ''), seo().patterns(), b.platform));
+r.post('/api/seo/apply', (req, b) => { const c = seo().applyToClip(b); events.publish('clips', { id: c.id }); return c; });
+r.del('/api/seo/runs/:id', (req, b, p) => { ctx.store.remove('seoRuns', p.id); events.publish('seo', {}); return { ok: true }; });
 r.get('/api/bridge', () => require('./integrations/bridge').status());
 r.get('/api/bridge/:site/history', (req, b, p) => require('./integrations/bridge').history(p.site));
 r.post('/api/bridge/:site/open', (req, b, p) => { const br = require('./integrations/bridge'); if (!br.available()) throw new HttpError(400, 'This works in the Euclidean desktop app.'); return ctx.bridge.open(p.site); });
