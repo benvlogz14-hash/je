@@ -358,6 +358,8 @@ r.post('/api/assets', (req, b) => {
   return a;
 });
 // Your own Grok / Claude / ChatGPT accounts through the desktop app (no API keys).
+// What the clip machine has learned for a client: approve/reject decisions and hand fixes made in Studio.
+r.get('/api/clients/:id/learning', (req, b, p) => { const t = require('./video/taste'); const l = t.editLessons(p.id); return { ...t.summary(p.id), edits: l.edits || 0, fixed: l.changed || 0, endShift: l.pads?.endShift ?? null, startShift: l.pads?.startShift ?? null, linesCut: [...new Set(l.cutLines || [])].length, avoidStarts: l.avoidStarts || [] }; });
 // SEO lab: research files, stats and the title and description machine.
 const seo = () => require('./seo');
 r.get('/api/seo', () => seo().overview());
@@ -591,7 +593,9 @@ r.post('/api/clips/:id/studio', async (req, b, p) => {
     const music = cues.length ? { volume: v.music.volume ?? 0.3, cues, durations: await durOf(cues.map((x) => x.file)) } : null;
     data = exporters.toVelo({ name: c.title, source: a.path, info: a.info, range: { start: c.start, end: c.end }, words, style: { ...(client.style || {}), ...(c.style || {}) }, hook: c.hook, focusX: c.focusX, covers: v?.covers || [], keywords: c.keywords, music, segs, punchIns: c.punchIns || [] });
   }
-  return ctx.store.insert('projects', { name: `#${c.ref} ${c.title}`, clientId: c.clientId, clipId: c.id, data, exports: [] });
+  // The machine's own cut, kept so an export from Studio can be compared with it (what the editor fixed by hand).
+  const origSegs = c.kind === 'broll' || c.kind === 'story' ? null : (data?.sequences?.[0] ? require('./video/taste').projectRanges(data) : null);
+  return ctx.store.insert('projects', { name: `#${c.ref} ${c.title}`, clientId: c.clientId, clipId: c.id, origSegs, data, exports: [] });
 });
 
 // ------------------------------------------------------------ approvals
@@ -1301,6 +1305,8 @@ r.post('/api/projects/:id/export', (req, b, p) => {
     ctx.store.setSettings({ studio: { exportFolder: outDir } });
   }
   if (b.fileName) fileName = path.basename(String(b.fileName)).replace(/[<>:"/\\|?*]+/g, '').replace(/\.mp4$/i, '').trim().slice(0, 120) || null;
+  // A clip fixed by hand in Studio teaches the clip machine how this editor cuts (server/video/taste.js learnEdit).
+  if (pr.clipId && pr.origSegs) { try { const c = ctx.store.get('clips', pr.clipId); const a = c && ctx.store.get('assets', c.assetId); const words = a ? require('./jobs/handlers').loadTranscript(a)?.words : null; if (words) require('./video/taste').learnEdit({ project: pr, clip: c, words }); } catch { /* learning never blocks an export */ } }
   return queue.enqueue('studio.export', { projectId: pr.id, outDir, fileName, reveal: b.reveal !== false }, { clientId: pr.clientId, actor: actorOf(req), title: `Export ${pr.name}` });
 });
 r.get('/api/projects/:id/velo', (req, res, p) => { const pr = must(ctx.store.get('projects', p.id)); const f = path.join(paths.tmp('velo'), `${pr.id}.velo`); fs.writeFileSync(f, JSON.stringify(pr.data, null, 1)); return serveFile(req, res, f, { download: `${pr.name.replace(/[^\w\- ]/g, '')}.velo` }); }, { stream: true });

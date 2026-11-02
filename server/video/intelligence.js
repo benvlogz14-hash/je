@@ -248,11 +248,11 @@ async function recut(chosen, sig, { asset, jobId, minSec, maxSec, tips }) {
   const tmax = Math.min(maxSec, Math.max(minSec + 10, Number(ctx.setting('production.montageMaxSec', 30)) || 30));
   const list = chosen.filter((c) => c.keep && c.span).slice(0, 8);
   if (!list.length) return;
-  const block = list.map((c, n) => `CLIP ${n + 1} (${c.title || ''}):\n${S.slice(c.span[0], c.span[1] + 1).map((x, k) => `${k + 1}. (${m.spoken(x).toFixed(1)}s) ${x.t}`).join('\n')}`).join('\n\n');
+  const block = list.map((c, n) => `CLIP ${n + 1} (${c.title || ''}):\n${S.slice(c.span[0], c.span[1] + 1).map((x, k) => `${k + 1}. (${m.spoken(x).toFixed(1)}s)${m.full(x) ? '' : ' [part]'} ${x.t}`).join('\n')}`).join('\n\n');
   try {
     const waitSec = Math.min(300, Number(ctx.setting('production.aiPickSeconds', 600)));
     const r = await Promise.race([new Promise((_, no) => setTimeout(() => no(new Error('slow')), waitSec * 1000).unref?.()), ai.ask({ role: 'analysis', json: true, clientId: asset.clientId, jobId, maxTokens: 1500,
-      system: `You edit YouTube Shorts the usual way: take a long stretch of someone talking and cut it down to a short story. Rules: whole sentences only (never cut inside one), keep them in their original order, no filler, no repeats, no outros or plugs. Open on a line that grabs attention and makes sense on its own. Build up through the strongest lines. End on an open hook: a line that leaves the viewer wanting the payoff ("and then we opened the door...", a question, a reveal about to happen), never the payoff itself. Total ${minSec} to ${tmax} seconds (the seconds are next to each line).${tips ? ` The editor's tips: ${tips}` : ''}`,
+      system: `You edit YouTube Shorts the usual way: take a long stretch of someone talking and cut it down to a short story. Rules: whole sentences only (never cut inside one), keep them in their original order, no filler, no repeats, no outros or plugs. Open on a line that grabs attention and makes sense on its own. Build up through the strongest lines. End on an open hook: a line that leaves the viewer wanting the payoff ("and then we opened the door...", a question, a reveal about to happen), never the payoff itself. A line starting with "but", "and", "so", "it", "that", "they" needs the line before it kept too. Lines marked [part] are pieces of one sentence: keep all of them or none. Total ${minSec} to ${tmax} seconds (the seconds are next to each line).${tips ? ` The editor's tips: ${tips}` : ''}${(() => { try { return require('./taste').editBlock(asset.clientId); } catch { return ''; } })()}`,
       prompt: `${block}\n\nFor every clip return the line numbers to keep. JSON: {"clips":[{"clip":1,"lines":[1,4,5,9]}]}` })]);
     for (const x of r.json?.clips || []) {
       const c = list[Number(x.clip) - 1]; if (!c) continue;
@@ -262,7 +262,9 @@ async function recut(chosen, sig, { asset, jobId, minSec, maxSec, tips }) {
       const kept = idx.map((k) => sec[k - 1]); const total = kept.reduce((n, y) => n + m.spoken(y), 0);
       if (total < minSec * 0.9 || total > tmax + 3) continue;
       if (m.DANGLING.test(kept[0].t) || !m.OPEN_LOOP.test(kept[kept.length - 1].t) || kept.some((y) => m.OUTRO.test(y.t))) continue;
-      c.keep = kept.map((y) => [Math.round(Math.max(0, y.s - 0.12) * 100) / 100, Math.round((y.e + 0.18) * 100) / 100]);
+      // Whole sentences only, and no line that leans on one the AI left out ("But then...", "It was...").
+      if (!m.coherent(kept, S)) continue;
+      c.keep = m.keepRanges(kept, sig);
       c.start = c.keep[0][0]; c.end = c.keep[c.keep.length - 1][1];
       c.reason = `${c.reason || ''} (cut by the AI from ${Math.round(sec[sec.length - 1].e - sec[0].s)} s)`.trim();
     }

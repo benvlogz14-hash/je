@@ -53,15 +53,85 @@ function reactionBursts(lv, { win = 10, z = 3, minSec = 0.5 } = {}) {
   return out;
 }
 
-/** Sentences with timing, from transcript words. */
+/**
+ * Sentences with timing, from transcript words. A sentence ends on . ! ? (or "..."); a pause alone doesn't end one
+ * (people stop mid-thought, and cutting there is what made clips start or stop in the middle of a sentence), unless
+ * it's very long (3 s+) or the transcript has no punctuation at all. Each line is marked:
+ *  - `whole`: it ends a sentence (ends on . ! ? or a long quiet after a complete-sounding line),
+ *  - `clean`: it starts one (the line before it ended a sentence).
+ * Only lines that are both can be kept on their own; very long run-ons are split at their longest pause and marked
+ * as not whole/clean on the inside, so they're only ever kept together.
+ */
+const ENDS = /([.!?]|\.\.\.|…)["')\]]*$/;
 function sentences(words) {
+  const punct = words.length ? words.filter((w) => ENDS.test(w.w)).length / words.length : 0;
+  const noPunct = words.length > 40 && punct < 0.02; // a transcript with no punctuation: pauses are all we have
   const out = []; let cur = null;
-  for (const w of words) {
-    if (!cur || w.s - cur.e > 1.2) { if (cur) out.push(cur); cur = { s: w.s, e: w.e, words: [w] }; } else { cur.e = w.e; cur.words.push(w); }
-    if (/[.!?]["']?$/.test(w.w) && cur.words.length >= 3) { out.push(cur); cur = null; }
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]; const gap = cur ? w.s - cur.e : 0;
+    if (cur && (gap > 3 || (noPunct && gap > 0.8))) { cur.whole = true; out.push(cur); cur = null; }
+    if (!cur) cur = { s: w.s, e: w.e, words: [] };
+    cur.e = w.e; cur.words.push(w);
+    if (ENDS.test(w.w) && cur.words.length >= 3) { cur.whole = true; out.push(cur); cur = null; }
   }
-  if (cur) out.push(cur);
-  return out.map((x) => ({ s: x.s, e: x.e, t: x.words.map((w) => w.w).join(' '), words: x.words }));
+  if (cur) { cur.whole = true; out.push(cur); }
+  // A run-on over 16 s is split at its longest pause; the halves only make sense together.
+  const res = [];
+  for (const x of out) {
+    if (x.e - x.s <= 16 || x.words.length < 8) { res.push(x); continue; }
+    let best = -1, gap = 0.35;
+    for (let k = 3; k < x.words.length - 3; k++) { const g = x.words[k].s - x.words[k - 1].e; if (g > gap) { gap = g; best = k; } }
+    if (best < 0) { res.push(x); continue; }
+    const a = x.words.slice(0, best), b = x.words.slice(best);
+    res.push({ s: a[0].s, e: a[a.length - 1].e, words: a, whole: false }, { s: b[0].s, e: b[b.length - 1].e, words: b, whole: x.whole, inside: true });
+  }
+  return res.map((x, i) => ({ s: x.s, e: x.e, t: x.words.map((w) => w.w).join(' '), words: x.words, whole: !!x.whole, clean: i === 0 || (!x.inside && !!res[i - 1].whole) }));
+}
+/** A line that can be kept by itself: a full sentence (starts and ends one). */
+const full = (x) => x.whole && x.clean;
+
+/**
+ * Where to cut around a line (source seconds), so no word is clipped and nothing of the next line leaks in: the end
+ * goes to where the voice actually falls quiet after the last word (fine 20 ms loudness map), the start to the quiet
+ * just before the first word; never past the middle of the gap to a neighbouring word. `pads` are this editor's
+ * learned margins (taste.edgePads), from how they fixed cuts in Studio.
+ */
+function cutEdges(S, i, fine, pads = {}) {
+  const x = S[i]; const prev = S[i - 1]; const next = S[i + 1];
+  const padS = pads.start ?? 0.1, padE = pads.end ?? 0.18;
+  const loS = prev ? Math.max(x.s - 0.5, (prev.e + x.s) / 2, prev.e + 0.03) : Math.max(0, x.s - 0.5);
+  const hiE = next ? Math.min(x.e + 0.7, (x.e + next.s) / 2, next.s - 0.03) : x.e + 0.7;
+  let a = Math.max(loS, x.s - padS), b = Math.min(hiE, x.e + padE);
+  const db = fine?.db; const st = fine?.step || 0.02;
+  if (db?.length) {
+    const lvl = (t) => db[Math.max(0, Math.min(db.length - 1, Math.floor(t / st)))];
+    // The quiet floor around this line: its quietest tenth, plus a little.
+    const around = []; for (let t = Math.max(0, x.s - 3); t < x.e + 3; t += st) around.push(lvl(t));
+    around.sort((p, q) => p - q); const floor = around[Math.floor(around.length * 0.1)] ?? -60; const quiet = floor + 8;
+    // End: the first moment after the last word where the voice has died down for 60 ms, then a short tail.
+    let endQ = null;
+    for (let t = x.e - 0.05; t <= hiE; t += st) if (lvl(t) <= quiet && lvl(t + st) <= quiet && lvl(t + 2 * st) <= quiet) { endQ = t; break; }
+    if (endQ != null) b = Math.min(hiE, Math.max(x.e + 0.04, endQ + Math.min(0.1, padE)));
+    else b = hiE; // the voice runs on to the limit: keep all of it rather than chop the tail
+    // Start: the last quiet moment before the first word.
+    let startQ = null;
+    for (let t = x.s + 0.03; t >= loS; t -= st) if (lvl(t) <= quiet && lvl(t - st) <= quiet) { startQ = t; break; }
+    if (startQ != null) a = Math.max(loS, Math.min(x.s - 0.03, startQ - Math.min(0.06, padS)));
+    else a = loS;
+  }
+  // This editor's habit from their Studio fixes (e.g. they always let lines breathe a little longer), never into a neighbour.
+  if (pads.endShift) b = Math.max(x.e + 0.02, Math.min(next ? next.s - 0.03 : b + pads.endShift, b + pads.endShift));
+  if (pads.startShift) a = Math.min(x.s - 0.01, Math.max(prev ? prev.e + 0.03 : a - pads.startShift, a - pads.startShift));
+  return [Math.round(Math.max(0, a) * 100) / 100, Math.round(b * 100) / 100];
+}
+
+/** A cut reads as one story: every kept line that leans on the one before it ("But...", "It was...") has that line too. */
+function coherent(kept, S) {
+  for (let k = 1; k < kept.length; k++) {
+    const i = S.indexOf(kept[k]);
+    if ((DANGLING.test(kept[k].t) || REFERS.test(kept[k].t) || !kept[k].clean) && S[i - 1] !== kept[k - 1]) return false;
+  }
+  return full(kept[0]) && !DANGLING.test(kept[0].t) && kept[kept.length - 1].whole;
 }
 
 /** Mark voiceover sentences: quiet gaps between words, or speech over shots with nobody on screen. */
@@ -148,10 +218,11 @@ function candidates(sig, { minSec, maxSec, duration, exclude = [], limit = 40, s
   const out = []; const S = sig.sents;
   const blocked = (c) => exclude.some((x) => sharedSec(x, c) > 0.2 * Math.min(lengthOf(c), maxSec));
   for (let i = 0; i < S.length; i++) {
+    if (!S[i].clean) continue; // never open in the middle of a sentence
     for (let j = i; j < S.length; j++) {
-      const s = Math.max(0, S[i].s - 0.15); const e = Math.min(duration, S[j].e + 0.25); const len = e - s;
+      const s = edgeOf(sig, i)[0]; const e = Math.min(duration, edgeOf(sig, j)[1]); const len = e - s;
       if (len > maxSec) break;
-      if (len < minSec) continue;
+      if (len < minSec || !S[j].whole) continue; // ...or stop in the middle of one
       if (blocked({ start: s, end: e })) continue;
       // Highlights: the clip must end on a hook (a reveal, a question, "and then we opened the door...").
       if (endHook && !END_HOOK.test(S[j].t)) continue;
@@ -165,6 +236,17 @@ function candidates(sig, { minSec, maxSec, duration, exclude = [], limit = 40, s
   return picked;
 }
 
+/** The kept lines as source ranges, each cut in the quiet around it. */
+function keepRanges(kept, sig) { return kept.map((x) => edgeOf(sig, sig.sents.indexOf(x))); }
+/** Cut points per line, worked out once per footage. */
+function edgeOf(sig, i) { const e = sig._edges || (sig._edges = []); return e[i] || (e[i] = cutEdges(sig.sents, i, sig.fine, sig.pads)); }
+/** Roughly the same line (most of its words): for remembering lines an editor cut out. */
+function similar(a, b) {
+  const w = (t) => new Set(String(t).toLowerCase().match(/[a-z0-9']+/g) || []); const A = w(a), B = w(b);
+  if (A.size < 3 || B.size < 3) return false; let n = 0; for (const x of A) if (B.has(x)) n++;
+  return n / Math.max(A.size, B.size) >= 0.8;
+}
+
 // ---------------------------------------------------------------- montage cuts (the usual Shorts edit)
 const DANGLING = /^["'(]?(and|but|so|or|because|cause|which|then|also|plus|like|that'?s why|anyway)\b/i;
 const REFERS = /^["'(]?(it|that|this|they|them|he|she|those|these|there|i picked (it|one)|one of them)\b/i;
@@ -173,7 +255,9 @@ const OPEN_LOOP = /\?\s*["']?$|\.\.\.\s*["']?$|\b(and then|but then|until|sudden
 /** Seconds a sentence lasts once the render's pause cuts take out gaps over ~0.55 s. */
 function spoken(x) { let n = 0; for (let i = 0; i < x.words.length; i++) { const w = x.words[i]; n += w.e - w.s; const nx = x.words[i + 1]; if (nx) n += Math.min(0.55, Math.max(0, nx.s - w.e)); } return n + 0.24; }
 function sentValue(x, sig) {
-  return (FILLER.test(x.t) || OUTRO.test(x.t) || x.ex ? -10 : 0) + (x.vo ? 3 : 0) + (HOOK.test(x.t) ? 2 : 0) + Math.min(2, x.words.length / 8)
+  if (!full(x)) return -10; // a piece of a sentence is never kept on its own
+  const first = String(x.words[0]?.w || '').toLowerCase().replace(/[^a-z']/g, '');
+  return (sig.avoidStarts?.has(first) ? -2.5 : 0) + (sig.cutLines?.some((t) => similar(t, x.t)) ? -4 : 0) + (FILLER.test(x.t) || OUTRO.test(x.t) || x.ex ? -10 : 0) + (x.vo ? 3 : 0) + (HOOK.test(x.t) ? 2 : 0) + Math.min(2, x.words.length / 8)
     + sig.shots.filter((sh) => sh.s < x.e && sh.e > x.s).reduce((n, sh) => Math.max(n, shotScore(sh) * 3), 0)
     + (sig.peaks || []).filter((t) => t >= x.s && t <= x.e).length * 0.8 + (sig.bursts || []).filter((t) => t >= x.s && t <= x.e).length;
 }
@@ -190,7 +274,7 @@ function narrative(sec, sig, { tmin, tmax }) {
   // Opening: one of the first lines that stands on its own (not "and...", "so..."), a hook if there is one.
   let open = -1;
   for (let k = 0; k < Math.min(4, end); k++) {
-    const x = sec[k]; if (x.ex || DANGLING.test(x.t) || REFERS.test(x.t) || FILLER.test(x.t) || x.words.length < 4) continue;
+    const x = sec[k]; if (x.ex || !full(x) || DANGLING.test(x.t) || REFERS.test(x.t) || FILLER.test(x.t) || x.words.length < 4) continue;
     if (open < 0 || (HOOK.test(x.t) && !HOOK.test(sec[open].t))) open = k;
     if (HOOK.test(x.t)) break;
   }
@@ -224,7 +308,8 @@ function narrative(sec, sig, { tmin, tmax }) {
     if (k - 1 > open && val[k - 1] > -5 && total + spoken(sec[k - 1]) <= tmax) { keep.add(k - 1); total += spoken(sec[k - 1]); } else { keep.delete(k); total -= spoken(sec[k]); }
   }
   if (total < tmin) return null;
-  return [...keep].sort((p, q) => p - q).map((k) => sec[k]);
+  const kept = [...keep].sort((p, q) => p - q).map((k) => sec[k]);
+  return coherent(kept, sig.sents) ? kept : null;
 }
 
 /**
@@ -240,8 +325,8 @@ function montageCuts(sig, { minSec, maxSec, duration, exclude = [] }) {
   for (let i = 0; i < S.length; i++) {
     const x = S[i];
     if (x.ex) continue;
-    if (!DANGLING.test(x.t) && !REFERS.test(x.t) && !FILLER.test(x.t) && x.words.length >= 4 && (i === 0 || x.s - S[i - 1].e > 0.6 || HOOK.test(x.t))) starts.push(i);
-    if (OPEN_LOOP.test(x.t) && !OUTRO.test(x.t) && x.words.length >= 3) ends.push(i);
+    if (full(x) && !DANGLING.test(x.t) && !REFERS.test(x.t) && !FILLER.test(x.t) && x.words.length >= 4 && (i === 0 || x.s - S[i - 1].e > 0.6 || HOOK.test(x.t))) starts.push(i);
+    if (x.whole && OPEN_LOOP.test(x.t) && !OUTRO.test(x.t) && x.words.length >= 3) ends.push(i);
   }
   for (const i of starts) {
     const reach = ends.filter((j) => j > i + 2 && S[j].e - S[i].s >= Math.max(45, tmax + 10) && S[j].e - S[i].s <= 300);
@@ -250,9 +335,9 @@ function montageCuts(sig, { minSec, maxSec, duration, exclude = [] }) {
     for (let r = 0; r < reach.length; r += step) {
       const j = reach[r]; const sec = S.slice(i, j + 1);
       const kept = narrative(sec, sig, { tmin, tmax }); if (!kept) continue;
-      const s = Math.max(0, S[i].s - 0.15); const e = Math.min(duration, S[j].e + 0.25);
+      const s = edgeOf(sig, i)[0]; const e = Math.min(duration, edgeOf(sig, j)[1]);
       const sc = scoreWindow(s, e, sig, kept);
-      const keepR = kept.map((x) => [Math.round(Math.max(0, x.s - 0.12) * 100) / 100, Math.round((x.e + 0.18) * 100) / 100]);
+      const keepR = keepRanges(kept, sig);
       const pieces = keepR.reduce((n, [a], k) => n + (k === 0 || a > keepR[k - 1][1] + 0.35 ? 1 : 0), 0);
       // Montage cuts are the house style: a small lift over plain windows, less when it's chopped into many pieces.
       out.push({ start: Math.round(s * 100) / 100, end: Math.round(e * 100) / 100, keep: keepR, score: Math.round((sc.score + 6 - 1.5 * Math.max(0, pieces - 5)) * 10) / 10, why: [...sc.why.filter((w) => w !== 'story cut'), `montage of ${Math.round(e - s)} s`], text: kept.map((x) => x.t).join(' '), lines: kept.length, span: [i, j] });
@@ -279,7 +364,11 @@ async function signals({ asset, transcript, vision, analysis }) {
   const shots = (vision?.shots || []).map((x) => ({ ...x }));
   let lv = null; try { lv = asset.info?.hasAudio ? await levels(asset.path, asset.workDir) : null; } catch { /* no level map */ }
   const sents = tagVoiceover(sentences(transcript?.words || []), lv, shots);
-  return { sents, shots, scenes: analysis?.scenes || [], peaks: analysis?.peaks || [], bursts: reactionBursts(lv), lv };
+  // The 20 ms loudness map (made when the transcript was lined up with the voice): where each cut goes.
+  let fine = null; try { fine = asset.info?.hasAudio ? await require('./align').fineLevels(asset.path, asset.workDir) : null; } catch { /* fixed margins */ }
+  // What this client's editor taught it in Studio: their cut margins, and the lines they keep cutting out.
+  let learned = {}; try { learned = require('./taste').editLessons(asset.clientId); } catch { /* nothing yet */ }
+  return { sents, shots, scenes: analysis?.scenes || [], peaks: analysis?.peaks || [], bursts: reactionBursts(lv), lv, fine, pads: learned.pads || {}, avoidStarts: new Set(learned.avoidStarts || []), cutLines: learned.cutLines || [] };
 }
 
 // ---------------------------------------------------------------- visual cuts
@@ -457,4 +546,4 @@ function dips(ys, fps = 10) {
   return out.filter(([a, b]) => b - a >= 0.15 && b - a <= 6).map(([a, b]) => [Math.round(Math.max(0, a - 0.1) * 100) / 100, Math.round((b + 0.1) * 100) / 100]);
 }
 
-module.exports = { OPEN_LOOP, REFERS, narrative, montageCuts, sharedSec, piecesOf, spoken, DANGLING, END_HOOK, HOOK, FILLER, OUTRO, dips, blackInRange, darkAt, coverBlack, outputToSource, reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
+module.exports = { cutEdges, keepRanges, coherent, full, similar, OPEN_LOOP, REFERS, narrative, montageCuts, sharedSec, piecesOf, spoken, DANGLING, END_HOOK, HOOK, FILLER, OUTRO, dips, blackInRange, darkAt, coverBlack, outputToSource, reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };

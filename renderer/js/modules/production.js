@@ -163,8 +163,11 @@ function AiTips({ client }) {
   const [tips, setTips] = useState(p.aiTips || '');
   useEffect(() => setTips(p.aiTips || ''), [client?.id]);
   const save = (patch, ok) => act(() => api.patch(`/api/clients/${client.id}`, { production: patch }), { ok, sound: 'tap' });
+  const { data: L } = useApi(client?.id ? `/api/clients/${client.id}/learning` : null, ['clips', 'projects'], [client?.id]);
+  const learned = L && (L.decisions || L.edits) ? [`${L.decisions} approve/reject decisions`, `${L.edits} clips you fixed in Studio`].join(', ') + (L.endShift ? `; it now ends lines ${Math.abs(Math.round(L.endShift * 1000))} ms ${L.endShift > 0 ? 'later' : 'sooner'}, like you do` : '') + (L.startShift ? `, starts them ${Math.abs(Math.round(L.startShift * 1000))} ms ${L.startShift > 0 ? 'earlier' : 'later'}` : '') + (L.linesCut ? `; ${L.linesCut} lines you cut out are scored down` : '') : '';
   return html`<div class="col" style="gap:6px;margin-top:10px;max-width:520px" onClick=${(e) => e.stopPropagation()}>
     <span class="label">Tips for the AI</span>
+    <span class="faint" style="font-size:var(--fs-xs)">${learned ? `Learned from ${learned}.` : 'It learns from every approve/reject and from every clip you fix in Studio and export.'}</span>
     <textarea class="textarea" rows="2" value=${tips} placeholder="e.g. Focus on the drone shots and the reveal at the end. Skip the intro and the sponsor read. Funny moments first." onInput=${(e) => setTips(e.target.value)} onBlur=${() => { if (tips !== (p.aiTips || '')) save({ aiTips: tips.slice(0, 1000) }, tips.trim() ? 'Tips saved; used when clips are picked' : 'Tips cleared'); }} aria-label="Tips for the AI" />
     <div class="row" style="gap:8px;align-items:center"><${Toggle} on=${wait} onChange=${(x) => save({ waitForStart: x }, x ? 'New footage waits for "Make clips"' : 'New footage makes clips right away')} label="Wait for Make clips" /><span style="font-size:var(--fs-sm)">Wait for me to press <b>Make clips</b></span><span class="faint" style="font-size:var(--fs-xs)">${wait ? 'footage gets transcribed, then waits so you can change these first' : 'clips start as soon as footage is in'}</span></div>
   </div>`;
