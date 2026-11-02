@@ -250,6 +250,8 @@ function Editor({ id }) {
   const [playing, setPlaying] = useState(false);
   const [tool, setTool] = useState('select');
   const [snap, setSnap] = useState(true);
+  // Close gaps (magnet for deletes): on, deleting anything slides what comes after it back, so no hole is left.
+  const [closeGapsOn, setCloseGapsOn] = useState(() => { try { return localStorage.getItem('eu.closeGaps') === '1'; } catch { return false; } });
   const [zoom, setZoom] = useState(60); // px per second
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(false); dirtyRef.current = dirty;
@@ -387,6 +389,24 @@ function Editor({ id }) {
     setSel([]);
   });
 
+  /** Slide everything back over every stretch where nothing is on any track (and to 0:00), keeping tracks in sync. */
+  const closeGaps = (quiet = false) => {
+    let closed = 0;
+    edit((d, s) => {
+      const tracks = [...s.videoTracks, ...s.audioTracks]; const all = tracks.flatMap((tr) => tr.clips);
+      if (!all.length) return;
+      const spans = all.map((c) => [c.start, c.start + c.duration]).sort((x, y) => x[0] - y[0]);
+      const gaps = []; let end = 0;
+      for (const [a, b] of spans) { if (a > end + 1 / (s.fps || 30)) gaps.push([end, a]); end = Math.max(end, b); }
+      if (!gaps.length) return;
+      for (const c of all) { const shift = gaps.filter(([, b]) => b <= c.start + 1e-6).reduce((n, [a, b]) => n + (b - a), 0); if (shift) c.start = Math.round((c.start - shift) * 1e6) / 1e6; }
+      closed = gaps.length;
+    });
+    if (quiet) return;
+    setTimeout(() => toast(closed ? `Closed ${closed} gap${closed > 1 ? 's' : ''}. Everything after them slid back.` : 'No gaps to close.', { kind: closed ? 'success' : 'info' }), 0);
+    sfx(closed ? 'success' : 'tap');
+  };
+
   // ---- clip operations (right-click menu and shortcuts), Premiere-style
   const groupOf = (s, ids) => [...new Set(ids.flatMap((cid) => { const f = findClip(s, cid); return f ? linked(s, f.c).map((x) => x.id) : []; }))];
   const trackRef = (s, cid) => { const v = s.videoTracks.findIndex((tr) => tr.clips.some((c) => c.id === cid)); if (v >= 0) return { kind: 'v', i: v }; return { kind: 'a', i: s.audioTracks.findIndex((tr) => tr.clips.some((c) => c.id === cid)) }; };
@@ -485,7 +505,7 @@ function Editor({ id }) {
       { label: 'Rename…', icon: 'edit', onClick: () => renameClip(c) },
       m && window.euclidean ? { label: 'Reveal in Explorer', icon: 'folder', onClick: () => reveal(c) } : null,
       'sep',
-      { label: 'Delete', icon: 'trash', hint: 'Del', danger: true, onClick: () => { setSel(ids); setTimeout(() => remove(false), 0); } },
+      { label: 'Delete', icon: 'trash', hint: 'Del', danger: true, onClick: () => { setSel(ids); setTimeout(() => { remove(false); if (closeGapsOn) setTimeout(() => closeGaps(true), 0); }, 0); } },
       { label: 'Ripple delete', icon: 'trash', hint: 'Alt+Del', danger: true, onClick: () => { setSel(ids); setTimeout(() => remove(true), 0); } },
     ]);
   };
@@ -645,7 +665,7 @@ function Editor({ id }) {
       else if (key === 'c') setTool('razor');
       else if (key === 'f2' && sel.length) { e.preventDefault(); const f = findClip(seq, sel[0]); if (f) renameClip(f.c); }
       else if (key === 't' && !mod) addText();
-      else if ((key === 'delete' || key === 'backspace') && sel.length) { e.preventDefault(); remove(e.altKey || e.shiftKey); }
+      else if ((key === 'delete' || key === 'backspace') && sel.length) { e.preventDefault(); remove(e.altKey || e.shiftKey); if (closeGapsOn) setTimeout(() => closeGaps(true), 0); }
       else if (key === 'arrowleft') { e.preventDefault(); setT((x) => Math.max(0, x - (e.shiftKey ? 1 : 1 / (seq?.fps || 30)))); }
       else if (key === 'arrowright') { e.preventDefault(); setT((x) => x + (e.shiftKey ? 1 : 1 / (seq?.fps || 30))); }
       else if (key === 'home') setT(0);
@@ -671,6 +691,7 @@ function Editor({ id }) {
       <div class="spacer" />
       <div class="btn-group"><button class=${tool === 'select' ? 'on' : ''} title="Selection (V)" onClick=${() => { sfx('tap'); setTool('select'); }}><${Icon} name="pointer" size=${14} /></button><button class=${tool === 'razor' ? 'on' : ''} title="Razor (C)" onClick=${() => { sfx('tap'); setTool('razor'); }}><${Icon} name="scissors" size=${14} /></button><button title="Add title (T)" onClick=${addText}><${Icon} name="type" size=${14} /></button></div>
       <button class=${'chip' + (snap ? ' on' : '')} title="Snapping (hold Alt to bypass)" onClick=${() => { sfx('toggle'); setSnap(!snap); }}><${Icon} name="magnet" size=${13} />Snap</button>
+      <button class=${'chip' + (closeGapsOn ? ' on' : '')} title=${closeGapsOn ? 'Close gaps is on: deleting slides everything after it back, so no empty space is left. Click to turn off.' : 'Close gaps: turn on and deleting slides everything after it back. Turning it on also closes the gaps already there.'} onClick=${() => { const v = !closeGapsOn; setCloseGapsOn(v); try { localStorage.setItem('eu.closeGaps', v ? '1' : '0'); } catch { /* ignore */ } sfx('toggle'); if (v) closeGaps(); }}><${Icon} name="layers" size=${13} />Close gaps</button>
       <${Button} kind="ghost" size="sm" icon="scissors" title="Split at playhead (S, Shift+S for all tracks)" onClick=${() => split(false)} />
       <${Button} kind="ghost" size="sm" icon="undo" title="Undo (Ctrl+Z)" disabled=${!undo.current.length} onClick=${doUndo} />
       <${Button} kind="ghost" size="sm" icon="redo" title="Redo (Ctrl+Shift+Z)" disabled=${!redo.current.length} onClick=${doRedo} />
