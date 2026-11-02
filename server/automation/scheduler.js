@@ -87,6 +87,21 @@ function tick() {
     try { dailyBroll(client); } catch (e) { audit.log('system', 'broll.daily_error', { clientId: client.id, error: e.message }, 'error'); }
   }
   require('../integrations/elevenlabs').pollCalls().catch(() => {});
+  // Keep the database small (it's saved whole): finished jobs over a week old go, beyond the newest 400; finished jobs
+  // over a day old keep only their last few log lines. Months of production used to pile up thousands of job logs.
+  if (every('prune', 3600000)) {
+    try {
+      const done = ctx.store.all('jobs', (j) => ['done', 'failed', 'canceled'].includes(j.status)).sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)));
+      const week = Date.now() - 7 * 864e5, day = Date.now() - 864e5; let trimmed = 0, removed = 0;
+      done.forEach((j, i) => {
+        const at = Date.parse(j.updatedAt || j.createdAt) || 0;
+        if (i >= 400 && at < week) { ctx.store.remove('jobs', j.id); removed++; return; }
+        if (at < day && (j.log || []).length > 5) { j.log = j.log.slice(-5); trimmed++; }
+      });
+      if (trimmed) ctx.store.touch();
+      if (removed || trimmed) audit.log('system', 'store.pruned', { removed, trimmed });
+    } catch (e) { audit.log('system', 'store.prune_error', { error: e.message }, 'warn'); }
+  }
   try { require('../hal/watch').tick(); } catch { /* HAL's watch is best-effort */ }
   try { require('../outreach/autopilot').tick(); } catch (e) { audit.log('system', 'outreach.autopilot_error', { error: e.message }, 'error'); }
   const tz = ctx.setting('agency.timezone', 'America/New_York');

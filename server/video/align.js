@@ -62,15 +62,88 @@ function align(t, lv) {
   return { t: { ...t, words: out, segments: segs }, changed: true, shifts: sm };
 }
 
-/** Align a transcript object for a media file (once; marks `voiceAligned`). */
+// ---------------------------------------------------------------- fine pass: each phrase on its own voice
+/** Loudness every 20 ms (cached next to the file as <name>.levels20.json). */
+async function fineLevels(file, dir) {
+  const path = require('path'); const fs = require('fs');
+  const cache = path.join(dir || path.dirname(file), `${path.basename(file).replace(/\.[^.]+$/, '')}.levels20.json`);
+  try { return JSON.parse(fs.readFileSync(cache, 'utf8')); } catch { /* measure */ }
+  const ff = require('./ffmpeg'); const { run } = require('../core/util');
+  const r = await run(ff.bin('ffmpeg'), ['-hide_banner', '-nostats', '-i', file, '-vn', '-ac', '1', '-af', 'aresample=16000,asetnsamples=n=320:p=0,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level', '-f', 'null', '-'], { timeoutMs: 3600000, priority: ff.priorityValue() });
+  const out = String(r.err || '') + String(r.out || '');
+  const lv = { step: 0.02, db: [...out.matchAll(/RMS_level=(-?[\d.]+|-inf)/g)].map((m) => (m[1] === '-inf' ? -90 : Math.max(-90, Math.round(Number(m[1]) * 10) / 10))) };
+  try { fs.writeFileSync(cache, JSON.stringify(lv)); } catch { /* read-only */ }
+  return lv;
+}
+
+/**
+ * Each phrase (words between pauses) is matched to the burst of voice it really is, in order: the phrases and the
+ * voice bursts heard in the sound (runs of loud 20 ms frames between quiet moments) are lined up as two sequences
+ * (dynamic programming, like aligning two strings), where a match costs the difference in length plus a little for
+ * how far it moves, and a phrase or a burst can go unmatched (music, a cough, a word whisper missed). A matched
+ * phrase is moved onto its burst, keeping its words' spacing, and its last word ends where the voice stops; unmatched
+ * phrases move by their neighbours' shift. Never more than 3 s, never out of order.
+ */
+function snapPhrases(t, lv) {
+  if (!t?.words?.length || !lv?.db?.length) return { t, moved: 0 };
+  const st = lv.step; const db = lv.db; const sorted = [...db].sort((a, b) => a - b);
+  const floor = sorted[Math.floor(sorted.length * 0.1)], high = sorted[Math.floor(sorted.length * 0.9)];
+  if (high - floor < 15) return { t, moved: 0 };
+  const thr = floor + Math.max(8, (high - floor) * 0.3);
+  const off0 = t.audioOffset || 0;
+  // voice bursts: loud runs, joined across gaps under 0.25 s, at least 0.1 s long
+  const segs = []; let cur = null;
+  for (let i = 0; i <= db.length; i++) {
+    const on = i < db.length && db[i] > thr; const x = i * st + off0;
+    if (on) { if (cur && x - cur.e < 0.25) cur.e = x + st; else { if (cur) segs.push(cur); cur = { s: x, e: x + st }; } }
+  }
+  if (cur) segs.push(cur);
+  const S = segs.filter((g) => g.e - g.s >= 0.1);
+  const words = t.words.map((w) => ({ ...w }));
+  const P = []; for (let i = 0; i < words.length;) { let j = i; while (j + 1 < words.length && words[j + 1].s - words[j].e < 0.25) j++; P.push({ i, j, s: words[i].s, e: words[j].e }); i = j + 1; }
+  const N = P.length, M = S.length; if (!N || !M) return { t, moved: 0 };
+  const W = M + 1; const INF = 1e9; const dp = new Float64Array((N + 1) * W).fill(INF); const from = new Int32Array((N + 1) * W).fill(-1); const how = new Int8Array((N + 1) * W);
+  const SKIP_P = 0.9, SKIP_S = 0.25, BAND = 3;
+  dp[0] = 0;
+  for (let i = 0; i <= N; i++) for (let j = 0; j <= M; j++) {
+    const c = dp[i * W + j]; if (c >= INF) continue;
+    if (i < N && c + SKIP_P < dp[(i + 1) * W + j]) { dp[(i + 1) * W + j] = c + SKIP_P; from[(i + 1) * W + j] = i * W + j; how[(i + 1) * W + j] = 1; }
+    if (j < M && c + SKIP_S < dp[i * W + j + 1]) { dp[i * W + j + 1] = c + SKIP_S; from[i * W + j + 1] = i * W + j; how[i * W + j + 1] = 2; }
+    if (i < N && j < M && Math.abs(S[j].s - P[i].s) <= BAND) {
+      const pd = P[i].e - P[i].s;
+      for (let k = j; k < Math.min(M, j + 4); k++) { // a phrase may span a few bursts (short pauses inside it)
+        const sd = S[k].e - S[j].s; if (sd > pd * 2 + 1) break;
+        const cost = Math.abs(pd - sd) * 0.8 + Math.abs(S[j].s - P[i].s) * 0.15 + (k - j) * 0.1;
+        if (c + cost < dp[(i + 1) * W + k + 1]) { dp[(i + 1) * W + k + 1] = c + cost; from[(i + 1) * W + k + 1] = i * W + j; how[(i + 1) * W + k + 1] = 3; }
+      }
+    }
+  }
+  // walk back the cheapest path
+  const match = new Array(N).fill(null); let pos = N * W + M;
+  while (pos > 0 && from[pos] >= 0) { const prev = from[pos]; if (how[pos] === 3) { const i = Math.floor(prev / W), j = prev % W, k = (pos % W) - 1; match[i] = { j, k }; } pos = prev; }
+  const shift = P.map((p, i) => (match[i] ? S[match[i].j].s - p.s : null));
+  // unmatched phrases take the shift of the nearest matched neighbours (in between: the average)
+  for (let i = 0; i < N; i++) if (shift[i] == null) { let a = i - 1; while (a >= 0 && (shift[a] == null || !match[a])) a--; let b = i + 1; while (b < N && !match[b]) b++; const va = a >= 0 ? shift[a] : null, vb = b < N ? shift[b] : null; shift[i] = va != null && vb != null ? (va + vb) / 2 : va ?? vb ?? 0; }
+  let moved = 0; let prevE = -Infinity;
+  P.forEach((p, i) => {
+    const d = shift[i]; if (Math.abs(d) >= 0.04) moved++;
+    for (let k = p.i; k <= p.j; k++) { let s0 = words[k].s + d, e0 = words[k].e + d; if (s0 < prevE) { e0 += prevE - s0; s0 = prevE; } words[k].s = Math.round(Math.max(0, s0) * 1000) / 1000; words[k].e = Math.round(Math.max(s0 + 0.04, e0) * 1000) / 1000; prevE = words[k].e; }
+    if (match[i]) { const end = S[match[i].k].e; const last = words[p.j]; const nextS = P[i + 1] ? P[i + 1].s + (shift[i + 1] ?? 0) : Infinity; if (end > last.s + 0.08 && end <= nextS + 0.01) { last.e = Math.round(end * 1000) / 1000; prevE = last.e; } }
+  });
+  return { t: { ...t, words }, moved };
+}
+
+/** Align a transcript object for a media file: the coarse pass (drift), then the fine pass (each phrase). Once. */
 async function alignFile(t, file, workDir) {
-  if (!t?.words?.length || t.voiceAligned) return t;
+  if (!t?.words?.length || t.voiceAligned?.v === 2) return t;
   // Studio's shared transcripts folder holds files from anywhere: give each its own loudness map (same names clash).
   let dir = workDir;
   if (/studio[\\/]transcripts[\\/]?$/.test(String(workDir || ''))) { dir = require('path').join(workDir, `lv-${require('crypto').createHash('sha1').update(file).digest('hex').slice(0, 12)}`); require('fs').mkdirSync(dir, { recursive: true }); }
-  let lv = null; try { lv = await montage.levels(file, dir); } catch { return t; }
-  const r = align(t, lv);
-  return { ...r.t, voiceAligned: r.changed ? { at: new Date().toISOString(), shifts: r.shifts } : true };
+  let out = t; let shifts = t.voiceAligned?.shifts || null;
+  if (!t.voiceAligned) { try { const lv = await montage.levels(file, dir); const r = align(t, lv); out = r.t; if (r.changed) shifts = r.shifts; } catch { /* no level map */ } }
+  let moved = 0;
+  try { const r = snapPhrases(out, await fineLevels(file, dir)); out = r.t; moved = r.moved; } catch { /* keep the coarse result */ }
+  return { ...out, voiceAligned: { v: 2, at: new Date().toISOString(), shifts, phrasesMoved: moved } };
 }
 
-module.exports = { align, alignFile };
+module.exports = { align, alignFile, snapPhrases, fineLevels };

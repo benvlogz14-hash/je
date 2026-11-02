@@ -84,14 +84,20 @@ class Store {
   get settings() { return this.data.settings; }
   setSettings(patch) { deepMerge(this.data.settings, patch); this.touch(); this.emit('settings', 'update', this.data.settings); return this.data.settings; }
 
+  // Saving writes the whole database, so it's spread out: at most every 2 s, written in the background (the app keeps
+  // working while the disk catches up), with the .bak copy refreshed every 5 minutes. It used to stringify, fsync and
+  // copy the whole file every 200 ms while anything changed, which froze the app during production runs.
   touch() {
     this.dirty = true;
-    if (!this.timer) this.timer = setTimeout(() => { this.timer = null; this.flush(); }, 200);
+    if (this.timer) return;
+    const wait = Math.max(200, (this.lastFlush || 0) + 2000 - Date.now());
+    this.timer = setTimeout(() => { this.timer = null; this.flushAsync(); }, wait);
   }
 
+  /** Write now and wait (used when the engine stops, and for backups). */
   flush() {
     if (!this.dirty) return;
-    this.dirty = false;
+    this.dirty = false; this.lastFlush = Date.now(); this.gen = (this.gen || 0) + 1; // a background save still running won't overwrite this one
     const body = JSON.stringify({ meta: { ...this.meta, savedAt: now() }, data: this.data });
     const tmp = this.file + '.tmp';
     try {
@@ -101,7 +107,24 @@ class Store {
       fs.closeSync(fd);
       if (fs.existsSync(this.file)) fs.copyFileSync(this.file, this.file + '.bak');
       fs.renameSync(tmp, this.file);
+      this.lastBak = Date.now();
     } catch (e) { console.error('[store] write failed', e.message); this.dirty = true; }
+  }
+
+  /** The everyday save: the same safe write-then-rename, without blocking the app on the disk. */
+  flushAsync() {
+    if (!this.dirty) return;
+    if (this.writing) { this.touch(); return; }
+    this.dirty = false; this.lastFlush = Date.now(); this.writing = true; const gen = this.gen = (this.gen || 0) + 1;
+    const body = JSON.stringify({ meta: { ...this.meta, savedAt: now() }, data: this.data });
+    const tmp = `${this.file}.${gen}.tmp`; const fsp = fs.promises;
+    (async () => {
+      const fh = await fsp.open(tmp, 'w'); try { await fh.writeFile(body); await fh.sync(); } finally { await fh.close(); }
+      if (!this.lastBak || Date.now() - this.lastBak > 5 * 60000) { try { await fsp.copyFile(this.file, this.file + '.bak'); } catch { /* first save */ } this.lastBak = Date.now(); }
+      if (gen !== this.gen) { await fsp.unlink(tmp).catch(() => {}); return; } // a newer save already landed
+      await fsp.rename(tmp, this.file);
+    })().catch((e) => { console.error('[store] write failed', e.message); this.dirty = true; })
+      .finally(() => { this.writing = false; if (this.dirty) this.touch(); });
   }
 
   backup(dir) {

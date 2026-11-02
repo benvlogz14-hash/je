@@ -288,9 +288,11 @@ async function draftFor(prospectId, { actor = 'user', h = { progress() {} }, ref
   let p = ctx.store.get('prospects', prospectId); if (!p) throw new Error('That prospect is gone.');
   const pre = classify(p);
   if (!pre.draft && pre.framing === 'exclude') return save(p, { framing: 'exclude', excluded: pre.reason, flags: [pre.reason === "Ryan's" ? "Ryan's: don't draft" : `Excluded: ${pre.reason}`], at: now() });
-  const res = !refresh && p.kit?.research?.sources?.length && Date.now() - Date.parse(p.kit.research.at) < 7 * 864e5 ? p.kit.research : await gather(p, h);
+  const cached = !refresh && p.kit?.research?.sources?.length && Date.now() - Date.parse(p.kit.research.at) < 7 * 864e5 ? loadResearch(p) : null;
+  const full = cached || await gather(p, h);
+  const res = stashResearch(p, full); // the page text goes to a file; the database keeps titles and links
   h.progress(0.7, 'Writing the research card');
-  const card = await researchCard(p, res);
+  const card = await researchCard(p, full);
   const cls = classify(p, card);
   if (!cls.draft) return save(p, { research: res, card: { ...card, framing: cls.framing }, framing: cls.framing, flags: [...cls.flags, cls.reason].filter(Boolean), excluded: cls.framing === 'exclude' ? cls.reason : null, at: now() });
   const tr = tier(card, p);
@@ -327,6 +329,14 @@ async function draftFor(prospectId, { actor = 'user', h = { progress() {} }, ref
   audit.log(actor, 'outreach.guide_drafted', { prospectId: p.id, name: p.name, framing: cls.framing, tier: tr.tier, queued: !!p.kit.queued });
   return p;
 }
+/** Research page text is big (tens of KB a person) and the database is saved whole, so it lives in a file. */
+function researchFile(p) { const path = require('path'); return path.join(require('../core/paths').root, 'political', p.id, 'research.json'); }
+function stashResearch(p, full) {
+  try { const f = researchFile(p); require('fs').mkdirSync(require('path').dirname(f), { recursive: true }); require('fs').writeFileSync(f, JSON.stringify(full)); } catch { /* keep going */ }
+  return { at: full.at, state: full.state, profile: full.profile ? { name: full.profile.name, office: full.profile.office, emails: full.profile.emails, sites: full.profile.sites, officePhone: full.profile.officePhone } : null, sources: (full.sources || []).map(({ n, title, url }) => ({ n, title, url })) };
+}
+function loadResearch(p) { try { const r = JSON.parse(require('fs').readFileSync(researchFile(p), 'utf8')); return r?.sources?.length ? r : null; } catch { return null; } }
+
 /** Saves the kit; an earlier draft still waiting in Approvals stays linked until a new one replaces it. */
 function save(p, kit) {
   const cur = ctx.store.get('prospects', p.id) || p;
