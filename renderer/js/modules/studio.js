@@ -991,7 +991,7 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
     <div class="row" style="padding:8px 10px;border-bottom:1px solid var(--line)"><${Seg} value=${tab} onChange=${setTab} options=${[{ value: 'media', label: 'Project' }, { value: 'broll', label: 'B-roll' }, { value: 'effects', label: 'Effects' }, { value: 'ai', label: 'AI' }]} /><div class="spacer" />${tab === 'media' ? html`<${Button} size="sm" kind="soft" icon="plus" busy=${busy} title="Import media" onClick=${importDisk} />` : null}</div>
     <input type="file" ref=${fileRef} multiple accept="video/*,audio/*,image/*" hidden onChange=${(e) => { importFiles([...e.target.files]); e.target.value = ''; }} />
     <div style="flex:1;overflow:auto;padding:8px" onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); importFiles([...e.dataTransfer.files]); } }}>
-      ${tab === 'ai' ? html`<${AIPanel} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${projectId} selected=${selected} />` : tab === 'broll' ? html`<${BrollBank} projectId=${projectId} clientId=${data.clientId} onAdd=${onBroll} />` : tab === 'media' ? (data.media.length ? data.media.map((m) => html`
+      ${tab === 'ai' ? html`<${AIPanel} aiEdit=${aiEdit} aiUndo=${aiUndo} projectId=${projectId} selected=${selected} />` : tab === 'broll' ? html`<${BrollBank} projectId=${projectId} onAdd=${onBroll} />` : tab === 'media' ? (data.media.length ? data.media.map((m) => html`
         <div class="review-item" draggable="true" onDragStart=${(e) => e.dataTransfer.setData('text/x-media', m.id)} onDblClick=${() => onAdd(m)} title="Double-click to add at the end of V1, or drag onto a track">
           <div class="th" style=${{ width: '58px', aspectRatio: '16/9', backgroundImage: m.kind !== 1 ? `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(m.path)}&t=${m.kind >= 2 ? 0 : 1}`)})` : 'none', display: 'grid', placeItems: 'center' }}>${m.kind === 1 ? html`<${Icon} name="volume" size=${16} />` : null}</div>
           <div class="grow" style="min-width:0"><div class="ellipsis" style="font-size:var(--fs-sm);font-weight:500">${m.name}</div><div class="faint tnum" style="font-size:var(--fs-xs)">${m.kind >= 2 ? 'Image' : dur(m.duration)}${m.width ? ` · ${m.width}×${m.height}` : ''}${m.proxyPending ? ' · preparing preview…' : m.proxyError ? ' · preview unavailable' : ''}</div></div></div>`)
@@ -1008,23 +1008,28 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
 // ------------------------------------------------------------ B-roll bank
 /** The client's best cut-away shots (drone first, from Look through) and your own B-roll files: drag one onto a video
  *  track, or double-click to drop it at the playhead on the B-roll track. */
-function BrollBank({ projectId, clientId, onAdd }) {
+function BrollBank({ projectId, onAdd }) {
+  // One folder per video in this project: B-roll only ever comes from the video itself (and files you add to it).
   const { data, reload } = useApi(`/api/broll/bank?projectId=${projectId}`, ['assets']);
-  const [kind, setKind] = useState('all');
+  const [kind, setKind] = useState('all'); const [shut, setShut] = useState({});
   const addFiles = async () => {
     const r = await api.post('/api/system/pick', { multi: true, filters: [{ name: 'Video and images', extensions: ['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', 'mts', 'png', 'jpg', 'jpeg', 'webp'] }] }).catch(() => null);
-    if (r?.paths?.length) act(() => api.post('/api/broll/bank', { paths: r.paths, clientId: data?.clientId || clientId || null }), { ok: 'Added to your B-roll bank', sound: 'success' }).then(reload);
+    if (r?.paths?.length) act(() => api.post('/api/broll/bank', { paths: r.paths, projectId }), { ok: 'Added to this video\'s B-roll folder', sound: 'success' }).then(reload);
   };
-  const hide = (it) => act(() => api.post('/api/broll/bank/hide', { key: it.key }), { ok: 'Removed from the bank', sound: 'tap' }).then(reload);
-  const items = (data?.items || []).filter((it) => kind === 'all' || (kind === 'drone' ? it.kind === 'drone' : kind === 'file' ? it.kind === 'file' : it.kind !== 'drone' && it.kind !== 'file'));
+  const hide = (it) => act(() => api.post('/api/broll/bank/hide', { key: it.key }), { ok: 'Removed from the folder', sound: 'tap' }).then(reload);
+  const keep = (it) => kind === 'all' || (kind === 'drone' ? it.kind === 'drone' : kind === 'file' ? it.kind === 'file' : it.kind !== 'drone' && it.kind !== 'file');
   const thumb = (it) => api.url(`/api/media/thumb?path=${encodeURIComponent(it.path)}&t=${it.e ? ((it.s + it.e) / 2).toFixed(1) : 1}`);
+  const folders = data?.folders || [];
   return html`<div class="col" style="gap:6px">
     <div class="row" style="gap:6px;flex-wrap:wrap"><${Seg} value=${kind} onChange=${setKind} options=${[{ value: 'all', label: 'All' }, { value: 'drone', label: 'Drone' }, { value: 'broll', label: 'Shots' }, { value: 'file', label: 'Mine' }]} /><div class="spacer" />${window.euclidean?.pickFiles ? html`<${Button} size="sm" kind="soft" icon="plus" onClick=${addFiles}>Add B-roll</${Button}>` : null}</div>
-    <p class="faint" style="font-size:var(--fs-xs);margin:0">Drag a shot onto a video track, or double-click to put it at the playhead. ${data ? `${data.looked} of ${data.footage} videos looked through.` : ''}</p>
-    ${!data ? html`<div class="faint" style="padding:10px">Loading…</div>` : !items.length ? html`<div class="empty" style="padding:24px 8px"><p style="font-size:var(--fs-sm)">${data.footage ? 'No B-roll shots yet. Press "Look through" on footage in Production and its drone and cut-away shots show up here.' : 'No footage for this client yet.'}</p></div>`
-      : html`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${items.map((it) => html`<div key=${it.key} class="broll-card" draggable="true" onDragStart=${(e) => { e.dataTransfer.setData('text/x-broll', JSON.stringify({ path: it.path, s: it.s, e: it.e, what: it.what })); e.dataTransfer.effectAllowed = 'copy'; }} onDblClick=${() => onAdd(it)} title=${`${it.what || it.kind} · ${it.from}${it.e ? ` · ${(it.e - it.s).toFixed(1)} s` : ''}. Drag onto a track or double-click.`}>
-          <div class="broll-th" style=${{ backgroundImage: `url(${thumb(it)})` }}>${it.kind === 'drone' ? html`<span class="broll-tag">Drone</span>` : it.kind === 'file' ? html`<span class="broll-tag">Mine</span>` : null}<button type="button" class="broll-x" title="Remove from the bank" onClick=${(e) => { e.stopPropagation(); hide(it); }}>×</button></div>
-          <div class="ellipsis" style="font-size:11px;padding:2px 2px 0">${it.what || it.from}</div></div>`)}</div>`}
+    <p class="faint" style="font-size:var(--fs-xs);margin:0">Only this video's own shots. Drag one onto a video track, or double-click to put it at the playhead.</p>
+    ${!data ? html`<div class="faint" style="padding:10px">Loading…</div>` : !folders.length ? html`<div class="empty" style="padding:24px 8px"><p style="font-size:var(--fs-sm)">This project isn't made from Production footage, so there are no shots to offer. Use Add B-roll to give it its own folder.</p></div>`
+      : folders.map((f) => { const items = f.items.filter(keep); return html`<div key=${f.id} class="broll-folder">
+        <button type="button" class="broll-folder-head" onClick=${() => setShut({ ...shut, [f.id]: !shut[f.id] })}><span>${shut[f.id] ? '▸' : '▾'}</span><${Icon} name="folder" size=${14} /><b class="ellipsis grow">${f.name}</b><span class="faint">${items.length}</span></button>
+        ${shut[f.id] ? null : !items.length ? html`<p class="faint" style="font-size:var(--fs-xs);margin:4px 2px 8px">${f.looked ? 'No shots of this kind.' : 'Press "Look through" on this video in Production and its drone and cut-away shots show up here.'}</p>`
+          : html`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:4px 0 8px">${items.map((it) => html`<div key=${it.key} class="broll-card" draggable="true" onDragStart=${(e) => { e.dataTransfer.setData('text/x-broll', JSON.stringify({ path: it.path, s: it.s, e: it.e, what: it.what })); e.dataTransfer.effectAllowed = 'copy'; }} onDblClick=${() => onAdd(it)} title=${`${it.what || it.kind}${it.e ? ` · ${(it.e - it.s).toFixed(1)} s` : ''}. Drag onto a track or double-click.`}>
+            <div class="broll-th" style=${{ backgroundImage: `url(${thumb(it)})` }}>${it.kind === 'drone' ? html`<span class="broll-tag">Drone</span>` : it.kind === 'file' ? html`<span class="broll-tag">Mine</span>` : null}<button type="button" class="broll-x" title="Remove from the folder" onClick=${(e) => { e.stopPropagation(); hide(it); }}>×</button></div>
+            <div class="ellipsis" style="font-size:11px;padding:2px 2px 0">${it.what || it.from}</div></div>`)}</div>`}</div>`; })}
   </div>`;
 }
 

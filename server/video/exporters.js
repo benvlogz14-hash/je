@@ -24,17 +24,24 @@ function veloClip(o) {
 }
 
 /** Build a Velo project for one short: footage on V1/A1, captions as text clips on V2. */
-function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, covers = [], keywords = null, music = null }) {
+function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, covers = [], keywords = null, music = null, segs = null }) {
   const st = captions.resolveStyle(style);
-  const dur = range.end - range.start;
+  // The clip as it was cut (montage lines and pause cuts), in source seconds; else the whole range. Studio used to get
+  // the whole range, so a montage clip (30 s taken from up to 5 minutes) opened minutes long.
+  const parts = (segs && segs.length ? segs : [[range.start, range.end]]).map(([a, b]) => [Math.max(range.start - 0.5, a), b]).filter(([a, b]) => b - a > 0.02);
+  const outAt = []; { let o = 0; for (const [a, b] of parts) { outAt.push(o); o += b - a; } }
+  const dur = parts.reduce((n, [a, b]) => n + (b - a), 0);
+  const remap = (t) => { for (let i = 0; i < parts.length; i++) { const [a, b] = parts[i]; if (t >= a - 1e-3 && t <= b + 1e-3) return outAt[i] + Math.max(0, Math.min(b, t) - a); } return null; };
+  const cutWords = (words || []).map((w) => { const s0 = remap(w.s), e0 = remap(w.e); if (s0 == null && e0 == null) return null; const s1 = s0 ?? Math.max(0, (e0 ?? 0) - (w.e - w.s)); return { ...w, s: s1, e: Math.max(s1 + 0.02, e0 ?? s1 + (w.e - w.s)) }; }).filter(Boolean);
+  words = cutWords; range = { start: 0, end: dur };
   const mediaId = 'm1';
   // Velo positions clips relative to sequence centre; scale so the footage fills the 9:16 frame.
   const scale = info.height ? Math.max(W / info.width, H / info.height) : 1;
   const overflowX = Math.max(0, info.width * scale - W);
   const posX = Math.round((0.5 - focusX) * overflowX);
   let nextId = 1;
-  const v1 = [veloClip({ id: nextId++, type: 0, mediaId, name: path.basename(source), start: 0, duration: dur, in: range.start, scale, posX, linkId: 1 })];
-  const a1 = info.hasAudio ? [veloClip({ id: nextId++, type: 1, mediaId, name: path.basename(source), start: 0, duration: dur, in: range.start, linkId: 1 })] : [];
+  const v1 = parts.map(([a, b], i) => veloClip({ id: nextId++, type: 0, mediaId, name: path.basename(source), start: outAt[i], duration: b - a, in: a, scale, posX, linkId: i + 1 }));
+  const a1 = info.hasAudio ? parts.map(([a, b], i) => veloClip({ id: nextId++, type: 1, mediaId, name: path.basename(source), start: outAt[i], duration: b - a, in: a, linkId: i + 1 })) : [];
   const posY = st.position === 'upper' ? -H * 0.3 : st.position === 'center' ? 0 : H * 0.28;
   const hex = (c) => `#ff${String(c || '#ffffff').replace('#', '').toLowerCase()}`;
   // Clip renders size text the subtitle way (Windows line height); Studio sizes it the browser way (em), so convert.
@@ -53,7 +60,7 @@ function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, c
   const v3 = hk && st.hook !== false ? [veloClip({ id: nextId++, type: 3, name: 'Hook', start: 0, duration: Math.min(st.hookSeconds, dur), posY: hookY, rotation: st.hookTilt || 0,
     text: textStyle(captions.hookCase(hookFit.text.replace(/\\N/g, '\n'), st), hookFit.size, st.hookColor, { font: st.hookFont || st.font, outline: st.hookOutline, outlineWidth: st.hookOutlineWidth, box: st.hookBox, boxColor: st.hookBg, radius: st.hookRadius || 0 }) })] : [];
   // The render's cut-away shots (B-roll) as their own picture-only clips, so you can move, trim or delete them.
-  const broll = (covers || []).filter((c) => c.at < range.end && c.at + c.dur > range.start).map((c) => veloClip({ id: nextId++, type: 0, mediaId, name: 'B-roll', start: Math.max(0, c.at - range.start), duration: c.dur, in: c.src, scale, posX: 0 }));
+  const broll = (covers || []).map((c) => ({ c, at: remap(c.at) })).filter((x) => x.at != null).map(({ c, at }) => veloClip({ id: nextId++, type: 0, mediaId, name: 'B-roll', start: at, duration: Math.min(c.dur, dur - at), in: c.src, scale, posX: 0 }));
   const track = (type, nm, clips) => ({ type, name: nm, muted: false, locked: false, volume: animated(1), clips });
   // The music the render added, on its own track so it can be moved, trimmed, swapped or deleted (it isn't in the footage).
   const mu = musicClips(music, dur, () => nextId++);

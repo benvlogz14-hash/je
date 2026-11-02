@@ -572,7 +572,7 @@ r.post('/api/clips/:id/studio', async (req, b, p) => {
     const libFile = (x) => (x.mood && x.track ? path.join(paths.root, 'music', String(x.mood), path.basename(String(x.track))) : null);
     const cues = (v?.music?.cues || []).map((x) => ({ ...x, file: x.file || libFile(x) })).filter((x) => x.file && fs.existsSync(x.file));
     const music = cues.length ? { volume: v.music.volume ?? 0.3, cues, durations: await durOf(cues.map((x) => x.file)) } : null;
-    data = exporters.toVelo({ name: c.title, source: a.path, info: a.info, range: { start: c.start, end: c.end }, words, style: { ...(client.style || {}), ...(c.style || {}) }, hook: c.hook, focusX: c.focusX, covers: v?.covers || [], keywords: c.keywords, music });
+    data = exporters.toVelo({ name: c.title, source: a.path, info: a.info, range: { start: c.start, end: c.end }, words, style: { ...(client.style || {}), ...(c.style || {}) }, hook: c.hook, focusX: c.focusX, covers: v?.covers || [], keywords: c.keywords, music, segs: v?.segs || (c.keep?.length ? c.keep : null) });
   }
   return ctx.store.insert('projects', { name: `#${c.ref} ${c.title}`, clientId: c.clientId, clipId: c.id, data, exports: [] });
 });
@@ -1134,32 +1134,38 @@ r.get('/api/projects/:id', (req, b, p) => must(ctx.store.get('projects', p.id)))
 // B-roll bank (Studio → B-roll tab): the good cut-away shots of a client's footage (drone first), found by Look
 // through, plus B-roll files you add yourself. Drag one onto the timeline and it goes in, picture only.
 r.get('/api/broll/bank', (req) => {
+  // Each video's B-roll stays with that video: only the footage this project is made from, one folder per video, plus
+  // the files you added to this project.
   const proj = req.query.projectId ? ctx.store.get('projects', String(req.query.projectId)) : null;
-  const clientId = String(req.query.clientId || proj?.clientId || '');
   const vision = require('./video/vision'); const m = require('./video/montage');
   const hidden = new Set(ctx.store.settings.brollHidden || []);
-  const assets = ctx.store.all('assets', (a) => (!clientId || a.clientId === clientId) && a.path && fs.existsSync(a.path) && a.info?.hasVideo !== false).slice(-60);
-  const shots = [];
+  const clip = proj?.clipId ? ctx.store.get('clips', proj.clipId) : null;
+  const paths_ = new Set((proj?.data?.media || []).map((x) => x.path));
+  const assets = ctx.store.all('assets', (a) => a.path && fs.existsSync(a.path) && a.info?.hasVideo !== false && (a.id === clip?.assetId || paths_.has(a.path)));
+  const folders = [];
   for (const a of assets) {
     let v = null; try { v = vision.cached(a.path, a.workDir); } catch { /* not looked through */ }
+    const items = [];
     for (const x of v?.shots || []) {
       if (x.usable === false || x.e - x.s < 1.2 || (x.bright != null && x.bright < 40)) continue;
-      const cut = m.isDrone(x) || ['broll', 'aerial'].includes(x.kind) || x.faces === 0; if (!cut) continue;
+      if (!(m.isDrone(x) || ['broll', 'aerial'].includes(x.kind) || x.faces === 0)) continue;
       const key = `${a.id}:${x.s.toFixed(1)}`; if (hidden.has(key)) continue;
       const mid = (x.s + x.e) / 2; const len = Math.min(3, x.e - x.s);
-      shots.push({ key, path: a.path, assetId: a.id, from: a.name, s: Math.max(x.s, mid - len / 2), e: Math.min(x.e, mid + len / 2), shotS: x.s, shotE: x.e, kind: m.isDrone(x) ? 'drone' : x.kind || 'broll', what: x.what || '', score: Math.round(m.shotScore(x) * 100) + (m.isDrone(x) ? 30 : 0) });
+      items.push({ key, path: a.path, assetId: a.id, from: a.name, s: Math.max(x.s, mid - len / 2), e: Math.min(x.e, mid + len / 2), kind: m.isDrone(x) ? 'drone' : x.kind || 'broll', what: x.what || '', score: Math.round(m.shotScore(x) * 100) + (m.isDrone(x) ? 30 : 0) });
     }
+    items.sort((p, q) => q.score - p.score);
+    folders.push({ id: a.id, name: String(a.name || 'Video').replace(/\.[^.]+$/, ''), looked: !!v, items: items.slice(0, 120) });
   }
-  shots.sort((p, q) => q.score - p.score);
-  const own = (ctx.store.settings.brollBank || []).filter((x) => !x.clientId || !clientId || x.clientId === clientId).filter((x) => fs.existsSync(x.path)).map((x) => ({ key: `file:${x.path}`, path: x.path, from: 'Your B-roll', s: 0, e: null, kind: 'file', what: x.name || path.basename(x.path), score: 1000 }));
-  const looked = assets.filter((a) => { try { return !!vision.cached(a.path, a.workDir); } catch { return false; } }).length;
-  return { clientId: clientId || null, items: [...own, ...shots.slice(0, 160)], footage: assets.length, looked };
+  const own = (ctx.store.settings.brollBank || []).filter((x) => proj && x.projectId === proj.id && fs.existsSync(x.path)).map((x) => ({ key: `file:${x.path}`, path: x.path, from: 'Your B-roll', s: 0, e: null, kind: 'file', what: x.name || path.basename(x.path), score: 1000 }));
+  if (own.length) folders.unshift({ id: 'mine', name: 'Your B-roll for this video', looked: true, items: own });
+  return { folders, items: folders.flatMap((f) => f.items), footage: assets.length, looked: folders.filter((f) => f.id !== 'mine' && f.looked).length };
 });
 r.post('/api/broll/bank', (req, b) => {
   const list = (Array.isArray(b.paths) ? b.paths : []).map(String).filter((f) => fs.existsSync(f));
   if (!list.length) throw new HttpError(400, 'Pick one or more video files.');
+  if (!b.projectId) throw new HttpError(400, 'Open a project first: B-roll you add belongs to that video.');
   const have = ctx.store.settings.brollBank || [];
-  ctx.store.settings.brollBank = [...have, ...list.filter((f) => !have.some((x) => x.path === f)).map((f) => ({ path: f, name: path.basename(f), clientId: b.clientId || null, addedAt: new Date().toISOString() }))]; ctx.store.touch();
+  ctx.store.settings.brollBank = [...have, ...list.filter((f) => !have.some((x) => x.path === f && x.projectId === b.projectId)).map((f) => ({ path: f, name: path.basename(f), projectId: String(b.projectId), addedAt: new Date().toISOString() }))]; ctx.store.touch();
   return { ok: true, added: list.length };
 });
 r.post('/api/broll/bank/hide', (req, b) => {

@@ -728,3 +728,5 @@ h4 { font-weight: 750; letter-spacing: -0.01em; }
 .pv-btn { align-self: flex-start; background: #ff2a1a; color: #fff; border: 0; border-radius: 8px; padding: 7px 12px; font-weight: 600; cursor: pointer; }
 .pv-reveal { display: flex; flex-direction: column; gap: 8px; align-items: center; text-align: center; padding: 28px 10px; border: 1px solid #ff2a1a; border-radius: 12px; background: radial-gradient(#2a0606, #0a0a0d); }
 .pv-reveal b { font: 700 20px "Share Tech Mono", monospace; color: #ff6b5e; letter-spacing: .08em; }
+.broll-folder-head { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: var(--surface-2); border-radius: 8px; padding: 7px 8px; font-size: var(--fs-sm); cursor: pointer; color: inherit; text-align: left; }
+.broll-folder-head .grow { flex: 1; min-width: 0; }
