@@ -188,6 +188,7 @@ function fitTitles(data) {
 /** What a clip is called on the timeline: its name, or for titles and captions their text unless you renamed them. */
 const clipLabel = (c) => (c.type === 3 && !c.renamed ? c.text?.text || c.name || 'Title' : c.name || 'Clip');
 const TRACK_H = { 0: 48, 1: 40 };
+try { localStorage.removeItem('eu.trackH'); } catch { /* ignore */ } // the timeline's vertical zoom was taken back out
 // Live scrubbing mutates the clip in place for instant preview; the original value is restored
 // right before the committing edit() so undo snapshots stay correct.
 const live = new Map();
@@ -1747,11 +1748,7 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
   };
   // Pinch / Ctrl+wheel zooms around the mouse; the plain wheel scrolls along the timeline.
   const zoomRef = useRef(zoom); zoomRef.current = zoom; const anchor = useRef(null);
-  // Track height (vertical zoom), remembered: Ctrl/pinch zooms both ways together, Alt + scroll only up/down, Ctrl+Shift only sideways.
-  const [th, setThRaw] = useState(() => { try { return Number(localStorage.getItem('eu.trackH')) || 1; } catch { return 1; } });
-  const thRef = useRef(th); thRef.current = th;
-  const setTh = (v) => { const n = Math.max(0.4, Math.min(3, v)); thRef.current = n; setThRaw(n); try { localStorage.setItem('eu.trackH', String(n)); } catch { /* ignore */ } };
-  const TH = (type) => Math.round(TRACK_H[type === 1 ? 1 : 0] * th);
+  const TH = (type) => TRACK_H[type === 1 ? 1 : 0];
   const zoomAround = (factor, cx) => {
     const el = scroller.current; if (!el) return; const mx = Math.max(0, cx - el.getBoundingClientRect().left - HEAD_W);
     const nz = Math.max(4, Math.min(600, zoomRef.current * factor)); if (nz === zoomRef.current) return;
@@ -1760,13 +1757,12 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
   useEffect(() => {
     const el = scroller.current; if (!el) return;
     const onWheel = (e) => {
-      if (e.altKey && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); setTh(thRef.current * wheelFactor(e)); return; }
-      if (e.ctrlKey || e.metaKey) { e.preventDefault(); const f = wheelFactor(e); zoomAround(f, e.clientX); if (!e.shiftKey) setTh(thRef.current * f); return; }
+      if (e.ctrlKey || e.metaKey || e.altKey) { e.preventDefault(); zoomAround(wheelFactor(e), e.clientX); return; }
       if (!e.shiftKey && Math.abs(e.deltaY) > Math.abs(e.deltaX) && el.scrollHeight <= el.clientHeight + 2) { e.preventDefault(); el.scrollLeft += e.deltaY; }
     };
     el.addEventListener('wheel', onWheel, { passive: false }); return () => el.removeEventListener('wheel', onWheel);
   }, []);
-  usePinch(scroller, (f, x) => { zoomAround(f, x); setTh(thRef.current * f); });
+  usePinch(scroller, (f, x) => zoomAround(f, x));
   useEffect(() => { const a = anchor.current; if (a && scroller.current) { scroller.current.scrollLeft = Math.max(0, a.at * zoom - a.mx); anchor.current = null; } }, [zoom]);
   const [, force] = useState(0);
   useEffect(() => { const f = () => force((n) => n + 1); window.addEventListener('studio-redraw', f); return () => window.removeEventListener('studio-redraw', f); }, []);
@@ -1892,7 +1888,6 @@ function Timeline({ seq, media, t, setT, sel, setSel, tool, snap, zoom, setZoom,
       <span class="eyebrow">Timeline</span><span class="mono tnum" style="color:var(--teal-ink)">${tc(t, fps)}</span><span class="faint" style="font-size:var(--fs-xs)">${sel.length ? `${sel.length} selected` : ''}</span>${dragHint ? html`<span class="badge ${drag?.ctrl ? 'coral' : drag?.shift ? 'lav' : 'sky'}">${dragHint}</span>` : null}
       <div class="spacer" /><${Button} kind="ghost" size="sm" icon="plus" onClick=${() => addTrack(0)}>Video track</${Button}><${Button} kind="ghost" size="sm" icon="plus" onClick=${() => addTrack(1)}>Audio track</${Button}>
       <${Icon} name="zoomOut" size=${15} style="color:var(--ink-3)" /><input type="range" class="range" style="width:140px" min="4" max="600" value=${zoom} onInput=${(e) => setZoom(Number(e.target.value))} aria-label="Timeline zoom" title="Or pinch / Ctrl + scroll on the timeline" /><${Icon} name="zoomIn" size=${15} style="color:var(--ink-3)" />
-      <span class="faint" style="font-size:var(--fs-xs)" title="Track height. Ctrl + scroll or pinch zooms both ways; Alt + scroll changes only the height; Ctrl + Shift + scroll only the width.">↕</span><input type="range" class="range" style="width:80px" min="0.4" max="3" step="0.05" value=${th} onInput=${(e) => setTh(Number(e.target.value))} onDblClick=${() => setTh(1)} aria-label="Track height" title="Track height (double-click resets)" />
     </div>
     <div ref=${scroller} style="flex:1;overflow:auto;position:relative;touch-action:pan-x pan-y" onPointerDown=${(e) => { if (e.target === e.currentTarget) startBox(e); }}>
       ${box ? html`<div style=${{ position: 'fixed', left: Math.min(box.x0, box.x1) + 'px', top: Math.min(box.y0, box.y1) + 'px', width: Math.abs(box.x1 - box.x0) + 'px', height: Math.abs(box.y1 - box.y0) + 'px', border: '1px dashed var(--teal-ink)', background: 'rgba(102,189,180,0.12)', zIndex: 50, pointerEvents: 'none' }} />` : null}
