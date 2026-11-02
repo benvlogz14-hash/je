@@ -24,7 +24,7 @@ function veloClip(o) {
 }
 
 /** Build a Velo project for one short: footage on V1/A1, captions as text clips on V2. */
-function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, covers = [], keywords = null, music = null, segs = null }) {
+function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, covers = [], keywords = null, music = null, segs = null, punchIns = [] }) {
   const st = captions.resolveStyle(style);
   // The clip as it was cut (montage lines and pause cuts), in source seconds; else the whole range. Studio used to get
   // the whole range, so a montage clip (30 s taken from up to 5 minutes) opened minutes long.
@@ -41,6 +41,15 @@ function toVelo({ name, source, info, range, words, style, hook, focusX = 0.5, c
   const posX = Math.round((0.5 - focusX) * overflowX);
   let nextId = 1;
   const v1 = parts.map(([a, b], i) => veloClip({ id: nextId++, type: 0, mediaId, name: path.basename(source), start: outAt[i], duration: b - a, in: a, scale, posX, linkId: i + 1 }));
+  // The render's zoom punch-ins (clip time) as scale keyframes on the pieces they fall in, so Studio matches the clip.
+  for (const p of (punchIns || []).filter((x) => x && x.at >= 0 && x.at < dur)) {
+    const i = parts.findIndex((_, k) => p.at >= outAt[k] && p.at < outAt[k] + (parts[k][1] - parts[k][0])); if (i < 0) continue;
+    const c = v1[i]; const len = parts[i][1] - parts[i][0]; const lt = p.at - outAt[i]; const z = scale * (p.zoom || 1.12); const end = Math.min(len, lt + (p.dur || 1.2));
+    const keys = [...(c.scaleX.keys || [])]; const q = (t) => Math.round(Math.max(0, Math.min(len, t)) * 1000) / 1000;
+    keys.push([q(lt), scale], [q(lt + 0.04), z], [q(end - 0.04), z], [q(end), scale]);
+    const uniq = [...new Map(keys.sort((x, y) => x[0] - y[0]).map((k) => [k[0], k])).values()];
+    c.scaleX = { base: scale, keys: uniq }; c.scaleY = { base: scale, keys: uniq.map((k) => [...k]) };
+  }
   const a1 = info.hasAudio ? parts.map(([a, b], i) => veloClip({ id: nextId++, type: 1, mediaId, name: path.basename(source), start: outAt[i], duration: b - a, in: a, linkId: i + 1 })) : [];
   const posY = st.position === 'upper' ? -H * 0.3 : st.position === 'center' ? 0 : H * 0.28;
   const hex = (c) => `#ff${String(c || '#ffffff').replace('#', '').toLowerCase()}`;

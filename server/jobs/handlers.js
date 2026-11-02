@@ -982,4 +982,4 @@ queue.register('backup', {
   async run() { const f = ctx.store.backup(paths.backups()); audit.log('system', 'backup.created', { file: path.basename(f) }); return { file: f }; },
 });
 
-module.exports = { studioTranscriptAligned, alignedTranscript, loadTranscript, studioTranscript, loadAnalysis, faceTrackFor };
+module.exports = { pausesFor, studioTranscriptAligned, alignedTranscript, loadTranscript, studioTranscript, loadAnalysis, faceTrackFor };

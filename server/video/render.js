@@ -143,6 +143,35 @@ function remap(t, segs) {
  * @param o.logo       optional absolute path to a PNG logo
  * @param o.outPath    output mp4
  */
+/**
+ * The pieces of the source a clip keeps (source seconds, whole frames): its kept lines (montage clips), each with its
+ * pauses and repeated takes cut out. Shared by the render and by Studio, so a clip opened in Studio is the same cut.
+ */
+function cutSegments({ start, end, plan = {}, words = [], fps }) {
+  // Story cuts: only the kept sentences (whole sentences, in order), each with its pauses trimmed.
+  const parts = [];
+  for (const [a, b] of (plan.keep || []).map(([x, y]) => [Math.max(start, x), Math.min(end, y)]).filter(([x, y]) => y - x > 0.3).sort((x, y) => x[0] - y[0])) {
+    const last = parts[parts.length - 1];
+    if (last && a <= last[1] + 0.35) last[1] = Math.max(last[1], b); else parts.push([a, b]); // overlapping or touching pieces become one, so captions stay in sync
+  }
+  const ranges = parts.length ? parts : [[start, end]];
+  let segs = ranges.flatMap(([a, b]) => (plan.silenceCut && words?.length ? keptSegments(words, a, b, plan.tight ? 0.35 : 0.55, 0.12, plan.silences?.length ? plan.silences : null) : plan.silenceCut && plan.silences?.length ? cutPauses(plan.silences, a, b) : [[a, b]]));
+  // Cut repeated takes and false starts (keeps the last take of each line).
+  if (plan.retakeCut !== false && words?.length) {
+    const rt = require('./retakes'); const inRange = words.filter((w) => w.e > start && w.s < end);
+    const ranges = rt.retakeRanges(inRange); if (ranges.length) segs = rt.subtract(segs, ranges);
+  }
+  // Every cut lands on a whole frame, and picture, sound and captions all use these same rounded times, so they can't
+  // drift apart. (Sound used to be cut in ~21 ms blocks and picture in whole frames, so each jump cut pushed the voice a
+  // little later than the captions; clips with many cuts ended up ~0.1-0.2 s off.)
+  const FPS = outFps(fps); const fr = FPS.includes('/') ? Number(FPS.split('/')[0]) / Number(FPS.split('/')[1]) : Number(FPS);
+  const snap = (t) => start + Math.round((t - start) * fr) / fr;
+  segs = segs.map(([a, b]) => [snap(a), Math.min(snap(b), snap(end))]).filter(([a, b]) => b - a >= 1 / fr - 1e-6)
+    .reduce((acc, sg) => { const l = acc[acc.length - 1]; if (l && sg[0] <= l[1] + 1e-6) l[1] = Math.max(l[1], sg[1]); else acc.push([...sg]); return acc; }, []);
+  if (!segs.length) segs = [[start, end]];
+  return segs;
+}
+
 async function renderShort(o) {
   ensureFonts();
   // o.wide: the full-frame 16:9 version (1920×1080, nothing cropped) with the same cuts and captions.
@@ -153,27 +182,8 @@ async function renderShort(o) {
   const info = o.info || await ff.probe(o.source);
   const start = Math.max(0, o.range.start), end = Math.min(info.duration || o.range.end, o.range.end);
   const plan = o.plan || {};
-  // Story cuts: only the kept sentences (whole sentences, in order), each with its pauses trimmed.
-  const parts = [];
-  for (const [a, b] of (plan.keep || []).map(([x, y]) => [Math.max(start, x), Math.min(end, y)]).filter(([x, y]) => y - x > 0.3).sort((x, y) => x[0] - y[0])) {
-    const last = parts[parts.length - 1];
-    if (last && a <= last[1] + 0.35) last[1] = Math.max(last[1], b); else parts.push([a, b]); // overlapping or touching pieces become one, so captions stay in sync
-  }
-  const ranges = parts.length ? parts : [[start, end]];
-  let segs = ranges.flatMap(([a, b]) => (plan.silenceCut && o.words?.length ? keptSegments(o.words, a, b, plan.tight ? 0.35 : 0.55, 0.12, plan.silences?.length ? plan.silences : null) : plan.silenceCut && plan.silences?.length ? cutPauses(plan.silences, a, b) : [[a, b]]));
-  // Cut repeated takes and false starts (keeps the last take of each line).
-  if (plan.retakeCut !== false && o.words?.length) {
-    const rt = require('./retakes'); const inRange = o.words.filter((w) => w.e > start && w.s < end);
-    const ranges = rt.retakeRanges(inRange); if (ranges.length) segs = rt.subtract(segs, ranges);
-  }
-  // Every cut lands on a whole frame, and picture, sound and captions all use these same rounded times, so they can't
-  // drift apart. (Sound used to be cut in ~21 ms blocks and picture in whole frames, so each jump cut pushed the voice a
-  // little later than the captions; clips with many cuts ended up ~0.1-0.2 s off.)
+  let segs = cutSegments({ start, end, plan, words: o.words, fps: info.fps });
   const FPS = outFps(info.fps); const fr = FPS.includes('/') ? Number(FPS.split('/')[0]) / Number(FPS.split('/')[1]) : Number(FPS);
-  const snap = (t) => start + Math.round((t - start) * fr) / fr;
-  segs = segs.map(([a, b]) => [snap(a), Math.min(snap(b), snap(end))]).filter(([a, b]) => b - a >= 1 / fr - 1e-6)
-    .reduce((acc, sg) => { const l = acc[acc.length - 1]; if (l && sg[0] <= l[1] + 1e-6) l[1] = Math.max(l[1], sg[1]); else acc.push([...sg]); return acc; }, []);
-  if (!segs.length) segs = [[start, end]];
   const outDur = segs.reduce((s, [a, b]) => s + (b - a), 0);
 
   // Captions are generated in the cut timeline so they stay in sync after jump cuts.
@@ -278,4 +288,4 @@ async function renderShort(o) {
   return { outPath: o.outPath, assPath, srtPath, duration: outDur, segments: segs, encoder: enc, cutWords };
 }
 
-module.exports = { renderShort, outFps, cutPauses, keptSegments, remap, ensureFonts, rel, voiceFilters, W, H };
+module.exports = { cutSegments, renderShort, outFps, cutPauses, keptSegments, remap, ensureFonts, rel, voiceFilters, W, H };

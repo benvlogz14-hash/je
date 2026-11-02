@@ -568,11 +568,18 @@ r.post('/api/clips/:id/studio', async (req, b, p) => {
     data = exporters.toVeloEdit({ name: c.title, source: a.path, info: a.info, segs: v.broll.segs, cuts: v.broll.cuts, total, music, lines: v.story?.lines || [], when: v.story?.when || [] });
   } else {
     const words = require('./jobs/handlers').loadTranscript(a)?.words || [];
+    // The clip's cut: saved with the render; for clips rendered before that, worked out the same way the render does
+    // (kept lines, pauses and repeated takes cut), so Studio never opens a longer, less edited version.
+    let segs = v?.segs || null;
+    if (!segs) {
+      const pauses = await require('./jobs/handlers').pausesFor(a).catch(() => null);
+      try { segs = require('./video/render').cutSegments({ start: c.start, end: c.end, words, fps: a.info?.fps, plan: { keep: c.keep || [], silenceCut: c.silenceCut !== false, tight: !!c.tightCuts, silences: pauses || [], retakeCut: client?.production?.retakeCut !== false && c.retakeCut !== false } }); } catch { segs = c.keep?.length ? c.keep : null; }
+    }
     // Clips rendered before the music file was saved: find their track in the music library by mood and name.
     const libFile = (x) => (x.mood && x.track ? path.join(paths.root, 'music', String(x.mood), path.basename(String(x.track))) : null);
     const cues = (v?.music?.cues || []).map((x) => ({ ...x, file: x.file || libFile(x) })).filter((x) => x.file && fs.existsSync(x.file));
     const music = cues.length ? { volume: v.music.volume ?? 0.3, cues, durations: await durOf(cues.map((x) => x.file)) } : null;
-    data = exporters.toVelo({ name: c.title, source: a.path, info: a.info, range: { start: c.start, end: c.end }, words, style: { ...(client.style || {}), ...(c.style || {}) }, hook: c.hook, focusX: c.focusX, covers: v?.covers || [], keywords: c.keywords, music, segs: v?.segs || (c.keep?.length ? c.keep : null) });
+    data = exporters.toVelo({ name: c.title, source: a.path, info: a.info, range: { start: c.start, end: c.end }, words, style: { ...(client.style || {}), ...(c.style || {}) }, hook: c.hook, focusX: c.focusX, covers: v?.covers || [], keywords: c.keywords, music, segs, punchIns: c.punchIns || [] });
   }
   return ctx.store.insert('projects', { name: `#${c.ref} ${c.title}`, clientId: c.clientId, clipId: c.id, data, exports: [] });
 });
