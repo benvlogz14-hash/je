@@ -238,16 +238,16 @@ function discoverOrWait(h, asset, opts = {}) {
 /** The transcript with its words put back on the voice where speech-to-text drifted (once per transcript, saved). */
 const retranscribing = new Map();
 async function alignedTranscript(asset, { onProgress, jobId } = {}) {
-  const t = loadTranscript(asset); if (!t) return t;
-  // Moved by the old loudness alignment (captions up to 3 s off): transcribed again from the sound, once.
-  if (require('../video/align').damaged(t)) {
-    // Every clip of a video waits for the same one run (8 clips used to mean 8 transcriptions side by side).
-    if (!retranscribing.has(asset.id)) retranscribing.set(asset.id, require('../video/intelligence').transcribe(asset, { jobId, onProgress: (f, n) => onProgress?.(f * 0.3, n || 'Transcribing again so the captions sit on the voice') }).finally(() => setTimeout(() => retranscribing.delete(asset.id), 1000)));
+  let t = loadTranscript(asset); if (!t) return t;
+  // Transcripts made by the Nov 3 update (precise-time experiment, `timing` set): made again the proven way, once per
+  // video (all its clips share the one run).
+  if (t.timing) {
+    if (!retranscribing.has(asset.id)) retranscribing.set(asset.id, require('../video/intelligence').transcribe(asset, { jobId, onProgress: (f, n) => onProgress?.(f * 0.3, n || 'Transcribing again') }).finally(() => setTimeout(() => retranscribing.delete(asset.id), 1000)));
     try { return await retranscribing.get(asset.id); } catch { return t; }
   }
   if (t.voiceAligned) return t;
   const a = await require('../video/align').alignFile(t, asset.path, asset.workDir);
-  if (a !== t) { try { fs.writeFileSync(path.join(asset.workDir, `${asset.id}.transcript.json`), JSON.stringify(a)); } catch { /* read-only */ } }
+  try { fs.writeFileSync(path.join(asset.workDir, `${asset.id}.transcript.json`), JSON.stringify(a)); } catch { /* read-only */ }
   return a;
 }
 
@@ -562,8 +562,7 @@ queue.register('render.short', {
     const xml = path.join(outDir, `v${n}.premiere.xml`);
     fs.writeFileSync(xml, exporters.toFcpXml({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end } }));
     const version = { n, path: outPath, ...(wideOut ? { wide: wideOut } : {}), thumb, duration: r.duration, renderedAt: now(), encoder: r.encoder, qc: { passed: qc.passed, issues: qc.issues }, srt: r.srtPath, velo, xml, changes: clip.pendingChanges || null, captioned: !!transcript, look: (({ font, size, hookFont }) => ({ font: font || 'Montserrat', size, hookFont }))({ ...(client.style || {}), ...(clip.style || {}) }), cuts: covers.length, covers, segs: (r.segments || []).map(([a, b]) => [Math.round((a + (assembled ? clip.start : 0)) * 1000) / 1000, Math.round((b + (assembled ? clip.start : 0)) * 1000) / 1000]), music: musicSheet ? { how: musicSheet.how, volume: Number(clip.musicVol ?? client.production?.musicVolume ?? ctx.setting('production.musicVolume', 0.3)), cues: musicSheet.cues.map((c) => ({ file: c.file || null, offset: c.offset || 0, vol: c.vol ?? 1, start: Math.round(c.start * 10) / 10, end: Math.round(c.end * 10) / 10, mood: c.mood, why: c.why || '', track: c.track || null, source: c.source || null })) } : null };
-    // How close this clip is to the 12 best shorts (winners.js): length, shot lengths, title, opening, ending, music.
-    try { const W = require('../video/winners'); version.winner = W.check({ clip, version, words: r.cutWords || [], style: { ...(client.style || {}), ...(clip.style || {}) } }); } catch { /* the check never blocks a render */ }
+    // (the per-clip winner score was removed with the Nov 3 revert)
     ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), version], currentVersion: n, pendingChanges: null, coverSrcs: covers.map((k) => [k.src, k.src + k.dur]) }));
     pipeline.afterQc(clip.id, qc);
     return { version: n, duration: r.duration, qc: qc.passed ? 'passed' : 'failed', encoder: r.encoder };

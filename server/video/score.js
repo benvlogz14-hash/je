@@ -90,17 +90,6 @@ async function plan({ words = [], shots = [], duration, title, hook, forced = 'a
     try { sheet = await withAi({ words, shots, duration, title, hook, clientId, jobId }); } catch { sheet = null; }
     if (!sheet) sheet = heuristic({ words, shots, duration, title });
   }
-  // Winner formula: music sits under the whole clip (every one of the 12 best shorts has a bed 10-15 dB under the voice,
-  // never a silent stretch). A "none" stretch takes its neighbour's mood, and gaps are closed.
-  if (require('./winners').on() && sheet.cues.length) {
-    const cs = sheet.cues.filter((c) => c.mood !== 'none').sort((a, b) => a.start - b.start);
-    if (cs.length) {
-      cs[0].start = 0;
-      for (let i = 1; i < cs.length; i++) cs[i - 1].end = cs[i].start;
-      cs[cs.length - 1].end = duration;
-      sheet.cues = cs;
-    }
-  }
   const used = [];
   for (const c of sheet.cues) {
     if (c.mood === 'none') continue;

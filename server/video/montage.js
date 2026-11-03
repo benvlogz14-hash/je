@@ -53,80 +53,15 @@ function reactionBursts(lv, { win = 10, z = 3, minSec = 0.5 } = {}) {
   return out;
 }
 
-/**
- * Sentences with timing, from transcript words. A sentence ends on . ! ? (or "..."); a pause alone doesn't end one
- * (people stop mid-thought, and cutting there is what made clips start or stop in the middle of a sentence), unless
- * it's very long (3 s+) or the transcript has no punctuation at all. Each line is marked:
- *  - `whole`: it ends a sentence (ends on . ! ? or a long quiet after a complete-sounding line),
- *  - `clean`: it starts one (the line before it ended a sentence).
- * Only lines that are both can be kept on their own; very long run-ons are split at their longest pause and marked
- * as not whole/clean on the inside, so they're only ever kept together.
- */
-const ENDS = /([.!?]|\.\.\.|…)["')\]]*$/;
+/** Sentences with timing, from transcript words. */
 function sentences(words) {
-  const punct = words.length ? words.filter((w) => ENDS.test(w.w)).length / words.length : 0;
-  const noPunct = words.length > 40 && punct < 0.02; // a transcript with no punctuation: pauses are all we have
   const out = []; let cur = null;
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i]; const gap = cur ? w.s - cur.e : 0;
-    if (cur && (gap > 3 || (noPunct && gap > 0.8))) { cur.whole = true; out.push(cur); cur = null; }
-    if (!cur) cur = { s: w.s, e: w.e, words: [] };
-    cur.e = w.e; cur.words.push(w);
-    if (ENDS.test(w.w) && cur.words.length >= 3) { cur.whole = true; out.push(cur); cur = null; }
+  for (const w of words) {
+    if (!cur || w.s - cur.e > 1.2) { if (cur) out.push(cur); cur = { s: w.s, e: w.e, words: [w] }; } else { cur.e = w.e; cur.words.push(w); }
+    if (/[.!?]["']?$/.test(w.w) && cur.words.length >= 3) { out.push(cur); cur = null; }
   }
-  if (cur) { cur.whole = true; out.push(cur); }
-  // A run-on over 16 s is split at its longest pause; the halves only make sense together.
-  const res = [];
-  for (const x of out) {
-    if (x.e - x.s <= 16 || x.words.length < 8) { res.push(x); continue; }
-    let best = -1, gap = 0.35;
-    for (let k = 3; k < x.words.length - 3; k++) { const g = x.words[k].s - x.words[k - 1].e; if (g > gap) { gap = g; best = k; } }
-    if (best < 0) { res.push(x); continue; }
-    const a = x.words.slice(0, best), b = x.words.slice(best);
-    res.push({ s: a[0].s, e: a[a.length - 1].e, words: a, whole: false }, { s: b[0].s, e: b[b.length - 1].e, words: b, whole: x.whole, inside: true });
-  }
-  return res.map((x, i) => ({ s: x.s, e: x.e, t: x.words.map((w) => w.w).join(' '), words: x.words, whole: !!x.whole, clean: i === 0 || (!x.inside && !!res[i - 1].whole) }));
-}
-/** A line that can be kept by itself: a full sentence (starts and ends one). */
-const full = (x) => x.whole && x.clean;
-
-/**
- * Where to cut around a line (source seconds), so no word is clipped and nothing of the next line leaks in: the end
- * goes to where the voice actually falls quiet after the last word (fine 20 ms loudness map), the start to the quiet
- * just before the first word; never past the middle of the gap to a neighbouring word. `pads` are this editor's
- * learned margins (taste.edgePads), from how they fixed cuts in Studio.
- */
-function cutEdges(S, i, fine, pads = {}) {
-  // The margins that held up on real footage: 0.12 s before the first word, 0.18 s after the last, never into a
-  // neighbouring line. (Placing cuts from the loudness map alone was tried: with wind, footsteps or music under the
-  // voice it found "quiet" in the wrong places and grabbed pieces of the next line, so it only ever adds a little.)
-  const x = S[i]; const prev = S[i - 1]; const next = S[i + 1];
-  const loS = prev ? Math.max((prev.e + x.s) / 2, prev.e + 0.05) : 0;
-  const hiE = next ? Math.min((x.e + next.s) / 2, next.s - 0.05) : x.e + 0.4;
-  let a = Math.max(loS, x.s - 0.12), b = Math.min(hiE, x.e + 0.18);
-  const db = fine?.db; const st = fine?.step || 0.02;
-  if (db?.length && b < hiE) {
-    // A last word still ringing out at +0.18 s (clearly loud, then clearly quiet within +0.35 s): keep its tail.
-    const lvl = (t) => db[Math.max(0, Math.min(db.length - 1, Math.floor(t / st)))];
-    const around = []; for (let t = Math.max(0, x.s - 3); t < x.e + 3; t += st) around.push(lvl(t));
-    around.sort((p, q) => p - q); const floor = around[Math.floor(around.length * 0.1)] ?? -60; const loud = around[Math.floor(around.length * 0.8)] ?? -20;
-    if (loud - floor >= 15 && lvl(b) >= floor + (loud - floor) * 0.6) {
-      for (let t = b; t <= Math.min(hiE, x.e + 0.35); t += st) if (lvl(t) <= floor + 6 && lvl(t + st) <= floor + 6) { b = Math.min(hiE, t + 0.04); break; }
-    }
-  }
-  // This editor's habit from their Studio fixes (e.g. they always let lines breathe a little longer), never into a neighbour.
-  if (pads.endShift) b = Math.max(x.e + 0.02, Math.min(hiE, b + pads.endShift));
-  if (pads.startShift) a = Math.min(x.s - 0.01, Math.max(loS, a - pads.startShift));
-  return [Math.round(Math.max(0, a) * 100) / 100, Math.round(b * 100) / 100];
-}
-
-/** A cut reads as one story: every kept line that leans on the one before it ("But...", "It was...") has that line too. */
-function coherent(kept, S) {
-  for (let k = 1; k < kept.length; k++) {
-    const i = S.indexOf(kept[k]);
-    if ((DANGLING.test(kept[k].t) || REFERS.test(kept[k].t) || !kept[k].clean) && S[i - 1] !== kept[k - 1]) return false;
-  }
-  return full(kept[0]) && !DANGLING.test(kept[0].t) && kept[kept.length - 1].whole;
+  if (cur) out.push(cur);
+  return out.map((x) => ({ s: x.s, e: x.e, t: x.words.map((w) => w.w).join(' '), words: x.words }));
 }
 
 /** Mark voiceover sentences: quiet gaps between words, or speech over shots with nobody on screen. */
@@ -191,11 +126,6 @@ function scoreWindow(s, e, sig, kept = null) {
   const firstWord = inS[0]?.s ?? e; if (firstWord - s > 1.2) score -= 10;
   const endHook = inS.length > 1 && END_HOOK.test(inS[inS.length - 1].t);
   if (endHook) { score += 12; why.push('ends on a hook'); }
-  // The winner formula (winners.js, the 12 best shorts): opens on a stake or the place ("today we're going to...",
-  // "I can't believe...", "On August 3rd, 2012..."), stops on a cliffhanger ("here???", "there's more to this").
-  const W = require('./winners');
-  if (W.on() && inS[0] && W.OPENER.test(inS[0].t)) { score += 6; why.push('opens like your best shorts'); }
-  if (W.on() && inS.length > 1 && W.CLIFF.test(inS[inS.length - 1].t)) { score += 6; if (!endHook) why.push('ends on a cliffhanger'); }
   if (kept) why.push('story cut');
   if (vo > 0.4) why.push('voiceover');
   if (drone > 0.15) why.push('drone shots');
@@ -218,11 +148,10 @@ function candidates(sig, { minSec, maxSec, duration, exclude = [], limit = 40, s
   const out = []; const S = sig.sents;
   const blocked = (c) => exclude.some((x) => sharedSec(x, c) > 0.2 * Math.min(lengthOf(c), maxSec));
   for (let i = 0; i < S.length; i++) {
-    if (!S[i].clean) continue; // never open in the middle of a sentence
     for (let j = i; j < S.length; j++) {
-      const s = edgeOf(sig, i)[0]; const e = Math.min(duration, edgeOf(sig, j)[1]); const len = e - s;
+      const s = Math.max(0, S[i].s - 0.15); const e = Math.min(duration, S[j].e + 0.25); const len = e - s;
       if (len > maxSec) break;
-      if (len < minSec || !S[j].whole) continue; // ...or stop in the middle of one
+      if (len < minSec) continue;
       if (blocked({ start: s, end: e })) continue;
       // Highlights: the clip must end on a hook (a reveal, a question, "and then we opened the door...").
       if (endHook && !END_HOOK.test(S[j].t)) continue;
@@ -236,30 +165,15 @@ function candidates(sig, { minSec, maxSec, duration, exclude = [], limit = 40, s
   return picked;
 }
 
-/** The kept lines as source ranges, each cut in the quiet around it. */
-function keepRanges(kept, sig) { return kept.map((x) => edgeOf(sig, sig.sents.indexOf(x))); }
-/** Cut points per line, worked out once per footage. */
-function edgeOf(sig, i) { const e = sig._edges || (sig._edges = []); return e[i] || (e[i] = cutEdges(sig.sents, i, sig.fine, sig.pads)); }
-/** Roughly the same line (most of its words): for remembering lines an editor cut out. */
-function similar(a, b) {
-  const w = (t) => new Set(String(t).toLowerCase().match(/[a-z0-9']+/g) || []); const A = w(a), B = w(b);
-  if (A.size < 3 || B.size < 3) return false; let n = 0; for (const x of A) if (B.has(x)) n++;
-  return n / Math.max(A.size, B.size) >= 0.8;
-}
-
 // ---------------------------------------------------------------- montage cuts (the usual Shorts edit)
 const DANGLING = /^["'(]?(and|but|so|or|because|cause|which|then|also|plus|like|that'?s why|anyway)\b/i;
 const REFERS = /^["'(]?(it|that|this|they|them|he|she|those|these|there|i picked (it|one)|one of them)\b/i;
 /** A montage ends on an open loop: the viewer wants the next line. Stricter than END_HOOK (which also scores windows). */
-const OPEN_LOOP_BASE = /\?\s*["']?$|\.\.\.\s*["']?$|\b(and then|but then|until|suddenly|all of a sudden|what we (found|saw|heard)|you won'?t believe|turns out|look at (this|that)|wait|no way|we heard|we saw|i heard|i saw|something (was )?(moving|there|inside|behind)|about to|what (is|was) (that|this|inside|behind)|behind (that|the) door|never (seen|expected))\b/i;
-/** Open loops: the usual ones plus the endings measured on the 12 best shorts (winners.CLIFF: "here???", "more to this"...). */
-const OPEN_LOOP = { test: (t) => OPEN_LOOP_BASE.test(t) || require('./winners').CLIFF.test(t) };
+const OPEN_LOOP = /\?\s*["']?$|\.\.\.\s*["']?$|\b(and then|but then|until|suddenly|all of a sudden|what we (found|saw|heard)|you won'?t believe|turns out|look at (this|that)|wait|no way|we heard|we saw|i heard|i saw|something (was )?(moving|there|inside|behind)|about to|what (is|was) (that|this|inside|behind)|behind (that|the) door|never (seen|expected))\b/i;
 /** Seconds a sentence lasts once the render's pause cuts take out gaps over ~0.55 s. */
 function spoken(x) { let n = 0; for (let i = 0; i < x.words.length; i++) { const w = x.words[i]; n += w.e - w.s; const nx = x.words[i + 1]; if (nx) n += Math.min(0.55, Math.max(0, nx.s - w.e)); } return n + 0.24; }
 function sentValue(x, sig) {
-  if (!full(x)) return -10; // a piece of a sentence is never kept on its own
-  const first = String(x.words[0]?.w || '').toLowerCase().replace(/[^a-z']/g, '');
-  return (sig.avoidStarts?.has(first) ? -2.5 : 0) + (sig.cutLines?.some((t) => similar(t, x.t)) ? -4 : 0) + (FILLER.test(x.t) || OUTRO.test(x.t) || x.ex ? -10 : 0) + (x.vo ? 3 : 0) + (HOOK.test(x.t) ? 2 : 0) + Math.min(2, x.words.length / 8)
+  return (FILLER.test(x.t) || OUTRO.test(x.t) || x.ex ? -10 : 0) + (x.vo ? 3 : 0) + (HOOK.test(x.t) ? 2 : 0) + Math.min(2, x.words.length / 8)
     + sig.shots.filter((sh) => sh.s < x.e && sh.e > x.s).reduce((n, sh) => Math.max(n, shotScore(sh) * 3), 0)
     + (sig.peaks || []).filter((t) => t >= x.s && t <= x.e).length * 0.8 + (sig.bursts || []).filter((t) => t >= x.s && t <= x.e).length;
 }
@@ -276,7 +190,7 @@ function narrative(sec, sig, { tmin, tmax }) {
   // Opening: one of the first lines that stands on its own (not "and...", "so..."), a hook if there is one.
   let open = -1;
   for (let k = 0; k < Math.min(4, end); k++) {
-    const x = sec[k]; if (x.ex || !full(x) || DANGLING.test(x.t) || REFERS.test(x.t) || FILLER.test(x.t) || x.words.length < 4) continue;
+    const x = sec[k]; if (x.ex || DANGLING.test(x.t) || REFERS.test(x.t) || FILLER.test(x.t) || x.words.length < 4) continue;
     if (open < 0 || (HOOK.test(x.t) && !HOOK.test(sec[open].t))) open = k;
     if (HOOK.test(x.t)) break;
   }
@@ -310,8 +224,7 @@ function narrative(sec, sig, { tmin, tmax }) {
     if (k - 1 > open && val[k - 1] > -5 && total + spoken(sec[k - 1]) <= tmax) { keep.add(k - 1); total += spoken(sec[k - 1]); } else { keep.delete(k); total -= spoken(sec[k]); }
   }
   if (total < tmin) return null;
-  const kept = [...keep].sort((p, q) => p - q).map((k) => sec[k]);
-  return coherent(kept, sig.sents) ? kept : null;
+  return [...keep].sort((p, q) => p - q).map((k) => sec[k]);
 }
 
 /**
@@ -327,8 +240,8 @@ function montageCuts(sig, { minSec, maxSec, duration, exclude = [] }) {
   for (let i = 0; i < S.length; i++) {
     const x = S[i];
     if (x.ex) continue;
-    if (full(x) && !DANGLING.test(x.t) && !REFERS.test(x.t) && !FILLER.test(x.t) && x.words.length >= 4 && (i === 0 || x.s - S[i - 1].e > 0.6 || HOOK.test(x.t))) starts.push(i);
-    if (x.whole && OPEN_LOOP.test(x.t) && !OUTRO.test(x.t) && x.words.length >= 3) ends.push(i);
+    if (!DANGLING.test(x.t) && !REFERS.test(x.t) && !FILLER.test(x.t) && x.words.length >= 4 && (i === 0 || x.s - S[i - 1].e > 0.6 || HOOK.test(x.t))) starts.push(i);
+    if (OPEN_LOOP.test(x.t) && !OUTRO.test(x.t) && x.words.length >= 3) ends.push(i);
   }
   for (const i of starts) {
     const reach = ends.filter((j) => j > i + 2 && S[j].e - S[i].s >= Math.max(45, tmax + 10) && S[j].e - S[i].s <= 300);
@@ -337,9 +250,9 @@ function montageCuts(sig, { minSec, maxSec, duration, exclude = [] }) {
     for (let r = 0; r < reach.length; r += step) {
       const j = reach[r]; const sec = S.slice(i, j + 1);
       const kept = narrative(sec, sig, { tmin, tmax }); if (!kept) continue;
-      const s = edgeOf(sig, i)[0]; const e = Math.min(duration, edgeOf(sig, j)[1]);
+      const s = Math.max(0, S[i].s - 0.15); const e = Math.min(duration, S[j].e + 0.25);
       const sc = scoreWindow(s, e, sig, kept);
-      const keepR = keepRanges(kept, sig);
+      const keepR = kept.map((x) => [Math.round(Math.max(0, x.s - 0.12) * 100) / 100, Math.round((x.e + 0.18) * 100) / 100]);
       const pieces = keepR.reduce((n, [a], k) => n + (k === 0 || a > keepR[k - 1][1] + 0.35 ? 1 : 0), 0);
       // Montage cuts are the house style: a small lift over plain windows, less when it's chopped into many pieces.
       out.push({ start: Math.round(s * 100) / 100, end: Math.round(e * 100) / 100, keep: keepR, score: Math.round((sc.score + 6 - 1.5 * Math.max(0, pieces - 5)) * 10) / 10, why: [...sc.why.filter((w) => w !== 'story cut'), `montage of ${Math.round(e - s)} s`], text: kept.map((x) => x.t).join(' '), lines: kept.length, span: [i, j] });
@@ -366,11 +279,7 @@ async function signals({ asset, transcript, vision, analysis }) {
   const shots = (vision?.shots || []).map((x) => ({ ...x }));
   let lv = null; try { lv = asset.info?.hasAudio ? await levels(asset.path, asset.workDir) : null; } catch { /* no level map */ }
   const sents = tagVoiceover(sentences(transcript?.words || []), lv, shots);
-  // The 20 ms loudness map (made when the transcript was lined up with the voice): where each cut goes.
-  let fine = null; try { fine = asset.info?.hasAudio ? await require('./align').fineLevels(asset.path, asset.workDir) : null; } catch { /* fixed margins */ }
-  // What this client's editor taught it in Studio: their cut margins, and the lines they keep cutting out.
-  let learned = {}; try { learned = require('./taste').editLessons(asset.clientId); } catch { /* nothing yet */ }
-  return { sents, shots, scenes: analysis?.scenes || [], peaks: analysis?.peaks || [], bursts: reactionBursts(lv), lv, fine, pads: learned.pads || {}, avoidStarts: new Set(learned.avoidStarts || []), cutLines: learned.cutLines || [] };
+  return { sents, shots, scenes: analysis?.scenes || [], peaks: analysis?.peaks || [], bursts: reactionBursts(lv), lv };
 }
 
 // ---------------------------------------------------------------- visual cuts
@@ -421,23 +330,15 @@ function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, blac
   // 1. Black fades inside the clip (the voice keeps going): always covered with a good shot.
   // Only true black fades (short), at most two per clip: dark scenes are not black and stay as they are.
   for (const [x, y] of black.filter(([a, b]) => b > start + 0.1 && a < end - 0.1 && b - a <= 2.5).slice(0, 2)) { const at = Math.max(start, x - 0.3); place(at, Math.min(end - at, Math.max(1.5, y - x + 0.6))); }
-  const space = require('../core/ctx').setting('production.winnerPace', false) === true ? gap : Math.max(gap, 6); // at least 6 s between cut-aways
-  const busy = (a, b) => out.some((c) => c.at < b + space && c.at + c.dur > a - space);
+  const busy = (a, b) => out.some((c) => c.at < b + gap && c.at + c.dur > a - gap);
   const here = shots.filter((x) => x.s < end && x.e > start);
   // 2. Weak stretches: a poor or static shot, someone talking with little movement, or any shot held too long (strong ones may run longer).
-  // Winner pace (winners.js): shots median 2 s, 90% under 3.8 s, the first cut by ~2 s; strong shots may run a bit longer.
-  // The winners' fast pace (a cut-away every ~4 s) was tried and taken back out: cut-aways from elsewhere in the video don't
-  // match what's being said, so forcing them that often made clips feel random. Only with production.winnerPace on.
-  const fast = require('../core/ctx').setting('production.winnerPace', false) === true;
-  const hold = (q) => (fast ? (q >= 0.7 ? 5.5 : 3.8) : (q >= 0.7 ? 9 : 5));
-  const weak = (t) => { const s = here.find((x) => t >= x.s && t < x.e); if (!s) return true; const q = shotScore(s); // Someone talking to camera is the story: never covered just for being on screen a while (that made cut-aways land on
-  // lines they had nothing to do with). Covered: poor shots, a static speaker, and scenery held far too long.
-  return q < 0.4 || (s.kind === 'speaker' && (s.motion ?? 5) < 3) || (s.kind !== 'speaker' && (s.faces ?? 0) === 0 && (t - Math.max(s.s, start)) > (fast ? hold(q) : 8)) || (fast && t - start < 2.6 && s.s <= start + 0.5 && s.e > start + 3.5); }; // the winners' first cut lands at ~2 s
-  let tries = 0; let t = start + (fast ? 2 : 2.5); // keep the first ~2 s on the real moment: that's the hook
+  const weak = (t) => { const s = here.find((x) => t >= x.s && t < x.e); if (!s) return true; const q = shotScore(s); return q < 0.4 || (s.kind === 'speaker' && (s.motion ?? 5) < 3) || (t - Math.max(s.s, start)) > (q >= 0.7 ? 9 : 5); };
+  let tries = 0; let t = start + 2.5; // keep the first 2.5 s on the real moment: that's the hook
   while (t < end - 2.5 && left()) {
     // Voiceover is always fine to cover; someone talking on camera gets fewer cut-aways (about 3 in 5).
-    const sentNow = sents.find((x) => t >= x.s && t < x.e); const dur = Math.min(fast ? 2.4 : 3, end - 1 - t);
-    if (dur >= 1.4 && !busy(t, t + dur) && weak(t) && (!sentNow || sentNow.vo || (tries++ % 5) < (fast ? 4 : 3)) && place(t, dur)) { t += out[out.length - 1].dur + space; continue; }
+    const sentNow = sents.find((x) => t >= x.s && t < x.e); const dur = Math.min(3, end - 1 - t);
+    if (dur >= 1.6 && !busy(t, t + dur) && weak(t) && (!sentNow || sentNow.vo || (tries++ % 5) < 3) && place(t, dur)) { t += out[out.length - 1].dur + gap; continue; }
     t += 1.5;
   }
   return out.filter((c) => c.at + c.dur <= start + len - 0.2).sort((a, b) => a.at - b.at);
@@ -556,4 +457,4 @@ function dips(ys, fps = 10) {
   return out.filter(([a, b]) => b - a >= 0.15 && b - a <= 6).map(([a, b]) => [Math.round(Math.max(0, a - 0.1) * 100) / 100, Math.round((b + 0.1) * 100) / 100]);
 }
 
-module.exports = { cutEdges, keepRanges, coherent, full, similar, OPEN_LOOP, REFERS, narrative, montageCuts, sharedSec, piecesOf, spoken, DANGLING, END_HOOK, HOOK, FILLER, OUTRO, dips, blackInRange, darkAt, coverBlack, outputToSource, reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };
+module.exports = { OPEN_LOOP, REFERS, narrative, montageCuts, sharedSec, piecesOf, spoken, DANGLING, END_HOOK, HOOK, FILLER, OUTRO, dips, blackInRange, darkAt, coverBlack, outputToSource, reactionBursts, blackIntervals, condense, levels, sentences, tagVoiceover, isDrone, shotScore, scoreWindow, candidates, signals, planCovers, assemble };

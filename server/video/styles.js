@@ -8,25 +8,23 @@
  *  - walkthrough: Montserrat captions with the spoken word in gold, a bold TikTok Sans title.
  *  - highlights: TikTok's own text (TikTok Sans) for captions and title.
  *  - story: no voice; intense music and short text lines that drive the story (story.js), modelled on a 6M-view video.
- *  - explorer: the most common look of the 12 best shorts (see winners.js).
  *  - custom: the client's own settings, untouched.
- * Every voiced style keeps its title up the whole video (hookSeconds 600 = until the end), like all 12 winners.
  */
 const PRESETS = {
   documentary: {
     label: 'Documentary',
-    blurb: 'Narrator over drone and B-roll, two-word captions with yellow key words, a big all-caps title the whole video',
+    blurb: 'Narrator over drone and B-roll, two-word captions with yellow key words, big title up top',
     style: { font: 'Montserrat', size: 150, uppercase: false, wordsPerLine: 2, primary: '#FFFFFF', highlight: '#F8D800', highlightMode: 'keywords', outline: '#000000', outlineWidth: 6, shadow: 3, position: 'lower', animation: 'none', box: false, rotate: 0,
-      hook: true, hookSeconds: 600, hookFont: 'Montserrat', hookSize: 215, hookUpper: true, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 9, hookShadow: 5, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
+      hook: true, hookSeconds: 6, hookFont: 'Montserrat', hookSize: 215, hookUpper: true, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 9, hookShadow: 5, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
     // 30-42 s of footage: after the pauses are cut out it lands around 30 s (22-40 ended up ~18 s and stopped before the payoff).
     production: { reframe: 'face', minClipSec: 30, maxClipSec: 42, visualCuts: true, punchIns: false },
   },
   walkthrough: {
     label: 'Walkthrough',
-    blurb: 'Your best Stringer short: 3 words a line with the spoken word in gold, smaller captions, a bold TikTok title the whole video',
+    blurb: 'Your best Stringer short: 3 words a line with the spoken word in gold, smaller captions, a bold TikTok title for 3 s',
     // Matched to "WHY DID they leave it all behind..." (caption and title widths measured from the video).
     style: { font: 'Montserrat', size: 120, uppercase: false, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#F5B850', highlightMode: 'word', outline: '#000000', outlineWidth: 3, shadow: 3, position: 'lower', animation: 'none', box: false, rotate: 0,
-      hook: true, hookSeconds: 600, hookFont: 'TikTok Sans Bold', hookSize: 144, hookUpper: false, hookCapsFirst: true, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 4, hookShadow: 3, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
+      hook: true, hookSeconds: 3, hookFont: 'TikTok Sans Bold', hookSize: 144, hookUpper: false, hookCapsFirst: true, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 4, hookShadow: 3, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
     production: { minClipSec: 30, maxClipSec: 42 }, // ~30 s finished (like Documentary); picking and cutting otherwise as they are
   },
   // The most common look among the 12 best shorts (winners.js): "tunnels under minneapolis...", "we outran the cops...",
@@ -37,7 +35,7 @@ const PRESETS = {
     label: 'Explorer',
     blurb: 'The look of your 12 best shorts, for any footage: a mystery title the whole video, heavy captions with yellow key words',
     style: { font: 'Montserrat', size: 128, uppercase: false, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#FFD60A', highlightMode: 'keywords', outline: '#000000', outlineWidth: 3, shadow: 4, position: 'lower', animation: 'none', box: false, rotate: 0,
-      hook: true, hookSeconds: 600, hookFont: 'Montserrat', hookSize: 168, hookUpper: false, hookCapsFirst: false, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 2, hookShadow: 6, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
+      hook: true, hookSeconds: 6, hookFont: 'Montserrat', hookSize: 168, hookUpper: false, hookCapsFirst: false, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 2, hookShadow: 6, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
     production: { minClipSec: 24, maxClipSec: 40 },
   },
   highlights: {
@@ -46,7 +44,7 @@ const PRESETS = {
     // TikTok's own text (TikTok Sans): captions 3 words a line with the spoken word in yellow, a plain white title up top.
     // The rest of the difference is in picking and cutting (story cuts + an ending hook + tighter jump cuts).
     style: { font: 'TikTok Sans Bold', size: 110, uppercase: false, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#FFE14D', highlightMode: 'word', outline: '#000000', outlineWidth: 4, shadow: 2, position: 'lower', animation: 'none', box: false, rotate: 0,
-      hook: true, hookSeconds: 600, hookFont: 'TikTok Sans', hookSize: 150, hookUpper: false, hookCapsFirst: false, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 3, hookShadow: 3, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
+      hook: true, hookSeconds: 3, hookFont: 'TikTok Sans', hookSize: 150, hookUpper: false, hookCapsFirst: false, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 3, hookShadow: 3, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
     production: {},
   },
   story: {

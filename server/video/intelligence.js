@@ -8,18 +8,18 @@ const ff = require('./ffmpeg');
 const { run, safeJson, clamp } = require('../core/util');
 
 // ------------------------------------------------------------ Transcription
+let settingsFixed = false;
 async function transcribe(asset, { jobId, onProgress } = {}) {
+  // The Nov 3 update could wrongly record "this Whisper can't do DTW" when only its new output mode failed: undo once.
+  if (!settingsFixed) { settingsFixed = true; if (ctx.setting('ai.transcription.noFullJson', null) != null) { try { ctx.store.setSettings({ ai: { transcription: { noDtw: false, noFullJson: null } } }); } catch { /* keep */ } } }
   const dir = path.dirname(asset.path);
   const cache = path.join(asset.workDir || dir, `${asset.id}.transcript.json`);
-  if (fs.existsSync(cache)) {
-    const raw = JSON.parse(fs.readFileSync(cache, 'utf8'));
-    // A transcript the (now switched off) loudness alignment moved is made again from the sound; any other is kept.
-    if (!require('./align').damaged(raw)) {
-      const t = require('./transcript-fix').clean(raw);
-      if (t !== raw) { try { fs.writeFileSync(cache, JSON.stringify(t)); } catch { /* read-only */ } }
-      return t;
-    }
-    onProgress?.(0.01, 'Captions were off: transcribing this video again');
+  // A transcript made by the Nov 3 update (`timing` set) is made again the proven way.
+  if (fs.existsSync(cache) && !JSON.parse(fs.readFileSync(cache, 'utf8')).timing) {
+    const raw = JSON.parse(fs.readFileSync(cache, 'utf8')); let t = require('./transcript-fix').clean(raw);
+    if (!t.voiceAligned) t = await require('./align').alignFile(t, asset.path, asset.workDir); // words back on the voice where they drifted
+    if (t !== raw) { try { fs.writeFileSync(cache, JSON.stringify(t)); } catch { /* read-only */ } }
+    return t;
   }
   const duration = asset.info?.duration || 0;
   // No speech-to-text yet: install the free one (whisper.cpp) right here instead of stopping.
@@ -34,7 +34,7 @@ async function transcribe(asset, { jobId, onProgress } = {}) {
     const wav = path.join(asset.workDir, `${asset.id}.wav`);
     await ff.extractWav(asset.path, wav);
     const words = await whisperLocal(localBin, localModel, wav, path.join(asset.workDir, `${asset.id}.whisper`), { duration, onProgress });
-    result = { engine: 'whisper.cpp (local)', timing: words.filter((w) => w.d).length >= words.length * 0.6 ? 'dtw' : 'rough', text: words.map((w) => w.w).join(' '), words, segments: segmentsFromWords(words) };
+    result = { engine: 'whisper.cpp (local)', text: words.map((w) => w.w).join(' '), words, segments: segmentsFromWords(words) };
     try { fs.unlinkSync(wav); } catch { /* ignore */ }
   } else if (ai.connected('openai')) {
     // 48 kbps mono MP3 ≈ 21 MB/hour; split into ≤45-minute pieces to stay under the 25 MB API limit.
@@ -77,28 +77,6 @@ async function transcribe(asset, { jobId, onProgress } = {}) {
  *  - `-pp` so the progress bar moves (without it whisper prints no progress and the step sat at 0%),
  *  - DTW word timing kept; a build that can't do it is remembered so the file is never transcribed twice.
  */
-/**
- * Words from whisper.cpp's JSON (one word per segment with -ml 1 -sow). Each word starts at its first token's DTW time
- * when there is one and it's sensible (within the rough window, in order), else at whisper's rough offset; it ends where
- * the next word starts (or its own rough end, if sooner). Marks `d` on words timed by DTW.
- */
-function wordsFromWhisper(j, off = 0) {
-  const raw = [];
-  for (const seg of j.transcription || []) {
-    const text = String(seg.text || '').trim(); if (!text) continue;
-    const s0 = seg.offsets.from / 1000, e0 = seg.offsets.to / 1000;
-    const tok = (seg.tokens || []).find((t) => String(t.text || '').trim() && !/^\[_?[A-Z]/.test(String(t.text).trim()));
-    const dtw = tok && Number.isFinite(tok.t_dtw) && tok.t_dtw >= 0 ? tok.t_dtw / 100 : null;
-    raw.push({ w: text, s0, e0, dtw: dtw != null && dtw >= s0 - 0.8 && dtw <= e0 + 0.4 ? dtw : null });
-  }
-  const useDtw = raw.length && raw.filter((x) => x.dtw != null).length / raw.length >= 0.6;
-  const out = []; let last = -Infinity;
-  for (const x of raw) { let s = useDtw && x.dtw != null ? x.dtw : x.s0; if (s < last) s = last; out.push({ w: x.w, s, e: x.e0, d: useDtw && x.dtw != null }); last = s; }
-  // End: whisper's own end when it's after the start, else a length from the word's letters; never past the next word (pauses stay pauses).
-  for (let i = 0; i < out.length; i++) { const nx = out[i + 1]; let e = out[i].e > out[i].s + 0.05 ? out[i].e : out[i].s + Math.min(0.6, 0.07 * out[i].w.length + 0.12); if (nx && e > nx.s) e = nx.s; out[i].e = Math.max(out[i].s + 0.05, e); }
-  return out.map((w) => ({ w: w.w, s: Math.round((w.s + off) * 1000) / 1000, e: Math.round((w.e + off) * 1000) / 1000, ...(w.d ? { d: 1 } : {}) }));
-}
-
 async function whisperLocal(bin, model, wav, outBase, { duration = 0, onProgress } = {}) {
   const os = require('os');
   const cores = Math.max(1, (os.availableParallelism ? os.availableParallelism() : os.cpus().length) || 1);
@@ -127,27 +105,20 @@ async function whisperLocal(bin, model, wav, outBase, { duration = 0, onProgress
   const prog = pieces.map(() => 0); const weight = pieces.map((p) => (dur ? ((p.e ?? dur) - p.s) / dur : 1 / pieces.length));
   const report = () => onProgress && onProgress(Math.min(0.99, prog.reduce((a, v, i) => a + v * weight[i], 0)));
   const dtw = ctx.setting('ai.transcription.noDtw', false) ? null : /base\.en/i.test(model) ? 'base.en' : /small\.en/i.test(model) ? 'small.en' : /tiny\.en/i.test(model) ? 'tiny.en' : /medium\.en/i.test(model) ? 'medium.en' : null;
-  let full = !ctx.setting('ai.transcription.noFullJson', false);
   const one = async (p) => {
     let file = wav; const of = pieces.length > 1 ? `${outBase}.p${p.i}` : outBase;
     if (pieces.length > 1) { file = `${of}.wav`; await run(ff.bin('ffmpeg'), ['-hide_banner', '-y', '-ss', String(p.s), ...(p.e != null ? ['-to', String(p.e)] : []), '-i', wav, '-c:a', 'pcm_s16le', file], { timeoutMs: 600000 }); }
-    // Full JSON (-ojf): it carries each token's DTW time (t_dtw), the precise one. The plain JSON (-oj) only has whisper's
-    // rough per-word offsets, which bunch up and drift; --dtw was being computed and then never read.
-    const base = ['-m', model, '-f', file, full ? '-ojf' : '-oj', '-ml', '1', '-sow', '-pp', '-t', String(threads), ...(best ? [] : ['-bs', '1', '-bo', '1']), '-of', of];
+    const base = ['-m', model, '-f', file, '-oj', '-ml', '1', '-sow', '-pp', '-t', String(threads), ...(best ? [] : ['-bs', '1', '-bo', '1']), '-of', of];
     const opts = { timeoutMs: 6 * 3600000, priority: ff.priorityValue(), onStderrLine: (l) => { const m = /progress\s*=\s*(\d+)%/.exec(l); if (m) { prog[p.i] = Number(m[1]) / 100; report(); } } };
     try { await run(bin, dtw ? [...base, '--dtw', dtw] : base, opts); } catch (e) {
-      if (e.canceled) throw e;
-      if (dtw) { ctx.store.setSettings({ ai: { transcription: { noDtw: true } } }); } // this build can't do DTW: don't try again on the next video
-      try { await run(bin, base, opts); } catch (e2) {
-        if (e2.canceled || !full) throw e2;
-        full = false; ctx.store.setSettings({ ai: { transcription: { noFullJson: true } } }); // a very old build without -ojf
-        await run(bin, base.map((a) => (a === '-ojf' ? '-oj' : a)), opts);
-      }
+      if (!dtw || e.canceled) throw e;
+      ctx.store.setSettings({ ai: { transcription: { noDtw: true } } }); // this build can't do DTW: don't try again on the next video
+      await run(bin, base, opts);
     }
     prog[p.i] = 1; report();
     const j = JSON.parse(fs.readFileSync(`${of}.json`, 'utf8'));
     if (pieces.length > 1) { for (const f of [file, `${of}.json`]) { try { fs.unlinkSync(f); } catch { /* ignore */ } } }
-    return wordsFromWhisper(j, p.s);
+    return (j.transcription || []).map((t) => ({ w: t.text.trim(), s: t.offsets.from / 1000 + p.s, e: t.offsets.to / 1000 + p.s })).filter((w) => w.w);
   };
   const parts = await Promise.all(pieces.map(one));
   return parts.flat().sort((a, b) => a.s - b.s);
@@ -203,8 +174,7 @@ function cleanHook(hook, { spoken = '', name = '' } = {}) {
     h = h.replace(/[,.;:]+$/, '');
     if (!/[?!]$/.test(h) && !/\.\.\.$/.test(h)) h += '...';
   }
-  // 9 of the 12 best shorts' titles end in "..." (the rest in ":" or a question): the title reads as a mystery.
-  return require('./winners').on() ? require('./winners').titleFinish(h) : h;
+  return h;
 }
 
 /** A short on-screen hook from the clip's first sentence. */
@@ -241,7 +211,7 @@ function normalizeClips(raw, { words, duration, minSec, maxSec, exclude = [], co
 
 /** Taste rules so edits don't look AI-made (adapted from reel-room by Eli Colussi, MIT). */
 const TASTE_RULES = `Don't make it look AI-edited; viewers scroll past the generic auto-edit look:
-- The hook is a short on-screen title about the subject, 2-6 words, like a video title: "Abandoned factory...", "Why did they leave it all behind...", "The town that sank...". Never a sentence quoted from what is said (the captions already show that), no clickbait like "You won't believe". ${require('./winners').TITLE_RULES}
+- The hook is a short on-screen title about the subject, 2-5 words, like a video title: "Abandoned factory...", "Why did they leave it all behind...", "The town that sank...". Never a sentence quoted from what is said (the captions already show that), no clickbait like "You won't believe".
 - Zooms only on the words that carry the point: roughly one every 4-8 seconds for energetic clips, none on serious lines. Never a zoom on every sentence.
 - Never more than two things on screen besides the speaker and captions, and nothing covers the face.
 - Graphics never repeat the captions word for word. No decorative emoji.
@@ -282,11 +252,11 @@ async function recut(chosen, sig, { asset, jobId, minSec, maxSec, tips }) {
   const tmax = Math.min(maxSec, Math.max(minSec + 10, Number(ctx.setting('production.montageMaxSec', 30)) || 30));
   const list = chosen.filter((c) => c.keep && c.span).slice(0, 8);
   if (!list.length) return;
-  const block = list.map((c, n) => `CLIP ${n + 1} (${c.title || ''}):\n${S.slice(c.span[0], c.span[1] + 1).map((x, k) => `${k + 1}. (${m.spoken(x).toFixed(1)}s)${m.full(x) ? '' : ' [part]'} ${x.t}`).join('\n')}`).join('\n\n');
+  const block = list.map((c, n) => `CLIP ${n + 1} (${c.title || ''}):\n${S.slice(c.span[0], c.span[1] + 1).map((x, k) => `${k + 1}. (${m.spoken(x).toFixed(1)}s) ${x.t}`).join('\n')}`).join('\n\n');
   try {
     const waitSec = Math.min(300, Number(ctx.setting('production.aiPickSeconds', 600)));
     const r = await Promise.race([new Promise((_, no) => setTimeout(() => no(new Error('slow')), waitSec * 1000).unref?.()), ai.ask({ role: 'analysis', json: true, clientId: asset.clientId, jobId, maxTokens: 1500,
-      system: `You edit YouTube Shorts the usual way: take a long stretch of someone talking and cut it down to a short story. Rules: whole sentences only (never cut inside one), keep them in their original order, no filler, no repeats, no outros or plugs. Open on a line that grabs attention and makes sense on its own. Build up through the strongest lines. End on an open hook: a line that leaves the viewer wanting the payoff ("and then we opened the door...", a question, a reveal about to happen), never the payoff itself. A line starting with "but", "and", "so", "it", "that", "they" needs the line before it kept too. Lines marked [part] are pieces of one sentence: keep all of them or none. Total ${minSec} to ${tmax} seconds (the seconds are next to each line).${tips ? ` The editor's tips: ${tips}` : ''}${(() => { try { return require('./taste').editBlock(asset.clientId); } catch { return ''; } })()}`,
+      system: `You edit YouTube Shorts the usual way: take a long stretch of someone talking and cut it down to a short story. Rules: whole sentences only (never cut inside one), keep them in their original order, no filler, no repeats, no outros or plugs. Open on a line that grabs attention and makes sense on its own. Build up through the strongest lines. End on an open hook: a line that leaves the viewer wanting the payoff ("and then we opened the door...", a question, a reveal about to happen), never the payoff itself. Total ${minSec} to ${tmax} seconds (the seconds are next to each line).${tips ? ` The editor's tips: ${tips}` : ''}`,
       prompt: `${block}\n\nFor every clip return the line numbers to keep. JSON: {"clips":[{"clip":1,"lines":[1,4,5,9]}]}` })]);
     for (const x of r.json?.clips || []) {
       const c = list[Number(x.clip) - 1]; if (!c) continue;
@@ -296,9 +266,7 @@ async function recut(chosen, sig, { asset, jobId, minSec, maxSec, tips }) {
       const kept = idx.map((k) => sec[k - 1]); const total = kept.reduce((n, y) => n + m.spoken(y), 0);
       if (total < minSec * 0.9 || total > tmax + 3) continue;
       if (m.DANGLING.test(kept[0].t) || !m.OPEN_LOOP.test(kept[kept.length - 1].t) || kept.some((y) => m.OUTRO.test(y.t))) continue;
-      // Whole sentences only, and no line that leans on one the AI left out ("But then...", "It was...").
-      if (!m.coherent(kept, S)) continue;
-      c.keep = m.keepRanges(kept, sig);
+      c.keep = kept.map((y) => [Math.round(Math.max(0, y.s - 0.12) * 100) / 100, Math.round((y.e + 0.18) * 100) / 100]);
       c.start = c.keep[0][0]; c.end = c.keep[c.keep.length - 1][1];
       c.reason = `${c.reason || ''} (cut by the AI from ${Math.round(sec[sec.length - 1].e - sec[0].s)} s)`.trim();
     }
@@ -336,7 +304,7 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
           const waitSec = Number(ctx.setting('production.aiPickSeconds', 600)); const t0 = Date.now();
           tick = setInterval(() => { const left = Math.max(0, waitSec - Math.round((Date.now() - t0) / 1000)); onProgress(0.45 + 0.4 * (1 - left / waitSec), `AI choosing the best ${count} (uses the scores in ${Math.ceil(left / 60)} min if it hasn't answered)`); }, 5000);
           const r = await Promise.race([new Promise((_, no) => setTimeout(() => no(new Error('AI took too long')), waitSec * 1000).unref?.()), ai.ask({ role: 'analysis', json: true, clientId: asset.clientId, jobId, maxTokens: 3500, system: DISCOVERY_SYSTEM,
-            prompt: `Footage: "${asset.name}" (${Math.round(duration)}s). Below are the ${Math.min(cands.length, 18)} strongest candidate moments, already measured (VO = voiceover narration, which performs best; DRONE = aerial shots). Choose the ${count} that would do best as YouTube Shorts/TikToks: a scroll-stopping first line, one clear story with a payoff, curiosity, strong visuals. Skip ones that start mid-thought or are just filler. Whatever the footage is about, the channel's best shorts (10k+ views each) share a structure: they open on the stake, the subject or a reaction from the very first word (shapes like "today we're going to <where> to <do what>...", "I can't believe...", "On <date>, <event>..."), run about 25-32 s, and stop on a cliffhanger just before the payoff (a question, "there's more to this", a line ending "..."): prefer moments with that shape.\n${require('./winners').titleRules()}${require('./taste').promptBlock(asset.clientId)}${tips ? `\n\nThe editor's tips for this footage (follow them; they beat the scores): ${tips}` : ''}\n\n${cands.slice(0, 18).map((c, i) => `#${i + 1} [${c.start.toFixed(1)}-${c.end.toFixed(1)}s${c.keep ? `, montage: ${c.lines} whole sentences from this stretch` : ''}] score ${Math.round(c.score)}${c.why.length ? ` (${c.why.join(', ')})` : ''}: "${c.text.slice(0, 420)}"`).join('\n')}\n\nReturn JSON: {"clips":[{"pick":1,"title":"<=60 chars, curiosity-driven","hook":"2-5 word on-screen title about what this moment shows (different for every clip, never a quote of what is said)","caption":"1-2 sentence social caption","hashtags":["tag"],"reason":"why it will work","punchIns":[{"at":seconds_from_clip_start,"dur":1.2}],"trials":[{"name":"<=3 words","test":"what this version tests","hook":"a different opening headline","start":sec}]}]}` })]);
+            prompt: `Footage: "${asset.name}" (${Math.round(duration)}s). Below are the ${Math.min(cands.length, 18)} strongest candidate moments, already measured (VO = voiceover narration, which performs best; DRONE = aerial shots). Choose the ${count} that would do best as YouTube Shorts/TikToks: a scroll-stopping first line, one clear story with a payoff, curiosity, strong visuals. Skip ones that start mid-thought or are just filler.${require('./taste').promptBlock(asset.clientId)}${tips ? `\n\nThe editor's tips for this footage (follow them; they beat the scores): ${tips}` : ''}\n\n${cands.slice(0, 18).map((c, i) => `#${i + 1} [${c.start.toFixed(1)}-${c.end.toFixed(1)}s${c.keep ? `, montage: ${c.lines} whole sentences from this stretch` : ''}] score ${Math.round(c.score)}${c.why.length ? ` (${c.why.join(', ')})` : ''}: "${c.text.slice(0, 420)}"`).join('\n')}\n\nReturn JSON: {"clips":[{"pick":1,"title":"<=60 chars, curiosity-driven","hook":"2-5 word on-screen title about what this moment shows (different for every clip, never a quote of what is said)","caption":"1-2 sentence social caption","hashtags":["tag"],"reason":"why it will work","punchIns":[{"at":seconds_from_clip_start,"dur":1.2}],"trials":[{"name":"<=3 words","test":"what this version tests","hook":"a different opening headline","start":sec}]}]}` })]);
           clearInterval(tick);
           const chosen = []; const seen = new Set();
           for (const x of r.json?.clips || []) {
@@ -408,4 +376,4 @@ function transcriptExcerpt(transcript, start, end, pad = 20) {
   return (transcript.segments || []).filter((s) => s.e > start - pad && s.s < end + pad).map((s) => `[${s.s.toFixed(1)}] ${s.t}`).join('\n').slice(0, 6000);
 }
 
-module.exports = { wordsFromWhisper, whisperLocal, cleanHook, topicHook, TASTE_RULES, transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };
+module.exports = { whisperLocal, cleanHook, topicHook, TASTE_RULES, transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };
