@@ -483,7 +483,7 @@ queue.register('render.short', {
     const pauses = (await pausesFor(asset)) || [];
     const renderArgs = () => ({ facePath: src.facePath, graphics: client.graphics,
       source: src.source, info: src.info, range: src.range, words: src.words, style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, keywords: clip.keywords || null,
-      reframe: clip.reframe, focusX: clip.focusX, plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: !!clip.tightCuts, silences: pauses.map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns, voiceClean: clip.voiceClean || client.production?.voiceClean || 'clean' }, logo: client.production?.logoPath || null,
+      reframe: clip.reframe, focusX: clip.focusX, plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: clip.tightCuts ?? require('../video/winners').on(), silences: pauses.map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns, voiceClean: clip.voiceClean || client.production?.voiceClean || 'clean' }, logo: client.production?.logoPath || null,
       outPath, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal,
       onProgress: (p) => { h.progress(0.12 + p * 0.7, `Rendering v${n}`); const pct = Math.round((0.12 + p * 0.7) * 100); if (pct - (ctx.store.get('clips', clip.id)?.renderProgress || 0) >= 4) { ctx.store.update('clips', clip.id, { renderProgress: pct }); events.publish('clips', { id: clip.id }); } },
     });
@@ -535,7 +535,7 @@ queue.register('render.short', {
         h.progress(0.84, 'Rendering the full-frame version');
         wideOut = outPath.replace(/\.mp4$/, '-wide.mp4');
         const rw = await render.renderShort({ graphics: client.graphics, source: src.source, info: src.info, range: src.range, words: src.words, style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, keywords: clip.keywords || null, wide: true,
-          plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: !!clip.tightCuts, silences: ((await pausesFor(asset)) || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns, voiceClean: clip.voiceClean || client.production?.voiceClean || 'clean' }, logo: client.production?.logoPath || null,
+          plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: clip.tightCuts ?? require('../video/winners').on(), silences: ((await pausesFor(asset)) || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns, voiceClean: clip.voiceClean || client.production?.voiceClean || 'clean' }, logo: client.production?.logoPath || null,
           outPath: wideOut, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal });
         if (musicSheet?.cues.some((c) => c.file) || Math.abs(voiceGain - 1) > 0.01) {
           const tmp = wideOut.replace(/\.mp4$/, '.music.mp4');
@@ -554,6 +554,8 @@ queue.register('render.short', {
     const xml = path.join(outDir, `v${n}.premiere.xml`);
     fs.writeFileSync(xml, exporters.toFcpXml({ name: clip.title, source: asset.path, info: asset.info, range: { start: clip.start, end: clip.end } }));
     const version = { n, path: outPath, ...(wideOut ? { wide: wideOut } : {}), thumb, duration: r.duration, renderedAt: now(), encoder: r.encoder, qc: { passed: qc.passed, issues: qc.issues }, srt: r.srtPath, velo, xml, changes: clip.pendingChanges || null, captioned: !!transcript, look: (({ font, size, hookFont }) => ({ font: font || 'Montserrat', size, hookFont }))({ ...(client.style || {}), ...(clip.style || {}) }), cuts: covers.length, covers, segs: (r.segments || []).map(([a, b]) => [Math.round((a + (assembled ? clip.start : 0)) * 1000) / 1000, Math.round((b + (assembled ? clip.start : 0)) * 1000) / 1000]), music: musicSheet ? { how: musicSheet.how, volume: Number(clip.musicVol ?? client.production?.musicVolume ?? ctx.setting('production.musicVolume', 0.3)), cues: musicSheet.cues.map((c) => ({ file: c.file || null, offset: c.offset || 0, vol: c.vol ?? 1, start: Math.round(c.start * 10) / 10, end: Math.round(c.end * 10) / 10, mood: c.mood, why: c.why || '', track: c.track || null, source: c.source || null })) } : null };
+    // How close this clip is to the 12 best shorts (winners.js): length, shot lengths, title, opening, ending, music.
+    try { const W = require('../video/winners'); version.winner = W.check({ clip, version, words: r.cutWords || [], style: { ...(client.style || {}), ...(clip.style || {}) } }); } catch { /* the check never blocks a render */ }
     ctx.store.update('clips', clip.id, (c) => ({ versions: [...(c.versions || []), version], currentVersion: n, pendingChanges: null, coverSrcs: covers.map((k) => [k.src, k.src + k.dur]) }));
     pipeline.afterQc(clip.id, qc);
     return { version: n, duration: r.duration, qc: qc.passed ? 'passed' : 'failed', encoder: r.encoder };
@@ -877,6 +879,12 @@ queue.register('video.reverse', {
 queue.register('setup.ollama', { title: () => 'Turn on Ollama', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setup(h) });
 queue.register('setup.vision', { title: () => 'Download free video vision (Llama vision)', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setupVision(h) });
 queue.register('setup.ffmpeg', { title: () => 'Install FFmpeg and yt-dlp', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/production').installFfmpeg(h) });
+// Best shorts library (winners.js): measure an uploaded top performer so the formula learns from it.
+queue.register('winners.measure', { title: (p) => `Measure best short: ${p.title || ''}`.slice(0, 80), maxAttempts: 1, run: async (job, h) => {
+  const W = require('../video/winners');
+  try { h.progress(0.2, 'Measuring cuts, length and sound'); const m = await W.measure(job.payload.file); W.update(job.payload.id, { ...m, status: 'ready' }); events.publish('winners', {}); return m; }
+  catch (e) { W.update(job.payload.id, { status: 'failed', error: 'Could not read this video.' }); events.publish('winners', {}); throw e; }
+} });
 queue.register('music.fill', { title: () => 'Download free music (all moods)', maxAttempts: 1, run: async (job, h) => ({ tracks: await require('../video/music').fillAll((f, t) => h.progress(f, t)) }) });
 // The outreach guide's batch run (Part 8): chunks of 10, every person researched, drafted and checked; HAL posts the summary.
 queue.register('outreach.kits', {

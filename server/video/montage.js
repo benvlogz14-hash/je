@@ -196,6 +196,11 @@ function scoreWindow(s, e, sig, kept = null) {
   const firstWord = inS[0]?.s ?? e; if (firstWord - s > 1.2) score -= 10;
   const endHook = inS.length > 1 && END_HOOK.test(inS[inS.length - 1].t);
   if (endHook) { score += 12; why.push('ends on a hook'); }
+  // The winner formula (winners.js, the 12 best shorts): opens on a stake or the place ("today we're going to...",
+  // "I can't believe...", "On August 3rd, 2012..."), stops on a cliffhanger ("here???", "there's more to this").
+  const W = require('./winners');
+  if (W.on() && inS[0] && W.OPENER.test(inS[0].t)) { score += 6; why.push('opens like your best shorts'); }
+  if (W.on() && inS.length > 1 && W.CLIFF.test(inS[inS.length - 1].t)) { score += 6; if (!endHook) why.push('ends on a cliffhanger'); }
   if (kept) why.push('story cut');
   if (vo > 0.4) why.push('voiceover');
   if (drone > 0.15) why.push('drone shots');
@@ -251,7 +256,9 @@ function similar(a, b) {
 const DANGLING = /^["'(]?(and|but|so|or|because|cause|which|then|also|plus|like|that'?s why|anyway)\b/i;
 const REFERS = /^["'(]?(it|that|this|they|them|he|she|those|these|there|i picked (it|one)|one of them)\b/i;
 /** A montage ends on an open loop: the viewer wants the next line. Stricter than END_HOOK (which also scores windows). */
-const OPEN_LOOP = /\?\s*["']?$|\.\.\.\s*["']?$|\b(and then|but then|until|suddenly|all of a sudden|what we (found|saw|heard)|you won'?t believe|turns out|look at (this|that)|wait|no way|we heard|we saw|i heard|i saw|something (was )?(moving|there|inside|behind)|about to|what (is|was) (that|this|inside|behind)|behind (that|the) door|never (seen|expected))\b/i;
+const OPEN_LOOP_BASE = /\?\s*["']?$|\.\.\.\s*["']?$|\b(and then|but then|until|suddenly|all of a sudden|what we (found|saw|heard)|you won'?t believe|turns out|look at (this|that)|wait|no way|we heard|we saw|i heard|i saw|something (was )?(moving|there|inside|behind)|about to|what (is|was) (that|this|inside|behind)|behind (that|the) door|never (seen|expected))\b/i;
+/** Open loops: the usual ones plus the endings measured on the 12 best shorts (winners.CLIFF: "here???", "more to this"...). */
+const OPEN_LOOP = { test: (t) => OPEN_LOOP_BASE.test(t) || require('./winners').CLIFF.test(t) };
 /** Seconds a sentence lasts once the render's pause cuts take out gaps over ~0.55 s. */
 function spoken(x) { let n = 0; for (let i = 0; i < x.words.length; i++) { const w = x.words[i]; n += w.e - w.s; const nx = x.words[i + 1]; if (nx) n += Math.min(0.55, Math.max(0, nx.s - w.e)); } return n + 0.24; }
 function sentValue(x, sig) {
@@ -422,12 +429,15 @@ function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, blac
   const busy = (a, b) => out.some((c) => c.at < b + gap && c.at + c.dur > a - gap);
   const here = shots.filter((x) => x.s < end && x.e > start);
   // 2. Weak stretches: a poor or static shot, someone talking with little movement, or any shot held too long (strong ones may run longer).
-  const weak = (t) => { const s = here.find((x) => t >= x.s && t < x.e); if (!s) return true; const q = shotScore(s); return q < 0.4 || (s.kind === 'speaker' && (s.motion ?? 5) < 3) || (t - Math.max(s.s, start)) > (q >= 0.7 ? 9 : 5); };
-  let tries = 0; let t = start + 2.5; // keep the first 2.5 s on the real moment: that's the hook
+  // Winner pace (winners.js): shots median 2 s, 90% under 3.8 s, the first cut by ~2 s; strong shots may run a bit longer.
+  const fast = require('./winners').on();
+  const hold = (q) => (fast ? (q >= 0.7 ? 5.5 : 3.8) : (q >= 0.7 ? 9 : 5));
+  const weak = (t) => { const s = here.find((x) => t >= x.s && t < x.e); if (!s) return true; const q = shotScore(s); return q < 0.4 || (s.kind === 'speaker' && (s.motion ?? 5) < 3) || (t - Math.max(s.s, start)) > hold(q) || (fast && t - start < 2.6 && s.s <= start + 0.5 && s.e > start + 3.5); }; // the winners' first cut lands at ~2 s
+  let tries = 0; let t = start + (fast ? 2 : 2.5); // keep the first ~2 s on the real moment: that's the hook
   while (t < end - 2.5 && left()) {
     // Voiceover is always fine to cover; someone talking on camera gets fewer cut-aways (about 3 in 5).
-    const sentNow = sents.find((x) => t >= x.s && t < x.e); const dur = Math.min(3, end - 1 - t);
-    if (dur >= 1.6 && !busy(t, t + dur) && weak(t) && (!sentNow || sentNow.vo || (tries++ % 5) < 3) && place(t, dur)) { t += out[out.length - 1].dur + gap; continue; }
+    const sentNow = sents.find((x) => t >= x.s && t < x.e); const dur = Math.min(fast ? 2.4 : 3, end - 1 - t);
+    if (dur >= 1.4 && !busy(t, t + dur) && weak(t) && (!sentNow || sentNow.vo || (tries++ % 5) < (fast ? 4 : 3)) && place(t, dur)) { t += out[out.length - 1].dur + gap; continue; }
     t += 1.5;
   }
   return out.filter((c) => c.at + c.dur <= start + len - 0.2).sort((a, b) => a.at - b.at);

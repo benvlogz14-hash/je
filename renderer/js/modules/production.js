@@ -126,7 +126,7 @@ function Intake({ clients, clientId, setClientId, assets, jobs, clipped = new Se
           const waiting = assets.filter((a) => (!target || a.clientId === target) && (a.status === 'waiting' || unclipped(a) || (waitOn && !a.started && busy(a))));
           const ready = waiting.filter((a) => a.status === 'waiting' || unclipped(a)).length;
           return waiting.length ? html`<button type="button" class="btn primary" style="box-shadow:inset 0 3px 8px rgba(0,0,0,0.35);transform:translateY(2px);font-weight:700" title="Set the clip length, count and tips, then press to make the clips." onClick=${(e) => { e.stopPropagation(); act(async () => { for (const a of waiting) await api.post(`/api/assets/${a.id}/process`, {}); }, { ok: ready === waiting.length ? `Making clips from ${waiting.length} video${waiting.length > 1 ? 's' : ''}` : 'Clips will be made as soon as the footage is ready', sound: 'success' }); }}>▶ Make clips (${waiting.length} video${waiting.length > 1 ? 's' : ''}${ready < waiting.length ? ', getting ready' : ''})</button>` : null; })()}${target ? html`<${WideSwitch} client=${clients.find((c) => c.id === target)} />` : null}<${Button} size="sm" kind="primary" icon="upload" onClick=${() => input.current.click()}>Upload</${Button}><${Button} size="sm" kind="ghost" icon="folder" onClick=${addPath}>From disk</${Button}><${Button} size="sm" kind="ghost" icon="link" onClick=${addLink}>From link</${Button}></div>
-      ${target ? html`<div style="flex:1 0 100%;min-width:0"><${StyleSwitch} client=${clients.find((c) => c.id === target)} /><div class="set-grid">${[ClipLength, MusicSwitch, AiTips, BrollSwitch].map((C) => html`<div class="set-card"><${C} client=${clients.find((c) => c.id === target)} /></div>`)}</div></div>` : null}
+      ${target ? html`<div style="flex:1 0 100%;min-width:0"><${StyleSwitch} client=${clients.find((c) => c.id === target)} /><div class="set-grid">${[ClipLength, MusicSwitch, AiTips, BrollSwitch, BestShorts].map((C) => html`<div class="set-card"><${C} client=${clients.find((c) => c.id === target)} /></div>`)}</div></div>` : null}
       <input ref=${input} type="file" accept="video/*,audio/*" multiple hidden onChange=${(e) => { upload([...e.target.files]); e.target.value = ''; }} />
     </div>
     <div class="panel"><div class="panel-head"><h4 class="grow">Footage</h4><span class="faint" style="font-size:var(--fs-sm)">${active.length ? `${active.length} processing` : `${assets.length} files`}</span>
@@ -173,6 +173,30 @@ function AiTips({ client }) {
   </div>`;
 }
 
+/**
+ * Your best shorts: the formula every clip is checked against (server/video/winners.js), measured from the top
+ * performers. Add more and the formula (length, pace, first cut, title examples) learns from them.
+ */
+function BestShorts() {
+  const { data, reload } = useApi('/api/winners', ['winners', 'jobs']);
+  const [open, setOpen] = useState(false); const [busy, setBusy] = useState(0);
+  if (!data) return null;
+  const P = data.profile; const all = [...data.added.slice().reverse(), ...data.builtin];
+  const add = () => { const i = document.createElement('input'); i.type = 'file'; i.multiple = true; i.accept = 'video/*'; i.onchange = async () => {
+    const fs = [...i.files]; if (!fs.length) return; setBusy(fs.length);
+    for (const f of fs) { try { await api.upload('/api/winners/upload', [f], {}); } catch (e) { toast(e.message, { kind: 'error' }); } setBusy((n) => n - 1); }
+    toast(`Added ${fs.length} short${fs.length > 1 ? 's' : ''}; measuring now`, { kind: 'ok' }); reload(); }; i.click(); };
+  const del = async (w) => { if (await confirmDialog({ title: `Remove "${w.title}"?`, text: 'The formula stops learning from it.', confirm: 'Remove' })) { await act(() => api.del(`/api/winners/${w.id}`), { ok: 'Removed' }); reload(); } };
+  return html`<div class="col" style="gap:6px;margin-top:10px" onClick=${(e) => e.stopPropagation()}>
+    <span class="label">Your best shorts (${P.count})</span>
+    <span style="font-size:var(--fs-sm)">Every clip is made and checked by their formula: ${P.length.min}-${P.length.max} s, a cut every ~${P.shot.median} s (first by ~${P.shot.firstCut} s), title up the whole video, ends on a cliffhanger, music under it all.</span>
+    <div class="row" style="gap:8px"><${Button} size="sm" kind="soft" icon="upload" busy=${busy > 0} onClick=${add}>${busy ? `Adding ${busy}...` : 'Add top performers'}</${Button}><${Button} size="sm" kind="ghost" onClick=${() => setOpen(!open)}>${open ? 'Hide list' : 'Show list'}</${Button}></div>
+    ${open ? html`<div class="col" style="gap:2px;max-height:220px;overflow:auto;font-size:var(--fs-xs)">${all.map((w) => html`<div class="row" style="gap:6px;padding:3px 0;border-top:1px solid var(--line)"><span class="grow ellipsis" title=${w.title}>${w.title}</span>
+      <span class="faint tnum">${w.status === 'measuring' ? 'measuring...' : w.status === 'failed' ? "couldn't read" : `${Math.round(w.dur)} s${w.shots ? ` · ${w.shots} shots` : ''}`}</span>
+      ${w.builtin ? html`<span class="faint">built in</span>` : html`<${Button} size="sm" kind="ghost" icon="trash" title="Remove" onClick=${() => del(w)} />`}</div>`)}</div>` : null}
+  </div>`;
+}
+
 /** Every new clip also rendered full frame (16:9), so Vertical / Full frame / Both can be compared on the clip. */
 function WideSwitch({ client }) {
   const on = !!client?.production?.wide;
@@ -202,6 +226,7 @@ function StyleSwitch({ client }) {
   // Each style's colour and a tiny sample of its look, so they can be told apart at a glance.
   const LOOK = {
     documentary: { color: '#E8C400', sample: html`<span style="font:800 13px Montserrat;color:#fff;text-shadow:0 0 2px #000,0 1px 2px #000">ABANDONED <span style="color:#F8D800">FACTORY</span></span>` },
+    explorer: { color: '#F07C5A', sample: html`<span style="font:800 13px Montserrat;color:#fff;text-shadow:0 2px 6px rgba(0,0,0,.9)">they left it <span style="color:#FFD60A">all</span>...</span>` },
     walkthrough: { color: '#E9A23B', sample: html`<span style="font:800 13px Montserrat;color:#fff;text-shadow:0 1px 3px #000">it's just <span style="color:#F5B850">crazy</span> how</span>` },
     highlights: { color: '#3FA796', sample: html`<span class="row" style="gap:3px;align-items:center">${[26, 18, 22].map((w) => html`<i style=${`display:block;width:${w}px;height:8px;border-radius:3px;background:#7fd8c8`} />`)}<span style="font:700 13px 'TikTok Sans Bold', 'TikTok Sans', Inter, sans-serif;color:#fff;margin-left:4px;text-shadow:0 1px 3px #000">the <span style="color:#FFE14D">door</span>?</span></span>` },
     story: { color: '#8B6FD6', sample: html`<span style="font:600 13px 'TikTok Sans', Inter, sans-serif;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.8)">You find something…</span>` },

@@ -360,6 +360,17 @@ r.post('/api/assets', (req, b) => {
 // Your own Grok / Claude / ChatGPT accounts through the desktop app (no API keys).
 // What the clip machine has learned for a client: approve/reject decisions and hand fixes made in Studio.
 r.get('/api/clients/:id/learning', (req, b, p) => { const t = require('./video/taste'); const l = t.editLessons(p.id); return { ...t.summary(p.id), edits: l.edits || 0, fixed: l.changed || 0, endShift: l.pads?.endShift ?? null, startShift: l.pads?.startShift ?? null, linesCut: [...new Set(l.cutLines || [])].length, avoidStarts: l.avoidStarts || [] }; });
+// Best shorts (winners.js): the formula the clip machine copies, and a library to add more top performers to.
+r.get('/api/winners', () => require('./video/winners').list());
+r.post('/api/winners/upload', async (req) => {
+  const dir = path.join(paths.root, 'winners'); fs.mkdirSync(dir, { recursive: true });
+  const { files, fields } = await receiveUpload(req, dir, { maxBytes: 2 * 1024 ** 3 });
+  const W = require('./video/winners'); const out = [];
+  for (const f of files) { const w = W.add({ file: f.path, title: files.length === 1 ? fields.title : null, views: files.length === 1 ? fields.views : null, by: actorOf(req) }); queue.enqueue('winners.measure', { id: w.id, file: f.path, title: w.title }, { actor: actorOf(req), title: `Measure ${w.title}` }); out.push(w); }
+  events.publish('winners', {}); return out;
+}, { raw: true });
+r.patch('/api/winners/:id', (req, b, p) => { const W = require('./video/winners'); W.update(p.id, { ...(b.title != null ? { title: String(b.title).slice(0, 120) } : {}), ...(b.views != null ? { views: Number(b.views) || null } : {}) }); events.publish('winners', {}); return { ok: true }; });
+r.del('/api/winners/:id', (req, b, p) => { require('./video/winners').remove(p.id); events.publish('winners', {}); return { ok: true }; });
 // SEO lab: research files, stats and the title and description machine.
 const seo = () => require('./seo');
 r.get('/api/seo', () => seo().overview());
@@ -585,7 +596,7 @@ r.post('/api/clips/:id/studio', async (req, b, p) => {
     let segs = v?.segs || null;
     if (!segs) {
       const pauses = await require('./jobs/handlers').pausesFor(a).catch(() => null);
-      try { segs = require('./video/render').cutSegments({ start: c.start, end: c.end, words, fps: a.info?.fps, plan: { keep: c.keep || [], silenceCut: c.silenceCut !== false, tight: !!c.tightCuts, silences: pauses || [], retakeCut: client?.production?.retakeCut !== false && c.retakeCut !== false } }); } catch { segs = c.keep?.length ? c.keep : null; }
+      try { segs = require('./video/render').cutSegments({ start: c.start, end: c.end, words, fps: a.info?.fps, plan: { keep: c.keep || [], silenceCut: c.silenceCut !== false, tight: c.tightCuts ?? require('./video/winners').on(), silences: pauses || [], retakeCut: client?.production?.retakeCut !== false && c.retakeCut !== false } }); } catch { segs = c.keep?.length ? c.keep : null; }
     }
     // Clips rendered before the music file was saved: find their track in the music library by mood and name.
     const libFile = (x) => (x.mood && x.track ? path.join(paths.root, 'music', String(x.mood), path.basename(String(x.track))) : null);
