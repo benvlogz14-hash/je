@@ -35,10 +35,10 @@ const PRESETS = {
   // words in yellow at ~77% down. Picks and cuts by the winner formula (20-36 s, tight cuts, a cut every ~2 s).
   explorer: {
     label: 'Explorer',
-    blurb: 'The look of your 12 best shorts, for any footage: a mystery title the whole video, heavy captions with yellow key words, a cut every ~2 s',
+    blurb: 'The look of your 12 best shorts, for any footage: a mystery title the whole video, heavy captions with yellow key words',
     style: { font: 'Montserrat', size: 128, uppercase: false, wordsPerLine: 3, primary: '#FFFFFF', highlight: '#FFD60A', highlightMode: 'keywords', outline: '#000000', outlineWidth: 3, shadow: 4, position: 'lower', animation: 'none', box: false, rotate: 0,
       hook: true, hookSeconds: 600, hookFont: 'Montserrat', hookSize: 168, hookUpper: false, hookCapsFirst: false, hookBox: false, hookColor: '#FFFFFF', hookOutline: '#000000', hookOutlineWidth: 2, hookShadow: 6, hookPosition: 'upper', hookTilt: 0, hookAnim: 'fade', hookRadius: 0 },
-    production: { minClipSec: 24, maxClipSec: 40, visualCuts: true },
+    production: { minClipSec: 24, maxClipSec: 40 },
   },
   highlights: {
     label: 'Highlights',

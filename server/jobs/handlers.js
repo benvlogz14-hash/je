@@ -236,10 +236,18 @@ function discoverOrWait(h, asset, opts = {}) {
 }
 
 /** The transcript with its words put back on the voice where speech-to-text drifted (once per transcript, saved). */
-async function alignedTranscript(asset) {
-  const t = loadTranscript(asset); if (!t || t.voiceAligned) return t;
+const retranscribing = new Map();
+async function alignedTranscript(asset, { onProgress, jobId } = {}) {
+  const t = loadTranscript(asset); if (!t) return t;
+  // Moved by the old loudness alignment (captions up to 3 s off): transcribed again from the sound, once.
+  if (require('../video/align').damaged(t)) {
+    // Every clip of a video waits for the same one run (8 clips used to mean 8 transcriptions side by side).
+    if (!retranscribing.has(asset.id)) retranscribing.set(asset.id, require('../video/intelligence').transcribe(asset, { jobId, onProgress: (f, n) => onProgress?.(f * 0.3, n || 'Transcribing again so the captions sit on the voice') }).finally(() => setTimeout(() => retranscribing.delete(asset.id), 1000)));
+    try { return await retranscribing.get(asset.id); } catch { return t; }
+  }
+  if (t.voiceAligned) return t;
   const a = await require('../video/align').alignFile(t, asset.path, asset.workDir);
-  try { fs.writeFileSync(path.join(asset.workDir, `${asset.id}.transcript.json`), JSON.stringify(a)); } catch { /* read-only */ }
+  if (a !== t) { try { fs.writeFileSync(path.join(asset.workDir, `${asset.id}.transcript.json`), JSON.stringify(a)); } catch { /* read-only */ } }
   return a;
 }
 
@@ -296,7 +304,7 @@ queue.register('discover', {
       return { clips: made.length, method: 'story' };
     }
     h.progress(0.2, 'Measuring the footage');
-    const transcript = await alignedTranscript(asset);
+    const transcript = await alignedTranscript(asset, { jobId: job.id, onProgress: (f, t) => h.progress(f, t) });
     // Re-clip with "best moments, made again" (fresh): the old clips' moments may be picked again (in today's styles
     // and settings); otherwise only moments no clip of this video has used yet.
     const used = () => (job.payload.fresh ? [] : pipeline.usedRanges(asset.id));
@@ -424,7 +432,7 @@ queue.register('render.short', {
     if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
     ctx.store.update('clips', clip.id, { renderProgress: 0, error: null });
     if (!ctx.capabilities.libass) h.log('Warning: this FFmpeg build lacks libass; captions cannot be burned in.');
-    const transcript = await alignedTranscript(asset);
+    const transcript = await alignedTranscript(asset, { jobId: job.id, onProgress: (f, t) => h.progress(f, t) });
     const n = (clip.versions || []).length + 1;
     const outDir = paths.clientDir(client.id, 'renders', clip.id);
     const outPath = path.join(outDir, `v${n}-${slug(clip.title).slice(0, 40)}.mp4`);
@@ -483,7 +491,7 @@ queue.register('render.short', {
     const pauses = (await pausesFor(asset)) || [];
     const renderArgs = () => ({ facePath: src.facePath, graphics: client.graphics,
       source: src.source, info: src.info, range: src.range, words: src.words, style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, keywords: clip.keywords || null,
-      reframe: clip.reframe, focusX: clip.focusX, plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: clip.tightCuts ?? require('../video/winners').on(), silences: pauses.map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns, voiceClean: clip.voiceClean || client.production?.voiceClean || 'clean' }, logo: client.production?.logoPath || null,
+      reframe: clip.reframe, focusX: clip.focusX, plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: !!clip.tightCuts, silences: pauses.map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns, voiceClean: clip.voiceClean || client.production?.voiceClean || 'clean' }, logo: client.production?.logoPath || null,
       outPath, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal,
       onProgress: (p) => { h.progress(0.12 + p * 0.7, `Rendering v${n}`); const pct = Math.round((0.12 + p * 0.7) * 100); if (pct - (ctx.store.get('clips', clip.id)?.renderProgress || 0) >= 4) { ctx.store.update('clips', clip.id, { renderProgress: pct }); events.publish('clips', { id: clip.id }); } },
     });
@@ -535,7 +543,7 @@ queue.register('render.short', {
         h.progress(0.84, 'Rendering the full-frame version');
         wideOut = outPath.replace(/\.mp4$/, '-wide.mp4');
         const rw = await render.renderShort({ graphics: client.graphics, source: src.source, info: src.info, range: src.range, words: src.words, style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, keywords: clip.keywords || null, wide: true,
-          plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: clip.tightCuts ?? require('../video/winners').on(), silences: ((await pausesFor(asset)) || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns, voiceClean: clip.voiceClean || client.production?.voiceClean || 'clean' }, logo: client.production?.logoPath || null,
+          plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: !!clip.tightCuts, silences: ((await pausesFor(asset)) || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns, voiceClean: clip.voiceClean || client.production?.voiceClean || 'clean' }, logo: client.production?.logoPath || null,
           outPath: wideOut, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal });
         if (musicSheet?.cues.some((c) => c.file) || Math.abs(voiceGain - 1) > 0.01) {
           const tmp = wideOut.replace(/\.mp4$/, '.music.mp4');

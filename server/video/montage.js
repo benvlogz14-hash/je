@@ -97,31 +97,26 @@ const full = (x) => x.whole && x.clean;
  * learned margins (taste.edgePads), from how they fixed cuts in Studio.
  */
 function cutEdges(S, i, fine, pads = {}) {
+  // The margins that held up on real footage: 0.12 s before the first word, 0.18 s after the last, never into a
+  // neighbouring line. (Placing cuts from the loudness map alone was tried: with wind, footsteps or music under the
+  // voice it found "quiet" in the wrong places and grabbed pieces of the next line, so it only ever adds a little.)
   const x = S[i]; const prev = S[i - 1]; const next = S[i + 1];
-  const padS = pads.start ?? 0.1, padE = pads.end ?? 0.18;
-  const loS = prev ? Math.max(x.s - 0.5, (prev.e + x.s) / 2, prev.e + 0.03) : Math.max(0, x.s - 0.5);
-  const hiE = next ? Math.min(x.e + 0.7, (x.e + next.s) / 2, next.s - 0.03) : x.e + 0.7;
-  let a = Math.max(loS, x.s - padS), b = Math.min(hiE, x.e + padE);
+  const loS = prev ? Math.max((prev.e + x.s) / 2, prev.e + 0.05) : 0;
+  const hiE = next ? Math.min((x.e + next.s) / 2, next.s - 0.05) : x.e + 0.4;
+  let a = Math.max(loS, x.s - 0.12), b = Math.min(hiE, x.e + 0.18);
   const db = fine?.db; const st = fine?.step || 0.02;
-  if (db?.length) {
+  if (db?.length && b < hiE) {
+    // A last word still ringing out at +0.18 s (clearly loud, then clearly quiet within +0.35 s): keep its tail.
     const lvl = (t) => db[Math.max(0, Math.min(db.length - 1, Math.floor(t / st)))];
-    // The quiet floor around this line: its quietest tenth, plus a little.
     const around = []; for (let t = Math.max(0, x.s - 3); t < x.e + 3; t += st) around.push(lvl(t));
-    around.sort((p, q) => p - q); const floor = around[Math.floor(around.length * 0.1)] ?? -60; const quiet = floor + 8;
-    // End: the first moment after the last word where the voice has died down for 60 ms, then a short tail.
-    let endQ = null;
-    for (let t = x.e - 0.05; t <= hiE; t += st) if (lvl(t) <= quiet && lvl(t + st) <= quiet && lvl(t + 2 * st) <= quiet) { endQ = t; break; }
-    if (endQ != null) b = Math.min(hiE, Math.max(x.e + 0.04, endQ + Math.min(0.1, padE)));
-    else b = hiE; // the voice runs on to the limit: keep all of it rather than chop the tail
-    // Start: the last quiet moment before the first word.
-    let startQ = null;
-    for (let t = x.s + 0.03; t >= loS; t -= st) if (lvl(t) <= quiet && lvl(t - st) <= quiet) { startQ = t; break; }
-    if (startQ != null) a = Math.max(loS, Math.min(x.s - 0.03, startQ - Math.min(0.06, padS)));
-    else a = loS;
+    around.sort((p, q) => p - q); const floor = around[Math.floor(around.length * 0.1)] ?? -60; const loud = around[Math.floor(around.length * 0.8)] ?? -20;
+    if (loud - floor >= 15 && lvl(b) >= floor + (loud - floor) * 0.6) {
+      for (let t = b; t <= Math.min(hiE, x.e + 0.35); t += st) if (lvl(t) <= floor + 6 && lvl(t + st) <= floor + 6) { b = Math.min(hiE, t + 0.04); break; }
+    }
   }
   // This editor's habit from their Studio fixes (e.g. they always let lines breathe a little longer), never into a neighbour.
-  if (pads.endShift) b = Math.max(x.e + 0.02, Math.min(next ? next.s - 0.03 : b + pads.endShift, b + pads.endShift));
-  if (pads.startShift) a = Math.min(x.s - 0.01, Math.max(prev ? prev.e + 0.03 : a - pads.startShift, a - pads.startShift));
+  if (pads.endShift) b = Math.max(x.e + 0.02, Math.min(hiE, b + pads.endShift));
+  if (pads.startShift) a = Math.min(x.s - 0.01, Math.max(loS, a - pads.startShift));
   return [Math.round(Math.max(0, a) * 100) / 100, Math.round(b * 100) / 100];
 }
 
@@ -426,18 +421,23 @@ function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, blac
   // 1. Black fades inside the clip (the voice keeps going): always covered with a good shot.
   // Only true black fades (short), at most two per clip: dark scenes are not black and stay as they are.
   for (const [x, y] of black.filter(([a, b]) => b > start + 0.1 && a < end - 0.1 && b - a <= 2.5).slice(0, 2)) { const at = Math.max(start, x - 0.3); place(at, Math.min(end - at, Math.max(1.5, y - x + 0.6))); }
-  const busy = (a, b) => out.some((c) => c.at < b + gap && c.at + c.dur > a - gap);
+  const space = require('../core/ctx').setting('production.winnerPace', false) === true ? gap : Math.max(gap, 6); // at least 6 s between cut-aways
+  const busy = (a, b) => out.some((c) => c.at < b + space && c.at + c.dur > a - space);
   const here = shots.filter((x) => x.s < end && x.e > start);
   // 2. Weak stretches: a poor or static shot, someone talking with little movement, or any shot held too long (strong ones may run longer).
   // Winner pace (winners.js): shots median 2 s, 90% under 3.8 s, the first cut by ~2 s; strong shots may run a bit longer.
-  const fast = require('./winners').on();
+  // The winners' fast pace (a cut-away every ~4 s) was tried and taken back out: cut-aways from elsewhere in the video don't
+  // match what's being said, so forcing them that often made clips feel random. Only with production.winnerPace on.
+  const fast = require('../core/ctx').setting('production.winnerPace', false) === true;
   const hold = (q) => (fast ? (q >= 0.7 ? 5.5 : 3.8) : (q >= 0.7 ? 9 : 5));
-  const weak = (t) => { const s = here.find((x) => t >= x.s && t < x.e); if (!s) return true; const q = shotScore(s); return q < 0.4 || (s.kind === 'speaker' && (s.motion ?? 5) < 3) || (t - Math.max(s.s, start)) > hold(q) || (fast && t - start < 2.6 && s.s <= start + 0.5 && s.e > start + 3.5); }; // the winners' first cut lands at ~2 s
+  const weak = (t) => { const s = here.find((x) => t >= x.s && t < x.e); if (!s) return true; const q = shotScore(s); // Someone talking to camera is the story: never covered just for being on screen a while (that made cut-aways land on
+  // lines they had nothing to do with). Covered: poor shots, a static speaker, and scenery held far too long.
+  return q < 0.4 || (s.kind === 'speaker' && (s.motion ?? 5) < 3) || (s.kind !== 'speaker' && (s.faces ?? 0) === 0 && (t - Math.max(s.s, start)) > (fast ? hold(q) : 8)) || (fast && t - start < 2.6 && s.s <= start + 0.5 && s.e > start + 3.5); }; // the winners' first cut lands at ~2 s
   let tries = 0; let t = start + (fast ? 2 : 2.5); // keep the first ~2 s on the real moment: that's the hook
   while (t < end - 2.5 && left()) {
     // Voiceover is always fine to cover; someone talking on camera gets fewer cut-aways (about 3 in 5).
     const sentNow = sents.find((x) => t >= x.s && t < x.e); const dur = Math.min(fast ? 2.4 : 3, end - 1 - t);
-    if (dur >= 1.4 && !busy(t, t + dur) && weak(t) && (!sentNow || sentNow.vo || (tries++ % 5) < (fast ? 4 : 3)) && place(t, dur)) { t += out[out.length - 1].dur + gap; continue; }
+    if (dur >= 1.4 && !busy(t, t + dur) && weak(t) && (!sentNow || sentNow.vo || (tries++ % 5) < (fast ? 4 : 3)) && place(t, dur)) { t += out[out.length - 1].dur + space; continue; }
     t += 1.5;
   }
   return out.filter((c) => c.at + c.dur <= start + len - 0.2).sort((a, b) => a.at - b.at);

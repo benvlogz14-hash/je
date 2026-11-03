@@ -134,7 +134,24 @@ function snapPhrases(t, lv) {
 }
 
 /** Align a transcript object for a media file: the coarse pass (drift), then the fine pass (each phrase). Once. */
+/**
+ * A transcript the alignment moved (coarse shifts or fine phrase moves) before it was switched off: on real footage
+ * (wind, footsteps, music) the loud bursts it lined phrases up with often weren't speech, so it pulled captions up to
+ * 3 s off, and the moved times were saved over the original. Such a transcript is made again from the sound.
+ */
+function damaged(t) {
+  const v = t?.voiceAligned; const ctx = require('../core/ctx');
+  if (v && !v.off && ((v.phrasesMoved || 0) > 0 || (v.shifts && v.shifts.some?.((x) => Math.abs(Number(x?.d ?? x) || 0) >= 0.05)))) return true;
+  // Made on this PC before the precise (DTW) word times were read: made again once, if this Whisper can give them.
+  return /whisper\.cpp/i.test(t?.engine || '') && !t.timing && !ctx.setting('ai.transcription.noDtw', false) && !ctx.setting('ai.transcription.noFullJson', false);
+}
+
+/**
+ * Off by default (`ai.transcription.align`): Whisper's own word times (beam search + DTW) are closer to the voice on
+ * real footage than lining words up with loudness. Kept for when someone switches it on.
+ */
 async function alignFile(t, file, workDir) {
+  if (require('../core/ctx').setting('ai.transcription.align', false) !== true) return t;
   if (!t?.words?.length || t.voiceAligned?.v === 2) return t;
   // Studio's shared transcripts folder holds files from anywhere: give each its own loudness map (same names clash).
   let dir = workDir;
@@ -146,4 +163,4 @@ async function alignFile(t, file, workDir) {
   return { ...out, voiceAligned: { v: 2, at: new Date().toISOString(), shifts, phrasesMoved: moved } };
 }
 
-module.exports = { align, alignFile, snapPhrases, fineLevels };
+module.exports = { align, alignFile, snapPhrases, fineLevels, damaged };

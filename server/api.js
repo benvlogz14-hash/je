@@ -597,7 +597,7 @@ r.post('/api/clips/:id/studio', async (req, b, p) => {
     let segs = v?.segs || null;
     if (!segs) {
       const pauses = await require('./jobs/handlers').pausesFor(a).catch(() => null);
-      try { segs = require('./video/render').cutSegments({ start: c.start, end: c.end, words, fps: a.info?.fps, plan: { keep: c.keep || [], silenceCut: c.silenceCut !== false, tight: c.tightCuts ?? require('./video/winners').on(), silences: pauses || [], retakeCut: client?.production?.retakeCut !== false && c.retakeCut !== false } }); } catch { segs = c.keep?.length ? c.keep : null; }
+      try { segs = require('./video/render').cutSegments({ start: c.start, end: c.end, words, fps: a.info?.fps, plan: { keep: c.keep || [], silenceCut: c.silenceCut !== false, tight: !!c.tightCuts, silences: pauses || [], retakeCut: client?.production?.retakeCut !== false && c.retakeCut !== false } }); } catch { segs = c.keep?.length ? c.keep : null; }
     }
     // Clips rendered before the music file was saved: find their track in the music library by mood and name.
     const libFile = (x) => (x.mood && x.track ? path.join(paths.root, 'music', String(x.mood), path.basename(String(x.track))) : null);

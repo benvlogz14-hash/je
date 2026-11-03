@@ -12,10 +12,14 @@ async function transcribe(asset, { jobId, onProgress } = {}) {
   const dir = path.dirname(asset.path);
   const cache = path.join(asset.workDir || dir, `${asset.id}.transcript.json`);
   if (fs.existsSync(cache)) {
-    const raw = JSON.parse(fs.readFileSync(cache, 'utf8')); let t = require('./transcript-fix').clean(raw);
-    if (!t.voiceAligned) t = await require('./align').alignFile(t, asset.path, asset.workDir); // words back on the voice where they drifted
-    if (t !== raw) { try { fs.writeFileSync(cache, JSON.stringify(t)); } catch { /* read-only */ } }
-    return t;
+    const raw = JSON.parse(fs.readFileSync(cache, 'utf8'));
+    // A transcript the (now switched off) loudness alignment moved is made again from the sound; any other is kept.
+    if (!require('./align').damaged(raw)) {
+      const t = require('./transcript-fix').clean(raw);
+      if (t !== raw) { try { fs.writeFileSync(cache, JSON.stringify(t)); } catch { /* read-only */ } }
+      return t;
+    }
+    onProgress?.(0.01, 'Captions were off: transcribing this video again');
   }
   const duration = asset.info?.duration || 0;
   // No speech-to-text yet: install the free one (whisper.cpp) right here instead of stopping.
@@ -30,7 +34,7 @@ async function transcribe(asset, { jobId, onProgress } = {}) {
     const wav = path.join(asset.workDir, `${asset.id}.wav`);
     await ff.extractWav(asset.path, wav);
     const words = await whisperLocal(localBin, localModel, wav, path.join(asset.workDir, `${asset.id}.whisper`), { duration, onProgress });
-    result = { engine: 'whisper.cpp (local)', text: words.map((w) => w.w).join(' '), words, segments: segmentsFromWords(words) };
+    result = { engine: 'whisper.cpp (local)', timing: words.filter((w) => w.d).length >= words.length * 0.6 ? 'dtw' : 'rough', text: words.map((w) => w.w).join(' '), words, segments: segmentsFromWords(words) };
     try { fs.unlinkSync(wav); } catch { /* ignore */ }
   } else if (ai.connected('openai')) {
     // 48 kbps mono MP3 ≈ 21 MB/hour; split into ≤45-minute pieces to stay under the 25 MB API limit.
@@ -73,6 +77,28 @@ async function transcribe(asset, { jobId, onProgress } = {}) {
  *  - `-pp` so the progress bar moves (without it whisper prints no progress and the step sat at 0%),
  *  - DTW word timing kept; a build that can't do it is remembered so the file is never transcribed twice.
  */
+/**
+ * Words from whisper.cpp's JSON (one word per segment with -ml 1 -sow). Each word starts at its first token's DTW time
+ * when there is one and it's sensible (within the rough window, in order), else at whisper's rough offset; it ends where
+ * the next word starts (or its own rough end, if sooner). Marks `d` on words timed by DTW.
+ */
+function wordsFromWhisper(j, off = 0) {
+  const raw = [];
+  for (const seg of j.transcription || []) {
+    const text = String(seg.text || '').trim(); if (!text) continue;
+    const s0 = seg.offsets.from / 1000, e0 = seg.offsets.to / 1000;
+    const tok = (seg.tokens || []).find((t) => String(t.text || '').trim() && !/^\[_?[A-Z]/.test(String(t.text).trim()));
+    const dtw = tok && Number.isFinite(tok.t_dtw) && tok.t_dtw >= 0 ? tok.t_dtw / 100 : null;
+    raw.push({ w: text, s0, e0, dtw: dtw != null && dtw >= s0 - 0.8 && dtw <= e0 + 0.4 ? dtw : null });
+  }
+  const useDtw = raw.length && raw.filter((x) => x.dtw != null).length / raw.length >= 0.6;
+  const out = []; let last = -Infinity;
+  for (const x of raw) { let s = useDtw && x.dtw != null ? x.dtw : x.s0; if (s < last) s = last; out.push({ w: x.w, s, e: x.e0, d: useDtw && x.dtw != null }); last = s; }
+  // End: whisper's own end when it's after the start, else a length from the word's letters; never past the next word (pauses stay pauses).
+  for (let i = 0; i < out.length; i++) { const nx = out[i + 1]; let e = out[i].e > out[i].s + 0.05 ? out[i].e : out[i].s + Math.min(0.6, 0.07 * out[i].w.length + 0.12); if (nx && e > nx.s) e = nx.s; out[i].e = Math.max(out[i].s + 0.05, e); }
+  return out.map((w) => ({ w: w.w, s: Math.round((w.s + off) * 1000) / 1000, e: Math.round((w.e + off) * 1000) / 1000, ...(w.d ? { d: 1 } : {}) }));
+}
+
 async function whisperLocal(bin, model, wav, outBase, { duration = 0, onProgress } = {}) {
   const os = require('os');
   const cores = Math.max(1, (os.availableParallelism ? os.availableParallelism() : os.cpus().length) || 1);
@@ -101,20 +127,27 @@ async function whisperLocal(bin, model, wav, outBase, { duration = 0, onProgress
   const prog = pieces.map(() => 0); const weight = pieces.map((p) => (dur ? ((p.e ?? dur) - p.s) / dur : 1 / pieces.length));
   const report = () => onProgress && onProgress(Math.min(0.99, prog.reduce((a, v, i) => a + v * weight[i], 0)));
   const dtw = ctx.setting('ai.transcription.noDtw', false) ? null : /base\.en/i.test(model) ? 'base.en' : /small\.en/i.test(model) ? 'small.en' : /tiny\.en/i.test(model) ? 'tiny.en' : /medium\.en/i.test(model) ? 'medium.en' : null;
+  let full = !ctx.setting('ai.transcription.noFullJson', false);
   const one = async (p) => {
     let file = wav; const of = pieces.length > 1 ? `${outBase}.p${p.i}` : outBase;
     if (pieces.length > 1) { file = `${of}.wav`; await run(ff.bin('ffmpeg'), ['-hide_banner', '-y', '-ss', String(p.s), ...(p.e != null ? ['-to', String(p.e)] : []), '-i', wav, '-c:a', 'pcm_s16le', file], { timeoutMs: 600000 }); }
-    const base = ['-m', model, '-f', file, '-oj', '-ml', '1', '-sow', '-pp', '-t', String(threads), ...(best ? [] : ['-bs', '1', '-bo', '1']), '-of', of];
+    // Full JSON (-ojf): it carries each token's DTW time (t_dtw), the precise one. The plain JSON (-oj) only has whisper's
+    // rough per-word offsets, which bunch up and drift; --dtw was being computed and then never read.
+    const base = ['-m', model, '-f', file, full ? '-ojf' : '-oj', '-ml', '1', '-sow', '-pp', '-t', String(threads), ...(best ? [] : ['-bs', '1', '-bo', '1']), '-of', of];
     const opts = { timeoutMs: 6 * 3600000, priority: ff.priorityValue(), onStderrLine: (l) => { const m = /progress\s*=\s*(\d+)%/.exec(l); if (m) { prog[p.i] = Number(m[1]) / 100; report(); } } };
     try { await run(bin, dtw ? [...base, '--dtw', dtw] : base, opts); } catch (e) {
-      if (!dtw || e.canceled) throw e;
-      ctx.store.setSettings({ ai: { transcription: { noDtw: true } } }); // this build can't do DTW: don't try again on the next video
-      await run(bin, base, opts);
+      if (e.canceled) throw e;
+      if (dtw) { ctx.store.setSettings({ ai: { transcription: { noDtw: true } } }); } // this build can't do DTW: don't try again on the next video
+      try { await run(bin, base, opts); } catch (e2) {
+        if (e2.canceled || !full) throw e2;
+        full = false; ctx.store.setSettings({ ai: { transcription: { noFullJson: true } } }); // a very old build without -ojf
+        await run(bin, base.map((a) => (a === '-ojf' ? '-oj' : a)), opts);
+      }
     }
     prog[p.i] = 1; report();
     const j = JSON.parse(fs.readFileSync(`${of}.json`, 'utf8'));
     if (pieces.length > 1) { for (const f of [file, `${of}.json`]) { try { fs.unlinkSync(f); } catch { /* ignore */ } } }
-    return (j.transcription || []).map((t) => ({ w: t.text.trim(), s: t.offsets.from / 1000 + p.s, e: t.offsets.to / 1000 + p.s })).filter((w) => w.w);
+    return wordsFromWhisper(j, p.s);
   };
   const parts = await Promise.all(pieces.map(one));
   return parts.flat().sort((a, b) => a.s - b.s);
@@ -375,4 +408,4 @@ function transcriptExcerpt(transcript, start, end, pad = 20) {
   return (transcript.segments || []).filter((s) => s.e > start - pad && s.s < end + pad).map((s) => `[${s.s.toFixed(1)}] ${s.t}`).join('\n').slice(0, 6000);
 }
 
-module.exports = { whisperLocal, cleanHook, topicHook, TASTE_RULES, transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };
+module.exports = { wordsFromWhisper, whisperLocal, cleanHook, topicHook, TASTE_RULES, transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };
