@@ -1052,14 +1052,14 @@ function BrollBank({ projectId, onAdd }) {
   const folders = data?.folders || [];
   return html`<div class="col" style="gap:6px">
     <div class="row" style="gap:6px;flex-wrap:wrap"><${Seg} value=${kind} onChange=${setKind} options=${[{ value: 'all', label: 'All' }, { value: 'drone', label: 'Drone' }, { value: 'broll', label: 'Shots' }, { value: 'file', label: 'Mine' }]} /><div class="spacer" />${window.euclidean?.pickFiles ? html`<${Button} size="sm" kind="soft" icon="plus" onClick=${addFiles}>Add B-roll</${Button}>` : null}</div>
-    <p class="faint" style="font-size:var(--fs-xs);margin:0">Only this video's own shots. Drag one onto a video track, or double-click to put it at the playhead.</p>
+    <p class="faint" style="font-size:var(--fs-xs);margin:0">Every shot from this video's Shots list, in order. Drag one onto a video track, or double-click to put it at the playhead.</p>
     ${!data ? html`<div class="faint" style="padding:10px">Loading…</div>` : !folders.length ? html`<div class="empty" style="padding:24px 8px"><p style="font-size:var(--fs-sm)">This project isn't made from Production footage, so there are no shots to offer. Use Add B-roll to give it its own folder.</p></div>`
       : folders.map((f) => { const items = f.items.filter(keep); return html`<div key=${f.id} class="broll-folder">
         <button type="button" class="broll-folder-head" onClick=${() => setShut({ ...shut, [f.id]: !shut[f.id] })}><span>${shut[f.id] ? '▸' : '▾'}</span><${Icon} name="folder" size=${14} /><b class="ellipsis grow">${f.name}</b><span class="faint">${items.length}</span></button>
-        ${shut[f.id] ? null : !items.length ? html`<p class="faint" style="font-size:var(--fs-xs);margin:4px 2px 8px">${f.looked ? 'No shots of this kind.' : 'Press "Look through" on this video in Production and its drone and cut-away shots show up here.'}</p>`
+        ${shut[f.id] ? null : !items.length ? html`<p class="faint" style="font-size:var(--fs-xs);margin:4px 2px 8px">${f.looked ? 'No shots of this kind.' : 'Press "Look through" on this video in Production and all its shots show up here.'}</p>`
           : html`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:4px 0 8px">${items.map((it) => html`<div key=${it.key} class="broll-card" draggable="true" onDragStart=${(e) => { e.dataTransfer.setData('text/x-broll', JSON.stringify({ path: it.path, s: it.s, e: it.e, what: it.what })); e.dataTransfer.effectAllowed = 'copy'; }} onDblClick=${() => onAdd(it)} title=${`${it.what || it.kind}${it.e ? ` · ${(it.e - it.s).toFixed(1)} s` : ''}. Drag onto a track or double-click.`}>
             <div class="broll-th" style=${{ backgroundImage: `url(${thumb(it)})` }}>${it.kind === 'drone' ? html`<span class="broll-tag">Drone</span>` : it.kind === 'file' ? html`<span class="broll-tag">Mine</span>` : null}<button type="button" class="broll-x" title="Remove from the folder" onClick=${(e) => { e.stopPropagation(); hide(it); }}>×</button></div>
-            <div class="ellipsis" style="font-size:11px;padding:2px 2px 0">${it.what || it.from}</div></div>`)}</div>`}</div>`; })}
+            <div class="ellipsis" style="font-size:11px;padding:2px 2px 0">${it.at != null ? html`<span class="faint tnum">${Math.floor(it.at / 60)}:${String(Math.floor(it.at % 60)).padStart(2, '0')} </span>` : null}${it.what || it.from}</div></div>`)}</div>`}</div>`; })}
   </div>`;
 }
 

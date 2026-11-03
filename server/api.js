@@ -1179,15 +1179,17 @@ r.get('/api/broll/bank', (req) => {
   for (const a of assets) {
     let v = null; try { v = vision.cached(a.path, a.workDir); } catch { /* not looked through */ }
     const items = [];
+    // Every shot from the footage's Shots list (Production → Footage → Shots), in the order they happen, so anything
+    // there can be dragged in. Long shots give their middle 6 s (trim or stretch it on the timeline).
     for (const x of v?.shots || []) {
-      if (x.usable === false || x.e - x.s < 1.2 || (x.bright != null && x.bright < 40)) continue;
-      if (!(m.isDrone(x) || ['broll', 'aerial'].includes(x.kind) || x.faces === 0)) continue;
+      if (x.e - x.s < 0.4) continue;
       const key = `${a.id}:${x.s.toFixed(1)}`; if (hidden.has(key)) continue;
-      const mid = (x.s + x.e) / 2; const len = Math.min(3, x.e - x.s);
-      items.push({ key, path: a.path, assetId: a.id, from: a.name, s: Math.max(x.s, mid - len / 2), e: Math.min(x.e, mid + len / 2), kind: m.isDrone(x) ? 'drone' : x.kind || 'broll', what: x.what || '', score: Math.round(m.shotScore(x) * 100) + (m.isDrone(x) ? 30 : 0) });
+      const len = x.e - x.s; const take = Math.min(len, 6); const mid = (x.s + x.e) / 2;
+      const s0 = len <= 6 ? x.s : mid - take / 2;
+      items.push({ key, path: a.path, assetId: a.id, from: a.name, s: Math.round(s0 * 100) / 100, e: Math.round((s0 + take) * 100) / 100, at: Math.round(x.s * 10) / 10, kind: m.isDrone(x) ? 'drone' : x.kind || 'shot', faces: x.faces || 0, dark: x.bright != null && x.bright < 40, what: x.what || '', score: Math.round(m.shotScore(x) * 100) + (m.isDrone(x) ? 30 : 0) });
     }
-    items.sort((p, q) => q.score - p.score);
-    folders.push({ id: a.id, name: String(a.name || 'Video').replace(/\.[^.]+$/, ''), looked: !!v, items: items.slice(0, 120) });
+    items.sort((p, q) => p.at - q.at);
+    folders.push({ id: a.id, name: String(a.name || 'Video').replace(/\.[^.]+$/, ''), looked: !!v, items: items.slice(0, 600) });
   }
   const own = (ctx.store.settings.brollBank || []).filter((x) => proj && x.projectId === proj.id && fs.existsSync(x.path)).map((x) => ({ key: `file:${x.path}`, path: x.path, from: 'Your B-roll', s: 0, e: null, kind: 'file', what: x.name || path.basename(x.path), score: 1000 }));
   if (own.length) folders.unshift({ id: 'mine', name: 'Your B-roll for this video', looked: true, items: own });
