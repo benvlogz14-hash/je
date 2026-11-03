@@ -28,9 +28,11 @@ const N = { E1: 41.2, G1: 49, A1: 55, Bb1: 58.27, C2: 65.41, Db2: 69.3, D2: 73.4
 const MOODS = {
   positive: { label: 'Uplifting', search: ['uplifting inspirational', 'hopeful cinematic', 'upbeat motivational'], gen: { kind: 'pad', bpm: 112, chords: [[N.C4, N.E4, N.G4], [N.G3, N.B3, N.D4], [N.A3, N.C4, N.E4], [N.F3, N.A3, N.C4]], kick: 1 } },
   triumphant: { label: 'Triumphant', search: ['epic triumphant', 'victory orchestral', 'heroic cinematic'], gen: { kind: 'pad', bpm: 100, brass: true, chords: [[N.D3, N.Fs3, N.A3], [N.A2, N.Cs4 / 2, N.E3], [N.B2, N.D3, N.Fs3], [N.G2, N.B2, N.D3]], kick: 2, snare: true } },
-  suspense: { label: 'Suspense', search: ['suspense tension', 'dark suspense', 'thriller tension'], gen: { kind: 'drone', bpm: 76, root: N.A1, rub: N.Bb1, pulse: [N.A2, N.A2, N.Bb2, N.A2], heartbeat: true } },
-  darkbeat: { label: 'Dark beat (horror trap)', search: ['dark ambient beat', 'horror trap', 'dark phonk', 'dark cinematic percussion'], gen: { kind: 'drone', bpm: 92, root: N.E1 * 2, rub: N.G2 / 2, kick: 1, snare: true, plinks: [N.E5, N.G4, N.B4, N.Fs4] } },
-  creepy: { label: 'Creepy / scary', search: ['creepy horror', 'eerie haunted', 'horror ambient'], gen: { kind: 'drone', bpm: 60, root: N.G1, rub: N.Db2, whine: true, plinks: [N.E5, N.C5, N.B4, N.Fs4] } },
+  suspense: { label: 'Suspense', search: ['suspense tension', 'dark suspense', 'thriller tension', 'suspense cinematic', 'mystery tension', 'tension build up', 'investigation mystery', 'dark mystery ambient', 'thriller underscore', 'ticking tension', 'suspenseful drone', 'detective noir'], gen: { kind: 'drone', bpm: 76, root: N.A1, rub: N.Bb1, pulse: [N.A2, N.A2, N.Bb2, N.A2], heartbeat: true } },
+  darkbeat: { label: 'Dark beat (horror trap)', search: ['dark ambient beat', 'horror trap', 'dark phonk', 'dark cinematic percussion', 'dark trap beat', 'dark hip hop instrumental', 'ominous beat', 'dark drill instrumental', 'industrial dark beat', 'dark electronic'], gen: { kind: 'drone', bpm: 92, root: N.E1 * 2, rub: N.G2 / 2, kick: 1, snare: true, plinks: [N.E5, N.G4, N.B4, N.Fs4] } },
+  creepy: { label: 'Creepy', search: ['creepy horror', 'eerie haunted', 'horror ambient', 'creepy music box', 'eerie atmosphere', 'haunted house', 'dark ambient drone', 'unsettling ambient', 'creepy piano', 'ghost ambient', 'abandoned eerie', 'creepy lullaby'], gen: { kind: 'drone', bpm: 60, root: N.G1, rub: N.Db2, whine: true, plinks: [N.E5, N.C5, N.B4, N.Fs4] } },
+  // Scary / horror: harder than creepy (stingers, a heartbeat, a rising whine), for the jump in the dark.
+  scary: { label: 'Scary / horror', search: ['horror music', 'scary horror', 'horror cinematic', 'horror soundtrack', 'terror', 'jump scare', 'horror suspense', 'nightmare horror', 'horror strings', 'slasher horror', 'dark horror ambient', 'horror trailer'], gen: { kind: 'drone', bpm: 70, root: N.E1 * 2, rub: N.F2 / 2, whine: true, heartbeat: true, pulse: [N.E2, N.F2, N.E2, N.F2] } },
   intense: { label: 'Intense / action', search: ['intense action', 'epic battle', 'driving drums action'], gen: { kind: 'pad', bpm: 140, chords: [[N.A2, N.C3, N.E3], [N.F2, N.A2, N.C3], [N.G2, N.B2, N.D3], [N.E2, N.Gs3 / 2, N.B2]], kick: 1, snare: true, drive: true } },
   sad: { label: 'Sad / emotional', search: ['sad piano', 'emotional melancholy', 'sad cinematic'], gen: { kind: 'piano', bpm: 66, chords: [[N.A3, N.C4, N.E4], [N.F3, N.A3, N.C4], [N.C4, N.E4, N.G4], [N.G3, N.B3, N.D4]] } },
   chill: { label: 'Chill', search: ['lofi chill', 'calm ambient', 'relaxing background'], gen: { kind: 'pad', bpm: 84, chords: [[N.C4, N.E4, N.B4], [N.A3, N.C4, N.G4], [N.D4, N.F4, N.C5], [N.G3, N.B3, N.F4]], kick: 2, soft: true } },
@@ -59,13 +61,14 @@ function library(mood) {
 }
 
 /** Download a few free tracks for a mood from Openverse (no key). cc0Only skips anything that needs a credit. */
-async function fill(mood, { want = 4, cc0Only = false } = {}) {
+async function fill(mood, { want = 4, cc0Only = false, pages = 1, onTrack = () => {} } = {}) {
   mood = valid(mood); const dir = libDir(mood); const c = credits(mood);
   let got = library(mood).filter((t) => !cc0Only || !t.credit).length;
-  for (const q of MOODS[mood].search) {
+  const searches = MOODS[mood].search.flatMap((q) => Array.from({ length: pages }, (_, i) => [q, i + 1]));
+  for (const [q, page] of searches) {
     if (got >= want) break;
     let res;
-    try { res = await (await fetch(`https://api.openverse.org/v1/audio/?q=${encodeURIComponent(q)}&license=${cc0Only ? 'cc0' : 'cc0,by'}&category=music&length=medium,long&page_size=20`, { headers: { 'user-agent': 'EuclideanMedia/1.0' }, signal: AbortSignal.timeout(20000) })).json(); }
+    try { res = await (await fetch(`https://api.openverse.org/v1/audio/?q=${encodeURIComponent(q)}&license=${cc0Only ? 'cc0' : 'cc0,by'}&category=music&length=medium,long&page_size=20&page=${page}`, { headers: { 'user-agent': 'EuclideanMedia/1.0' }, signal: AbortSignal.timeout(20000) })).json(); }
     catch { continue; }
     for (const a of res.results || []) {
       if (got >= want) break;
@@ -82,7 +85,7 @@ async function fill(mood, { want = 4, cc0Only = false } = {}) {
         await run(ff.bin('ffmpeg'), ['-hide_banner', '-y', '-i', tmp, '-vn', '-t', '360', '-af', 'loudnorm=I=-18:TP=-2,aformat=sample_rates=48000:channel_layouts=stereo', '-c:a', 'aac', '-b:a', '160k', file], { timeoutMs: 180000 });
         c[name] = { title: a.title || 'Untitled', by: a.creator || 'unknown', license: lic === 'cc0' ? 'cc0' : 'cc-by', url: a.foreign_landing_url || url,
           credit: lic === 'cc0' ? '' : `Music: "${a.title || 'Untitled'}" by ${a.creator || 'unknown'} (CC BY ${a.license_version || ''})`.replace(/\s+\)/, ')') };
-        got++;
+        got++; onTrack(got);
       } catch { try { fs.unlinkSync(file); } catch { /* none */ } }
       finally { try { fs.unlinkSync(tmp); } catch { /* none */ } }
     }
@@ -94,8 +97,8 @@ async function fill(mood, { want = 4, cc0Only = false } = {}) {
 // ---------------------------------------------------------------- the built-in composer
 const f3 = (x) => Number(x).toFixed(3);
 /** FFmpeg expression for one mood's music (stereo-ready mono), seconds long. */
-function recipe(mood) {
-  const g = MOODS[mood].gen; const beat = 60 / g.bpm; const bar = beat * 4;
+function recipe(mood, variant = 0) {
+  const g = variantGen(mood, variant); const beat = 60 / g.bpm; const bar = beat * 4;
   const idx = `floor(mod(t,${f3(bar * 4)})/${f3(bar)})`;
   const pick = (list) => list.reduceRight((acc, v, i) => (i === list.length - 1 ? `${v}` : `if(eq(${idx},${i}),${v},${acc})`), '');
   const tone = (fq, rich) => (rich ? `(sin(2*PI*${fq}*t)+0.5*sin(4*PI*${fq}*t)+0.3*sin(6*PI*${fq}*t)+0.18*sin(8*PI*${fq}*t))` : `sin(2*PI*${fq}*t)`);
@@ -133,11 +136,32 @@ function recipe(mood) {
   return { expr: e, lowpass: g.soft ? 3000 : 5500 };
 }
 
-/** Music written by FFmpeg for a mood (cached). */
-async function generate(mood, seconds = 120) {
+/**
+ * Variations of the built-in composer's recipe (v1-v12), so a mood isn't one track: moved to another key, slower or
+ * faster, and with its layers (heartbeat, pulse, whine, plinks, kick) switched on and off by the variation's number.
+ */
+const VARIANTS = 12;
+const SEMI = [0, -2, 3, -5, 5, -3, 2, -4, 4, -1, 1, -6];
+function variantGen(mood, v) {
+  const g = { ...MOODS[mood].gen }; if (!v) return g;
+  const k = Math.pow(2, SEMI[v % SEMI.length] / 12); const sh = (x) => (x == null ? x : Array.isArray(x) ? x.map(sh) : x * k);
+  for (const key of ['root', 'rub', 'pulse', 'plinks', 'chords']) if (g[key] != null) g[key] = sh(g[key]);
+  g.bpm = Math.round(g.bpm * [1, 0.88, 1.12, 0.94, 1.06, 0.82][v % 6]);
+  if (g.kind === 'drone') {
+    const bit = (n) => ((v >> n) & 1) === 1;
+    g.heartbeat = bit(0) || (mood === 'scary' && v % 3 !== 0); g.whine = mood === 'darkbeat' ? false : bit(1) || mood === 'scary';
+    if (!g.pulse && bit(2)) g.pulse = [g.root * 2, g.root * 2, g.rub * 2, g.root * 2];
+    if (!g.plinks && bit(3)) g.plinks = [N.E5, N.C5, N.B4, N.Fs4].map((x) => x * k);
+    if (mood === 'darkbeat') { g.kick = 1 + (v % 2); g.snare = true; }
+  }
+  return g;
+}
+
+/** Music written by FFmpeg for a mood (cached); variant 0 is the original, 1-12 its variations. */
+async function generate(mood, seconds = 120, variant = 0) {
   mood = valid(mood); const dir = libDir(mood);
-  const out = path.join(dir, `generated-${mood}-v2.m4a`); if (fs.existsSync(out)) return out;
-  const r = recipe(mood);
+  const out = path.join(dir, variant ? `generated-${mood}-v2-${variant}.m4a` : `generated-${mood}-v2.m4a`); if (fs.existsSync(out)) return out;
+  const r = recipe(mood, variant);
   await run(ff.bin('ffmpeg'), ['-hide_banner', '-y', '-f', 'lavfi', '-i', `aevalsrc=${r.expr.replace(/,/g, '\\,')}:s=44100:d=${seconds}`, '-af', `lowpass=f=${r.lowpass},aecho=0.6:0.5:60|120:0.25|0.15,afade=t=in:d=1.5,loudnorm=I=-18,aformat=sample_rates=48000:channel_layouts=stereo`, '-c:a', 'aac', '-b:a', '160k', out], { timeoutMs: 300000 });
   return out;
 }
@@ -154,7 +178,7 @@ async function pick(mood = 'positive', { cc0Only = false, avoid = [] } = {}) {
   let lib = library(mood).filter(ok);
   if (lib.length < 2 && ctx.setting('music.download', true) !== false) { try { await fill(mood, { cc0Only }); lib = library(mood).filter(ok); } catch { /* offline */ } }
   if (lib.length) { const t = lib[(Math.random() * lib.length) | 0]; return { file: t.file, credit: t.credit, source: t.credit ? 'Free library (CC BY)' : 'Free library (CC0)' }; }
-  try { return { file: await generate(mood), credit: '', source: 'Made by Euclidean' }; } catch { return null; }
+  try { return { file: await generate(mood, 120, DARK.includes(mood) ? (Math.random() * (VARIANTS + 1)) | 0 : 0), credit: '', source: 'Made by Euclidean' }; } catch { return null; }
 }
 
 /**
@@ -189,7 +213,7 @@ function overview() {
     return { mood: k, label: m.label, own: !!fromFolder(k), cc0: lib.filter((t) => !t.credit).length, ccby: lib.filter((t) => t.credit).length, generated: fs.existsSync(path.join(libDir(k), `generated-${k}-v2.m4a`)), tracks: lib.map((t) => ({ name: path.basename(t.file), title: t.title, license: t.license })) };
   });
 }
-const CLIP_MOODS = ['darkbeat', 'creepy', 'suspense', 'intense', 'triumphant', 'positive', 'sad', 'chill', 'funny'];
+const CLIP_MOODS = ['darkbeat', 'scary', 'creepy', 'suspense', 'intense', 'triumphant', 'positive', 'sad', 'chill', 'funny'];
 
 /** Every track you can pick, by mood: your folder, the free library, and Euclidean's own. id = "<where>/<mood>/<file>". */
 function catalog() {
@@ -200,6 +224,7 @@ function catalog() {
     }
     for (const t of library(mood)) tracks.push({ id: `lib/${mood}/${path.basename(t.file)}`, title: t.title, license: t.credit ? 'CC BY (credit needed)' : 'CC0 (free for anything)', source: 'Free library', needsCredit: !!t.credit });
     tracks.push({ id: `gen/${mood}/original`, title: `Euclidean original: ${MOODS[mood].label}`, license: 'Made by Euclidean', source: 'Made by Euclidean' });
+    if (DARK.includes(mood)) for (let v = 1; v <= VARIANTS; v++) tracks.push({ id: `gen/${mood}/v${v}`, title: `Euclidean original: ${MOODS[mood].label} ${v + 1}`, license: 'Made by Euclidean', source: 'Made by Euclidean' });
     return { mood, label: MOODS[mood].label, tracks };
   });
 }
@@ -207,10 +232,21 @@ function catalog() {
 async function resolve(id) {
   const [where, mood, ...rest] = String(id || '').split('/'); const name = rest.join('/');
   if (!MOODS[mood] || !name || name.includes('..') || /[\\/]/.test(name)) return null;
-  if (where === 'gen') return generate(mood);
+  if (where === 'gen') { const v = /^v(\d+)$/.exec(name); return generate(mood, 120, v ? Math.min(VARIANTS, Number(v[1])) : 0); }
   if (where === 'lib') { const f = path.join(libDir(mood), name); return fs.existsSync(f) ? f : null; }
   if (where === 'own') for (const root of ownDirs()) for (const sub of [mood, MOODS[mood].label.toLowerCase()]) { const f = path.join(root, sub, name); if (fs.existsSync(f)) return f; }
   return null;
+}
+/** The dark moods (suspense, creepy, scary, dark beat): a big library of each. */
+const DARK = ['suspense', 'creepy', 'scary', 'darkbeat'];
+async function fillDark(onProgress = () => {}, { want = 40 } = {}) {
+  let n = 0;
+  for (let i = 0; i < DARK.length; i++) {
+    const m = DARK[i]; const label = MOODS[m].label.toLowerCase();
+    onProgress(i / DARK.length, `Getting ${label} music`);
+    try { n += await fill(m, { want, cc0Only: true, pages: 3, onTrack: (got) => onProgress((i + Math.min(1, got / want)) / DARK.length, `Getting ${label} music: ${got} tracks`) }); } catch { /* offline */ }
+  }
+  return n;
 }
 /** Download free tracks for every mood (CC0 first). */
 async function fillAll(onProgress = () => {}) {
@@ -219,4 +255,4 @@ async function fillAll(onProgress = () => {}) {
   return n;
 }
 
-module.exports = { pick, generate, fill, fillAll, library, overview, catalog, resolve, scoreVideo, recipe, libDir, MOODS, CLIP_MOODS };
+module.exports = { DARK, VARIANTS, variantGen, fillDark, pick, generate, fill, fillAll, library, overview, catalog, resolve, scoreVideo, recipe, libDir, MOODS, CLIP_MOODS };

@@ -551,6 +551,7 @@ r.get('/api/music/play', async (req, res) => { const f = await require('./video/
 // Studio's music library: the file for a catalog track, so it can be added to a project like any other audio.
 r.post('/api/music/file', async (req, b) => { const f = await require('./video/music').resolve(b?.id); if (!f) throw new HttpError(404, 'That track is gone. Press "Get more free music" or pick another.'); return { path: f }; });
 r.post('/api/music/fill', (req) => queue.enqueue('music.fill', {}, { actor: actorOf(req), dedupeKey: 'music.fill' }));
+r.post('/api/music/dark', (req) => queue.enqueue('music.dark', {}, { actor: actorOf(req), dedupeKey: 'music.dark' }));
 /** Render one of the AI's trial openings (different hook and/or start) as the clip's next version. */
 r.post('/api/clips/:id/trial', (req, b, p) => {
   const c = must(ctx.store.get('clips', p.id)); const t = (c.trials || [])[Number(b.i)]; if (!t) throw new HttpError(404, 'Trial not found');

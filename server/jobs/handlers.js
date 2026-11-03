@@ -885,6 +885,7 @@ queue.register('winners.measure', { title: (p) => `Measure best short: ${p.title
   try { h.progress(0.2, 'Measuring cuts, length and sound'); const m = await W.measure(job.payload.file); W.update(job.payload.id, { ...m, status: 'ready' }); events.publish('winners', {}); return m; }
   catch (e) { W.update(job.payload.id, { status: 'failed', error: 'Could not read this video.' }); events.publish('winners', {}); throw e; }
 } });
+queue.register('music.dark', { title: () => 'Download the dark music library (suspense, creepy, scary, dark beat)', maxAttempts: 1, run: async (job, h) => ({ tracks: await require('../video/music').fillDark((f, t) => h.progress(f, t)) }) });
 queue.register('music.fill', { title: () => 'Download free music (all moods)', maxAttempts: 1, run: async (job, h) => ({ tracks: await require('../video/music').fillAll((f, t) => h.progress(f, t)) }) });
 // The outreach guide's batch run (Part 8): chunks of 10, every person researched, drafted and checked; HAL posts the summary.
 queue.register('outreach.kits', {

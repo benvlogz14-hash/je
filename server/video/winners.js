@@ -103,7 +103,7 @@ const BUILTIN = [
   [26.2, 12, 3.1, 4.8, -15.1, 'we outran the cops...'], [25.2, 18, 0.9, 3.1, -13.8, 'ABANDONED GHOST TOWN'], [35.4, 20, 2.3, 3.5, -17.5, 'THEY LEFT MILLIONS TO FREEZE'],
   [25.9, 6, 1.3, 9.4, -14.9, 'THEY LEFT millions behind in this mansion...'], [46.1, null, null, null, null, 'Island lost to time...'], [36.4, null, null, null, null, 'who left this boat here...'],
 ].map(([dur, shots, firstCut, longest, lufs, title]) => ({ builtin: true, title, dur, shots, firstCut, longest, lufs }));
-const added = () => ctx.store.settings._winners || [];
+const added = () => ctx.store?.settings?._winners || [];
 const fs = require('fs'); const path = require('path');
 
 /** Measure one short (a file): length, every cut, the first cut, the longest shot, loudness, the quietest sound. */

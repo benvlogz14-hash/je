@@ -208,7 +208,7 @@ function normalizeClips(raw, { words, duration, minSec, maxSec, exclude = [], co
 
 /** Taste rules so edits don't look AI-made (adapted from reel-room by Eli Colussi, MIT). */
 const TASTE_RULES = `Don't make it look AI-edited; viewers scroll past the generic auto-edit look:
-- The hook is a short on-screen title about the subject, 2-6 words, like a video title: "Abandoned factory...", "Why did they leave it all behind...", "The town that sank...". Never a sentence quoted from what is said (the captions already show that), no clickbait like "You won't believe". ${require('./winners').titleRules()}
+- The hook is a short on-screen title about the subject, 2-6 words, like a video title: "Abandoned factory...", "Why did they leave it all behind...", "The town that sank...". Never a sentence quoted from what is said (the captions already show that), no clickbait like "You won't believe". ${require('./winners').TITLE_RULES}
 - Zooms only on the words that carry the point: roughly one every 4-8 seconds for energetic clips, none on serious lines. Never a zoom on every sentence.
 - Never more than two things on screen besides the speaker and captions, and nothing covers the face.
 - Graphics never repeat the captions word for word. No decorative emoji.

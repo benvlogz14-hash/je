@@ -18,6 +18,7 @@ const MOODS = music.CLIP_MOODS;
 const LEX = {
   creepy: ['abandon', 'creep', 'ghost', 'haunt', 'eerie', 'scary', 'scare', 'horror', 'blood', 'dead', 'death', 'corpse', 'body', 'bones', 'skull', 'doll', 'basement', 'cursed', 'demon', 'rott', 'decay', 'shadow', 'spooky', 'nightmare', 'grave', 'cemetery', 'morgue', 'asylum', 'mold', 'freaky', 'terrif', 'disturb', 'weird', 'strange'],
   suspense: ['suddenly', 'secret', 'hidden', 'hide', 'locked', 'door', 'heard', 'noise', 'listen', 'quiet', 'careful', 'footstep', 'someone', 'behind', 'caught', 'security', 'alarm', 'police', 'trespass', 'sneak', 'mystery', 'mysterious', 'unknown', 'wait', 'shh', 'tunnel', 'dark', 'flashlight', 'inside', 'discover'],
+  scary: ['scream', 'terrif', 'horror', 'jump scare', 'monster', 'killer', 'murder', 'blood', 'run', 'get out', 'what was that', 'oh my god', 'help', 'trapped', 'dark', 'alone', 'night'],
   intense: ['run', 'chase', 'crash', 'fight', 'attack', 'explo', 'fire', 'emergency', 'hurry', 'danger', 'insane', 'crazy', 'fast', 'speed', 'escape', 'collapse', 'falling', 'jump', 'go go', 'scream'],
   triumphant: ['finally', 'made it', 'we did', 'won', 'win', 'victory', 'success', 'champion', 'record', 'proud', 'incredible', 'unbelievable', 'massive', 'legend', 'goal', 'top', 'best', 'achiev', 'beat', 'conquer', 'summit'],
   sad: ['sad', 'lost', 'miss', 'gone', 'died', 'passed away', 'tragic', 'sorry', 'cry', 'tears', 'heartbreak', 'lonely', 'forgotten', 'memory', 'memories', 'once', 'used to'],
