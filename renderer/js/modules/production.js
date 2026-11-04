@@ -130,6 +130,7 @@ function Intake({ clients, clientId, setClientId, assets, jobs, clipped = new Se
       <input ref=${input} type="file" accept="video/*,audio/*" multiple hidden onChange=${(e) => { upload([...e.target.files]); e.target.value = ''; }} />
     </div>
     <div class="panel"><div class="panel-head"><h4 class="grow">Footage</h4><span class="faint" style="font-size:var(--fs-sm)">${active.length ? `${active.length} processing` : `${assets.length} files`}</span>
+      <${Button} size="sm" kind="soft" icon="scissors" title="Open any video, drag the handles to pick a part, crop it and export: no timeline" onClick=${() => navigate('/clipper')}>Quick cut</${Button}>
       <${Button} size="sm" kind="soft" icon="sparkle" disabled=${!target || !assets.some((a) => a.clientId === target && a.info?.hasVideo !== false)} title=${target ? "Pick any of this client's videos and make clips from them again, with today's styles and settings" : 'Choose a client first (menu at the top right)'} onClick=${() => setReclip(true)}>Re-clip footage</${Button}></div>
       ${reclip ? html`<${ReclipFootage} client=${clients.find((c) => c.id === target)} assets=${assets.filter((a) => a.clientId === target && a.info?.hasVideo !== false)} onClose=${() => setReclip(false)} />` : null}
       <div class="list" style="max-height:190px;overflow:auto">${recent.length ? recent.map((a) => {

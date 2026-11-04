@@ -604,6 +604,20 @@ async function faceTrackFor(clip, asset, h) {
   } catch (e) { h.log(`Face tracking skipped: ${e.message}`); return null; }
 }
 
+// Quick cut (server/video/clipper.js): a light preview copy for files the player can't play smoothly, and the export.
+queue.register('clipper.proxy', { title: () => 'Quick cut: preview copy', maxAttempts: 1, priority: 8, run: async (job, h) => {
+  await require('../video/clipper').makeProxy(job.payload.id, (f) => h.progress(f, 'Making a smooth preview copy'));
+  events.publish('clipper', { id: job.payload.id }); return { ok: true };
+} });
+queue.register('clipper.export', { title: () => 'Quick cut: export', maxAttempts: 1, priority: 8, run: async (job, h) => {
+  const r = await require('../video/clipper').exportCut({ ...job.payload, signal: h.signal, onProgress: (f) => h.progress(f * 0.97, 'Exporting') });
+  let assetId = null;
+  if (job.payload.clientId && ctx.store.get('clients', job.payload.clientId)) { try { assetId = pipeline.addAsset({ clientId: job.payload.clientId, filePath: r.path, source: 'quick cut', actor: job.actor || 'user' })?.id || null; } catch (e) { h.log(`Not added to Production: ${e.message}`); } }
+  events.publish('notify', { title: 'Cut exported', body: path.basename(r.path) });
+  events.publish('clipper.exported', { id: job.payload.id, path: r.path, assetId });
+  if (job.payload.reveal !== false && ctx.revealFile) ctx.revealFile(r.path);
+  return { ...r, assetId };
+} });
 queue.register('studio.export', {
   title: () => 'Export Studio project', heavy: true,
   priority: 8, // you're waiting on it: ahead of renders and transcription

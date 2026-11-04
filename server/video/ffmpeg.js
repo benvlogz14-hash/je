@@ -82,7 +82,8 @@ async function probe(file) {
   return {
     duration: Number(j.format?.duration || v?.duration || a?.duration || 0),
     width, height, fps: d ? Math.round((n / d) * 100) / 100 : 0,
-    hasVideo: !!v && width > 0 && height > 0, hasAudio: !!a, // a 0x0 stream (cover art, broken track) is not a picture vcodec: v?.codec_name || null, acodec: a?.codec_name || null,
+    hasVideo: !!v && width > 0 && height > 0, hasAudio: !!a, // a 0x0 stream (cover art, broken track) is not a picture
+    vcodec: v?.codec_name || null, acodec: a?.codec_name || null,
     size: Number(j.format?.size || 0), bitrate: Number(j.format?.bit_rate || 0),
     // Where the sound starts on the file's timeline (downloads often start the audio a little after the picture).
     // Speech-to-text times are counted from the first sound, so they get this added to line up with the picture.

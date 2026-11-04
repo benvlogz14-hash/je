@@ -1357,7 +1357,9 @@ r.post('/api/projects/:id/media', async (req, b, p) => {
     if (!info.hasVideo && !info.hasAudio && !isImage && ext !== '.svg') { problems.push(`${path.basename(f)}: no video or audio inside`); continue; }
     const kind = isImage ? 2 : ext === '.svg' ? 3 : info.hasVideo ? 0 : 1;
     const m = { id: makeId('m'), path: f, name: path.basename(f), kind, duration: kind >= 2 ? 5 : info.duration, width: info.width, height: info.height, fps: info.fps, hasVideo: info.hasVideo && kind !== 1, hasAudio: info.hasAudio && kind < 2, vcodec: info.vcodec, srcIn: 0, srcOut: -1 };
-    if (kind === 0 && studioProxy.needsProxy(f, info)) { m.proxy = null; m.proxyPending = true; studioProxy.make(pr.id, m); }
+    // Studio previews every video from a light copy (it always has: the codec check never saw the codec), which keeps
+    // playback and scrubbing smooth; exports use the original.
+    if (kind === 0) { m.proxy = null; m.proxyPending = true; studioProxy.make(pr.id, m); }
     added.push(m);
   }
   if (!added.length && problems.length) throw new HttpError(400, `Nothing imported. ${problems.join(' · ')}`);
@@ -1383,15 +1385,40 @@ r.post('/api/projects/:id/extract-audio', async (req, b, p) => {
   return item;
 });
 /** Media preview for Studio: only files referenced by a project or an asset can be served. */
+// Quick cut (server/video/clipper.js): open a video, pick a stretch, crop, export. Separate from the clip machine.
+const clipper = () => require('./video/clipper');
+r.get('/api/clipper', () => ({ files: clipper().list().filter((x) => fs.existsSync(x.path)), folder: ctx.setting('studio.exportFolder', '') || path.join(require('os').homedir(), 'Videos', 'Euclidean'), desktop: !!ctx.pickFiles, clients: ctx.store.all('clients', (c) => c.status !== 'archived').map((c) => ({ id: c.id, name: c.name })) }));
+r.post('/api/clipper/open', async (req, b) => {
+  let file = String(b.path || '');
+  if (b.assetId) file = must(ctx.store.get('assets', String(b.assetId)), 'That footage is gone').path;
+  const e = await clipper().open(file);
+  if (e.proxyPending) queue.enqueue('clipper.proxy', { id: e.id }, { actor: actorOf(req), title: `Preview copy: ${e.name}`, dedupeKey: `clipper.proxy:${e.id}`, priority: 8 });
+  return e;
+});
+r.post('/api/clipper/upload', async (req) => {
+  const { files } = await receiveUpload(req, clipper().dir());
+  const out = [];
+  for (const f of files) { const e = await clipper().open(f.path, { uploaded: true }); if (e.proxyPending) queue.enqueue('clipper.proxy', { id: e.id }, { actor: actorOf(req), title: `Preview copy: ${e.name}`, dedupeKey: `clipper.proxy:${e.id}`, priority: 8 }); out.push(e); }
+  return out;
+}, { raw: true });
+r.get('/api/clipper/:id', (req, b, p) => must(clipper().get(p.id), 'Open the video again'));
+r.get('/api/clipper/:id/wave', async (req, b, p) => ({ peaks: await clipper().wave(p.id) }));
+r.get('/api/clipper/:id/strip', async (req, res, p) => { let f = null; try { f = await clipper().strip(p.id); } catch { /* none */ } if (!f || !fs.existsSync(f)) return send(res, 404, {}); return serveFile(req, res, f, { cache: true }); }, { stream: true });
+r.del('/api/clipper/:id', (req, b, p) => { clipper().forget(p.id); return { ok: true }; });
+r.post('/api/clipper/:id/export', (req, b, p) => {
+  const e = must(clipper().get(p.id), 'Open the video again');
+  if (b.folder) { const d = path.resolve(String(b.folder)); try { fs.mkdirSync(d, { recursive: true }); fs.accessSync(d, fs.constants.W_OK); } catch { throw new HttpError(400, `Euclidean can't save into ${d}. Choose another folder.`); } ctx.store.setSettings({ studio: { exportFolder: d } }); }
+  return queue.enqueue('clipper.export', { id: e.id, start: Number(b.start), end: Number(b.end), crop: b.crop || null, size: b.size || 'original', name: String(b.name || '').slice(0, 120), folder: b.folder ? path.resolve(String(b.folder)) : '', clientId: b.clientId || null, reveal: b.reveal !== false }, { actor: actorOf(req), title: `Quick cut: ${e.name}`, priority: 8 });
+});
 r.get('/api/media', (req, res) => {
   const f = String(req.query.path || '');
-  const allowed = ctx.store.all('projects').some((p) => (p.data?.media || []).some((m) => m.path === f || m.proxy === f)) || ctx.store.find('assets', (a) => a.path === f);
+  const allowed = ctx.store.all('projects').some((p) => (p.data?.media || []).some((m) => m.path === f || m.proxy === f)) || ctx.store.find('assets', (a) => a.path === f) || require('./video/clipper').allowed(f);
   if (!allowed) return send(res, 403, { error: 'File is not part of any project' });
   return serveFile(req, res, f);
 }, { stream: true });
 r.get('/api/media/thumb', async (req, res) => {
   const f = String(req.query.path || ''); const still = /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(f); const t = still ? 0 : Number(req.query.t || 1);
-  const allowed = ctx.store.all('projects').some((p) => (p.data?.media || []).some((m) => m.path === f)) || !!ctx.store.find('assets', (a) => a.path === f) || (ctx.store.settings.brollBank || []).some((x) => x.path === f);
+  const allowed = ctx.store.all('projects').some((p) => (p.data?.media || []).some((m) => m.path === f)) || !!ctx.store.find('assets', (a) => a.path === f) || (ctx.store.settings.brollBank || []).some((x) => x.path === f) || require('./video/clipper').allowed(f);
   if (!allowed) return send(res, 403, {});
   const out = path.join(paths.tmp('thumbs'), crypto.createHash('md5').update(f + t).digest('hex') + '.jpg');
   if (!fs.existsSync(out)) { try { await ff.thumbnail(f, out, t, 240); } catch { /* retry from the first frame below */ } }

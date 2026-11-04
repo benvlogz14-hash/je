@@ -21,6 +21,7 @@ import { Palette } from './modules/palette.js';
 import { Lite } from './modules/lite.js';
 import { Bridge } from './modules/bridge.js';
 import { Seo } from './modules/seo.js';
+import { Clipper } from './modules/clipper.js';
 
 const NAV = [
   { path: '/messages', tone: 'teal', icon: 'messages', label: 'Messages', key: '1' },
@@ -31,6 +32,7 @@ const NAV = [
   { path: '/calendar', tone: 'moss', icon: 'calendar', label: 'Publishing', key: '6' },
   { path: '/politics', tone: 'rose', icon: 'target', label: 'Politics', hint: 'Find candidates, make their ads, email them, autopilot' },
   { path: '/growth', tone: 'sky', icon: 'growth', label: 'Outreach', hint: 'Creator outreach, lead pipeline and table', key: '7' },
+  { path: '/clipper', tone: 'gold', icon: 'scissors', label: 'Quick cut', hint: 'Open a video, drag the handles, crop, export' },
   { path: '/seo', tone: 'sky', icon: 'search', label: 'SEO lab', hint: 'Your SEO research and stats, and a title and description machine' },
   { path: '/bridge', tone: 'lav', icon: 'sparkle', label: 'AI apps', hint: 'Talk to your Grok, Claude and ChatGPT accounts (no API keys)' },
   'sep',
@@ -38,7 +40,7 @@ const NAV = [
   { path: '/finance', tone: 'rose', icon: 'finance', label: 'Finance', key: '9', owner: true },
   { path: '/system', tone: 'slate', icon: 'system', label: 'System', key: '0' },
 ];
-const ROUTES = { '/messages': Messages, '/production': Production, '/approvals': Approvals, '/studio': Studio, '/clients': Clients, '/calendar': Calendar, '/growth': Growth, '/politics': Politics, '/bridge': Bridge, '/seo': Seo, '/analytics': Analytics, '/finance': Finance, '/system': System, '/settings': Settings, '/lite': Lite };
+const ROUTES = { '/messages': Messages, '/production': Production, '/approvals': Approvals, '/studio': Studio, '/clients': Clients, '/calendar': Calendar, '/growth': Growth, '/politics': Politics, '/bridge': Bridge, '/seo': Seo, '/clipper': Clipper, '/analytics': Analytics, '/finance': Finance, '/system': System, '/settings': Settings, '/lite': Lite };
 
 function useCounts() {
   const [counts, setCounts] = useState({ approvals: 0, unread: 0 });
