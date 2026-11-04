@@ -465,7 +465,17 @@ r.get('/api/assets/:id/transcript-file/:fmt', (req, res, p) => {
   return res.end(body);
 }, { stream: true });
 r.post('/api/assets/:id/transcribe', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); if (a.info && !a.info.hasAudio) throw new HttpError(400, 'This video has no sound to transcribe.'); try { fs.unlinkSync(path.join(a.workDir, `${a.id}.transcript.json`)); } catch { /* none yet */ } /* a fresh transcript (new timing fixes) */ return queue.enqueue('transcribe', { assetId: a.id }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `transcribe:${a.id}:${Date.now()}` }); });
-r.get('/api/assets/:id/transcript', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); return require('./jobs/handlers').loadTranscript(a) || { words: [], segments: [] }; });
+r.get('/api/assets/:id/transcript', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); const t = require('./jobs/handlers').loadTranscript(a); return t ? { ...t, wordsRaw: undefined, captionTiming: a.captionTiming || 'aligned', hasRaw: !!t.wordsRaw?.length } : { words: [], segments: [], captionTiming: a.captionTiming || 'aligned' }; });
+// Caption timing per video: 'aligned' (lined up to the voice's loudness, the default) or 'raw' (exactly as Whisper heard
+// it). Switching re-renders this video's clips that aren't published, so the two can be compared on real footage.
+r.post('/api/assets/:id/caption-timing', (req, b, p) => {
+  const a = must(ctx.store.get('assets', p.id)); const mode = b.mode === 'raw' ? 'raw' : 'aligned';
+  ctx.store.update('assets', a.id, { captionTiming: mode });
+  const clips = ctx.store.all('clips', (c) => c.assetId === a.id && !['published', 'rendering'].includes(c.status) && c.kind !== 'broll' && c.kind !== 'story' && !c.postId);
+  for (const c of clips) pipeline.requestRender(c, { reason: 'caption timing' });
+  events.publish('assets', { id: a.id }); events.publish('clips', {});
+  return { ok: true, mode, rerendering: clips.length };
+});
 r.del('/api/assets/:id', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); ctx.store.remove('assets', a.id); audit.log(actorOf(req), 'footage.removed', { clientId: a.clientId, assetId: a.id }); return { ok: true }; }, { roles: OWNER });
 
 // ------------------------------------------------------------ clips

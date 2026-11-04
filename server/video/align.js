@@ -143,7 +143,9 @@ async function alignFile(t, file, workDir) {
   if (!t.voiceAligned) { try { const lv = await montage.levels(file, dir); const r = align(t, lv); out = r.t; if (r.changed) shifts = r.shifts; } catch { /* no level map */ } }
   let moved = 0;
   try { const r = snapPhrases(out, await fineLevels(file, dir)); out = r.t; moved = r.moved; } catch { /* keep the coarse result */ }
-  return { ...out, voiceAligned: { v: 2, at: new Date().toISOString(), shifts, phrasesMoved: moved } };
+  // Whisper's own word times are kept (wordsRaw) so a video whose captions came out wrong can switch back to them.
+  const wordsRaw = t.wordsRaw || (!t.voiceAligned ? t.words : undefined);
+  return { ...out, ...(wordsRaw ? { wordsRaw } : {}), voiceAligned: { v: 2, at: new Date().toISOString(), shifts, phrasesMoved: moved } };
 }
 
 module.exports = { align, alignFile, snapPhrases, fineLevels };

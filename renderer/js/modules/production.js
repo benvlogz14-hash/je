@@ -1,5 +1,5 @@
 // Production: footage intake and the clip board, per client.
-import { html, useRoute, useState, useEffect, useRef, useStore, useApi, navigate, Button, Empty, Loading, StatusBadge, Progress, act, toast, promptDialog, confirmDialog, Avatar, Drawer, Toggle, Modal } from '../lib/ui.js';
+import { html, useRoute, useState, useEffect, useRef, useStore, useApi, navigate, Button, Empty, Loading, StatusBadge, Progress, act, toast, promptDialog, confirmDialog, Avatar, Drawer, Toggle, Modal, Seg } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { play } from '../lib/sound.js';
@@ -372,6 +372,11 @@ function Transcript({ a }) {
     <summary><b>Transcript</b> <span class="faint" style="font-size:var(--fs-xs)">${segs.length ? `${(t.words || []).length} words` : 'not made yet'}</span></summary>
     <div class="col" style="gap:8px;margin-top:8px">
       ${segs.length ? html`<div class="selectable" style="max-height:260px;overflow:auto;white-space:pre-wrap;font-size:var(--fs-sm);line-height:1.6;background:var(--surface-2);border-radius:10px;padding:10px 12px">${text}</div>
+        <div class="col" style="gap:4px;padding:8px 10px;border:1px solid var(--line);border-radius:10px">
+          <div class="row wrap" style="gap:8px;align-items:center"><b style="font-size:var(--fs-sm)">Caption timing</b>
+            <${Seg} value=${t.captionTiming || 'aligned'} onChange=${(mode) => act(() => api.post(`/api/assets/${a.id}/caption-timing`, { mode }), { ok: mode === 'raw' ? "Using Whisper's own timing; this video's clips are re-rendering" : "Lining captions up to the voice again; this video's clips are re-rendering" }).then(reload)} options=${[{ value: 'aligned', label: 'Lined up to the voice' }, { value: 'raw', label: 'As Whisper heard it' }]} /></div>
+          <span class="faint" style="font-size:var(--fs-xs)">Captions out of sync on this video's clips? Switch and compare: its clips re-render with the other timing.${(t.captionTiming === 'raw' && !t.hasRaw) ? ' (This video is transcribed again first, a few minutes.)' : ''}</span>
+        </div>
         <div class="row wrap" style="gap:6px"><${Button} size="sm" kind="primary" onClick=${copy}>Copy text</${Button}><a class="btn ghost sm" href=${api.url(`/api/assets/${a.id}/transcript-file/txt`) + '&download=1'}>Download .txt</a><a class="btn ghost sm" href=${api.url(`/api/assets/${a.id}/transcript-file/srt`) + '&download=1'}>Download subtitles (.srt)</a></div>`
       : html`<div class="row wrap" style="gap:8px"><span class="faint grow" style="font-size:var(--fs-sm)">Turns everything said in the video into text with timestamps. Uses the free speech-to-text tool (installed automatically the first time).</span><${Button} size="sm" kind="primary" onClick=${() => act(() => api.post(`/api/assets/${a.id}/transcribe`, {}), { ok: 'Making the transcript' }).then(reload)}>Make transcript</${Button}></div>`}
     </div></details>`;

@@ -245,6 +245,13 @@ async function alignedTranscript(asset, { onProgress, jobId } = {}) {
     if (!retranscribing.has(asset.id)) retranscribing.set(asset.id, require('../video/intelligence').transcribe(asset, { jobId, onProgress: (f, n) => onProgress?.(f * 0.3, n || 'Transcribing again') }).finally(() => setTimeout(() => retranscribing.delete(asset.id), 1000)));
     try { return await retranscribing.get(asset.id); } catch { return t; }
   }
+  // Whisper's own timing asked for, but this transcript only has the lined-up times: transcribe again once to get them.
+  if (asset.captionTiming === 'raw') {
+    if (t.timingMode === 'raw') return t;
+    if (!retranscribing.has(asset.id)) retranscribing.set(asset.id, require('../video/intelligence').transcribe(asset, { jobId, force: true, onProgress: (f, n) => onProgress?.(f * 0.3, n || 'Transcribing again for Whisper timing') }).finally(() => setTimeout(() => retranscribing.delete(asset.id), 1000)));
+    try { await retranscribing.get(asset.id); } catch { return t; }
+    return loadTranscript(asset) || t;
+  }
   if (t.voiceAligned) return t;
   const a = await require('../video/align').alignFile(t, asset.path, asset.workDir);
   try { fs.writeFileSync(path.join(asset.workDir, `${asset.id}.transcript.json`), JSON.stringify(a)); } catch { /* read-only */ }
@@ -258,8 +265,16 @@ function loadTranscript(asset) {
   // Tidy word times and repetition loops once, and save it, so captions, cuts and the caption editor all agree.
   const t = require('../video/transcript-fix').clean(raw);
   if (t !== raw) { try { fs.writeFileSync(f, JSON.stringify(t)); } catch { /* read-only */ } }
+  // Caption timing for this video (footage panel → Transcript): 'raw' = exactly as Whisper heard it, not lined up to
+  // the loudness. Used everywhere the words are read (renders, cuts, Studio, the caption editor).
+  if (asset.captionTiming === 'raw' && t.wordsRaw?.length) {
+    const r = require('../video/transcript-fix').clean({ ...t, words: t.wordsRaw, voiceAligned: undefined });
+    return { ...t, words: r.words, segments: segmentsOf(r.words, t.segments), timingMode: 'raw' };
+  }
   return t;
 }
+/** Segments (for the transcript text) re-timed from words, keeping their text. */
+function segmentsOf(words, segs = []) { try { return require('../video/intelligence').segmentsFromWords ? require('../video/intelligence').segmentsFromWords(words) : segs; } catch { return segs; } }
 
 queue.register('video.look', {
   title: () => 'Look through the video', heavy: true,

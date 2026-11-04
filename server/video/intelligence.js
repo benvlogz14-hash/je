@@ -9,13 +9,13 @@ const { run, safeJson, clamp } = require('../core/util');
 
 // ------------------------------------------------------------ Transcription
 let settingsFixed = false;
-async function transcribe(asset, { jobId, onProgress } = {}) {
+async function transcribe(asset, { jobId, onProgress, force = false } = {}) {
   // The Nov 3 update could wrongly record "this Whisper can't do DTW" when only its new output mode failed: undo once.
   if (!settingsFixed) { settingsFixed = true; if (ctx.setting('ai.transcription.noFullJson', null) != null) { try { ctx.store.setSettings({ ai: { transcription: { noDtw: false, noFullJson: null } } }); } catch { /* keep */ } } }
   const dir = path.dirname(asset.path);
   const cache = path.join(asset.workDir || dir, `${asset.id}.transcript.json`);
   // A transcript made by the Nov 3 update (`timing` set) is made again the proven way.
-  if (fs.existsSync(cache) && !JSON.parse(fs.readFileSync(cache, 'utf8')).timing) {
+  if (!force && fs.existsSync(cache) && !JSON.parse(fs.readFileSync(cache, 'utf8')).timing) {
     const raw = JSON.parse(fs.readFileSync(cache, 'utf8')); let t = require('./transcript-fix').clean(raw);
     if (!t.voiceAligned) t = await require('./align').alignFile(t, asset.path, asset.workDir); // words back on the voice where they drifted
     if (t !== raw) { try { fs.writeFileSync(cache, JSON.stringify(t)); } catch { /* read-only */ } }
@@ -376,4 +376,4 @@ function transcriptExcerpt(transcript, start, end, pad = 20) {
   return (transcript.segments || []).filter((s) => s.e > start - pad && s.s < end + pad).map((s) => `[${s.s.toFixed(1)}] ${s.t}`).join('\n').slice(0, 6000);
 }
 
-module.exports = { whisperLocal, cleanHook, topicHook, TASTE_RULES, transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };
+module.exports = { segmentsFromWords, whisperLocal, cleanHook, topicHook, TASTE_RULES, transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };
