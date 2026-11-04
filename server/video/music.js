@@ -178,9 +178,7 @@ async function pick(mood = 'positive', { cc0Only = false, avoid = [] } = {}) {
   let lib = library(mood).filter(ok);
   if (lib.length < 2 && ctx.setting('music.download', true) !== false) { try { await fill(mood, { cc0Only }); lib = library(mood).filter(ok); } catch { /* offline */ } }
   if (lib.length) { const t = lib[(Math.random() * lib.length) | 0]; return { file: t.file, credit: t.credit, source: t.credit ? 'Free library (CC BY)' : 'Free library (CC0)' }; }
-  // Automatic picks use the plain original (the variations with a whine/heartbeat sat too loud under the voice); the
-  // variations stay in the catalog for anyone who picks one by hand.
-  try { return { file: await generate(mood), credit: '', source: 'Made by Euclidean' }; } catch { return null; }
+  try { return { file: await generate(mood, 120, DARK.includes(mood) ? (Math.random() * (VARIANTS + 1)) | 0 : 0), credit: '', source: 'Made by Euclidean' }; } catch { return null; }
 }
 
 /**

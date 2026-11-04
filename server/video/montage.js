@@ -330,15 +330,19 @@ function planCovers({ start, end, shots, sents = [], avoid = [], gap = 1.5, blac
   // 1. Black fades inside the clip (the voice keeps going): always covered with a good shot.
   // Only true black fades (short), at most two per clip: dark scenes are not black and stay as they are.
   for (const [x, y] of black.filter(([a, b]) => b > start + 0.1 && a < end - 0.1 && b - a <= 2.5).slice(0, 2)) { const at = Math.max(start, x - 0.3); place(at, Math.min(end - at, Math.max(1.5, y - x + 0.6))); }
-  const busy = (a, b) => out.some((c) => c.at < b + gap && c.at + c.dur > a - gap);
+  const space = Math.max(gap, 6); // at least 6 s between cut-aways
+  const busy = (a, b) => out.some((c) => c.at < b + space && c.at + c.dur > a - space);
   const here = shots.filter((x) => x.s < end && x.e > start);
   // 2. Weak stretches: a poor or static shot, someone talking with little movement, or any shot held too long (strong ones may run longer).
-  const weak = (t) => { const s = here.find((x) => t >= x.s && t < x.e); if (!s) return true; const q = shotScore(s); return q < 0.4 || (s.kind === 'speaker' && (s.motion ?? 5) < 3) || (t - Math.max(s.s, start)) > (q >= 0.7 ? 9 : 5); };
+  // Someone talking to camera is the story: never covered just for being on screen a while (shots from elsewhere in the
+  // video landed on lines they had nothing to do with: "random B-roll"). Covered: poor shots, a static speaker, and
+  // scenery held 8 s+.
+  const weak = (t) => { const s = here.find((x) => t >= x.s && t < x.e); if (!s) return true; const q = shotScore(s); return q < 0.4 || (s.kind === 'speaker' && (s.motion ?? 5) < 3) || (s.kind !== 'speaker' && !(s.faces > 0) && (t - Math.max(s.s, start)) > 8); };
   let tries = 0; let t = start + 2.5; // keep the first 2.5 s on the real moment: that's the hook
   while (t < end - 2.5 && left()) {
     // Voiceover is always fine to cover; someone talking on camera gets fewer cut-aways (about 3 in 5).
     const sentNow = sents.find((x) => t >= x.s && t < x.e); const dur = Math.min(3, end - 1 - t);
-    if (dur >= 1.6 && !busy(t, t + dur) && weak(t) && (!sentNow || sentNow.vo || (tries++ % 5) < 3) && place(t, dur)) { t += out[out.length - 1].dur + gap; continue; }
+    if (dur >= 1.6 && !busy(t, t + dur) && weak(t) && (!sentNow || sentNow.vo || (tries++ % 5) < 3) && place(t, dur)) { t += out[out.length - 1].dur + space; continue; }
     t += 1.5;
   }
   return out.filter((c) => c.at + c.dur <= start + len - 0.2).sort((a, b) => a.at - b.at);
