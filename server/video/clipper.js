@@ -105,7 +105,69 @@ async function exportCut({ id, start, end, crop = null, size = 'original', name 
 function forget(id) {
   const e = get(id); if (!e) return;
   if (e.uploaded && e.path.startsWith(dir())) { try { fs.unlinkSync(e.path); } catch { /* gone */ } }
+  try { fs.unlinkSync(path.join(dir(), 'tx', `qc_${e.id}.transcript.json`)); } catch { /* none */ }
   save(list().filter((x) => x.id !== id));
 }
 
-module.exports = { list, get, open, makeProxy, strip, wave, exportCut, forget, allowed, dir };
+
+// ------------------------------------------------------------------ the searchable transcript
+const txDir = () => { const d = path.join(dir(), 'tx'); fs.mkdirSync(d, { recursive: true }); return d; };
+/** The file as an "asset" for the speech-to-text step (its own folder, never mixed with Production's). */
+const asAsset = (e) => ({ id: `qc_${e.id}`, workDir: txDir(), path: e.path, name: e.name, info: e.info, clientId: null });
+const txFile = (e) => path.join(txDir(), `qc_${e.id}.transcript.json`);
+
+/** Transcribe the whole video (fast mode: rough word times are plenty for searching). Run as a job. */
+async function transcribe(id, { jobId, onProgress } = {}) {
+  const e = get(id); if (!e) return null;
+  if (!e.info.hasAudio) { update(id, { tx: { status: 'none', note: 'This video has no sound.' } }); return null; }
+  update(id, { tx: { status: 'working', at: new Date().toISOString() } });
+  try {
+    const t = await require('./intelligence').transcribe(asAsset(e), { jobId, fast: true, onProgress });
+    update(id, { tx: { status: 'ready', words: (t.words || []).length, at: new Date().toISOString() } });
+    return t;
+  } catch (err) { update(id, { tx: { status: 'failed', note: String(err.message || err).slice(0, 200) } }); throw err; }
+}
+
+/**
+ * The transcript in paragraphs for reading and searching: a new paragraph after a pause of 1.2 s+, or at a sentence
+ * end once a paragraph is 12 s+ long, or at 25 s. Words go out as [text, start] pairs (small, even for 2.5 hours).
+ */
+function transcript(id) {
+  const e = get(id); if (!e) return null;
+  let t = null; try { t = JSON.parse(fs.readFileSync(txFile(e), 'utf8')); } catch { /* not yet */ }
+  if (!t?.words?.length) return { status: e.tx?.status || 'none', note: e.tx?.note || null, paras: [] };
+  const paras = []; let cur = null;
+  t.words.forEach((w, i) => {
+    const prev = t.words[i - 1];
+    const brk = !cur || w.s - prev.e > 1.2 || (w.s - cur.s > 12 && /[.!?]["']?$/.test(prev.w)) || w.s - cur.s > 25;
+    if (brk) { cur = { s: w.s, e: w.e, w: [] }; paras.push(cur); }
+    cur.w.push([w.w, Math.round(w.s * 100) / 100]); cur.e = w.e;
+  });
+  return { status: 'ready', paras, words: t.words.length };
+}
+
+// ------------------------------------------------------------------ YouTube (or any yt-dlp) links
+/** Download a video from a link (up to 1080p, mp4) into the Quick cut folder, with progress. Returns the file. */
+async function download(url, { onProgress, signal } = {}) {
+  if (!/^https?:\/\/\S+$/i.test(url)) throw new Error('Paste a full link, like https://www.youtube.com/watch?v=...');
+  if (!ctx.capabilities.ytdlp) { await ff.detect().catch(() => {}); if (!ctx.capabilities.ytdlp) throw new Error("The YouTube downloader (yt-dlp) isn't installed yet. Open Production and press the fix button for FFmpeg and yt-dlp, then try again."); }
+  const d = path.join(dir(), 'links'); fs.mkdirSync(d, { recursive: true });
+  const key = crypto.createHash('sha1').update(url.replace(/[&?](si|feature|pp|t)=[^&]*/g, '')).digest('hex').slice(0, 12);
+  const had = fs.readdirSync(d).find((f) => f.includes(`[${key}]`) && /\.(mp4|mkv|webm)$/i.test(f)); if (had) return path.join(d, had);
+  const ffb = ff.bin('ffmpeg');
+  const args = ['-f', 'bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/bv*[height<=1080]+ba/b', '--merge-output-format', 'mp4', '--no-playlist', '--newline',
+    ...(path.isAbsolute(ffb) ? ['--ffmpeg-location', path.dirname(ffb)] : []), '-o', path.join(d, `%(title).80B [${key}].%(ext)s`), '--print', 'after_move:%(filepath)s', '--', url];
+  let got = ''; let part = 0;
+  try {
+    const r = await run(ff.ytdlpBin(), args, { signal, timeoutMs: 6 * 3600000, onLine: (l) => {
+      const m = /\[download\]\s+([\d.]+)%/.exec(l); if (m && onProgress) { const v = Number(m[1]) / 100; if (v < part - 0.5) part = 0; part = v; onProgress(v, 'Downloading'); }
+      if (/^\[Merger\]/.test(l) && onProgress) onProgress(0.99, 'Putting the picture and sound together');
+    } });
+    got = String(r.out || '').trim().split('\n').filter((x) => x && fs.existsSync(x.trim())).pop()?.trim() || '';
+  } catch (e) { throw new Error(`Couldn't download that link. Check it opens in a browser and isn't private. (${String(e.message || e).split('\n').pop().slice(0, 160)})`); }
+  if (!got) got = (fs.readdirSync(d).filter((f) => f.includes(`[${key}]`) && /\.(mp4|mkv|webm)$/i.test(f)).map((f) => path.join(d, f)))[0] || '';
+  if (!got) throw new Error("Couldn't download that link.");
+  return got;
+}
+
+module.exports = { list, get, open, makeProxy, strip, wave, exportCut, forget, allowed, dir, transcribe, transcript, download };

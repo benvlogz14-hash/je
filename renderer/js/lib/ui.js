@@ -5,6 +5,7 @@ import htm from '../../vendor/htm.mjs';
 import { api } from './api.js';
 import { play } from './sound.js';
 import { Icon } from './icons.js';
+import { transition, springIn } from './motion.js';
 
 export const html = htm.bind(h);
 export { h, render, useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect };
@@ -40,7 +41,9 @@ function parseHash() {
   const [p, q] = raw.split('?');
   return { path: p, query: Object.fromEntries(new URLSearchParams(q || '')) };
 }
-if (!window.EUCLIDEAN_DEMO) { window.addEventListener('hashchange', () => store.set({ route: parseHash() })); store.set({ route: parseHash() }); }
+// Switching pages glides (a View Transition) unless motion is turned down; only the part of the path before ? counts as
+// a new page, so changing a query (e.g. Quick cut's ?f=) doesn't animate.
+if (!window.EUCLIDEAN_DEMO) { window.addEventListener('hashchange', () => { const r = parseHash(); const cur = store.get().route; if (cur && cur.path.split('/')[1] !== r.path.split('/')[1]) transition(() => store.set({ route: r })); else store.set({ route: r }); }); store.set({ route: parseHash() }); }
 
 // ------------------------------------------------------------ data hooks
 /** Fetch a path, refetch when any of the given live event types arrive. */
@@ -149,14 +152,16 @@ export function Tabs({ value, tabs, onChange }) {
 
 // ------------------------------------------------------------ overlays
 export function Modal({ title, onClose, children, footer, wide, icon }) {
+  const box = useRef(null); useLayoutEffect(() => { springIn(box.current); }, []);
   useEffect(() => { play('open'); const k = (e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose?.(); } }; window.addEventListener('keydown', k, true); return () => { window.removeEventListener('keydown', k, true); play('close'); }; }, []);
-  return html`<div class="scrim" onClick=${onClose} /><div class=${'modal' + (wide ? ' wide' : '')} role="dialog" aria-modal="true" aria-label=${title}>
+  return html`<div class="scrim" onClick=${onClose} /><div ref=${box} class=${'modal' + (wide ? ' wide' : '')} role="dialog" aria-modal="true" aria-label=${title}>
     <div class="modal-head">${icon ? html`<${Icon} name=${icon} size=${19} />` : null}<h3 class="grow">${title}</h3><${Button} kind="ghost" size="sm" icon="x" title="Close" onClick=${onClose} /></div>
     <div class="modal-body">${children}</div>${footer ? html`<div class="modal-foot">${footer}</div>` : null}</div>`;
 }
 export function Drawer({ title, sub, onClose, children, actions, wide }) {
+  const box = useRef(null); useLayoutEffect(() => { springIn(box.current, { from: 'right' }); }, []);
   useEffect(() => { play('open'); const k = (e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose?.(); } }; window.addEventListener('keydown', k, true); return () => window.removeEventListener('keydown', k, true); }, []);
-  return html`<div class="scrim" onClick=${onClose} /><aside class=${'drawer' + (wide ? ' wide' : '')} role="dialog" aria-label=${typeof title === 'string' ? title : 'Details'}>
+  return html`<div class="scrim" onClick=${onClose} /><aside ref=${box} class=${'drawer' + (wide ? ' wide' : '')} role="dialog" aria-label=${typeof title === 'string' ? title : 'Details'}>
     <div class="drawer-head"><div class="grow" style="min-width:0"><h3 class="ellipsis">${title}</h3>${sub ? html`<div class="muted" style="font-size:var(--fs-sm)">${sub}</div>` : null}</div>${actions}<${Button} kind="ghost" size="sm" icon="x" title="Close" onClick=${onClose} /></div>
     <div class="drawer-body">${children}</div></aside>`;
 }

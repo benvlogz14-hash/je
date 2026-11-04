@@ -1387,21 +1387,28 @@ r.post('/api/projects/:id/extract-audio', async (req, b, p) => {
 /** Media preview for Studio: only files referenced by a project or an asset can be served. */
 // Quick cut (server/video/clipper.js): open a video, pick a stretch, crop, export. Separate from the clip machine.
 const clipper = () => require('./video/clipper');
+/** After a video is opened in Quick cut: its smooth preview copy and its searchable transcript, in the background. */
+function clipperFollowUps(e, req) {
+  if (e.proxyPending) queue.enqueue('clipper.proxy', { id: e.id }, { actor: actorOf(req), title: `Preview copy: ${e.name}`, dedupeKey: `clipper.proxy:${e.id}`, priority: 8 });
+  if (e.info?.hasAudio && e.tx?.status !== 'ready') queue.enqueue('clipper.transcribe', { id: e.id }, { actor: actorOf(req), title: `Transcript: ${e.name}`, dedupeKey: `clipper.tx:${e.id}`, priority: 6 });
+}
 r.get('/api/clipper', () => ({ files: clipper().list().filter((x) => fs.existsSync(x.path)), folder: ctx.setting('studio.exportFolder', '') || path.join(require('os').homedir(), 'Videos', 'Euclidean'), desktop: !!ctx.pickFiles, clients: ctx.store.all('clients', (c) => c.status !== 'archived').map((c) => ({ id: c.id, name: c.name })) }));
 r.post('/api/clipper/open', async (req, b) => {
   let file = String(b.path || '');
   if (b.assetId) file = must(ctx.store.get('assets', String(b.assetId)), 'That footage is gone').path;
-  const e = await clipper().open(file);
-  if (e.proxyPending) queue.enqueue('clipper.proxy', { id: e.id }, { actor: actorOf(req), title: `Preview copy: ${e.name}`, dedupeKey: `clipper.proxy:${e.id}`, priority: 8 });
+  const e = await clipper().open(file); clipperFollowUps(e, req);
   return e;
 });
 r.post('/api/clipper/upload', async (req) => {
   const { files } = await receiveUpload(req, clipper().dir());
   const out = [];
-  for (const f of files) { const e = await clipper().open(f.path, { uploaded: true }); if (e.proxyPending) queue.enqueue('clipper.proxy', { id: e.id }, { actor: actorOf(req), title: `Preview copy: ${e.name}`, dedupeKey: `clipper.proxy:${e.id}`, priority: 8 }); out.push(e); }
+  for (const f of files) { const e = await clipper().open(f.path, { uploaded: true }); clipperFollowUps(e, req); out.push(e); }
   return out;
 }, { raw: true });
 r.get('/api/clipper/:id', (req, b, p) => must(clipper().get(p.id), 'Open the video again'));
+r.post('/api/clipper/link', (req, b) => { const url = String(b.url || '').trim(); if (!/^https?:\/\/\S+$/i.test(url)) throw new HttpError(400, 'Paste a full link, like https://www.youtube.com/watch?v=...'); return queue.enqueue('clipper.link', { url }, { actor: actorOf(req), title: 'Quick cut: download from link', priority: 8 }); });
+r.get('/api/clipper/:id/transcript', (req, b, p) => must(clipper().transcript(p.id), 'Open the video again'));
+r.post('/api/clipper/:id/transcript', (req, b, p) => { const e = must(clipper().get(p.id), 'Open the video again'); return queue.enqueue('clipper.transcribe', { id: e.id }, { actor: actorOf(req), title: `Transcript: ${e.name}`, dedupeKey: `clipper.tx:${e.id}`, priority: 6 }); });
 r.get('/api/clipper/:id/wave', async (req, b, p) => ({ peaks: await clipper().wave(p.id) }));
 r.get('/api/clipper/:id/strip', async (req, res, p) => { let f = null; try { f = await clipper().strip(p.id); } catch { /* none */ } if (!f || !fs.existsSync(f)) return send(res, 404, {}); return serveFile(req, res, f, { cache: true }); }, { stream: true });
 r.del('/api/clipper/:id', (req, b, p) => { clipper().forget(p.id); return { ok: true }; });

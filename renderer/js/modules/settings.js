@@ -1,3 +1,4 @@
+import { reduced, setReduced } from '../lib/motion.js';
 // Settings: general, connections (credentials), AI, messaging, production, team & tokens, backups, appearance.
 import { html, useRoute, useState, useEffect, useStore, useApi, navigate, store, Button, Seg, Tabs, Toggle, Field, Loading, Avatar, Modal, act, toast, confirmDialog } from '../lib/ui.js';
 import { api } from '../lib/api.js';
@@ -280,9 +281,11 @@ function Backups() {
 function Appearance() {
   const [theme, setTheme] = useState(() => { try { return localStorage.getItem('eu.theme') || 'light'; } catch { return 'light'; } });
   const [snd, setSnd] = useState(soundOn());
+  const [motionOff, setMotionOff] = useState(reduced());
   const apply = (t) => { setTheme(t); try { localStorage.setItem('eu.theme', t); } catch { /* ignore */ } window.__applyTheme?.(t); window.euclidean?.setTheme?.(t); };
   return html`<${Section} title="Appearance">
     <div class="row"><span class="label" style="width:120px">Theme</span><${Seg} value=${theme} onChange=${apply} options=${[{ value: 'light', label: 'Light', icon: 'sun' }, { value: 'dark', label: 'Night', icon: 'moon' }, { value: 'system', label: 'Match system' }]} /></div>
+    <div class="row"><span class="label" style="width:120px">Motion</span><${Toggle} on=${!motionOff} label="Animations" onChange=${(v) => { setReduced(!v); setMotionOff(!v); }} /><span class="muted" style="font-size:var(--fs-sm)">${motionOff ? 'Reduce motion is on: pages and popups appear without sliding' : 'Smooth page changes, gliding lists and springy popups'}</span></div>
     <div class="row"><span class="label" style="width:120px">Sounds</span><${Toggle} on=${snd} label="Sounds" onChange=${(v) => { setSound(v); setSnd(v); }} /><span class="muted" style="font-size:var(--fs-sm)">Soft clicks, send and receive tones</span></div>
     <div class="divider" /><div class="eyebrow">Keyboard</div>
     <div class="grid c2" style="font-size:var(--fs-sm)">${[['Ctrl K', 'Search and commands'], ['Ctrl 1–0', 'Switch module'], ['Ctrl ,', 'Settings'], ['/', 'Commands in any composer'], ['A / R / X', 'Approve, request changes, reject'], ['J / K', 'Next / previous in Approvals'], ['Space', 'Play / pause'], ['S', 'Split in Studio']].map(([k, d]) => html`<div class="row"><kbd>${k}</kbd><span class="muted">${d}</span></div>`)}</div>

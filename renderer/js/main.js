@@ -3,6 +3,7 @@ import { HalDock } from './modules/hal.js';
 import { ArcadeDock, openArcade } from './modules/arcade.js';
 import { html, render, useState, useEffect, useRef, useStore, store, navigate, RouteContext, Toasts, ModalHost, Button, HoldButton, Seg, Avatar, act, toast, useEvent } from './lib/ui.js';
 import { api } from './lib/api.js';
+import { initMotion } from './lib/motion.js';
 import { Component } from '../vendor/preact.mjs';
 import { Icon, BrandMark } from './lib/icons.js';
 import { play, setSound, soundOn } from './lib/sound.js';
@@ -285,6 +286,7 @@ export function applyTheme(t) {
 try { window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener('change', () => { let t = 'light'; try { t = localStorage.getItem('eu.theme') || 'light'; } catch { /* ignore */ } if (t === 'system') applyTheme(t); }); } catch { /* old browsers */ }
 
 export async function boot(demoBackend) {
+  try { initMotion(); } catch { /* animations are optional */ }
   const root = document.getElementById('app');
   // Light (white with pastel accents) is the default; dark and follow-system are opt-in in Settings.
   let theme = 'light'; try { theme = localStorage.getItem('eu.theme') || 'light'; } catch { /* ignore */ }

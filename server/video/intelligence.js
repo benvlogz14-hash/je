@@ -14,7 +14,7 @@ const { run, safeJson, clamp } = require('../core/util');
  */
 function needsRedo(t) { return !!t && /whisper\.cpp/i.test(t.engine || '') && !t.timing; }
 
-async function transcribe(asset, { jobId, onProgress, force = false } = {}) {
+async function transcribe(asset, { jobId, onProgress, force = false, fast = false } = {}) {
   const dir = path.dirname(asset.path);
   const cache = path.join(asset.workDir || dir, `${asset.id}.transcript.json`);
   if (!force && fs.existsSync(cache)) {
@@ -38,7 +38,7 @@ async function transcribe(asset, { jobId, onProgress, force = false } = {}) {
   if (localBin && localModel && fs.existsSync(localBin)) {
     const wav = path.join(asset.workDir, `${asset.id}.wav`);
     await ff.extractWav(asset.path, wav);
-    const words = await whisperLocal(localBin, localModel, wav, path.join(asset.workDir, `${asset.id}.whisper`), { duration, onProgress });
+    const words = await whisperLocal(localBin, localModel, wav, path.join(asset.workDir, `${asset.id}.whisper`), { duration, onProgress, fast });
     result = { engine: 'whisper.cpp (local)', timing: words.filter((w) => w.d).length >= words.length * 0.6 ? 'dtw' : 'rough', text: words.map((w) => w.w).join(' '), words, segments: segmentsFromWords(words) };
     try { fs.unlinkSync(wav); } catch { /* ignore */ }
   } else if (ai.connected('openai')) {
@@ -104,13 +104,14 @@ function wordsFromWhisper(j, off = 0) {
   return out.map((w) => ({ w: w.w, s: Math.round((w.s + off) * 1000) / 1000, e: Math.round((w.e + off) * 1000) / 1000, ...(w.d ? { d: 1 } : {}) }));
 }
 
-async function whisperLocal(bin, model, wav, outBase, { duration = 0, onProgress } = {}) {
+async function whisperLocal(bin, model, wav, outBase, { duration = 0, onProgress, fast = false } = {}) {
   const os = require('os');
   const cores = Math.max(1, (os.availableParallelism ? os.availableParallelism() : os.cpus().length) || 1);
   const set = Number(ctx.setting('ai.transcription.threads', 0)) || 0;
   // Beam search (whisper's own default) is the default again: greedy decoding was faster but let word times drift in
   // some videos. 'fast' brings greedy back for anyone who wants speed over timing.
-  const best = ctx.setting('ai.transcription.accuracy', 'best') !== 'fast';
+  // fast: greedy decoding (about twice as quick); Quick cut's searchable transcripts use it, clips never do.
+  const best = !fast && ctx.setting('ai.transcription.accuracy', 'best') !== 'fast';
   const dur = duration || 0;
   const n = set ? 1 : dur > 240 && cores >= 10 ? Math.min(4, Math.floor(cores / 4), Math.ceil(dur / 120)) : 1;
   // Leave the app room to breathe: 2 cores free on 6+ core PCs (1 on smaller ones), and run below normal priority, so

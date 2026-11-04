@@ -609,6 +609,19 @@ queue.register('clipper.proxy', { title: () => 'Quick cut: preview copy', maxAtt
   await require('../video/clipper').makeProxy(job.payload.id, (f) => h.progress(f, 'Making a smooth preview copy'));
   events.publish('clipper', { id: job.payload.id }); return { ok: true };
 } });
+queue.register('clipper.transcribe', { title: () => 'Quick cut: transcript', maxAttempts: 1, priority: 6, run: async (job, h) => {
+  const t = await require('../video/clipper').transcribe(job.payload.id, { jobId: job.id, onProgress: (f, n) => h.progress(f, n || 'Writing down everything that is said') });
+  events.publish('clipper', { id: job.payload.id, transcript: true }); return { words: (t?.words || []).length };
+} });
+queue.register('clipper.link', { title: () => 'Quick cut: download from link', maxAttempts: 1, priority: 8, run: async (job, h) => {
+  const C = require('../video/clipper');
+  const file = await C.download(job.payload.url, { signal: h.signal, onProgress: (f, n) => h.progress(f * 0.97, n) });
+  const e = await C.open(file, { uploaded: true });
+  if (e.proxyPending) queue.enqueue('clipper.proxy', { id: e.id }, { title: `Preview copy: ${e.name}`, dedupeKey: `clipper.proxy:${e.id}`, priority: 8 });
+  if (e.info?.hasAudio && e.tx?.status !== 'ready') queue.enqueue('clipper.transcribe', { id: e.id }, { title: `Transcript: ${e.name}`, dedupeKey: `clipper.tx:${e.id}`, priority: 6 });
+  events.publish('clipper.linked', { jobId: job.id, id: e.id, name: e.name });
+  return { id: e.id, name: e.name };
+} });
 queue.register('clipper.export', { title: () => 'Quick cut: export', maxAttempts: 1, priority: 8, run: async (job, h) => {
   const r = await require('../video/clipper').exportCut({ ...job.payload, signal: h.signal, onProgress: (f) => h.progress(f * 0.97, 'Exporting') });
   let assetId = null;

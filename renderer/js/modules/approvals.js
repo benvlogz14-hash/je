@@ -55,7 +55,7 @@ export function Approvals() {
 
   if (data && !data.length) return html`<div class="page"><div class="page-head"><div class="grow"><h1>Approvals</h1></div></div><div class="panel"><${Empty} icon="approvals" title="You're all caught up">New clips and AI-drafted messages land here when they need a decision. Political content and first-touch outreach always do.</${Empty}></div></div>`;
   return html`<div class="review">
-    <aside class="review-list">
+    <aside class="review-list" data-animate>
       <div style="padding:10px 8px 8px" class="col"><div class="row"><h2 class="grow">Approvals</h2><span class="badge coral">${(data || []).length}</span></div>
         <${Button} size="sm" kind="ghost" icon="x" disabled=${!items.length || !!busy} onClick=${rejectAll} title="Reject every item in this list">${busy || `Reject all ${items.length || ''}`}</${Button}>
         <${Seg} value=${kind} onChange=${(v) => { setKind(v); setSel(0); }} options=${[{ value: 'all', label: 'All' }, { value: 'clip', label: 'Videos' }, { value: 'message', label: 'Messages' }]} /></div>
