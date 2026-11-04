@@ -134,7 +134,12 @@ function snapPhrases(t, lv) {
 }
 
 /** Align a transcript object for a media file: the coarse pass (drift), then the fine pass (each phrase). Once. */
-async function alignFile(t, file, workDir) {
+/**
+ * Off unless asked for (a video's Caption timing set to "Lined up to the loudness", or `ai.transcription.align`): with
+ * precise (DTW) word times it isn't needed, and on footage with wind/footsteps it moved captions off the voice.
+ */
+async function alignFile(t, file, workDir, { force = false } = {}) {
+  if (!force && require('../core/ctx').setting('ai.transcription.align', false) !== true) return t;
   if (!t?.words?.length || t.voiceAligned?.v === 2) return t;
   // Studio's shared transcripts folder holds files from anywhere: give each its own loudness map (same names clash).
   let dir = workDir;

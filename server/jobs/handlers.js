@@ -237,25 +237,22 @@ function discoverOrWait(h, asset, opts = {}) {
 
 /** The transcript with its words put back on the voice where speech-to-text drifted (once per transcript, saved). */
 const retranscribing = new Map();
+/** One transcription per video at a time, shared by all its clips. */
+function redo(asset, { jobId, onProgress, force = false } = {}) {
+  if (!retranscribing.has(asset.id)) retranscribing.set(asset.id, require('../video/intelligence').transcribe(asset, { jobId, force, onProgress: (f, n) => onProgress?.(f * 0.3, n || 'Transcribing again so the captions sit exactly on the voice') }).finally(() => setTimeout(() => retranscribing.delete(asset.id), 1000)));
+  return retranscribing.get(asset.id);
+}
 async function alignedTranscript(asset, { onProgress, jobId } = {}) {
   let t = loadTranscript(asset); if (!t) return t;
-  // Transcripts made by the Nov 3 update (precise-time experiment, `timing` set): made again the proven way, once per
-  // video (all its clips share the one run).
-  if (t.timing) {
-    if (!retranscribing.has(asset.id)) retranscribing.set(asset.id, require('../video/intelligence').transcribe(asset, { jobId, onProgress: (f, n) => onProgress?.(f * 0.3, n || 'Transcribing again') }).finally(() => setTimeout(() => retranscribing.delete(asset.id), 1000)));
-    try { return await retranscribing.get(asset.id); } catch { return t; }
+  // Made with the old timing (rough offsets + loudness shift): transcribed again once with the precise word times.
+  if (require('../video/intelligence').needsRedo(t)) { try { await redo(asset, { jobId, onProgress }); } catch { return t; } return loadTranscript(asset) || t; }
+  // This video asked for captions lined up to the loudness (footage panel → Caption timing).
+  if (asset.captionTiming === 'aligned' && !t.voiceAligned) {
+    const a = await require('../video/align').alignFile(t, asset.path, asset.workDir, { force: true });
+    try { fs.writeFileSync(path.join(asset.workDir, `${asset.id}.transcript.json`), JSON.stringify(a)); } catch { /* read-only */ }
+    return loadTranscript(asset) || a;
   }
-  // Whisper's own timing asked for, but this transcript only has the lined-up times: transcribe again once to get them.
-  if (asset.captionTiming === 'raw') {
-    if (t.timingMode === 'raw') return t;
-    if (!retranscribing.has(asset.id)) retranscribing.set(asset.id, require('../video/intelligence').transcribe(asset, { jobId, force: true, onProgress: (f, n) => onProgress?.(f * 0.3, n || 'Transcribing again for Whisper timing') }).finally(() => setTimeout(() => retranscribing.delete(asset.id), 1000)));
-    try { await retranscribing.get(asset.id); } catch { return t; }
-    return loadTranscript(asset) || t;
-  }
-  if (t.voiceAligned) return t;
-  const a = await require('../video/align').alignFile(t, asset.path, asset.workDir);
-  try { fs.writeFileSync(path.join(asset.workDir, `${asset.id}.transcript.json`), JSON.stringify(a)); } catch { /* read-only */ }
-  return a;
+  return t;
 }
 
 function loadTranscript(asset) {
@@ -265,9 +262,9 @@ function loadTranscript(asset) {
   // Tidy word times and repetition loops once, and save it, so captions, cuts and the caption editor all agree.
   const t = require('../video/transcript-fix').clean(raw);
   if (t !== raw) { try { fs.writeFileSync(f, JSON.stringify(t)); } catch { /* read-only */ } }
-  // Caption timing for this video (footage panel → Transcript): 'raw' = exactly as Whisper heard it, not lined up to
-  // the loudness. Used everywhere the words are read (renders, cuts, Studio, the caption editor).
-  if (asset.captionTiming === 'raw' && t.wordsRaw?.length) {
+  // Caption timing for this video (footage panel → Transcript): exactly as Whisper heard it (the default), unless it's
+  // set to 'aligned' (lined up to the loudness). Used everywhere the words are read (renders, cuts, Studio, the editor).
+  if (asset.captionTiming !== 'aligned' && t.wordsRaw?.length) {
     const r = require('../video/transcript-fix').clean({ ...t, words: t.wordsRaw, voiceAligned: undefined });
     return { ...t, words: r.words, segments: segmentsOf(r.words, t.segments), timingMode: 'raw' };
   }

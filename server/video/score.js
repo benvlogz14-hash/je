@@ -13,12 +13,12 @@ const ai = require('../integrations/ai');
 const music = require('./music');
 const { safeJson } = require('../core/util');
 
-const MOODS = music.CLIP_MOODS;
+// Scary / horror is only ever picked by a person (its built-in track is harsh under a voice), never automatically.
+const MOODS = music.CLIP_MOODS.filter((m) => m !== 'scary');
 // Words that signal each mood (stems; matched at the start of a word).
 const LEX = {
   creepy: ['abandon', 'creep', 'ghost', 'haunt', 'eerie', 'scary', 'scare', 'horror', 'blood', 'dead', 'death', 'corpse', 'body', 'bones', 'skull', 'doll', 'basement', 'cursed', 'demon', 'rott', 'decay', 'shadow', 'spooky', 'nightmare', 'grave', 'cemetery', 'morgue', 'asylum', 'mold', 'freaky', 'terrif', 'disturb', 'weird', 'strange'],
   suspense: ['suddenly', 'secret', 'hidden', 'hide', 'locked', 'door', 'heard', 'noise', 'listen', 'quiet', 'careful', 'footstep', 'someone', 'behind', 'caught', 'security', 'alarm', 'police', 'trespass', 'sneak', 'mystery', 'mysterious', 'unknown', 'wait', 'shh', 'tunnel', 'dark', 'flashlight', 'inside', 'discover'],
-  scary: ['scream', 'terrif', 'horror', 'jump scare', 'monster', 'killer', 'murder', 'blood', 'run', 'get out', 'what was that', 'oh my god', 'help', 'trapped', 'dark', 'alone', 'night'],
   intense: ['run', 'chase', 'crash', 'fight', 'attack', 'explo', 'fire', 'emergency', 'hurry', 'danger', 'insane', 'crazy', 'fast', 'speed', 'escape', 'collapse', 'falling', 'jump', 'go go', 'scream'],
   triumphant: ['finally', 'made it', 'we did', 'won', 'win', 'victory', 'success', 'champion', 'record', 'proud', 'incredible', 'unbelievable', 'massive', 'legend', 'goal', 'top', 'best', 'achiev', 'beat', 'conquer', 'summit'],
   sad: ['sad', 'lost', 'miss', 'gone', 'died', 'passed away', 'tragic', 'sorry', 'cry', 'tears', 'heartbreak', 'lonely', 'forgotten', 'memory', 'memories', 'once', 'used to'],
@@ -85,7 +85,7 @@ async function plan({ words = [], shots = [], duration, title, hook, forced = 'a
     if (file) return { how: 'chosen by you', cues: [{ start: 0, end: duration, mood: track.split('/')[1], file, track: track.split('/').slice(2).join('/'), source: 'Chosen by you', offset: 0 }] };
   }
   let sheet;
-  if (forced && forced !== 'auto' && MOODS.includes(forced)) sheet = { cues: [{ start: 0, end: duration, mood: forced }], how: 'chosen by you' };
+  if (forced && forced !== 'auto' && music.CLIP_MOODS.includes(forced)) sheet = { cues: [{ start: 0, end: duration, mood: forced }], how: 'chosen by you' };
   else {
     try { sheet = await withAi({ words, shots, duration, title, hook, clientId, jobId }); } catch { sheet = null; }
     if (!sheet) sheet = heuristic({ words, shots, duration, title });
