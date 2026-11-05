@@ -357,6 +357,7 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
   const end = { at: t, dur: endDur, bg: 'navy', cta, name, sub: office || '', site: site || '', tag: tag || '' };
   return {
     w: W, h: H, fps: FPS, total: t + endDur, segs, words, voice, end, name, office: [office, place].filter(Boolean).join(', ').slice(0, 70),
+    bug: map ? (map.number ? `${map.stateName} · District ${map.number}` : map.stateName) : String(office || '').slice(0, 30),
     look, fonts: looks.fontFiles(look), ticker: [name, office, place, site].filter(Boolean).join('  •  '),
   };
 }
@@ -436,7 +437,7 @@ async function previewOne(look, { vertical = true } = {}) {
   if (fs.existsSync(out)) return out;
   const words = 'We are fighting for every family in this district'.split(' ');
   const seg = { at: 0, dur: 4, bg: 'navy', tilt: -1.4, enter: true, plate: true, badge: true, head: { words: ['Fighting', 'for', 'our', 'families'].map((w, i) => ({ w, key: w === 'families', t: 0.1 + i * 0.12 })) }, card: { kind: 'stat', value: '100', suffix: '%', label: 'for our families' } };
-  const spec = { w: vertical ? 1080 : 1920, h: vertical ? 1920 : 1080, fps: FPS, total: 4, segs: [seg], words: words.map((w, i) => ({ w, s: 1.6 + i * 0.12, e: 1.7 + i * 0.12, b: 0 })), voice: [], end: null, name: 'Jane Rivera', office: 'State Senate, District 12', look, fonts: looks.fontFiles(look), ticker: 'Jane Rivera  •  State Senate, District 12  •  janerivera.com' };
+  const spec = { bug: 'Texas · District 12', w: vertical ? 1080 : 1920, h: vertical ? 1920 : 1080, fps: FPS, total: 4, segs: [seg], words: words.map((w, i) => ({ w, s: 1.6 + i * 0.12, e: 1.7 + i * 0.12, b: 0 })), voice: [], end: null, name: 'Jane Rivera', office: 'State Senate, District 12', look, fonts: looks.fontFiles(look), ticker: 'Jane Rivera  •  State Senate, District 12  •  janerivera.com' };
   const srv = await serve({ f: FONTS });
   try {
     const browserExecutable = await browser(); const serveUrl = await bundled();

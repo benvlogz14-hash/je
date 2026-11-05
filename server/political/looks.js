@@ -26,7 +26,8 @@ const FONTS = {
 const OPTIONS = {
   layout: ['card', 'frame', 'full', 'letterbox'], // tilted card over colour | straight framed card | full-screen footage | cinematic bars
   headPos: ['top', 'bottom'], headCase: ['upper', 'none'], headAlign: ['center', 'left'],
-  keyStyle: ['box', 'underline', 'color', 'highlight'], reveal: ['word', 'line', 'type', 'fade'],
+  keyStyle: ['box', 'underline', 'color', 'highlight', 'circle', 'sticker'], reveal: ['word', 'line', 'type', 'fade', 'blur'],
+  flair: ['bold', 'cinematic', 'clean', 'news', 'grassroots', 'tiktok', 'patriotic', 'dark', 'bright', 'none'],
   capStyle: ['box', 'color', 'plain', 'underline', 'none'], capPos: ['card', 'low', 'center'], capCase: ['upper', 'none'],
   transition: ['wipe', 'cut', 'fade', 'flash', 'slide', 'zoom'],
   grade: ['none', 'warm', 'cool', 'bw', 'film', 'punchy', 'dark'], texture: ['none', 'grain', 'paper', 'halftone', 'scanlines', 'stripes'],
@@ -40,56 +41,56 @@ const BOLD = {
   head: { pos: 'top', case: 'upper', align: 'center', keyStyle: 'box', reveal: 'word', scale: 1 },
   cap: { style: 'box', pos: 'card', case: 'upper', scale: 1 },
   card: { tilt: true, border: 12, radius: 0, block: true, shadow: true, borderColor: '#ffffff' },
-  transition: 'wipe', grade: 'none', texture: 'none', plate: 'box', pill: 'tag', badge: true, end: 'split', motion: 'snappy', punch: false, ticker: false,
+  transition: 'wipe', grade: 'none', texture: 'none', plate: 'box', pill: 'tag', badge: true, end: 'split', motion: 'snappy', punch: false, ticker: false, flair: 'bold',
 };
 
 const PRESETS = {
   bold: { ...BOLD, about: 'The reference ad: navy, yellow and red blocks, tilted footage card, boxed key words' },
   cinematic: {
-    name: 'Cinematic', about: 'Film look: black bars, serif headlines, slow fades, warm film grade, grain', layout: 'letterbox', colors: { a: '#0b0b0d', b: '#14110e', c: '#0b0b0d' }, light: '#f4efe6', dark: '#0b0b0d',
-    fonts: { head: 'DM Serif Display', body: 'Montserrat', cap: 'Inter' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'fade', scale: 0.85 },
+    flair: 'cinematic', name: 'Cinematic', about: 'Film look: black bars, serif headlines, slow fades, warm film grade, grain', layout: 'letterbox', colors: { a: '#0b0b0d', b: '#14110e', c: '#0b0b0d' }, light: '#f4efe6', dark: '#0b0b0d',
+    fonts: { head: 'DM Serif Display', body: 'Montserrat', cap: 'Inter' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'blur', scale: 0.85 },
     cap: { style: 'plain', pos: 'low', case: 'none', scale: 0.7 }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false }, accent: '#d9a441',
     transition: 'fade', grade: 'film', texture: 'grain', plate: 'minimal', pill: 'none', badge: false, end: 'solid', motion: 'calm',
   },
   clean: {
-    name: 'Clean and modern', about: 'White background, rounded footage, one blue accent, calm motion', layout: 'frame', colors: { a: '#ffffff', b: '#eef3ff', c: '#ffffff' }, light: '#ffffff', dark: '#0e1a3a',
+    flair: 'clean', name: 'Clean and modern', about: 'White background, rounded footage, one blue accent, calm motion', layout: 'frame', colors: { a: '#ffffff', b: '#eef3ff', c: '#ffffff' }, light: '#ffffff', dark: '#0e1a3a',
     fonts: { head: 'Inter', body: 'Inter', cap: 'Inter' }, head: { pos: 'top', case: 'none', align: 'left', keyStyle: 'underline', reveal: 'word', scale: 0.82 },
     cap: { style: 'color', pos: 'card', case: 'none', scale: 0.8 }, card: { tilt: false, border: 0, radius: 36, block: false, shadow: true }, accent: '#2f5bff',
     transition: 'slide', grade: 'none', texture: 'none', plate: 'bar', pill: 'tag', badge: false, end: 'solid', motion: 'smooth',
   },
   news: {
-    name: 'Breaking news', about: 'Red, black and white bars, a scrolling ticker, hard cuts, flashes', layout: 'frame', colors: { a: '#0d0d10', b: '#c8102e', c: '#0d0d10' }, light: '#ffffff', dark: '#0d0d10',
+    flair: 'news', name: 'Breaking news', about: 'Red, black and white bars, a scrolling ticker, hard cuts, flashes', layout: 'frame', colors: { a: '#0d0d10', b: '#c8102e', c: '#0d0d10' }, light: '#ffffff', dark: '#0d0d10',
     fonts: { head: 'Barlow Condensed', body: 'Inter', cap: 'Barlow Condensed' }, head: { pos: 'bottom', case: 'upper', align: 'left', keyStyle: 'box', reveal: 'line', scale: 0.9 },
     cap: { style: 'box', pos: 'card', case: 'upper', scale: 0.85 }, card: { tilt: false, border: 6, radius: 0, block: false, shadow: false, borderColor: '#ffffff' }, accent: '#c8102e',
     transition: 'flash', grade: 'punchy', texture: 'none', plate: 'bar', pill: 'tag', badge: false, end: 'solid', motion: 'snappy', ticker: true,
   },
   grassroots: {
-    name: 'Grassroots', about: 'Kraft paper, marker headlines, taped photo, hand-made feel', layout: 'card', colors: { a: '#efe6d2', b: '#e8dcc0', c: '#f3ead8' }, light: '#fffaf0', dark: '#1d2a44',
-    fonts: { head: 'Permanent Marker', body: 'Kalam', cap: 'Permanent Marker' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'highlight', reveal: 'word', scale: 0.9 },
+    flair: 'grassroots', name: 'Grassroots', about: 'Kraft paper, marker headlines, taped photo, hand-made feel', layout: 'card', colors: { a: '#efe6d2', b: '#e8dcc0', c: '#f3ead8' }, light: '#fffaf0', dark: '#1d2a44',
+    fonts: { head: 'Permanent Marker', body: 'Kalam', cap: 'Permanent Marker' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'circle', reveal: 'word', scale: 0.9 },
     cap: { style: 'color', pos: 'card', case: 'none', scale: 0.85 }, card: { tilt: true, border: 18, radius: 2, block: false, shadow: true, borderColor: '#ffffff' }, accent: '#d6452b',
     transition: 'slide', grade: 'warm', texture: 'paper', plate: 'minimal', pill: 'tape', badge: false, end: 'solid', motion: 'smooth',
   },
   tiktok: {
-    name: 'Full-screen TikTok', about: 'Footage fills the screen, giant captions in the middle, zoom punches on key words', layout: 'full', colors: { a: '#111111', b: '#ffde21', c: '#ff3b5c' }, light: '#ffffff', dark: '#000000',
+    flair: 'tiktok', name: 'Full-screen TikTok', about: 'Footage fills the screen, giant captions in the middle, zoom punches on key words', layout: 'full', colors: { a: '#111111', b: '#ffde21', c: '#ff3b5c' }, light: '#ffffff', dark: '#000000',
     fonts: { head: 'TikTok Sans', body: 'TikTok Sans', cap: 'TikTok Sans' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'line', scale: 0.72 },
     cap: { style: 'color', pos: 'center', case: 'none', scale: 1.15 }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false }, accent: '#ffde21',
     transition: 'zoom', grade: 'punchy', texture: 'none', plate: 'minimal', pill: 'none', badge: false, end: 'solid', motion: 'snappy', punch: true,
   },
   patriotic: {
-    name: 'Red, white and blue', about: 'Classic campaign: navy and red, serif caps, flag stripes on the end card', layout: 'frame', colors: { a: '#14234b', b: '#ffffff', c: '#b3192e' }, light: '#ffffff', dark: '#14234b',
+    flair: 'patriotic', name: 'Red, white and blue', about: 'Classic campaign: navy and red, serif caps, flag stripes on the end card', layout: 'frame', colors: { a: '#14234b', b: '#ffffff', c: '#b3192e' }, light: '#ffffff', dark: '#14234b',
     fonts: { head: 'Playfair Display SC', body: 'Montserrat', cap: 'Montserrat' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'line', scale: 0.85 },
     cap: { style: 'color', pos: 'card', case: 'upper', scale: 0.75 }, card: { tilt: false, border: 10, radius: 0, block: false, shadow: true, borderColor: '#ffffff' }, accent: '#b3192e',
     transition: 'fade', grade: 'none', texture: 'none', plate: 'bar', pill: 'tag', badge: true, end: 'stripes', motion: 'smooth',
   },
   dark: {
-    name: 'Dark and urgent', about: 'Black and red, black-and-white footage, grain, hard cuts (contrast-ad energy)', layout: 'full', colors: { a: '#0a0a0a', b: '#a10f0f', c: '#0a0a0a' }, light: '#ffffff', dark: '#0a0a0a',
+    flair: 'dark', name: 'Dark and urgent', about: 'Black and red, black-and-white footage, grain, hard cuts (contrast-ad energy)', layout: 'full', colors: { a: '#0a0a0a', b: '#a10f0f', c: '#0a0a0a' }, light: '#ffffff', dark: '#0a0a0a',
     fonts: { head: 'Bebas Neue', body: 'Inter', cap: 'Bebas Neue' }, head: { pos: 'top', case: 'upper', align: 'center', keyStyle: 'box', reveal: 'word', scale: 1 },
     cap: { style: 'box', pos: 'center', case: 'upper', scale: 1 }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false }, accent: '#e01e1e',
     transition: 'flash', grade: 'bw', texture: 'grain', plate: 'bar', pill: 'none', badge: false, end: 'solid', motion: 'snappy', punch: true,
   },
   bright: {
-    name: 'Bright and poppy', about: 'Pastel colours, rounded bubbly type, bouncy motion', layout: 'card', colors: { a: '#ffd6e8', b: '#c9f2ff', c: '#fff1b8' }, light: '#ffffff', dark: '#2b1f5c',
-    fonts: { head: 'Lilita One', body: 'Poppins', cap: 'Lilita One' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'highlight', reveal: 'word', scale: 0.95 },
+    flair: 'bright', name: 'Bright and poppy', about: 'Pastel colours, rounded bubbly type, bouncy motion', layout: 'card', colors: { a: '#ffd6e8', b: '#c9f2ff', c: '#fff1b8' }, light: '#ffffff', dark: '#2b1f5c',
+    fonts: { head: 'Lilita One', body: 'Poppins', cap: 'Lilita One' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'sticker', reveal: 'word', scale: 0.95 },
     cap: { style: 'box', pos: 'card', case: 'none', scale: 0.9 }, card: { tilt: true, border: 14, radius: 28, block: true, shadow: true, borderColor: '#ffffff' }, accent: '#7b5cff',
     transition: 'slide', grade: 'punchy', texture: 'halftone', plate: 'box', pill: 'tag', badge: false, end: 'split', motion: 'snappy',
   },
@@ -139,7 +140,7 @@ function normalize(x = {}, base = BOLD) {
     card: { tilt: cd.tilt != null ? !!cd.tilt : B.card.tilt, border: num(cd.border, 0, 30, B.card.border), radius: num(cd.radius, 0, 60, B.card.radius), block: cd.block != null ? !!cd.block : B.card.block, shadow: cd.shadow != null ? !!cd.shadow : B.card.shadow, borderColor: hex(cd.borderColor, B.card.borderColor || '#ffffff') },
     transition: pick(x.transition, OPTIONS.transition, B.transition), grade: pick(x.grade, OPTIONS.grade, B.grade), texture: pick(x.texture, OPTIONS.texture, B.texture),
     plate: pick(x.plate, OPTIONS.plate, B.plate), pill: pick(x.pill, OPTIONS.pill, B.pill), badge: x.badge != null ? !!x.badge : !!B.badge, end: pick(x.end, OPTIONS.end, B.end),
-    motion: pick(x.motion, OPTIONS.motion, B.motion), punch: x.punch != null ? !!x.punch : !!B.punch, ticker: x.ticker != null ? !!x.ticker : !!B.ticker,
+    motion: pick(x.motion, OPTIONS.motion, B.motion), flair: pick(x.flair, OPTIONS.flair, B.flair || 'none'), punch: x.punch != null ? !!x.punch : !!B.punch, ticker: x.ticker != null ? !!x.ticker : !!B.ticker,
   };
   // Full-screen and letterbox footage can't tilt or sit on a block; the cap position must exist in that layout.
   if (L.layout === 'full' || L.layout === 'letterbox') { L.card = { ...L.card, tilt: false, block: false, border: 0, radius: 0 }; L.badge = false; }
@@ -165,6 +166,7 @@ const SCHEMA = `{
  "card": {"tilt": true|false, "border": 0-30, "radius": 0-60, "block": true|false (offset colour block behind), "shadow": true|false, "borderColor": "#hex"},
  "transition": ${OPTIONS.transition.join('|')}, "grade": ${OPTIONS.grade.join('|')}, "texture": ${OPTIONS.texture.join('|')},
  "plate": ${OPTIONS.plate.join('|')} (name plate), "pill": tag|tape|none (place labels), "badge": true|false, "end": split|solid|stripes, "motion": snappy|smooth|calm,
+ "flair": bold|cinematic|clean|news|grassroots|tiktok|patriotic|dark|bright|none (the signature motion graphics: bold = colour blocks and wipes, cinematic = opening bars/gold rules/vignette, clean = gliding soft shapes, news = sweeping red bars and a corner bug, grassroots = tape/marker scribbles/doodles, tiktok = full-screen word flashes and a progress bar, patriotic = flag-stripe wipes and stars, dark = glitches and stamped words, bright = floating shapes and confetti),
  "punch": true|false (zoom punch-ins on key words), "ticker": true|false (scrolling name bar along the bottom),
  "notes": "anything in the request about content or pacing (which lines, length, what to open or end on), for the editor; empty if none"
 }`;

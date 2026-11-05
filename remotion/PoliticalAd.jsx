@@ -5,6 +5,7 @@
 // stat counter, ticker and end card all follow the look. Motion: hold → travel → hold, spring() and interpolate() only.
 import React, { useEffect, useMemo, useState } from 'react';
 import { AbsoluteFill, Audio, Img, OffthreadVideo, Sequence, continueRender, delayRender, interpolate, spring, useCurrentFrame, useVideoConfig, Easing } from 'remotion';
+import { FlairUnder, FlairOver, CardFlair, EndFlair } from './Flair.jsx';
 
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const SEC = { navy: 'a', yellow: 'b', red: 'c', a: 'a', b: 'b', c: 'c' };
@@ -184,12 +185,17 @@ function Headline({ seg, L, look, fps }) {
           const at = Math.round((x.t != null ? x.t : seg.at + 0.06 + k * 0.07) * fps);
           const s = sp(frame, fps, at, M.word);
           const shown = look.head.reveal === 'word' || look.head.reveal === 'type' ? frame >= at : frame >= first;
-          const opacity = look.head.reveal === 'word' ? (shown ? clamp(s * 1.6, 0, 1) : 0) : look.head.reveal === 'line' ? (shown ? clamp(lineS * 1.6, 0, 1) : 0) : 1;
-          const move = look.head.reveal === 'word' ? `translateY(${interpolate(s, [0, 1], [size * 0.35, 0])}px)` : 'none';
+          const blurIn = look.head.reveal === 'blur';
+          const bp = blurIn ? interpolate(frame - at, [0, 14], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }) : 1;
+          const opacity = look.head.reveal === 'word' ? (shown ? clamp(s * 1.6, 0, 1) : 0) : look.head.reveal === 'line' ? (shown ? clamp(lineS * 1.6, 0, 1) : 0) : blurIn ? (frame >= at ? bp : 0) : 1;
+          const move = look.head.reveal === 'word' ? `translateY(${interpolate(s, [0, 1], [size * 0.35, 0])}px)` : blurIn ? `scale(${1.06 - 0.06 * bp})` : 'none';
+          const blurF = blurIn ? `blur(${(1 - bp) * 14}px)` : 'none';
           let text = x.w;
           if (look.head.reveal === 'type') { const n = Math.floor(clamp((frame - at) / Math.max(1, fps * 0.035), 0, x.w.length)); text = <>{x.w.slice(0, n)}<span style={{ opacity: 0 }}>{x.w.slice(n)}</span></>; }
-          if (!x.key) return <span key={k} style={{ display: 'inline-block', opacity, transform: move }}>{text}</span>;
+          if (!x.key) return <span key={k} style={{ display: 'inline-block', opacity, transform: move, filter: blurF }}>{text}</span>;
           const ks = look.head.keyStyle; const kpop = look.head.reveal === 'word' ? s : lineS;
+          if (ks === 'circle') { const cp = interpolate(frame - at, [3, 17], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }); return <span key={k} style={{ display: 'inline-block', position: 'relative', opacity, transform: move }}><span style={{ position: 'relative', color: over ? ON_FOOTAGE.color : S.text }}>{text}</span><svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ position: 'absolute', left: '-14%', top: '-22%', width: '128%', height: '140%', overflow: 'visible' }}><path d="M8 58 C 4 22, 70 6, 94 30 C 108 52, 70 96, 30 90 C 6 86, 2 60, 14 40 C 24 26, 46 18, 62 16" fill="none" stroke={S.accent} strokeWidth={Math.max(4, size * 0.06)} strokeLinecap="round" vectorEffect="non-scaling-stroke" pathLength={1} strokeDasharray="1 1" strokeDashoffset={1 - cp} /></svg></span>; }
+          if (ks === 'sticker') return <span key={k} style={{ display: 'inline-block', opacity, transform: `rotate(${-4 * M.rot}deg) scale(${interpolate(kpop, [0, 1], [0.5, 1])})`, filter: `drop-shadow(0 ${size * 0.06}px 0 ${look.dark})` }}><Outlined stroke={S.accent} width={size * 0.16} color={look.light}>{text}</Outlined></span>;
           if (ks === 'box') return <span key={k} style={{ display: 'inline-block', opacity, background: S.key, color: S.keyText, padding: `0 ${size * 0.1}px`, textShadow: 'none', transform: `rotate(${-1.5 * M.rot}deg) scale(${interpolate(kpop, [0, 1], [0.6, 1])})` }}>{text}</span>;
           if (ks === 'highlight') return <span key={k} style={{ display: 'inline-block', position: 'relative', opacity, transform: move, color: over ? ON_FOOTAGE.color : S.text }}><span style={{ position: 'absolute', left: -size * 0.08, right: -size * 0.08, top: '18%', bottom: '4%', background: S.key, opacity: 0.85, transform: `skewX(-8deg) scaleX(${kpop})`, transformOrigin: '0 50%', zIndex: -1 }} /><span style={{ position: 'relative', color: S.keyText }}>{text}</span></span>;
           if (ks === 'underline') return <span key={k} style={{ display: 'inline-block', position: 'relative', opacity, transform: move }}>{text}<span style={{ position: 'absolute', left: 0, right: 0, bottom: -size * 0.04, height: Math.max(6, size * 0.09), background: S.accent, transform: `scaleX(${kpop})`, transformOrigin: '0 50%' }} /></span>;
@@ -249,15 +255,18 @@ function Card({ seg, prevTilt, L, look, fps, keyTimes, children }) {
   const sc = punch * (flat && seg.enter ? interpolate(enter, [0, 1], [1.08, 1]) : 1);
   const op = flat && seg.enter ? clamp(enter * 1.4, 0, 1) : 1;
   const r = look.card.radius;
+  const openBars = look.flair === 'cinematic' && seg.enter ? `inset(${(1 - clamp(enter, 0, 1)) * 50}% 0)` : 'none';
   return (
-    <div style={{ position: 'absolute', left: x, top: y, width: w, height: h, opacity: op, transform: `translate(${tx}px, ${ty}px) rotate(${rot}deg) scale(${sc})` }}>
+    <div style={{ position: 'absolute', left: x, top: y, width: w, height: h, opacity: look.flair === 'cinematic' && seg.enter ? 1 : op, clipPath: openBars, transform: `translate(${tx}px, ${ty}px) rotate(${rot}deg) scale(${sc})` }}>
       {look.card.block && !flat ? <div style={{ position: 'absolute', left: 26, top: 30, width: w, height: h, background: S.block, borderRadius: r, transform: `rotate(${tiltOn ? 1.4 : 0}deg)` }} /> : null}
       <div style={{ position: 'absolute', inset: 0, background: look.card.borderColor, borderRadius: r, boxShadow: look.card.shadow && !flat ? '0 22px 50px rgba(0,0,0,0.28)' : 'none', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', inset: border, overflow: 'hidden', background: '#0c1020', borderRadius: Math.max(0, r - border) }}>
           <CardContent seg={seg} fps={fps} w={w - border * 2} h={h - border * 2} look={look} keyTimes={keyTimes} />
+          {look.flair !== 'grassroots' ? <CardFlair look={look} w={w - border * 2} h={h - border * 2} frame={frame} fps={fps} seg={seg} /> : null}
           {children}
         </div>
       </div>
+      {look.flair === 'grassroots' ? <CardFlair look={look} w={w} h={h} frame={frame} fps={fps} seg={seg} /> : null}
     </div>
   );
 }
@@ -515,6 +524,7 @@ export const PoliticalAd = ({ spec }) => {
   return (
     <AbsoluteFill style={{ overflow: 'hidden' }}>
       <Background segs={segs} endCard={spec.end} look={look} fps={fps} />
+      <FlairUnder segs={segs} look={look} L={L} fps={fps} endAt={spec.end?.at} />
       {segs.map((seg, i) => (
         <Sequence key={`s${i}`} from={F(seg.at)} durationInFrames={Math.max(1, F(seg.at + seg.dur) - F(seg.at))} layout="none">
           <Card seg={{ ...seg, cut: i > 0 && segs[i - 1].card?.src !== seg.card?.src }} prevTilt={i > 0 && !seg.enter ? segs[i - 1].tilt : null} L={L} look={look} fps={fps} keyTimes={keyTimes}>
@@ -532,9 +542,11 @@ export const PoliticalAd = ({ spec }) => {
       ) : null)}
       {now ? <Headline seg={now} L={L} look={look} fps={fps} /> : null}
       {look.ticker && spec.ticker ? <Ticker text={spec.ticker} look={look} fps={fps} until={spec.end ? spec.end.at : spec.total} /> : null}
+      <FlairOver segs={segs} look={look} L={L} fps={fps} spec={spec} />
       {spec.end ? (
         <Sequence from={F(spec.end.at)} durationInFrames={Math.max(1, F(spec.end.dur))} layout="none">
           <EndCard e={spec.end} look={look} fps={fps} L={L} />
+          <EndFlair look={look} fps={fps} L={L} name={spec.end.name} />
         </Sequence>
       ) : null}
       <TransitionFX segs={segs} look={look} fps={fps} endAt={spec.end?.at} />
