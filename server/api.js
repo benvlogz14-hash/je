@@ -838,7 +838,7 @@ r.post('/api/reverse/upload', async (req, res) => {
 r.get('/api/reverse', () => require('./video/reverse').list().map(({ grade, ...x }) => x));
 r.get('/api/reverse/:id/sheet', (req, res, p) => { const x = require('./video/reverse').get(p.id); return x?.sheet && fs.existsSync(x.sheet) ? serveFile(req, res, x.sheet) : send(res, 404, { error: 'No sheet' }); }, { stream: true });
 r.del('/api/reverse/:id', (req, b, p) => { require('./video/reverse').remove(p.id); events.publish('settings', {}); return { ok: true }; });
-r.post('/api/reverse/:id/apply', (req, b, p) => {
+r.post('/api/reverse/:id/apply', async (req, b, p) => {
   const rv = require('./video/reverse'); const x = rv.get(p.id); if (!x) throw new HttpError(404, 'Recipe not found');
   const done = [];
   if (b.clientId) {
@@ -848,6 +848,10 @@ r.post('/api/reverse/:id/apply', (req, b, p) => {
     events.publish('clients', { id: c.id });
   }
   if (b.political) { ctx.store.setSettings({ political: { styleNotes: rv.notes(x), ...(x.avgShot ? { reference: { src: x.src, duration: x.duration, cuts: x.cuts, avgShot: x.avgShot, cutsPerMinute: x.cutsPerMinute, sheet: x.sheet, vertical: x.vertical, at: x.at } } : {}) } }); done.push('political ad style'); events.publish('settings', {}); }
+  if (b.political) {
+    // The pro ads get a look designed from the same study (colours, type, pacing words), as the default.
+    try { const looks = require('./political/looks'); const r = await looks.fromPrompt(`Match this video's style: ${rv.notes(x)}`); ctx.store.setSettings({ political: { proLook: { look: looks.strip(r.look), name: r.look.name, prompt: `From a studied video: ${String(x.title || x.src || '').slice(0, 80)}`, preset: null, notes: '', by: r.by, at: now() } } }); done.push(`pro ad look "${r.look.name}"`); } catch { /* the look stays as it was */ }
+  }
   if (!done.length) throw new HttpError(400, 'Choose a client or the political ads.');
   audit.log(actorOf(req), 'reverse.applied', { id: x.id, clientId: b.clientId || null, political: !!b.political });
   return { ok: true, applied: done };
@@ -861,6 +865,34 @@ r.post('/api/setup/:action', (req, b, p) => {
   return queue.enqueue(job, {}, { actor: actorOf(req), dedupeKey: job });
 }, { roles: OWNER });
 r.get('/api/political/steps', () => polPkg.STEPS.map(([key, label]) => ({ key, label })));
+// Looks for the pro ads: presets, a look designed from a typed description, per lead or as the default.
+r.get('/api/political/looks', () => ({ presets: require('./political/looks').list(), current: ctx.setting('political.proLook', null) }));
+r.post('/api/political/looks/design', async (req, b) => {
+  const looks = require('./political/looks');
+  if (b.preset && !looks.PRESETS[b.preset]) throw new HttpError(400, 'Unknown look');
+  const r = b.prompt ? await looks.fromPrompt(String(b.prompt)) : { look: looks.preset(b.preset || 'bold'), notes: '', by: 'preset' };
+  const out = { look: looks.strip(r.look), name: r.look.name, prompt: String(b.prompt || '').slice(0, 1500), preset: b.preset || null, notes: r.notes, by: r.by, at: now() };
+  if (b.save) { ctx.store.setSettings({ political: { proLook: out } }); audit.log(actorOf(req), 'political.look_default', { look: out.name }); }
+  return out;
+});
+// A still of a look: ?preset=<id>, ?prospect=<id> (that lead's own look) or ?default=1 (the saved default).
+r.get('/api/political/looks/preview', async (req, res) => {
+  const looks = require('./political/looks'); const q = req.query || {};
+  let look = q.preset ? (looks.PRESETS[q.preset] ? looks.preset(q.preset) : null) : null;
+  if (q.prospect) look = ctx.store.get('prospects', q.prospect)?.pkg?.proLook?.look || null;
+  if (q.default) look = ctx.setting('political.proLook', null)?.look || looks.preset('bold');
+  if (!look) return send(res, 404, { error: 'No look' });
+  try { const f = await require('./political/adengine').previewStill(look, { vertical: q.wide ? false : true }); return serveFile(req, res, f); }
+  catch (e) { return send(res, 503, { error: `Preview unavailable: ${String(e.message).slice(0, 160)}` }); }
+}, { stream: true });
+r.del('/api/political/looks/default', () => { ctx.store.setSettings({ political: { proLook: null } }); return { ok: true }; });
+r.post('/api/prospects/:id/look', (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id));
+  const looks = require('./political/looks');
+  if (b.clear) { ctx.store.update('prospects', pr.id, (cur) => ({ pkg: { ...(cur.pkg || {}), proLook: null } })); events.publish('prospects', { id: pr.id }); return { ok: true }; }
+  if (!b.prompt && !looks.PRESETS[b.preset]) throw new HttpError(400, 'Pick a look or describe one.');
+  return queue.enqueue('political.restyle', { prospectId: pr.id, name: pr.name, preset: b.prompt ? null : b.preset, prompt: String(b.prompt || '').slice(0, 1500) }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}` });
+});
 // The candidate's own footage, uploaded on the lead (used by the ad styles made from their footage; uploads come first).
 r.post('/api/prospects/:id/footage/upload', async (req, res, p) => {
   const pr = ctx.store.get('prospects', p.id); if (!pr) return send(res, 404, { error: 'Not found' });

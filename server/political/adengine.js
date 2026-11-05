@@ -23,6 +23,7 @@ const ctx = require('../core/ctx');
 const paths = require('../core/paths');
 const ai = require('../integrations/ai');
 const ff = require('../video/ffmpeg');
+const looks = require('./looks');
 
 const FPS = 30;
 const ROOT = path.join(__dirname, '..', '..');
@@ -187,9 +188,9 @@ async function mapFor({ state, office }) {
 
 /** A headline taken word for word from a line: the whole sentence when it's short, else the strongest clause (4-8 words)
  *  that starts and ends on a clause break, so it reads as a whole thought ("Civil rights are being attacked,"). */
-function autoHeadline(words) {
+function autoHeadline(words, whole = 9) {
   const ws = words.map((x) => x.w);
-  if (ws.length <= 9) return { from: 0, to: ws.length };
+  if (ws.length <= whole) return { from: 0, to: ws.length };
   const brk = (i) => i < 0 || /[.!?,;:]["”']?$/.test(ws[i]);
   let best = null;
   for (let len = 3; len <= 10; len++) for (let i = 0; i + len <= ws.length; i++) {
@@ -223,14 +224,15 @@ function findRun(lineWords, run) {
 const BG_CYCLE = ['navy', 'yellow', 'navy', 'red', 'navy', 'yellow'];
 
 /** The built-in planner (no AI needed); the AI's choices are laid over it when one is connected. */
-function basePlan(bites, { broll, map, place = '' }) {
+function basePlan(bites, { broll, map, place = '', look = null }) {
+  const whole = look && (look.layout === 'full' || look.head?.pos === 'bottom') ? 6 : 9; // tighter headline areas get shorter lines
   let brollUsed = 0;
   // The map goes on the line about the district or community (else the second line).
   const placeWords = String(place).toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 3);
   const local = (b) => /\b(district|community|neighbo|town|city|county|borough|state|street|home|here)/i.test(b.text) || placeWords.some((w) => b.text.toLowerCase().includes(w)) || (map?.number && new RegExp(`\\b${map.number}`).test(b.text));
   const mapAt = !map ? -1 : (bites.findIndex((b, k) => k >= 1 && b.e - b.s >= 3.4 && local(b)) + 1 || bites.findIndex((b, k) => k >= 1 && b.e - b.s >= 3.4) + 1) - 1;
   return bites.map((b, k) => {
-    const dur = b.e - b.s; const h = autoHeadline(b.words);
+    const dur = b.e - b.s; const h = autoHeadline(b.words, whole);
     const head = b.words.slice(h.from, h.to).map((x) => x.w);
     const key = keyWordOf(head);
     const p = { bite: k, headline: head.join(' '), keys: key >= 0 ? [head[key]] : [], bg: BG_CYCLE[k % BG_CYCLE.length] };
@@ -240,7 +242,7 @@ function basePlan(bites, { broll, map, place = '' }) {
   });
 }
 
-async function aiPlan(bites, { name, office, place, broll, map, notes, prev }) {
+async function aiPlan(bites, { name, office, place, broll, map, notes, prev, look }) {
   if (!ai.anyConnected()) return null;
   const lines = bites.map((b, k) => `#${k} (${(b.e - b.s).toFixed(1)}s): ${b.text}`).join('\n');
   const shots = broll.map((x, i) => `B${i}: ${x.what || 'footage with nobody talking'} (${(x.e - x.s).toFixed(1)}s)`).join('\n') || 'none';
@@ -254,6 +256,7 @@ async function aiPlan(bites, { name, office, place, broll, map, notes, prev }) {
 - map (optional, at most once, only when a district map exists, on a line about the district, their community or the people they serve): {"at": seconds, "dur": 2 to 3.2}.
 Design rules: fewer, bigger things on screen; motion shows meaning; every claim on screen must be the candidate's own words. Return JSON {"lines":[{"bite":0,"headline":"...","keys":["..."],"bg":"navy","cover":null,"map":null}, ...]}.`,
     prompt: `Candidate: ${name}${office ? `, ${office}` : ''}${place ? ` (${place})` : ''}
+The look of this ad: ${look ? `${look.name}${look.about ? ` (${look.about})` : ''}${look.layout === 'full' || look.head?.pos === 'bottom' ? '; keep headlines to 3-6 words' : ''}` : 'Bold blocks'}
 District map available: ${map ? `yes (${map.number ? `district ${map.number}, ` : ''}${map.stateName})` : 'no'}
 
 Lines in order:
@@ -312,7 +315,8 @@ async function faceX(c, start, end) {
 
 // ------------------------------------------------------------------ build the spec from the plan
 
-function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office, place, cta, site, tag }) {
+function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office, place, cta, site, tag, look }) {
+  look = look || looks.preset('bold');
   const W = vertical ? 1080 : 1920; const H = vertical ? 1920 : 1080;
   const segs = []; const words = []; const voice = [];
   const tilts = [-1.6, 1.3, -1.1, 1.5, -1.4, 1.0];
@@ -353,8 +357,7 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
   const end = { at: t, dur: endDur, bg: 'navy', cta, name, sub: office || '', site: site || '', tag: tag || '' };
   return {
     w: W, h: H, fps: FPS, total: t + endDur, segs, words, voice, end, name, office: [office, place].filter(Boolean).join(', ').slice(0, 70),
-    fontHead: 'Anton', fontBody: 'Montserrat',
-    fonts: [{ family: 'Anton', url: '/f/Anton_400Regular.ttf' }, { family: 'Montserrat', url: '/f/Montserrat_800ExtraBold.ttf', weight: '800' }],
+    look, fonts: looks.fontFiles(look), ticker: [name, office, place, site].filter(Boolean).join('  •  '),
   };
 }
 
@@ -369,7 +372,7 @@ function withBase(spec, base) {
  * Make one ad. bites = the picked lines ({clip, s, e, text, words}); footage = prospect.pkg.footage (clips, broll).
  * Returns { file, duration, spec, plan, agent }.
  */
-async function make({ bites, footage, vertical, out, work, music, name, office, place, state, cta = 'Vote', site = '', tag = '', notes = '', prev = null, onProgress = () => {} }) {
+async function make({ bites, footage, vertical, out, work, music, name, office, place, state, cta = 'Vote', site = '', tag = '', notes = '', prev = null, look = null, onProgress = () => {} }) {
   if (!available()) throw new Error('The pro ad designer is still installing. Restart Euclidean once to finish the update.');
   fs.mkdirSync(work, { recursive: true });
   const clips = footage.clips;
@@ -377,8 +380,9 @@ async function make({ bites, footage, vertical, out, work, music, name, office, 
   const map = await mapFor({ state, office }).catch(() => null);
   // B-roll pieces: shots with nobody talking (best first), at most one per line.
   const broll = (footage.broll || []).filter((x) => clips[x.clip] && fs.existsSync(clips[x.clip].file) && x.e - x.s >= 1.6).slice(0, 8);
-  let plan = basePlan(bites, { broll, map, place }); let agent = 'built-in';
-  try { const j = await aiPlan(bites, { name, office, place, broll, map, notes, prev }); if (j) { plan = mergePlan(plan, j, bites, { broll, map }); agent = j.agent; } } catch { /* the built-in plan */ }
+  const lookN = look ? looks.normalize(look, look) : looks.preset('bold');
+  let plan = basePlan(bites, { broll, map, place, look: lookN }); let agent = 'built-in';
+  try { const j = await aiPlan(bites, { name, office, place, broll, map, notes, prev, look: lookN }); if (j) { plan = mergePlan(plan, j, bites, { broll, map }); agent = j.agent; } } catch { /* the built-in plan */ }
 
   // Cut each line (with a hair of lead-in and tail) and each B-roll shot used.
   const cuts = [];
@@ -396,7 +400,7 @@ async function make({ bites, footage, vertical, out, work, music, name, office, 
     const file = path.join(work, `broll${p.cover.broll}.mp4`); await cutBroll(c, s, len, file);
     brollFiles[p.cover.broll] = { url: `/m/broll${p.cover.broll}.mp4` };
   }
-  const spec = buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office, place, cta, site, tag });
+  const spec = buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office, place, cta, site, tag, look: lookN });
 
   // Render with Remotion.
   const srv = await serve({ m: work, f: FONTS });
@@ -421,6 +425,29 @@ async function make({ bites, footage, vertical, out, work, music, name, office, 
   return { file: out, duration: spec.total, spec, plan, agent };
 }
 
+/** A still of a look (for the style picker): a sample headline, captions, a stat card and a name plate. Cached by look. */
+let previewChain = Promise.resolve();
+function previewStill(look, opts = {}) { const run = previewChain.then(() => previewOne(look, opts)); previewChain = run.catch(() => {}); return run; } // one at a time
+async function previewOne(look, { vertical = true } = {}) {
+  look = looks.normalize(look, look);
+  const key = crypto.createHash('sha1').update(JSON.stringify(looks.strip(look)) + srcHash() + (vertical ? 'v' : 'h')).digest('hex').slice(0, 16);
+  const dir = path.join(paths.root, 'remotion', 'previews'); fs.mkdirSync(dir, { recursive: true });
+  const out = path.join(dir, `${key}.png`);
+  if (fs.existsSync(out)) return out;
+  const words = 'We are fighting for every family in this district'.split(' ');
+  const seg = { at: 0, dur: 4, bg: 'navy', tilt: -1.4, enter: true, plate: true, badge: true, head: { words: ['Fighting', 'for', 'our', 'families'].map((w, i) => ({ w, key: w === 'families', t: 0.1 + i * 0.12 })) }, card: { kind: 'stat', value: '100', suffix: '%', label: 'for our families' } };
+  const spec = { w: vertical ? 1080 : 1920, h: vertical ? 1920 : 1080, fps: FPS, total: 4, segs: [seg], words: words.map((w, i) => ({ w, s: 1.6 + i * 0.12, e: 1.7 + i * 0.12, b: 0 })), voice: [], end: null, name: 'Jane Rivera', office: 'State Senate, District 12', look, fonts: looks.fontFiles(look), ticker: 'Jane Rivera  •  State Senate, District 12  •  janerivera.com' };
+  const srv = await serve({ f: FONTS });
+  try {
+    const browserExecutable = await browser(); const serveUrl = await bundled();
+    const { selectComposition, renderStill } = require('@remotion/renderer');
+    const inputProps = { spec: withBase(spec, srv.base) };
+    const composition = await selectComposition({ serveUrl, id: 'PoliticalAd', inputProps, logLevel: 'error', browserExecutable });
+    await renderStill({ composition, serveUrl, browserExecutable, output: out, frame: Math.round(1.75 * FPS), inputProps, logLevel: 'error', scale: vertical ? 0.3 : 0.25 });
+  } finally { srv.server.close(); }
+  return out;
+}
+
 async function mixMusic(input, music, out, total) {
   const f = [];
   const inputs = ['-i', input];
@@ -432,4 +459,4 @@ async function mixMusic(input, music, out, total) {
   await ff.ffmpegWithProgress([...inputs, '-filter_complex', f.join(';'), '-map', '0:v', '-map', '[a]', '-t', total.toFixed(3), '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', out], { totalSec: total });
 }
 
-module.exports = { available, make, mapFor, districtOf, stateName, autoHeadline, basePlan, mergePlan, buildSpec, findRun, bundled };
+module.exports = { available, make, previewStill, mapFor, districtOf, stateName, autoHeadline, basePlan, mergePlan, buildSpec, findRun, bundled };

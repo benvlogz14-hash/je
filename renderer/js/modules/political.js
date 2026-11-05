@@ -112,7 +112,7 @@ function PackageSettings() {
   const init = boot.settings?.political || {};
   const [v, setV] = useState({ backgrounds: 'photo', photoMode: 'auto', photoCutout: true, campaignPhotos: true, videoStyle: 'pro', shortSeconds: 20, videoSeconds: 60, longVideo: true, socialVideo: true, contrastAds: false, brandColors: true, plan: '12 posts a week for $949', bookingUrl: '', senderName: '', offer: '', templates: '', theme: 'auto', narration: false, musicDir: '', musicOn: true, ...init });
   const set = (k) => (e) => setV({ ...v, [k]: e && e.target ? (e.target.type === 'number' ? Number(e.target.value) : e.target.value) : e });
-  const save = () => act(() => api.patch('/api/settings', { political: v }), { ok: 'Saved' }).then((s) => { const b = store.get().boot; if (b && s) store.set({ boot: { ...b, settings: s } }); });
+  const save = () => act(() => { const { proLook: _l, ...rest } = v; return api.patch('/api/settings', { political: rest }); }, { ok: 'Saved' }).then((s) => { const b = store.get().boot; if (b && s) store.set({ boot: { ...b, settings: s } }); });
   return html`<div class="col" style="gap:12px">
     <div class="form-grid">
       <${Field} label="Ad style" id="pol-style"><select id="pol-style" class="input" value=${v.videoStyle} onChange=${set('videoStyle')}><option value="pro">Pro motion graphics from their footage (recommended)</option><option value="campaign">Campaign ad (graphics, like real political ads)</option><option value="speech">Their own speeches, with B-roll and captions</option><option value="pop">Bubbly and poppy</option></select></${Field}>
@@ -126,6 +126,7 @@ function PackageSettings() {
       <${Field} label="Colours (bubbly style)" id="pol-theme"><select id="pol-theme" class="input" value=${v.theme} onChange=${set('theme')}>${[['auto', 'Match their party'], ['blue', 'Blue'], ['red', 'Red'], ['purple', 'Purple'], ['green', 'Green']].map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></${Field}>
       <${Field} label="Music folder (optional)" hint="One track is picked for each video" id="pol-music"><div class="row" style="gap:6px"><input id="pol-music" class="input" value=${v.musicDir} onInput=${set('musicDir')} placeholder="C:\\Music\\Upbeat" />${window.euclidean?.pickFolder || boot.electron ? html`<${Button} size="sm" kind="ghost" onClick=${() => api.post('/api/system/pick-folder', {}).then((r) => r.path && setV({ ...v, musicDir: r.path })).catch(() => {})}>Choose</${Button}>` : null}</div></${Field}>
     </div>
+    ${v.videoStyle === 'pro' ? html`<div class="panel pad" style="background:var(--surface-2)"><${DefaultLook} /></div>` : null}
     <div class="col" style="gap:8px">${[['photoCutout', 'Remove photo backgrounds with AI (needs a remove.bg key or the free rembg tool)'], ['campaignPhotos', "Also use the photo from the candidate's own website (credited)"], ['longVideo', 'Make the long horizontal ad too'], ['socialVideo', 'Also make a social media video (not an ad) about what they have been doing, for incumbents to post'], ['brandColors', "Use the colours from the candidate's own website (campaign style)"], ['contrastAds', 'Allow contrast ads against a researched opponent (cited facts only; always needs your review)'], ['narration', 'AI narrator voice over the long ad (needs OpenAI)'], ['musicOn', 'Add mood-matched royalty-free music (your folder, a free licensed library, or music Euclidean makes itself)']].map(([k, l]) => html`<label class="row" style="gap:8px"><${Toggle} on=${!!v[k]} onChange=${(x) => setV({ ...v, [k]: x })} label=${l} /><span>${l}</span></label>`)}</div>
     <div class="faint" style="font-size:var(--fs-xs)">Music: put tracks in a "positive" and a "contrast" subfolder of your music folder to match the mood of each ad.</div>
     <${Field} label="Your offer, in your words (optional)" id="pol-offer"><textarea id="pol-offer" class="input" rows="2" value=${v.offer} onInput=${set('offer')} placeholder="Two free videos, yours to use whether or not we talk. Could you give us 20 minutes?" style="font-family:inherit;height:64px" /></${Field}>
@@ -150,6 +151,7 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
         ${pkg.error ? html`<div class="notice coral">${pkg.error}</div>` : null}
       </div>
       <${FootageLinks} p=${p} pkg=${pkg} run=${run} busy=${!!job} reload=${reload} />
+      <${LookPanel} p=${p} pkg=${pkg} busy=${!!job} reload=${reload} />
       <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ value: 'about', label: 'About' }, { value: 'videos', label: 'Videos & sheet' }, { value: 'email', label: 'Email' }, { value: 'brief', label: 'Brief' }, { value: 'call', label: 'Call' }, { value: 'sources', label: `Sources ${pkg.sources?.length || ''}` }]} />
       ${tab === 'about' ? html`<div class="col selectable" style="gap:10px;font-size:var(--fs-sm);line-height:1.55">
         ${b.headline ? html`<h3>${b.headline}</h3>` : null}
@@ -195,6 +197,54 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
       ${tab === 'sources' ? html`<ol class="selectable" style="padding-left:22px;font-size:var(--fs-sm);line-height:1.6">${(pkg.sources || []).map((s) => html`<li value=${s.n}><a href=${s.url} target="_blank" rel="noreferrer">${s.title}</a></li>`)}${pkg.researchErrors?.length ? html`<div class="faint" style="margin-top:8px;font-size:var(--fs-xs)">Unavailable: ${pkg.researchErrors.join(' · ')}</div>` : null}</ol>` : null}
       <div class="faint" style="font-size:var(--fs-xs)">${pkg.finishedAt ? `Made ${ago(pkg.finishedAt)}` : ''}</div>
     </div></${Drawer}>`;
+}
+
+/** Preset looks as real preview stills (drawn by the ad engine itself), click to pick. */
+function LookPicker({ presets, sel, onSel }) {
+  return html`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:10px">${presets.map((x) => html`<button type="button" class=${'look-card' + (sel === x.id ? ' on' : '')} title=${x.about} onClick=${() => onSel(sel === x.id ? null : x.id)}
+      style=${`display:flex;flex-direction:column;gap:4px;padding:6px;border-radius:12px;cursor:pointer;text-align:left;background:var(--surface);border:2px solid ${sel === x.id ? 'var(--accent, #6c5ce7)' : 'var(--line)'}`}>
+      <div style=${`position:relative;width:100%;aspect-ratio:9/16;border-radius:8px;overflow:hidden;background:linear-gradient(${x.colors.slice(0, 3).join(',')})`}>
+        <img src=${api.url(`/api/political/looks/preview?preset=${x.id}`)} loading="lazy" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" onError=${(e) => { e.target.style.display = 'none'; }} />
+      </div>
+      <b style="font-size:var(--fs-xs)">${x.name}</b>
+      <span class="faint" style="font-size:10px;line-height:1.3">${x.about}</span>
+    </button>`)}</div>`;
+}
+const LOOK_EXAMPLES = 'Or describe the style you want, in your own words: "dark and cinematic, black and gold, slow and serious", "bright TikTok style with giant captions", "breaking-news look with a ticker, red and black", "like the Larinda ad but green and white"';
+
+/** How this lead's pro ads look: pick a preset or describe one; the ads are remade and the old ones kept as a version. */
+function LookPanel({ p, pkg, busy, reload }) {
+  const { data } = useApi('/api/political/looks');
+  const own = pkg.proLook;
+  const [sel, setSel] = useState(null);
+  const [prompt, setPrompt] = useState('');
+  const go = () => act(() => api.post(`/api/prospects/${p.id}/look`, prompt.trim() ? { prompt: prompt.trim() } : { preset: sel }), { ok: 'Remaking the ads in that look. The earlier ones are kept as a version.' }).then(() => { setPrompt(''); setSel(null); reload(); });
+  const clear = () => act(() => api.post(`/api/prospects/${p.id}/look`, { clear: true }), { ok: 'This lead uses the default look again (remake the ads to see it).' }).then(reload);
+  return html`<details class="panel pad">
+    <summary><b>How the ads look</b> <span class="faint">${own ? `${own.name}${own.prompt ? ` · "${own.prompt.slice(0, 70)}${own.prompt.length > 70 ? '…' : ''}"` : ''}` : `the default look: ${data?.current?.name || 'Bold blocks'}`}</span></summary>
+    <div class="col" style="gap:10px;margin-top:10px">
+      ${own ? html`<div class="row" style="gap:12px;align-items:flex-start"><img src=${api.url(`/api/political/looks/preview?prospect=${p.id}&v=${encodeURIComponent(own.at || '')}`)} alt="" style="width:90px;border-radius:8px;border:1px solid var(--line)" onError=${(e) => { e.target.style.display = 'none'; }} />
+        <div class="col" style="gap:4px;font-size:var(--fs-sm)"><b>${own.name}</b>${own.prompt ? html`<span class="faint">"${own.prompt}"</span>` : null}${own.notes ? html`<span class="faint">Editor notes: ${own.notes}</span>` : null}<span class="faint" style="font-size:var(--fs-xs)">${own.by === 'preset' ? 'Preset' : own.by === 'built-in' ? 'Read without an AI (connect one for finer control)' : `Designed by ${providerLabel ? providerLabel(String(own.by).split(':')[0]) : own.by}`}</span></div></div>` : null}
+      <${LookPicker} presets=${data?.presets || []} sel=${sel} onSel=${(id) => { setSel(id); if (id) setPrompt(''); }} />
+      <textarea class="input" rows="2" placeholder=${LOOK_EXAMPLES} value=${prompt} onInput=${(e) => { setPrompt(e.target.value); if (e.target.value.trim()) setSel(null); }} />
+      <div class="row wrap" style="gap:6px"><${Button} size="sm" kind="primary" icon="sparkle" disabled=${busy || (!sel && !prompt.trim())} onClick=${go}>Make the ads in this look</${Button}>${own ? html`<${Button} size="sm" kind="ghost" onClick=${clear}>Use the default look</${Button}>` : null}</div>
+      <div class="faint" style="font-size:var(--fs-xs)">A description can also steer the edit ("open on the housing line, keep it under 20 seconds"). Words on screen are always the candidate's own.</div>
+    </div></details>`;
+}
+
+/** The default look for every lead's pro ads (Package settings). */
+function DefaultLook() {
+  const { data, reload } = useApi('/api/political/looks');
+  const [sel, setSel] = useState(null); const [prompt, setPrompt] = useState(''); const [busy, setBusy] = useState(false);
+  const cur = data?.current;
+  const save = async () => { setBusy(true); await act(() => api.post('/api/political/looks/design', { ...(prompt.trim() ? { prompt: prompt.trim() } : { preset: sel }), save: true }), { ok: 'Saved as the default look' }); setBusy(false); setSel(null); setPrompt(''); reload(); };
+  return html`<div class="col" style="gap:10px">
+    <div class="row" style="gap:12px;align-items:center">${cur ? html`<img src=${api.url(`/api/political/looks/preview?default=1&v=${encodeURIComponent(cur.at || '')}`)} alt="" style="width:64px;border-radius:8px;border:1px solid var(--line)" onError=${(e) => { e.target.style.display = 'none'; }} />` : null}
+      <div class="col" style="gap:2px"><b>Default look for the pro ads: ${cur?.name || 'Bold blocks (the reference ad)'}</b>${cur?.prompt ? html`<span class="faint" style="font-size:var(--fs-xs)">"${cur.prompt}"</span>` : null}<span class="faint" style="font-size:var(--fs-xs)">Each lead can have its own look too (open the lead → How the ads look).</span></div></div>
+    <${LookPicker} presets=${data?.presets || []} sel=${sel} onSel=${(id) => { setSel(id); if (id) setPrompt(''); }} />
+    <textarea class="input" rows="2" placeholder=${LOOK_EXAMPLES} value=${prompt} onInput=${(e) => { setPrompt(e.target.value); if (e.target.value.trim()) setSel(null); }} />
+    <div class="row" style="gap:6px"><${Button} size="sm" kind="primary" disabled=${busy || (!sel && !prompt.trim())} onClick=${save}>${busy ? 'Designing…' : 'Save as the default look'}</${Button}></div>
+  </div>`;
 }
 
 /** Their footage: videos the founders upload (first choice), pasted links, and what was picked from them. */

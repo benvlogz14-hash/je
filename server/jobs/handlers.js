@@ -888,6 +888,15 @@ queue.register('prospect.audit', {
 const political = require('../political/package');
 const polSources = require('../political/sources');
 
+queue.register('political.restyle', {
+  title: (p) => `New look: ${p.name || 'prospect'}`,
+  heavy: true, maxAttempts: 1,
+  async run(job, h) {
+    if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
+    return political.restyle(job.payload.prospectId, { preset: job.payload.preset || null, prompt: job.payload.prompt || '', actor: job.createdBy }, h);
+  },
+});
+
 queue.register('political.package', {
   title: (p) => `Package: ${p.name || 'prospect'}${p.only ? ` (${p.only})` : ''}`,
   heavy: true, maxAttempts: 1,

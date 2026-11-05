@@ -99,10 +99,12 @@ async function stepImages(p, h) {
 }
 /** Real clips of them speaking (Facebook, YouTube, their sites) for the "their own speeches" ad style. */
 /** Ad styles built from the candidate's own footage: "speech" (their speeches with B-roll) and "pro" (motion graphics). */
-const footageStyle = () => ['speech', 'pro'].includes(S('videoStyle', 'campaign'));
+const footageStyle = (p) => ['speech', 'pro'].includes(S('videoStyle', 'campaign')) || !!p?.pkg?.proLook;
+/** The pro ads' look for this lead: its own (picked or described on the lead), else the default in Package settings. */
+function lookFor(p) { const own = p?.pkg?.proLook; const all = S('proLook', null); return { look: own?.look || all?.look || null, notes: own?.notes || all?.notes || '' }; }
 
 async function stepFootage(p, h) {
-  if (!footageStyle()) return { skip: true, note: 'Only used for the ad styles made from their own footage' };
+  if (!footageStyle(p)) return { skip: true, note: 'Only used for the ad styles made from their own footage' };
   const pkg = p.pkg; const pr = pkg.profile || {};
   const links = [].concat(p.footageLinks || []).flatMap((x) => String(x).split(/\s+/)).filter((x) => /^https?:\/\//.test(x));
   const uploads = (p.footageUploads || []).map((x) => x.file).filter((f) => f && fs.existsSync(f));
@@ -189,7 +191,7 @@ async function stepCreative(p) {
   const pkg = p.pkg;
   const shortSec = Math.max(10, Math.min(90, Number(S('shortSeconds', 20)) || 20));
   const longSec = Math.max(30, Math.min(240, Number(S('videoSeconds', 60)) || 60));
-  const speech = footageStyle() && (pkg.footage?.bites?.short || []).length >= 2;
+  const speech = footageStyle(p) && (pkg.footage?.bites?.short || []).length >= 2;
   const style = S('videoStyle', 'campaign') === 'pop' ? 'pop' : 'campaign';
   const hasPhoto = pkg.profile?.photoFound !== false && !!pkg.profile?.photo;
   const offer = hasPhoto
@@ -319,7 +321,7 @@ async function stepVideo(p, h, kind) {
   if (!board?.length) throw new Error('Run the ad scripts step first.');
   const dir = dirFor(p); const out = path.join(dir, `${slugName(p.name)} - ${K.label} ${K.social ? 'video' : 'ad'}.mp4`);
   // One track for the whole package, matched to the ad's mood (own folder, free licensed library, or generated).
-  const speechStyle = footageStyle() && (p.pkg.footage?.bites?.short || []).length >= 2;
+  const speechStyle = footageStyle(p) && (p.pkg.footage?.bites?.short || []).length >= 2;
   const mood = speechStyle ? 'speech' : c.tone === 'contrast' && !K.social ? 'contrast' : K.social ? 'triumphant' : 'positive';
   const key = K.social ? 'musicSocial' : 'music';
   let track = S('musicOn', true) === false ? null : p.pkg[key] && p.pkg[key].mood === mood && fs.existsSync(p.pkg[key].file) ? p.pkg[key] : null;
@@ -340,16 +342,17 @@ async function stepVideo(p, h, kind) {
   const ref = S('reference', null);
   const paced = ref?.avgShot ? board.map((x) => (x.sec ? x : { ...x, sec: Math.max(2.5, Math.min(7, ref.avgShot * (['issues', 'checklist', 'chart', 'contrast'].includes(x.type) ? 1.6 : 1))) })) : board;
   const ft = p.pkg.footage; const bites = ft?.bites?.[K.social ? 'long' : K.board] || [];
-  const haveFootage = footageStyle() && bites.length >= 2 && ft.clips.every((x) => fs.existsSync(x.file));
+  const haveFootage = footageStyle(p) && bites.length >= 2 && ft.clips.every((x) => fs.existsSync(x.file));
   const speechAd = () => require('./footage').renderSpeechAd({ bites, footage: ft, info, vertical: K.vertical, out, work, music, tagline: K.social ? `What *${p.name.split(/\s+/)[0]}* has been working on` : ft.tagline || `${p.name} is *fighting for you*`, office: shortOffice(pr.office || ''), site: siteOf(p.pkg), social: !!K.social, onProgress: (f, t) => h.progress(f * 0.92, t) });
   let res = null;
-  if (haveFootage && S('videoStyle', 'campaign') === 'pro') {
+  if (haveFootage && (S('videoStyle', 'campaign') === 'pro' || p.pkg.proLook)) {
     // Motion-graphics ad (Remotion): the AI plans it from their lines, the research and the founders' notes.
     const eng = require('./adengine');
-    const notes = (p.pkg.notes || []).filter((n) => n.target !== 'email').slice(-3).map((n) => n.text).join(' | ');
+    const lk = lookFor(p);
+    const notes = [lk.notes, ...(p.pkg.notes || []).filter((n) => n.target !== 'email').slice(-3).map((n) => n.text)].filter(Boolean).join(' | ');
     try {
-      const r = await eng.make({ bites, footage: ft, vertical: K.vertical, out, work, music, name: p.name, office: shortOffice(pr.office || ''), place: p.pkg.brief?.place || '', state: pr.state || '', cta: K.social ? 'Follow' : 'Vote', site: siteOf(p.pkg), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes, prev: p.pkg.pro?.[kind]?.plan || null, onProgress: (f, t) => h.progress(f * 0.92, t) });
-      save(p.id, (pkg) => ({ pro: { ...(pkg.pro || {}), [kind]: { plan: r.plan, agent: r.agent, at: new Date().toISOString() } } }));
+      const r = await eng.make({ bites, footage: ft, vertical: K.vertical, out, work, music, name: p.name, office: shortOffice(pr.office || ''), place: p.pkg.brief?.place || '', state: pr.state || '', cta: K.social ? 'Follow' : 'Vote', site: siteOf(p.pkg), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes, look: lk.look, prev: p.pkg.pro?.[kind]?.plan || null, onProgress: (f, t) => h.progress(f * 0.92, t) });
+      save(p.id, (pkg) => ({ pro: { ...(pkg.pro || {}), [kind]: { plan: r.plan, agent: r.agent, look: r.spec.look?.name || '', at: new Date().toISOString() } } }));
       res = r;
     } catch (e) {
       audit.log('system', 'political.pro_ad_failed', { prospectId: p.id, kind, error: String(e.message).slice(0, 300) }, 'warn');
@@ -559,6 +562,30 @@ async function revise(prospectId, { note, target = 'all', actor = 'user' }, h) {
   return { status: 'ready' };
 }
 
+/**
+ * Remake the ads in another look: a preset ("cinematic") or one designed from a typed description. The earlier ads are
+ * kept as a version. A lead with no package yet gets the whole package made in that look.
+ */
+async function restyle(prospectId, { preset = null, prompt = '', actor = 'user' }, h) {
+  const looks = require('./looks');
+  let p = ctx.store.get('prospects', prospectId); if (!p) throw Object.assign(new Error('Prospect not found'), { permanent: true });
+  h.progress(0.01, prompt ? 'Designing the look from your description' : 'Setting the look');
+  const r = prompt ? await looks.fromPrompt(prompt, { current: p.pkg?.proLook?.look || null }) : { look: looks.preset(preset), notes: '', by: 'preset' };
+  if (p.pkg?.files?.v || p.pkg?.files?.h) snapshot(p, `Before the "${r.look.name}" look`);
+  save(p.id, () => ({ proLook: { look: looks.strip(r.look), name: r.look.name, prompt: String(prompt || '').slice(0, 1500), preset, notes: r.notes, by: r.by, at: now() } }));
+  audit.log(actor, 'political.restyled', { prospectId, look: r.look.name, by: r.by });
+  p = ctx.store.get('prospects', prospectId);
+  if (!p.pkg?.creative || !(p.pkg?.footage?.clips || []).length) return run(prospectId, { from: p.pkg?.creative ? 'footage' : 'research', actor }, h);
+  const steps = ['video_v', 'video_h', ...(S('longVideo', true) ? ['video_hl'] : []), ...(S('socialVideo', true) ? ['video_s'] : []), 'sheet'];
+  for (let i = 0; i < steps.length; i++) {
+    const sub = { progress: (f, t) => h.progress(0.03 + 0.97 * ((i + Math.max(0, Math.min(1, f))) / steps.length), t) };
+    await run(prospectId, { only: steps[i], actor }, sub);
+  }
+  p = ctx.store.get('prospects', prospectId);
+  events.publish('notify', { title: `New look: ${p.name}`, body: `The ads were remade in the "${r.look.name}" look. The earlier ones are kept as a version.`, route: '/growth' });
+  return { look: r.look.name };
+}
+
 /** Bring back an earlier version (its ads, sheet and email). */
 function restore(prospectId, n, actor = 'user') {
   const p = ctx.store.get('prospects', prospectId); const v = (p?.pkg?.versions || []).find((x) => x.n === Number(n));
@@ -571,4 +598,4 @@ function restore(prospectId, n, actor = 'user') {
   return { restored: v.n };
 }
 
-module.exports = { vetEmail, revise, restore, STEPS, VIDEOS, run, dirFor, fallbackCreative, vetStoryboard, material, attachmentsFor, DEFAULT_PLAN };
+module.exports = { vetEmail, revise, restyle, lookFor, restore, STEPS, VIDEOS, run, dirFor, fallbackCreative, vetStoryboard, material, attachmentsFor, DEFAULT_PLAN };
