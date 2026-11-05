@@ -225,7 +225,7 @@ const BG_CYCLE = ['navy', 'yellow', 'navy', 'red', 'navy', 'yellow'];
 
 /** The built-in planner (no AI needed); the AI's choices are laid over it when one is connected. */
 function basePlan(bites, { broll, map, place = '', look = null }) {
-  const whole = look && (look.layout === 'full' || look.head?.pos === 'bottom') ? 6 : 9; // tighter headline areas get shorter lines
+  const whole = look && (look.layout === 'full' || look.head?.pos === 'bottom') ? 7 : 11; // tighter headline areas get shorter lines
   let brollUsed = 0;
   // The map goes on the line about the district or community (else the second line).
   const placeWords = String(place).toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 3);

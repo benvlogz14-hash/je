@@ -475,7 +475,7 @@ function EndCard({ e, look, fps, L }) {
   const big = L.v ? 168 : 150;
   const at = (k) => sp(frame, fps, 6 + k * 5, M.word);
   const up = look.head.case === 'upper';
-  const nameSize = fitWords([e.name || ''], look.fonts.head, big, W * 0.88, big * 1.2, { upper: up, maxLines: 1 });
+  const nameSize = fitWords(String(e.name || '').split(/\s+/), look.fonts.head, big, W * 0.88, big * 2.3, { upper: up, maxLines: 2, gap: 0.25 });
   let deco = null;
   if (look.end === 'split') deco = <AbsoluteFill style={{ background: B.bg, clipPath: `polygon(${W * 0.62 + (1 - a) * W}px 0, ${W}px 0, ${W}px ${H}px, ${W * 0.22 + (1 - a) * W}px ${H}px)` }} />;
   if (look.end === 'stripes') deco = (
@@ -487,7 +487,7 @@ function EndCard({ e, look, fps, L }) {
       {deco}
       <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: big * 0.08, paddingTop: look.end === 'stripes' ? H * 0.12 : 0 }}>
         {e.cta ? <div style={{ fontFamily: look.fonts.head, fontSize: big * 0.42, color: A.keyText, background: A.key, padding: `0 ${big * 0.12}px`, borderRadius: look.card.radius ? 12 : 0, transform: `rotate(${-2 * M.rot}deg) scale(${at(0)})`, textTransform: up ? 'uppercase' : 'none' }}>{e.cta}</div> : null}
-        <div style={{ fontFamily: look.fonts.head, fontSize: nameSize, color: nameColor, textTransform: up ? 'uppercase' : 'none', lineHeight: 0.98, textAlign: 'center', transform: `translateY(${(1 - at(1)) * 80}px)`, opacity: clamp(at(1) * 1.5, 0, 1) }}>
+        <div style={{ fontFamily: look.fonts.head, fontSize: nameSize, color: nameColor, textTransform: up ? 'uppercase' : 'none', lineHeight: 0.98, textAlign: 'center', maxWidth: W * 0.9, transform: `translateY(${(1 - at(1)) * 80}px)`, opacity: clamp(at(1) * 1.5, 0, 1) }}>
           {look.end === 'split' ? <Outlined stroke={look.dark} width={10} color={nameColor}>{e.name}</Outlined> : e.name}
         </div>
         {e.sub ? <div style={{ fontFamily: look.fonts.body, fontSize: big * 0.2, color: look.dark, background: look.light === A.bg ? B.bg : look.light, padding: `${big * 0.04}px ${big * 0.16}px`, textTransform: 'uppercase', letterSpacing: '0.04em', transform: `scale(${at(2)})` }}>{e.sub}</div> : null}

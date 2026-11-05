@@ -108,6 +108,10 @@ async function stepFootage(p, h) {
   const pkg = p.pkg; const pr = pkg.profile || {};
   const links = [].concat(p.footageLinks || []).flatMap((x) => String(x).split(/\s+/)).filter((x) => /^https?:\/\//.test(x));
   const uploads = (p.footageUploads || []).map((x) => x.file).filter((f) => f && fs.existsSync(f));
+  // Turning their speech into text needs OpenAI or the free local Whisper: install Whisper once if neither is there.
+  if (!ai.connected('openai') && !require('../setup/whisper').status().ready) {
+    try { await require('../setup/whisper').install({ progress: (f, t) => h.progress(0.1 + f * 0.1, `Installing free speech-to-text (one time): ${t || ''}`) }); } catch { /* the step explains what's missing */ }
+  }
   const r = await require('./footage').prepare({
     uploads, name: p.name, office: shortOffice(pr.office || ''), socials: pr.socials || [], sites: pr.sites || [], links, dir: dirFor(p), themes: pkg.brief?.themes || [],
     shortSec: Number(S('shortSeconds', 20)) || 20, longSec: Number(S('videoSeconds', 60)) || 60, contrast: !!S('contrastAds', false),
