@@ -332,7 +332,7 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
     const keyset = new Set((p.keys || []).map(norm));
     const head = { words: hw.map((w, i) => ({ w, key: keyset.has(norm(w)), t: at >= 0 ? Math.max(t, t + (b.words[at + i].s - cut.start) - 0.05) : t + 0.08 + i * 0.07 })) };
     const speaker = (from, to) => ({ kind: 'video', src: cut.url, from: from - t, fx: cut.fx ?? 0.5, fy: 0.3, pushAt: t, pushLen: cut.dur });
-    const base = { bg: p.bg || 'navy', head, tilt: tilts[k % tilts.length] };
+    const base = { bg: p.bg || 'navy', head, tilt: tilts[k % tilts.length], label: b.label || null };
     const parts = [];
     const ins = p.map ? { kind: 'map', ...p.map } : p.cover && brollFiles[p.cover.broll] ? { kind: 'broll', ...p.cover } : null;
     if (ins && ins.at < cut.dur - 0.6) {

@@ -81,6 +81,25 @@ export function FlairUnder({ segs, look, L, fps, endAt }) {
       })}</AbsoluteFill>
     );
   }
+  if (f === 'poster') {
+    const cx = L.card.x + L.card.w / 2; const cy = L.card.y + L.card.h / 2; const R = Math.max(W, H) * 1.2;
+    const pop = sp(frame, fps, 0, { damping: 20, stiffness: 90 });
+    return (
+      <AbsoluteFill>
+        <svg width={W} height={H} style={{ position: 'absolute', inset: 0 }}>
+          <g transform={`translate(${cx} ${cy}) rotate(${t * 7}) scale(${pop})`}>{Array.from({ length: 18 }).map((_, i) => { const a0 = (i * 20) * Math.PI / 180; const a1 = (i * 20 + 10) * Math.PI / 180; return <path key={i} d={`M0 0 L${Math.cos(a0) * R} ${Math.sin(a0) * R} L${Math.cos(a1) * R} ${Math.sin(a1) * R} Z`} fill="#ffffff" fillOpacity="0.13" />; })}</g>
+        </svg>
+      </AbsoluteFill>
+    );
+  }
+  if (f === 'explainer') {
+    const line = mixHex(look.dark, look.sections.a.bg, 0.9);
+    return <AbsoluteFill><svg width={W} height={H}><pattern id="gp" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0 L0 0 0 48" fill="none" stroke={line} strokeWidth="2" /></pattern><rect width={W} height={H} fill="url(#gp)" /></svg></AbsoluteFill>;
+  }
+  if (f === 'zine') {
+    const zig = (y, up, h) => { let d = `M0 ${y}`; for (let x = 0; x <= W + 40; x += 40) d += ` L${x} ${y + (up ? -1 : 1) * (h * (0.4 + rnd(x) * 0.6))}`; return d + ` L${W} ${up ? 0 : H} L0 ${up ? 0 : H} Z`; };
+    return <AbsoluteFill><svg width={W} height={H}><path d={zig(L.v ? 90 : 46, true, L.v ? 34 : 22)} fill={look.dark} /><path d={zig(H - (L.v ? 120 : 50), false, L.v ? 34 : 22)} fill={look.accent} /></svg></AbsoluteFill>;
+  }
   if (f === 'patriotic') {
     return (
       <AbsoluteFill>{[0, 1, 2].map((i) => {
@@ -102,6 +121,18 @@ export function CardFlair({ look, w, h, frame, fps, seg }) {
     const tape = (x, y, r) => <div style={{ position: 'absolute', left: x, top: y, width: 170, height: 52, background: 'rgba(242,232,196,0.88)', transform: `rotate(${r}deg) scale(${s})`, boxShadow: '0 2px 6px rgba(0,0,0,0.12)' }} />;
     return <>{tape(-60, -18, -32)}{tape(w - 110, -18, 30)}</>;
   }
+  if (f === 'zine') {
+    const s = sp(frame, fps, seg.enter ? 8 : 0, { damping: 14, stiffness: 160 });
+    return <><div style={{ position: 'absolute', left: w / 2 - 90, top: -26, width: 180, height: 52, background: 'rgba(242,232,196,0.9)', transform: `rotate(-3deg) scale(${s})` }} /><div style={{ position: 'absolute', right: -30, bottom: 40, width: 130, height: 44, background: 'rgba(242,232,196,0.9)', transform: `rotate(62deg) scale(${s})` }} /></>;
+  }
+  if (f === 'y2k') {
+    const bh = 46;
+    return <div style={{ position: 'absolute', left: 0, top: -bh + 2, width: w, height: bh, background: look.dark, borderRadius: '8px 8px 0 0', display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px' }}>
+      {['#ff5f8f', '#d7ff4a', '#c9b6ff'].map((c) => <div key={c} style={{ width: 16, height: 16, borderRadius: 8, background: c }} />)}
+      <div style={{ fontFamily: look.fonts.body, fontSize: 30, color: look.light, marginLeft: 10, letterSpacing: '0.04em' }}>candidate_speech.mp4</div>
+    </div>;
+  }
+  if (f === 'poster') return <div style={{ position: 'absolute', inset: 10, border: `4px double ${look.light}`, pointerEvents: 'none' }} />;
   if (f === 'patriotic') return <div style={{ position: 'absolute', inset: 14, border: `3px solid ${look.light}`, outline: `3px solid ${look.accent}`, outlineOffset: 6, opacity: 0.9, pointerEvents: 'none' }} />;
   if (f === 'cinematic' || f === 'dark') return <div style={{ position: 'absolute', inset: 0, boxShadow: `inset 0 0 ${Math.round(Math.min(w, h) * (f === 'dark' ? 0.32 : 0.22))}px rgba(0,0,0,${f === 'dark' ? 0.8 : 0.6})`, pointerEvents: 'none' }} />;
   return null;
@@ -167,6 +198,43 @@ export function FlairOver({ segs, look, L, fps, spec }) {
       </AbsoluteFill>
     );
   }
+  if (f === 'street') {
+    const k = keys.find((x) => t >= x.t && t < x.t + 1.3);
+    if (!k) return null;
+    const s = sp(frame, fps, Math.round(k.t * fps), { damping: 13, stiffness: 240 });
+    const out = interpolate(t - k.t, [1.1, 1.3], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+    const size = Math.min(L.v ? 110 : 96, (W * 0.46) / Math.max(3, k.w.length * 0.72), (W * 0.5 * (L.v ? 110 : 96)) / Math.max(1, textW(k.w, look.fonts.head, L.v ? 110 : 96)));
+    const blue = look.sections.b.bg;
+    return <div style={{ position: 'absolute', right: L.v ? 90 : 140, top: L.v ? H * 0.34 : H * 0.3, opacity: out, transform: `rotate(${6 + Math.sin(t * 6) * 2}deg) scale(${s})` }}>
+      <div style={{ background: look.light, border: `${Math.round(size * 0.09)}px solid ${blue}`, borderRadius: size * 0.4, padding: `${size * 0.08}px ${size * 0.3}px`, fontFamily: look.fonts.head, fontSize: size, color: look.dark, boxShadow: `0 ${size * 0.1}px 0 ${look.dark}` }}>{k.w}</div>
+    </div>;
+  }
+  if (f === 'explainer') {
+    const starts = (spec.voice || []).map((v) => v.at);
+    const n = starts.filter((a) => a <= t + 1e-6).length; if (!n) return null;
+    const s = sp(frame, fps, Math.round(starts[n - 1] * fps), { damping: 11, stiffness: 220 });
+    const d = L.v ? 120 : 96;
+    return <div style={{ position: 'absolute', left: L.card.x - d * 0.3, top: L.card.y - d * 0.55, width: d, height: d, borderRadius: '50%', background: look.accent, border: `5px solid ${look.dark}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: look.fonts.head, fontSize: d * 0.5, color: look.dark, transform: `scale(${s}) rotate(${(1 - s) * -40}deg)`, boxShadow: `4px 6px 0 ${look.dark}` }}>{n}</div>;
+  }
+  if (f === 'doc') {
+    if (!seg) return null;
+    const lines = (spec.voice || []).map((v) => v.at); const n = Math.max(1, lines.filter((a) => a <= t + 1e-6).length);
+    const s = sp(frame, fps, firstHead, { damping: 26, stiffness: 80 });
+    const cs = sp(frame, fps, Math.round(lines[n - 1] * fps) || 0, { damping: 26, stiffness: 90 });
+    const label = seg.label ? `Part ${n} · ${seg.label}` : `Part ${n}`;
+    const qs = L.v ? 200 : 170;
+    return <AbsoluteFill>
+      <div style={{ position: 'absolute', left: L.head.x - (L.v ? 10 : 20), top: L.head.y - qs * 0.58, fontFamily: look.fonts.head, fontSize: qs, lineHeight: 1, color: look.accent, opacity: 0.9 * s }}>“</div>
+      <div style={{ position: 'absolute', left: L.v ? 60 : 90, top: L.v ? 140 : 50, display: 'flex', alignItems: 'center', gap: 14, opacity: cs }}>
+        <div style={{ width: 60 * cs, height: 2, background: look.accent }} />
+        <div style={{ fontFamily: look.fonts.body, fontSize: L.v ? 32 : 24, letterSpacing: '0.22em', textTransform: 'uppercase', color: look.light, textShadow: '0 2px 10px rgba(0,0,0,0.6)' }}>{label}</div>
+      </div>
+    </AbsoluteFill>;
+  }
+  if (f === 'y2k') {
+    const spots = [[0.07, 0.16], [0.92, 0.22], [0.1, 0.78], [0.9, 0.74], [0.5, 0.93]];
+    return <AbsoluteFill>{spots.map(([x, y], i) => { const k = 0.5 + 0.5 * Math.sin(t * 3 + i * 1.7); const sz = (L.v ? 60 : 46) * (0.6 + 0.4 * k); return <svg key={i} width={sz} height={sz} viewBox="0 0 100 100" style={{ position: 'absolute', left: x * W - sz / 2, top: y * H - sz / 2, transform: `rotate(${t * 40 + i * 20}deg)` }}><path d="M50 0 C54 38 62 46 100 50 C62 54 54 62 50 100 C46 62 38 54 0 50 C38 46 46 38 50 0 Z" fill={i % 2 ? look.accent : look.light} /></svg>; })}</AbsoluteFill>;
+  }
   if (f === 'patriotic') {
     const ls = lineStarts.map((x) => Math.round(x * fps)).filter((x) => frame >= x && frame < x + 18).pop();
     if (ls == null) return null;
@@ -224,6 +292,10 @@ export function EndFlair({ look, fps, L, name }) {
       if (y < -40) return null;
       return <div key={i} style={{ position: 'absolute', left: x0 + Math.sin(t * 3 + i) * 30, top: y, width: 14 + rnd(i + 7) * 12, height: 8 + rnd(i + 8) * 8, background: cols[i % cols.length], transform: `rotate(${rot}deg)`, borderRadius: i % 3 === 0 ? '50%' : 2 }} />;
     })}</AbsoluteFill>;
+  }
+  if (f === 'poster') {
+    const R = Math.max(W, H);
+    return <AbsoluteFill><svg width={W} height={H} style={{ position: 'absolute', inset: 0 }}><g transform={`translate(${W / 2} ${H / 2}) rotate(${t * 9})`}>{Array.from({ length: 18 }).map((_, i) => { const a0 = (i * 20) * Math.PI / 180; const a1 = (i * 20 + 10) * Math.PI / 180; return <path key={i} d={`M0 0 L${Math.cos(a0) * R} ${Math.sin(a0) * R} L${Math.cos(a1) * R} ${Math.sin(a1) * R} Z`} fill="#ffffff" fillOpacity="0.12" />; })}</g></svg></AbsoluteFill>;
   }
   if (f === 'patriotic') return <AbsoluteFill>{[0, 1, 2, 3, 4].map((i) => { const s = sp(frame, fps, 8 + i * 3, { damping: 9, stiffness: 160 }); const sz = L.v ? 54 : 44; return <Star key={i} size={sz} color={look.light} style={{ position: 'absolute', left: W / 2 + (i - 2) * sz * 1.3 - sz / 2, top: H / 2 - (L.v ? 330 : 270), transform: `scale(${s})` }} />; })}</AbsoluteFill>;
   if (f === 'dark') {

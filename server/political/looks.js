@@ -21,15 +21,16 @@ const FONTS = {
   'Permanent Marker': 'PermanentMarker-Regular.ttf', 'Caveat Brush': 'CaveatBrush-Regular.ttf', Kalam: 'Kalam-Bold.ttf', 'Special Elite': 'SpecialElite-Regular.ttf',
   'Lilita One': 'LilitaOne-Regular.ttf', 'Titan One': 'TitanOne-Regular.ttf', 'Luckiest Guy': 'LuckiestGuy-Regular.ttf', Bungee: 'Bungee-Regular.ttf', 'Black Ops One': 'BlackOpsOne-Regular.ttf',
   'Dela Gothic One': 'DelaGothicOne-Regular.ttf', 'Rubik Mono One': 'RubikMonoOne-Regular.ttf', VT323: 'VT323-Regular.ttf',
+  Shrikhand: 'Shrikhand-Regular.ttf', 'Sigmar One': 'SigmarOne-Regular.ttf', 'Bowlby One': 'BowlbyOne-Regular.ttf', Righteous: 'Righteous-Regular.ttf', Chewy: 'Chewy-Regular.ttf', 
 };
 
 const OPTIONS = {
   layout: ['card', 'frame', 'full', 'letterbox'], // tilted card over colour | straight framed card | full-screen footage | cinematic bars
   headPos: ['top', 'bottom'], headCase: ['upper', 'none'], headAlign: ['center', 'left'],
   keyStyle: ['box', 'underline', 'color', 'highlight', 'circle', 'sticker'], reveal: ['word', 'line', 'type', 'fade', 'blur'],
-  flair: ['bold', 'cinematic', 'clean', 'news', 'grassroots', 'tiktok', 'patriotic', 'dark', 'bright', 'none'],
+  flair: ['bold', 'cinematic', 'clean', 'news', 'grassroots', 'tiktok', 'patriotic', 'dark', 'bright', 'street', 'poster', 'explainer', 'doc', 'y2k', 'zine', 'none'],
   capStyle: ['box', 'color', 'plain', 'underline', 'none'], capPos: ['card', 'low', 'center'], capCase: ['upper', 'none'],
-  transition: ['wipe', 'cut', 'fade', 'flash', 'slide', 'zoom'],
+  transition: ['wipe', 'cut', 'fade', 'flash', 'slide', 'zoom', 'mix'],
   grade: ['none', 'warm', 'cool', 'bw', 'film', 'punchy', 'dark'], texture: ['none', 'grain', 'paper', 'halftone', 'scanlines', 'stripes'],
   plate: ['box', 'bar', 'minimal', 'none'], pill: ['tag', 'tape', 'none'], end: ['split', 'solid', 'stripes'], motion: ['snappy', 'smooth', 'calm'],
 };
@@ -93,6 +94,42 @@ const PRESETS = {
     fonts: { head: 'Lilita One', body: 'Poppins', cap: 'Lilita One' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'sticker', reveal: 'word', scale: 0.95 },
     cap: { style: 'box', pos: 'card', case: 'none', scale: 0.9 }, card: { tilt: true, border: 14, radius: 28, block: true, shadow: true, borderColor: '#ffffff' }, accent: '#7b5cff',
     transition: 'slide', grade: 'punchy', texture: 'halftone', plate: 'box', pill: 'tag', badge: false, end: 'split', motion: 'snappy',
+  },
+  street: {
+    flair: 'street', name: 'Street vlog', about: 'Walk-and-talk creator style: handheld full-screen footage, big friendly captions, sticker words, transit-style place tags', layout: 'full', colors: { a: '#ff6a13', b: '#1b4dff', c: '#ffd23f' }, light: '#ffffff', dark: '#14121f',
+    fonts: { head: 'Archivo Black', body: 'Inter', cap: 'Archivo Black' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'sticker', reveal: 'word', scale: 0.78 },
+    cap: { style: 'color', pos: 'center', case: 'none', scale: 1.05 }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false }, accent: '#ffd23f',
+    transition: 'mix', grade: 'punchy', texture: 'none', plate: 'minimal', pill: 'tag', badge: false, end: 'split', motion: 'snappy', punch: true,
+  },
+  poster: {
+    flair: 'poster', name: 'Retro poster', about: 'Old cinema poster: marigold, magenta and teal, a turning sunburst, 3D stacked type, halftone', layout: 'card', colors: { a: '#b8126b', b: '#ffb21c', c: '#0f7c7a' }, light: '#fff4dc', dark: '#2a0b1f',
+    fonts: { head: 'Shrikhand', body: 'Righteous', cap: 'Bowlby One' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'word', scale: 0.9 },
+    cap: { style: 'box', pos: 'card', case: 'upper', scale: 0.82 }, card: { tilt: true, border: 16, radius: 4, block: false, shadow: true, borderColor: '#fff4dc' }, accent: '#ffb21c',
+    transition: 'mix', grade: 'warm', texture: 'halftone', plate: 'box', pill: 'tag', badge: false, end: 'split', motion: 'snappy',
+  },
+  explainer: {
+    flair: 'explainer', name: 'Explainer', about: 'Policy in plain steps: grid paper, numbered points, highlighter, arrows', layout: 'frame', colors: { a: '#fbfbf7', b: '#eef6ff', c: '#fffbe8' }, light: '#ffffff', dark: '#15233f',
+    fonts: { head: 'Poppins', body: 'Inter', cap: 'Poppins' }, head: { pos: 'top', case: 'none', align: 'left', keyStyle: 'highlight', reveal: 'word', scale: 0.8 },
+    cap: { style: 'underline', pos: 'card', case: 'none', scale: 0.82 }, card: { tilt: false, border: 8, radius: 18, block: false, shadow: true, borderColor: '#15233f' }, accent: '#ffcf33',
+    transition: 'slide', grade: 'none', texture: 'none', plate: 'bar', pill: 'tag', badge: false, end: 'solid', motion: 'smooth',
+  },
+  doc: {
+    flair: 'doc', name: 'Documentary', about: 'Interview film: full-screen footage, big quote marks, chapter titles, slow and warm', layout: 'full', colors: { a: '#101010', b: '#1b1712', c: '#101010' }, light: '#f6f0e4', dark: '#0d0d0d',
+    fonts: { head: 'DM Serif Display', body: 'Inter', cap: 'Inter' }, head: { pos: 'bottom', case: 'none', align: 'left', keyStyle: 'color', reveal: 'fade', scale: 0.8 },
+    cap: { style: 'plain', pos: 'low', case: 'none', scale: 0.6 }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false }, accent: '#e8b04b',
+    transition: 'fade', grade: 'film', texture: 'grain', plate: 'minimal', pill: 'none', badge: false, end: 'solid', motion: 'calm',
+  },
+  y2k: {
+    flair: 'y2k', name: 'Y2K', about: 'Early-internet nostalgia: old computer window, pixel labels, sparkles, lilac and lime', layout: 'card', colors: { a: '#c9b6ff', b: '#d7ff4a', c: '#ff7ac6' }, light: '#ffffff', dark: '#160c33',
+    fonts: { head: 'Rubik Mono One', body: 'VT323', cap: 'Rubik Mono One' }, head: { pos: 'top', case: 'upper', align: 'center', keyStyle: 'box', reveal: 'type', scale: 0.72 },
+    cap: { style: 'box', pos: 'card', case: 'upper', scale: 0.7 }, card: { tilt: false, border: 6, radius: 6, block: true, shadow: false, borderColor: '#160c33' }, accent: '#ff3fa4',
+    transition: 'mix', grade: 'punchy', texture: 'scanlines', plate: 'box', pill: 'tag', badge: false, end: 'split', motion: 'snappy',
+  },
+  zine: {
+    flair: 'zine', name: 'Cut-out zine', about: 'Photocopied collage: ransom-note letters, torn paper, tape, black and white with one colour', layout: 'card', colors: { a: '#f1eee6', b: '#e8e3d6', c: '#f1eee6' }, light: '#ffffff', dark: '#111111',
+    fonts: { head: 'Archivo Black', body: 'Special Elite', cap: 'Special Elite' }, head: { pos: 'top', case: 'upper', align: 'center', keyStyle: 'box', reveal: 'word', scale: 0.85 },
+    cap: { style: 'box', pos: 'card', case: 'upper', scale: 0.8 }, card: { tilt: true, border: 14, radius: 0, block: false, shadow: true, borderColor: '#ffffff' }, accent: '#ff3b1f',
+    transition: 'mix', grade: 'bw', texture: 'halftone', plate: 'minimal', pill: 'tape', badge: false, end: 'solid', motion: 'snappy',
   },
 };
 
@@ -164,9 +201,9 @@ const SCHEMA = `{
  "head": {"pos": top|bottom, "case": upper|none, "align": center|left, "keyStyle": ${OPTIONS.keyStyle.join('|')}, "reveal": ${OPTIONS.reveal.join('|')}, "scale": 0.6-1.3},
  "cap": {"style": ${OPTIONS.capStyle.join('|')}, "pos": card|low|center, "case": upper|none, "scale": 0.5-1.4},
  "card": {"tilt": true|false, "border": 0-30, "radius": 0-60, "block": true|false (offset colour block behind), "shadow": true|false, "borderColor": "#hex"},
- "transition": ${OPTIONS.transition.join('|')}, "grade": ${OPTIONS.grade.join('|')}, "texture": ${OPTIONS.texture.join('|')},
+ "transition": ${OPTIONS.transition.join('|')} (mix = a different one on each line), "grade": ${OPTIONS.grade.join('|')}, "texture": ${OPTIONS.texture.join('|')},
  "plate": ${OPTIONS.plate.join('|')} (name plate), "pill": tag|tape|none (place labels), "badge": true|false, "end": split|solid|stripes, "motion": snappy|smooth|calm,
- "flair": bold|cinematic|clean|news|grassroots|tiktok|patriotic|dark|bright|none (the signature motion graphics: bold = colour blocks and wipes, cinematic = opening bars/gold rules/vignette, clean = gliding soft shapes, news = sweeping red bars and a corner bug, grassroots = tape/marker scribbles/doodles, tiktok = full-screen word flashes and a progress bar, patriotic = flag-stripe wipes and stars, dark = glitches and stamped words, bright = floating shapes and confetti),
+ "flair": bold|cinematic|clean|news|grassroots|tiktok|patriotic|dark|bright|none (the signature motion graphics: bold = colour blocks and wipes, cinematic = opening bars/gold rules/vignette, clean = gliding soft shapes, news = sweeping red bars and a corner bug, grassroots = tape/marker scribbles/doodles, tiktok = full-screen word flashes and a progress bar, patriotic = flag-stripe wipes and stars, dark = glitches and stamped words, bright = floating shapes and confetti, street = handheld vlog with sticker words and transit-style tags, poster = turning sunburst and 3D stacked type, explainer = grid paper and numbered points, doc = big quote marks and chapter titles, y2k = old computer window and sparkles, zine = ransom-note cut-out letters and torn paper),
  "punch": true|false (zoom punch-ins on key words), "ticker": true|false (scrolling name bar along the bottom),
  "notes": "anything in the request about content or pacing (which lines, length, what to open or end on), for the editor; empty if none"
 }`;
@@ -195,6 +232,8 @@ const WORDS = {
   cinematic: /cinema|film|movie|trailer|documentary|letterbox|serif|elegant|prestige/i, news: /news|breaking|report|headline news|ticker|cable/i,
   grassroots: /grassroots|hand.?made|handwritten|marker|paper|scrapbook|community|homemade|diy/i, tiktok: /tiktok|reels?|full.?screen|vertical video|influencer|gen ?z|captions? big/i,
   patriotic: /patriot|flag|america|red,? white|classic campaign|traditional|serious/i, dark: /dark|gritty|attack|contrast|urgent|ominous|black and red|scary|warning/i,
+  street: /zohran|mamdani|street|vlog|walk.?and.?talk|man.on.the.street|creator|handheld|organic/i, poster: /poster|bollywood|vintage|retro poster|sunburst|marquee|70s|80s/i,
+  explainer: /explain|policy|steps?|numbered|whiteboard|how it works|infographic/i, doc: /documentary|interview|testimonial|story|quote/i, y2k: /y2k|2000s|windows|pixel|internet|retro computer|nostalgia/i, zine: /zine|collage|cut.?out|ransom|punk|photocop/i,
   bright: /bright|pastel|fun|bubbly|playful|pop(py)?|colou?rful|cute|young/i, clean: /clean|minimal|modern|simple|apple|white|corporate|sleek/i, bold: /bold|block|original|reference|larinda|same as/i,
 };
 function guess(text) { for (const [id, re] of Object.entries(WORDS)) if (re.test(text)) return id; return null; }
