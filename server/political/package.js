@@ -98,12 +98,16 @@ async function stepImages(p, h) {
   return `${backgrounds.length} background photo${backgrounds.length === 1 ? '' : 's'}`;
 }
 /** Real clips of them speaking (Facebook, YouTube, their sites) for the "their own speeches" ad style. */
+/** Ad styles built from the candidate's own footage: "speech" (their speeches with B-roll) and "pro" (motion graphics). */
+const footageStyle = () => ['speech', 'pro'].includes(S('videoStyle', 'campaign'));
+
 async function stepFootage(p, h) {
-  if (S('videoStyle', 'campaign') !== 'speech') return { skip: true, note: 'Only used for the "Their own speeches" ad style' };
+  if (!footageStyle()) return { skip: true, note: 'Only used for the ad styles made from their own footage' };
   const pkg = p.pkg; const pr = pkg.profile || {};
   const links = [].concat(p.footageLinks || []).flatMap((x) => String(x).split(/\s+/)).filter((x) => /^https?:\/\//.test(x));
+  const uploads = (p.footageUploads || []).map((x) => x.file).filter((f) => f && fs.existsSync(f));
   const r = await require('./footage').prepare({
-    name: p.name, office: shortOffice(pr.office || ''), socials: pr.socials || [], sites: pr.sites || [], links, dir: dirFor(p), themes: pkg.brief?.themes || [],
+    uploads, name: p.name, office: shortOffice(pr.office || ''), socials: pr.socials || [], sites: pr.sites || [], links, dir: dirFor(p), themes: pkg.brief?.themes || [],
     shortSec: Number(S('shortSeconds', 20)) || 20, longSec: Number(S('videoSeconds', 60)) || 60, contrast: !!S('contrastAds', false),
     notes: (pkg.notes || []).filter((n) => n.target !== 'email').map((n) => n.text).join(' | '), want: Number(S('footageClips', 4)) || 4, onStep: (x) => h.progress(0.3, x),
   });
@@ -185,7 +189,7 @@ async function stepCreative(p) {
   const pkg = p.pkg;
   const shortSec = Math.max(10, Math.min(90, Number(S('shortSeconds', 20)) || 20));
   const longSec = Math.max(30, Math.min(240, Number(S('videoSeconds', 60)) || 60));
-  const speech = S('videoStyle', 'campaign') === 'speech' && (pkg.footage?.bites?.short || []).length >= 2;
+  const speech = footageStyle() && (pkg.footage?.bites?.short || []).length >= 2;
   const style = S('videoStyle', 'campaign') === 'pop' ? 'pop' : 'campaign';
   const hasPhoto = pkg.profile?.photoFound !== false && !!pkg.profile?.photo;
   const offer = hasPhoto
@@ -315,7 +319,7 @@ async function stepVideo(p, h, kind) {
   if (!board?.length) throw new Error('Run the ad scripts step first.');
   const dir = dirFor(p); const out = path.join(dir, `${slugName(p.name)} - ${K.label} ${K.social ? 'video' : 'ad'}.mp4`);
   // One track for the whole package, matched to the ad's mood (own folder, free licensed library, or generated).
-  const speechStyle = S('videoStyle', 'campaign') === 'speech' && (p.pkg.footage?.bites?.short || []).length >= 2;
+  const speechStyle = footageStyle() && (p.pkg.footage?.bites?.short || []).length >= 2;
   const mood = speechStyle ? 'speech' : c.tone === 'contrast' && !K.social ? 'contrast' : K.social ? 'triumphant' : 'positive';
   const key = K.social ? 'musicSocial' : 'music';
   let track = S('musicOn', true) === false ? null : p.pkg[key] && p.pkg[key].mood === mood && fs.existsSync(p.pkg[key].file) ? p.pkg[key] : null;
@@ -336,9 +340,23 @@ async function stepVideo(p, h, kind) {
   const ref = S('reference', null);
   const paced = ref?.avgShot ? board.map((x) => (x.sec ? x : { ...x, sec: Math.max(2.5, Math.min(7, ref.avgShot * (['issues', 'checklist', 'chart', 'contrast'].includes(x.type) ? 1.6 : 1))) })) : board;
   const ft = p.pkg.footage; const bites = ft?.bites?.[K.social ? 'long' : K.board] || [];
-  const res = S('videoStyle', 'campaign') === 'speech' && bites.length >= 2 && ft.clips.every((x) => fs.existsSync(x.file))
-    ? await require('./footage').renderSpeechAd({ bites, footage: ft, info, vertical: K.vertical, out, work, music, tagline: K.social ? `What *${p.name.split(/\s+/)[0]}* has been working on` : ft.tagline || `${p.name} is *fighting for you*`, office: shortOffice(pr.office || ''), site: siteOf(p.pkg), social: !!K.social, onProgress: (f, t) => h.progress(f * 0.92, t) })
-    : await render.renderVideo({ scenes: paced, info, vertical: K.vertical, out, work, music, narration, onProgress: (f, t) => h.progress(f * 0.92, t) });
+  const haveFootage = footageStyle() && bites.length >= 2 && ft.clips.every((x) => fs.existsSync(x.file));
+  const speechAd = () => require('./footage').renderSpeechAd({ bites, footage: ft, info, vertical: K.vertical, out, work, music, tagline: K.social ? `What *${p.name.split(/\s+/)[0]}* has been working on` : ft.tagline || `${p.name} is *fighting for you*`, office: shortOffice(pr.office || ''), site: siteOf(p.pkg), social: !!K.social, onProgress: (f, t) => h.progress(f * 0.92, t) });
+  let res = null;
+  if (haveFootage && S('videoStyle', 'campaign') === 'pro') {
+    // Motion-graphics ad (Remotion): the AI plans it from their lines, the research and the founders' notes.
+    const eng = require('./adengine');
+    const notes = (p.pkg.notes || []).filter((n) => n.target !== 'email').slice(-3).map((n) => n.text).join(' | ');
+    try {
+      const r = await eng.make({ bites, footage: ft, vertical: K.vertical, out, work, music, name: p.name, office: shortOffice(pr.office || ''), place: p.pkg.brief?.place || '', state: pr.state || '', cta: K.social ? 'Follow' : 'Vote', site: siteOf(p.pkg), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes, prev: p.pkg.pro?.[kind]?.plan || null, onProgress: (f, t) => h.progress(f * 0.92, t) });
+      save(p.id, (pkg) => ({ pro: { ...(pkg.pro || {}), [kind]: { plan: r.plan, agent: r.agent, at: new Date().toISOString() } } }));
+      res = r;
+    } catch (e) {
+      audit.log('system', 'political.pro_ad_failed', { prospectId: p.id, kind, error: String(e.message).slice(0, 300) }, 'warn');
+      h.progress(0.05, 'The motion-graphics ad failed, making the speech ad instead');
+    }
+  }
+  if (!res) res = haveFootage ? await speechAd() : await render.renderVideo({ scenes: paced, info, vertical: K.vertical, out, work, music, narration, onProgress: (f, t) => h.progress(f * 0.92, t) });
   fs.rmSync(work, { recursive: true, force: true });
   // Small copy for email attachments (720p), the full-quality file stays in the folder.
   h.progress(0.94, 'Making the email-sized copy');

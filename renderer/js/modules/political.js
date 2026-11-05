@@ -110,12 +110,12 @@ function MakeProgress({ ids, list, jobFor, steps, onOpen, onClear }) {
 function PackageSettings() {
   const boot = store.get().boot || {};
   const init = boot.settings?.political || {};
-  const [v, setV] = useState({ backgrounds: 'photo', photoMode: 'auto', photoCutout: true, campaignPhotos: true, videoStyle: 'campaign', shortSeconds: 20, videoSeconds: 60, longVideo: true, socialVideo: true, contrastAds: false, brandColors: true, plan: '12 posts a week for $949', bookingUrl: '', senderName: '', offer: '', templates: '', theme: 'auto', narration: false, musicDir: '', musicOn: true, ...init });
+  const [v, setV] = useState({ backgrounds: 'photo', photoMode: 'auto', photoCutout: true, campaignPhotos: true, videoStyle: 'pro', shortSeconds: 20, videoSeconds: 60, longVideo: true, socialVideo: true, contrastAds: false, brandColors: true, plan: '12 posts a week for $949', bookingUrl: '', senderName: '', offer: '', templates: '', theme: 'auto', narration: false, musicDir: '', musicOn: true, ...init });
   const set = (k) => (e) => setV({ ...v, [k]: e && e.target ? (e.target.type === 'number' ? Number(e.target.value) : e.target.value) : e });
   const save = () => act(() => api.patch('/api/settings', { political: v }), { ok: 'Saved' }).then((s) => { const b = store.get().boot; if (b && s) store.set({ boot: { ...b, settings: s } }); });
   return html`<div class="col" style="gap:12px">
     <div class="form-grid">
-      <${Field} label="Ad style" id="pol-style"><select id="pol-style" class="input" value=${v.videoStyle} onChange=${set('videoStyle')}><option value="campaign">Campaign ad (like real political ads)</option><option value="speech">Their own speeches, with B-roll and captions</option><option value="pop">Bubbly and poppy</option></select></${Field}>
+      <${Field} label="Ad style" id="pol-style"><select id="pol-style" class="input" value=${v.videoStyle} onChange=${set('videoStyle')}><option value="pro">Pro motion graphics from their footage (recommended)</option><option value="campaign">Campaign ad (graphics, like real political ads)</option><option value="speech">Their own speeches, with B-roll and captions</option><option value="pop">Bubbly and poppy</option></select></${Field}>
       <${Field} label="Short ads (seconds)" hint="Vertical and horizontal, 10 to 90" id="pol-short"><input id="pol-short" class="input" type="number" min="10" max="90" value=${v.shortSeconds} onInput=${set('shortSeconds')} /></${Field}>
       <${Field} label="Long ad (seconds)" hint="Horizontal, 30 to 240" id="pol-len"><input id="pol-len" class="input" type="number" min="30" max="240" value=${v.videoSeconds} onInput=${set('videoSeconds')} /></${Field}>
       <${Field} label="Your political plan (one line)" id="pol-plan"><input id="pol-plan" class="input" value=${v.plan} onInput=${set('plan')} placeholder="12 posts a week for $949 a month" /></${Field}>
@@ -149,6 +149,7 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
         <div class="faint" style="font-size:var(--fs-xs)">Click a step to re-run just that step (for example after editing the email address).</div>
         ${pkg.error ? html`<div class="notice coral">${pkg.error}</div>` : null}
       </div>
+      <${FootageLinks} p=${p} pkg=${pkg} run=${run} busy=${!!job} reload=${reload} />
       <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ value: 'about', label: 'About' }, { value: 'videos', label: 'Videos & sheet' }, { value: 'email', label: 'Email' }, { value: 'brief', label: 'Brief' }, { value: 'call', label: 'Call' }, { value: 'sources', label: `Sources ${pkg.sources?.length || ''}` }]} />
       ${tab === 'about' ? html`<div class="col selectable" style="gap:10px;font-size:var(--fs-sm);line-height:1.55">
         ${b.headline ? html`<h3>${b.headline}</h3>` : null}
@@ -167,7 +168,6 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
         </div>` : html`<div class="faint">Videos appear here when the package is made.</div>`}
         ${pkg.files?.s ? html`<div class="col" style="gap:6px;width:200px"><span class="label">Social video (not an ad)</span><video src=${file('s')} poster=${pkg.files?.posterS ? file('posterS') : undefined} controls playsinline style="width:200px;border-radius:12px;background:#000" /><a class="faint" href=${file('s') + '&download=1'}>Download social video</a></div>` : null}
         ${pkg.files?.hl ? html`<div class="col" style="gap:6px"><video src=${file('hl')} poster=${pkg.files?.posterHL ? file('posterHL') : undefined} controls playsinline style="width:100%;border-radius:12px;background:#000" /><a class="faint" href=${file('hl') + '&download=1'}>Download long horizontal</a></div>` : null}
-        <${FootageLinks} p=${p} pkg=${pkg} run=${run} busy=${!!job} reload=${reload} />
         ${pkg.files?.sheet ? html`<div class="row" style="gap:8px"><${Icon} name="film" size=${16} /><a href=${file('sheet')} target="_blank">Open the one-page sheet (PDF)</a></div>` : null}
         ${c.storyboard?.length ? html`<details><summary class="muted">Storyboard (${c.storyboard.length} scenes)</summary><ol style="padding-left:18px;font-size:var(--fs-sm)">${c.storyboard.map((s) => html`<li><b>${s.type}</b> · ${[s.headline, s.value, s.label, s.quote, (s.items || []).join(', '), s.sub].filter(Boolean).join(' · ')}</li>`)}</ol></details>` : null}
       </div>` : null}
@@ -197,20 +197,50 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
     </div></${Drawer}>`;
 }
 
-/** Speech clips used for "their own speeches" ads, and a box to paste more (Facebook, YouTube, X...). */
+/** Their footage: videos the founders upload (first choice), pasted links, and what was picked from them. */
 function FootageLinks({ p, pkg, run, busy, reload }) {
   const [links, setLinks] = useState([].concat(p.footageLinks || []).join('\n'));
-  const ft = pkg.footage;
+  const [up, setUp] = useState(null); // { name, frac, n, of }
+  const [over, setOver] = useState(false);
+  const ft = pkg.footage; const uploads = p.footageUploads || [];
   const save = () => act(() => api.patch(`/api/prospects/${p.id}`, { footageLinks: links.split(/\s+/).filter((x) => /^https?:\/\//.test(x)) }), { ok: 'Saved' }).then(reload);
-  return html`<details class="panel pad" open=${!!ft}>
-    <summary><b>Speech clips</b> <span class="faint">${ft ? `${ft.clips?.length || 0} videos · ${ft.bites?.short?.length || 0} + ${ft.bites?.long?.length || 0} lines` : 'for the "Their own speeches" ad style'}</span></summary>
+  const send = async (files) => {
+    const list = [...files].filter((f) => /^video\//.test(f.type) || /\.(mp4|mov|m4v|mkv|webm|avi)$/i.test(f.name));
+    if (!list.length) { toast('Choose video files (MP4, MOV...).', { kind: 'error' }); return; }
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i];
+      setUp({ name: f.name, frac: 0, n: i + 1, of: list.length });
+      try {
+        await new Promise((ok, bad) => {
+          const x = new XMLHttpRequest(); x.open('POST', api.url(`/api/prospects/${p.id}/footage/upload`));
+          x.setRequestHeader('content-type', f.type || 'video/mp4'); x.setRequestHeader('x-file-name', encodeURIComponent(f.name));
+          x.upload.onprogress = (e) => e.lengthComputable && setUp({ name: f.name, frac: e.loaded / e.total, n: i + 1, of: list.length });
+          x.onload = () => { let d = {}; try { d = JSON.parse(x.responseText); } catch { /* text */ } x.status < 300 ? ok(d) : bad(new Error(d.error || `Upload failed (${x.status})`)); };
+          x.onerror = () => bad(new Error('Upload failed: connection lost')); x.send(f);
+        });
+      } catch (e) { toast(`${f.name}: ${e.message}`, { kind: 'error' }); }
+    }
+    setUp(null); reload();
+  };
+  const remove = (u) => act(() => api.del(`/api/prospects/${p.id}/footage/${u.id}`)).then(reload);
+  const mins = (s) => (s >= 60 ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : `${Math.round(s)}s`);
+  return html`<details class="panel pad" open=${!!ft || uploads.length > 0}>
+    <summary><b>Their footage</b> <span class="faint">${uploads.length ? `${uploads.length} uploaded · ` : ''}${ft ? `${ft.clips?.length || 0} videos used · ${ft.bites?.short?.length || 0} + ${ft.bites?.long?.length || 0} lines` : 'for the ads made from their own videos'}</span></summary>
     <div class="col" style="gap:8px;margin-top:8px">
-      ${(ft?.clips || []).length ? html`<ul style="padding-left:18px;font-size:var(--fs-sm)">${ft.clips.map((c) => html`<li><a href=${c.url} target="_blank" rel="noreferrer">${c.title || c.url}</a> <span class="faint">${c.platform}${c.uploader ? ` · ${c.uploader}` : ''}</span></li>`)}</ul>` : null}
+      <label class=${`drop${over ? ' over' : ''}`} style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:16px;border:2px dashed var(--line-strong, var(--line));border-radius:12px;cursor:pointer;text-align:center;background:${over ? 'var(--surface-2)' : 'transparent'}"
+        onDragOver=${(e) => { e.preventDefault(); setOver(true); }} onDragLeave=${() => setOver(false)} onDrop=${(e) => { e.preventDefault(); setOver(false); send(e.dataTransfer.files); }}>
+        <b>${up ? `Uploading ${up.n} of ${up.of}: ${up.name} (${Math.round(up.frac * 100)}%)` : 'Upload their videos'}</b>
+        <span class="faint" style="font-size:var(--fs-xs)">Drop speeches, interviews, rallies, B-roll of the district. All of it gets used: the best lines become the ads.</span>
+        <input type="file" accept="video/*" multiple style="display:none" disabled=${!!up} onChange=${(e) => { const fs = e.target.files; send(fs); e.target.value = ''; }} />
+      </label>
+      ${up ? html`<${Progress} value=${up.frac} />` : null}
+      ${uploads.length ? html`<ul style="padding-left:18px;font-size:var(--fs-sm)">${uploads.map((u) => html`<li>${u.name} <span class="faint">${mins(u.duration || 0)} · ${(u.size / 1e6).toFixed(0)} MB${u.hasAudio ? '' : ' · no sound (B-roll only)'}</span> <button class="btn ghost sm" title="Remove" onClick=${() => remove(u)}>×</button></li>`)}</ul>` : null}
+      ${(ft?.clips || []).filter((c) => c.url).length ? html`<ul style="padding-left:18px;font-size:var(--fs-sm)">${ft.clips.filter((c) => c.url).map((c) => html`<li><a href=${c.url} target="_blank" rel="noreferrer">${c.title || c.url}</a> <span class="faint">${c.platform}${c.uploader ? ` · ${c.uploader}` : ''}</span></li>`)}</ul>` : null}
       ${(ft?.bites?.short || []).length ? html`<div class="col" style="gap:4px;font-size:var(--fs-sm)"><b>Lines in the short ads</b>${ft.bites.short.map((b) => html`<div>${b.label ? html`<span class="badge lav">${b.label}</span> ` : null}"${b.text}"</div>`)}</div>` : null}
       ${ft?.errors?.length ? html`<div class="faint" style="font-size:var(--fs-xs)">${ft.errors.slice(-3).join(' · ')}</div>` : null}
-      <textarea class="input" rows="3" placeholder="Paste links to their videos, one per line (Facebook, YouTube, X, Instagram). Public videos only." value=${links} onInput=${(e) => setLinks(e.target.value)} />
-      <div class="row" style="gap:6px"><${Button} size="sm" kind="ghost" onClick=${save}>Save links</${Button}><${Button} size="sm" kind="primary" disabled=${busy} onClick=${() => save().then(() => run({ from: 'footage' }, 'Finding clips and remaking the ads'))}>Save and remake the ads</${Button}></div>
-      <div class="faint" style="font-size:var(--fs-xs)">It uses whole sentences exactly as they said them, never stitched words. Only public posts are used, with no Facebook login.</div>
+      <textarea class="input" rows="2" placeholder="Or paste links to their videos, one per line (Facebook, YouTube, X, Instagram). Public videos only." value=${links} onInput=${(e) => setLinks(e.target.value)} />
+      <div class="row" style="gap:6px"><${Button} size="sm" kind="ghost" onClick=${save}>Save links</${Button}><${Button} size="sm" kind="primary" disabled=${busy || !!up} onClick=${() => save().then(() => run({ from: 'footage' }, 'Reading their footage and remaking the ads'))}>Make the ads from this footage</${Button}></div>
+      <div class="faint" style="font-size:var(--fs-xs)">It uses whole sentences exactly as they said them, never stitched words. To change an ad, write a note below ("open on the line about rent", "use the district map earlier") and the AI re-plans it.</div>
     </div></details>`;
 }
 

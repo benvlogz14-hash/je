@@ -139,6 +139,7 @@ function sentences(words, clip) {
 async function transcribeClips(clips, dir, onStep = () => {}) {
   const all = []; const errors = [];
   for (let k = 0; k < clips.length; k++) {
+    if (clips[k].brollOnly) { clips[k].words = []; continue; } // no sound: B-roll only
     onStep(`Turning speech into text (${k + 1} of ${clips.length})`);
     try {
       const t = await intel.transcribe({ id: `clip${k + 1}`, path: clips[k].file, workDir: dir, info: { duration: clips[k].duration }, clientId: null });
@@ -214,11 +215,21 @@ function visualBroll(clips) {
 }
 
 /** Everything the speech ads need, saved on prospect.pkg.footage. */
-async function prepare({ name, office, socials, sites, links, dir, themes, shortSec, longSec, contrast, notes, want = 4, onStep = () => {} }) {
-  const found = await find({ name, socials, sites, links }, onStep);
-  if (!found.list.length) return { clips: [], bites: { short: [], long: [] }, errors: [...found.errors, 'No public videos found. Paste a few video links on the lead (Facebook, YouTube, X).'] };
-  const dl = await download(found.list, path.join(dir, 'footage'), { want, name, onStep });
-  if (!dl.clips.length) return { clips: [], bites: { short: [], long: [] }, errors: [...found.errors, ...dl.errors, "Couldn't download any of the videos found."] };
+async function prepare({ uploads = [], name, office, socials, sites, links, dir, themes, shortSec, longSec, contrast, notes, want = 4, onStep = () => {} }) {
+  // Footage the founders uploaded comes first (all of it); then pasted links, and a web search only when nothing was uploaded.
+  const up = [];
+  for (const f of uploads) {
+    try { const info = await ff.probe(f); if (info.hasVideo && info.duration >= 2) up.push({ url: '', platform: 'upload', how: 'uploaded', own: true, uploader: '', title: path.basename(f).replace(/^\d+-/, ''), file: f, duration: info.duration, width: info.width, height: info.height, brollOnly: !info.hasAudio }); }
+    catch { /* not a video */ }
+  }
+  let found = { list: [], errors: [] }; let dl = { clips: [], errors: [] };
+  const need = up.length ? Math.max(0, Math.min(want, links.length)) : want;
+  if (need) {
+    found = await find({ name, socials: up.length ? [] : socials, sites: up.length ? [] : sites, links }, onStep);
+    if (found.list.length) dl = await download(found.list, path.join(dir, 'footage'), { want: need, name, onStep });
+  }
+  dl = { clips: [...up, ...dl.clips], errors: dl.errors };
+  if (!dl.clips.length) return { clips: [], bites: { short: [], long: [] }, errors: [...found.errors, ...dl.errors, found.list.length ? "Couldn't download any of the videos found." : 'No videos yet. Upload their footage on the lead, or paste a few video links (Facebook, YouTube, X).'] };
   const tr = await transcribeClips(dl.clips, path.join(dir, 'footage'), onStep);
   // Look through each video shot by shot: who's on camera, crowds, scenery, and what's unusable.
   const vision = require('../video/vision');

@@ -861,6 +861,30 @@ r.post('/api/setup/:action', (req, b, p) => {
   return queue.enqueue(job, {}, { actor: actorOf(req), dedupeKey: job });
 }, { roles: OWNER });
 r.get('/api/political/steps', () => polPkg.STEPS.map(([key, label]) => ({ key, label })));
+// The candidate's own footage, uploaded on the lead (used by the ad styles made from their footage; uploads come first).
+r.post('/api/prospects/:id/footage/upload', async (req, res, p) => {
+  const pr = ctx.store.get('prospects', p.id); if (!pr) return send(res, 404, { error: 'Not found' });
+  const dir = path.join(paths.root, 'political', pr.id, 'uploads'); fs.mkdirSync(dir, { recursive: true });
+  const name = decodeURIComponent(String(req.headers['x-file-name'] || 'video.mp4')).replace(/[^\w .()-]/g, '').slice(-90) || 'video.mp4';
+  const file = path.join(dir, `${Date.now()}-${/\.\w{2,4}$/.test(name) ? name : `${name}.mp4`}`);
+  try { await new Promise((ok, bad) => { const w = fs.createWriteStream(file); let n = 0; req.on('data', (c) => { n += c.length; if (n > 8e9) { req.destroy(); bad(new Error('That video is too big (8 GB max).')); } }); req.pipe(w); w.on('finish', ok); w.on('error', bad); req.on('error', bad); }); }
+  catch (e) { try { fs.unlinkSync(file); } catch { /* none */ } return send(res, 400, { error: e.message }); }
+  let info = null; try { info = await ff.probe(file); } catch { /* checked below */ }
+  if (!info?.hasVideo) { try { fs.unlinkSync(file); } catch { /* none */ } return send(res, 400, { error: "That file isn't a video Euclidean can read." }); }
+  const item = { id: `fu_${Date.now().toString(36)}`, file, name, size: fs.statSync(file).size, duration: info.duration || 0, hasAudio: !!info.hasAudio, at: now() };
+  ctx.store.update('prospects', pr.id, (cur) => ({ footageUploads: [...(cur.footageUploads || []), item] }));
+  audit.log(actorOf(req), 'prospect.footage_uploaded', { prospectId: pr.id, name, size: item.size });
+  events.publish('prospects', { id: pr.id });
+  const { file: _f, ...out } = item; return send(res, 200, out);
+}, { stream: true, raw: true });
+r.del('/api/prospects/:id/footage/:fid', (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id)); const it = (pr.footageUploads || []).find((x) => x.id === p.fid);
+  if (!it) throw new HttpError(404, 'Not found');
+  if (paths.inside(path.join(paths.root, 'political'), it.file)) { try { fs.unlinkSync(it.file); } catch { /* gone */ } }
+  ctx.store.update('prospects', pr.id, (cur) => ({ footageUploads: (cur.footageUploads || []).filter((x) => x.id !== p.fid) }));
+  events.publish('prospects', { id: pr.id });
+  return { ok: true };
+});
 r.get('/api/prospects/:id/file/:kind', (req, res, p) => {
   const pr = ctx.store.get('prospects', p.id); if (!pr) return send(res, 404, { error: 'Not found' });
   const f = p.kind === 'photo' ? pr.pkg?.profile?.photo : pr.pkg?.files?.[p.kind];
