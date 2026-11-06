@@ -4,7 +4,7 @@ import { html, useState, useApi, navigate, Button, HoldButton, Seg, Empty, Loadi
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { ago, providerLabel } from '../lib/format.js';
-import { Political } from './political.js';
+import { Political, AdMachine } from './political.js';
 import { Autopilot, NewProspects, ReviewQueue, Leads, CreatorsLane, ScoutChat, Learning } from './outreach.js';
 
 const STAGES = [['new', 'New'], ['drafted', 'Draft ready'], ['contacted', 'Contacted'], ['replied', 'Replied'], ['meeting', 'Meeting'], ['proposal', 'Proposal'], ['won', 'Won'], ['lost', 'Lost']];
@@ -29,6 +29,7 @@ export function Growth({ only = null } = {}) {
       <${Button} kind="ghost" icon="plus" onClick=${async () => { const name = await promptDialog({ title: 'Add prospect', label: 'Name or handle', confirm: 'Add' }); if (name) act(() => api.post('/api/prospects', { name }), { ok: 'Added' }).then(reload); }}>Add manually</${Button}></div>
     ${only ? html`<${HealthBanner} />` : null}
     ${view === 'political' || view === 'creators' ? html`<div class="col" style="gap:16px" key=${view}>
+      ${view === 'political' ? html`<${AdMachine} list=${(data || []).filter((p) => p.type === 'political')} jobs=${jobs} onOpen=${(id) => window.dispatchEvent(new CustomEvent('eu:openLead', { detail: id }))} reload=${reload} />` : null}
       <${Autopilot} lane=${view === 'political' ? 'political' : 'creators'} />
       <${ScoutChat} lane=${view === 'political' ? 'political' : 'creators'} />
       <${NewProspects} lane=${view === 'political' ? 'political' : 'creators'} />

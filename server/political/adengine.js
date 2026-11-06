@@ -62,6 +62,26 @@ function serve(roots) {
   });
 }
 
+// ------------------------------------------------------------------ Remotion's heavy work runs in its own process
+
+/** Run one task in remotion-worker.js (a separate, low-priority process) so the app never stalls while an ad renders.
+ *  (Building the designer stalled the engine ~1.8 s at a time, each preview still ~0.9 s.) */
+function runWorker(task, onProgress = () => {}) {
+  return new Promise((resolve, reject) => {
+    const { fork } = require('child_process');
+    const child = fork(path.join(__dirname, 'remotion-worker.js'), [], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+    let err = ''; let done = false;
+    child.stderr.on('data', (d) => { err = (err + d).slice(-2000); });
+    child.on('message', (m) => {
+      if (m.progress != null) { onProgress(m.progress, m.text); return; }
+      done = true;
+      if (m.error) reject(new Error(m.error.split('\n')[0].replace(/^Error:\s*/, '').slice(0, 300))); else resolve(m.result);
+    });
+    child.on('exit', (code) => { if (!done) reject(new Error(`The video renderer stopped (${code}). ${err.split('\n').filter(Boolean).slice(-1)[0] || ''}`.trim())); });
+    child.send(task);
+  });
+}
+
 // ------------------------------------------------------------------ bundle (once per version of /remotion) and browser
 
 function srcHash() {
@@ -77,9 +97,8 @@ async function bundled(onStep = () => {}) {
   if (bundling) return bundling;
   bundling = (async () => {
     onStep('Preparing the ad designer (first time only)');
-    const { bundle } = require('@remotion/bundler');
     const tmp = `${dir}.tmp`; fs.rmSync(tmp, { recursive: true, force: true });
-    await bundle({ entryPoint: path.join(SRC, 'index.jsx'), outDir: tmp, enableCaching: false });
+    await runWorker({ op: 'bundle', entryPoint: path.join(SRC, 'index.jsx'), outDir: tmp });
     fs.rmSync(dir, { recursive: true, force: true }); fs.renameSync(tmp, dir);
     // Older bundles are no longer used.
     for (const f of fs.readdirSync(path.dirname(dir))) if (f.startsWith('bundle-') && path.join(path.dirname(dir), f) !== dir) fs.rmSync(path.join(path.dirname(dir), f), { recursive: true, force: true });
@@ -93,14 +112,7 @@ async function bundled(onStep = () => {}) {
 let browserPath = null;
 async function browser(onStep = () => {}) {
   if (browserPath && fs.existsSync(browserPath)) return browserPath;
-  const { ensureBrowser } = require('@remotion/renderer');
-  const here = process.cwd(); let said = false;
-  try {
-    process.chdir(ROOT);
-    await ensureBrowser({ logLevel: 'error', onBrowserDownload: () => { if (!said) { said = true; onStep('Downloading the video renderer (one time, about 100 MB)'); } return { version: null, onProgress: () => {} }; } });
-    const info = require('@remotion/renderer/dist/browser/BrowserFetcher').getRevisionInfo();
-    browserPath = info.local && fs.existsSync(info.executablePath) ? info.executablePath : null;
-  } finally { process.chdir(here); }
+  browserPath = await runWorker({ op: 'browser' }, (f, t) => t && onStep(t));
   return browserPath;
 }
 
@@ -409,15 +421,9 @@ async function make({ bites, footage, vertical, out, work, music, name, office, 
   try {
     const browserExecutable = await browser((x) => onProgress(0.27, x));
     const serveUrl = await bundled((x) => onProgress(0.28, x));
-    const { selectComposition, renderMedia } = require('@remotion/renderer');
-    const inputProps = { spec: withBase(spec, srv.base) };
-    const composition = await selectComposition({ serveUrl, id: 'PoliticalAd', inputProps, logLevel: 'error', browserExecutable });
     const cores = require('os').cpus().length;
-    await renderMedia({
-      composition, serveUrl, browserExecutable, codec: 'h264', outputLocation: silent, inputProps, crf: 18, pixelFormat: 'yuv420p', audioCodec: 'aac', audioBitrate: '192k',
-      concurrency: Math.max(1, Math.min(8, Math.floor(cores / 2))), logLevel: 'error', timeoutInMilliseconds: 120000,
-      onProgress: ({ progress }) => onProgress(0.3 + 0.6 * progress, `Drawing the ad ${Math.round(progress * 100)}%`),
-    });
+    await runWorker({ op: 'render', serveUrl, browserExecutable, inputProps: { spec: withBase(spec, srv.base) }, outputLocation: silent, crf: 18, concurrency: Math.max(1, Math.min(8, Math.floor(cores / 2))) },
+      (progress) => onProgress(0.3 + 0.6 * progress, `Drawing the ad ${Math.round(progress * 100)}%`));
   } finally { srv.server.close(); }
 
   // Music under the voice (ducked), faded out at the end.
@@ -441,10 +447,7 @@ async function previewOne(look, { vertical = true } = {}) {
   const srv = await serve({ f: FONTS });
   try {
     const browserExecutable = await browser(); const serveUrl = await bundled();
-    const { selectComposition, renderStill } = require('@remotion/renderer');
-    const inputProps = { spec: withBase(spec, srv.base) };
-    const composition = await selectComposition({ serveUrl, id: 'PoliticalAd', inputProps, logLevel: 'error', browserExecutable });
-    await renderStill({ composition, serveUrl, browserExecutable, output: out, frame: Math.round(1.75 * FPS), inputProps, logLevel: 'error', scale: vertical ? 0.3 : 0.25 });
+    await runWorker({ op: 'still', serveUrl, browserExecutable, inputProps: { spec: withBase(spec, srv.base) }, output: out, frame: Math.round(1.75 * FPS), scale: vertical ? 0.3 : 0.25 });
   } finally { srv.server.close(); }
   return out;
 }

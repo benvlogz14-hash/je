@@ -35,6 +35,8 @@ export function Political({ prospects, reload }) {
   };
   const toggle = (id) => setPicked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const cur = open && list.find((p) => p.id === open);
+  // The ad machine at the top of the page opens a lead's panel here.
+  useEffect(() => { const h = (e) => setOpen(e.detail); window.addEventListener('eu:openLead', h); return () => window.removeEventListener('eu:openLead', h); }, []);
 
   return html`<div class="col" style="gap:16px">
     <div class="grid-2" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
@@ -199,6 +201,79 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
     </div></${Drawer}>`;
 }
 
+/** Upload video files to a lead's footage, one at a time, reporting { name, frac, n, of } (null when done). */
+async function uploadFootage(pid, files, setUp) {
+  const list = [...files].filter((f) => /^video\//.test(f.type) || /\.(mp4|mov|m4v|mkv|webm|avi)$/i.test(f.name));
+  if (!list.length) { toast('Choose video files (MP4, MOV...).', { kind: 'error' }); return; }
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i];
+    setUp({ name: f.name, frac: 0, n: i + 1, of: list.length });
+    try {
+      await new Promise((ok, bad) => {
+        const x = new XMLHttpRequest(); x.open('POST', api.url(`/api/prospects/${pid}/footage/upload`));
+        x.setRequestHeader('content-type', f.type || 'video/mp4'); x.setRequestHeader('x-file-name', encodeURIComponent(f.name));
+        x.upload.onprogress = (e) => e.lengthComputable && setUp({ name: f.name, frac: e.loaded / e.total, n: i + 1, of: list.length });
+        x.onload = () => { let d = {}; try { d = JSON.parse(x.responseText); } catch { /* text */ } x.status < 300 ? ok(d) : bad(new Error(d.error || `Upload failed (${x.status})`)); };
+        x.onerror = () => bad(new Error('Upload failed: connection lost')); x.send(f);
+      });
+    } catch (e) { toast(`${f.name}: ${e.message}`, { kind: 'error' }); }
+  }
+  setUp(null);
+}
+
+/** The ad machine, up front on Politics: pick the candidate, drop their footage, pick or describe a style, make the ads. */
+export function AdMachine({ list, jobs, onOpen, reload }) {
+  const { data: looks } = useApi('/api/political/looks');
+  const [pid, setPid] = useState(() => list[0]?.id || '');
+  const [newName, setNewName] = useState(''); const [newOffice, setNewOffice] = useState('');
+  const [sel, setSel] = useState(null); const [prompt, setPrompt] = useState('');
+  const [up, setUp] = useState(null); const [over, setOver] = useState(false);
+  useEffect(() => { if (list.length && !list.some((x) => x.id === pid)) setPid(list[list.length - 1].id); }, [list.length]);
+  const p = list.find((x) => x.id === pid);
+  const busy = p && (jobs || []).some((j) => ['political.package', 'political.restyle'].includes(j.type) && j.payload?.prospectId === p.id);
+  const job = p && (jobs || []).find((j) => ['political.package', 'political.restyle'].includes(j.type) && j.payload?.prospectId === p.id);
+  const add = () => act(() => api.post('/api/prospects', { name: newName.trim(), type: 'political', location: newOffice.trim() }), { ok: 'Candidate added' }).then((r) => { if (r?.id) { setPid(r.id); setNewName(''); setNewOffice(''); reload(); } });
+  const drop = (files) => { if (!p) { toast('Pick or add the candidate first.', { kind: 'error' }); return; } uploadFootage(p.id, files, setUp).then(reload); };
+  const make = () => {
+    if (!p) return;
+    const body = prompt.trim() ? { prompt: prompt.trim() } : sel ? { preset: sel } : null;
+    const req = body ? api.post(`/api/prospects/${p.id}/look`, body) : api.post(`/api/prospects/${p.id}/package`, p.pkg?.creative ? { from: 'footage' } : {});
+    return act(() => req, { ok: `Making ${p.name}'s ads. Progress shows here and on the lead.` }).then(() => { setPrompt(''); reload(); });
+  };
+  const made = list.filter((x) => x.pkg?.files?.posterV).slice(-6).reverse();
+  const curLook = p?.pkg?.proLook?.name || looks?.current?.name || 'Bold blocks';
+  return html`<div class="panel pad col" style="gap:14px">
+    <div class="row" style="gap:10px;align-items:center"><div class="avatar" style="background:var(--coral-soft, var(--sky-soft));color:var(--coral-ink, var(--sky-ink))"><${Icon} name="film" size=${16} /></div>
+      <div class="col grow" style="gap:2px"><h4>Ad machine</h4><span class="faint" style="font-size:var(--fs-xs)">Upload a candidate's footage. Their best lines, word for word, become motion-graphics ads in 9:16 and 16:9, in 15 styles or one you describe.</span></div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;align-items:start">
+      <div class="col" style="gap:10px;min-width:0">
+        <b style="font-size:var(--fs-sm)">1 · The candidate</b>
+        <select class="input" id="am-lead" value=${pid} onChange=${(e) => setPid(e.target.value)}>${!list.length ? html`<option value="">No candidates yet: add one below</option>` : null}${list.map((x) => html`<option value=${x.id}>${x.name}${x.pkg?.profile?.office || x.location ? ` · ${x.pkg?.profile?.office || x.location}` : ''}</option>`)}</select>
+        <div class="row" style="gap:6px"><input class="input grow" id="am-new" placeholder="Or add someone: name" value=${newName} onInput=${(e) => setNewName(e.target.value)} /><input class="input" id="am-office" style="width:42%" placeholder="Office, e.g. Assembly AD-35, NY" value=${newOffice} onInput=${(e) => setNewOffice(e.target.value)} /><${Button} size="sm" kind="ghost" disabled=${!newName.trim()} onClick=${add}>Add</${Button}></div>
+        <b style="font-size:var(--fs-sm);margin-top:4px">2 · Their footage</b>
+        <label style=${`display:flex;flex-direction:column;align-items:center;gap:4px;padding:18px;border:2px dashed var(--line-strong, var(--line));border-radius:12px;cursor:pointer;text-align:center;background:${over ? 'var(--surface-2)' : 'transparent'}`}
+          onDragOver=${(e) => { e.preventDefault(); setOver(true); }} onDragLeave=${() => setOver(false)} onDrop=${(e) => { e.preventDefault(); setOver(false); drop(e.dataTransfer.files); }}>
+          <b>${up ? `Uploading ${up.n} of ${up.of}: ${Math.round(up.frac * 100)}%` : 'Drop their videos here, or click to choose'}</b>
+          <span class="faint" style="font-size:var(--fs-xs)">${p ? `${(p.footageUploads || []).length} uploaded for ${p.name}` : 'Pick the candidate first'} · speeches, interviews, rallies, B-roll</span>
+          <input type="file" accept="video/*" multiple style="display:none" disabled=${!!up || !p} onChange=${(e) => { drop(e.target.files); e.target.value = ''; }} />
+        </label>
+        ${up ? html`<${Progress} value=${up.frac} />` : null}
+        ${made.length ? html`<b style="font-size:var(--fs-sm);margin-top:4px">Made recently</b><div class="row wrap" style="gap:8px">${made.map((x) => html`<button class="ghost" title=${`Open ${x.name}`} onClick=${() => onOpen(x.id)} style="padding:0;border:0;background:none;cursor:pointer;display:flex;flex-direction:column;gap:3px;align-items:center"><img src=${api.url(`/api/prospects/${x.id}/file/posterV`)} alt="" style="height:96px;border-radius:8px;border:1px solid var(--line)" onError=${(e) => { e.target.closest('button').style.display = 'none'; }} /><span class="faint ellipsis" style="font-size:10px;max-width:70px">${x.name.split(' ').slice(-1)[0]}</span></button>`)}</div>` : null}
+      </div>
+      <div class="col" style="gap:10px;min-width:0">
+        <b style="font-size:var(--fs-sm)">3 · The style <span class="faint" style="font-weight:400">now: ${curLook}</span></b>
+        <div style="max-height:420px;overflow:auto;padding-right:4px"><${LookPicker} presets=${looks?.presets || []} sel=${sel} onSel=${(id) => { setSel(id); if (id) setPrompt(''); }} /></div>
+        <textarea class="input" rows="2" id="am-prompt" placeholder=${'Or describe it: "Zohran-style street vlog, orange and blue", "dark and cinematic, black and gold"'} value=${prompt} onInput=${(e) => { setPrompt(e.target.value); if (e.target.value.trim()) setSel(null); }} />
+      </div>
+    </div>
+    <div class="row wrap" style="gap:10px;align-items:center">
+      ${job ? html`<div class="col grow" style="gap:4px;min-width:200px"><${Progress} value=${job.progress || 0} /><span class="faint" style="font-size:var(--fs-xs)">${Math.round((job.progress || 0) * 100)}% · ${job.note || 'working'}</span></div>` : html`<span class="faint grow" style="font-size:var(--fs-xs)">${p ? `${p.name}: ${(p.footageUploads || []).length ? 'footage ready' : 'no footage yet (it will look for public videos)'} · ${prompt.trim() ? 'your described style' : sel ? (looks?.presets || []).find((x) => x.id === sel)?.name : curLook}` : ''}</span>`}
+      ${p ? html`<${Button} kind="ghost" size="sm" onClick=${() => onOpen(p.id)}>Open ${p.name.split(' ')[0]}</${Button}>` : null}
+      <${Button} kind="primary" icon="sparkle" disabled=${!p || busy || !!up} onClick=${make}>Make the ads</${Button}>
+    </div>
+  </div>`;
+}
+
 /** Preset looks as real preview stills (drawn by the ad engine itself), click to pick. */
 function LookPicker({ presets, sel, onSel }) {
   return html`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:10px">${presets.map((x) => html`<button type="button" class=${'look-card' + (sel === x.id ? ' on' : '')} title=${x.about} onClick=${() => onSel(sel === x.id ? null : x.id)}
@@ -254,24 +329,7 @@ function FootageLinks({ p, pkg, run, busy, reload }) {
   const [over, setOver] = useState(false);
   const ft = pkg.footage; const uploads = p.footageUploads || [];
   const save = () => act(() => api.patch(`/api/prospects/${p.id}`, { footageLinks: links.split(/\s+/).filter((x) => /^https?:\/\//.test(x)) }), { ok: 'Saved' }).then(reload);
-  const send = async (files) => {
-    const list = [...files].filter((f) => /^video\//.test(f.type) || /\.(mp4|mov|m4v|mkv|webm|avi)$/i.test(f.name));
-    if (!list.length) { toast('Choose video files (MP4, MOV...).', { kind: 'error' }); return; }
-    for (let i = 0; i < list.length; i++) {
-      const f = list[i];
-      setUp({ name: f.name, frac: 0, n: i + 1, of: list.length });
-      try {
-        await new Promise((ok, bad) => {
-          const x = new XMLHttpRequest(); x.open('POST', api.url(`/api/prospects/${p.id}/footage/upload`));
-          x.setRequestHeader('content-type', f.type || 'video/mp4'); x.setRequestHeader('x-file-name', encodeURIComponent(f.name));
-          x.upload.onprogress = (e) => e.lengthComputable && setUp({ name: f.name, frac: e.loaded / e.total, n: i + 1, of: list.length });
-          x.onload = () => { let d = {}; try { d = JSON.parse(x.responseText); } catch { /* text */ } x.status < 300 ? ok(d) : bad(new Error(d.error || `Upload failed (${x.status})`)); };
-          x.onerror = () => bad(new Error('Upload failed: connection lost')); x.send(f);
-        });
-      } catch (e) { toast(`${f.name}: ${e.message}`, { kind: 'error' }); }
-    }
-    setUp(null); reload();
-  };
+  const send = (files) => uploadFootage(p.id, files, setUp).then(reload);
   const remove = (u) => act(() => api.del(`/api/prospects/${p.id}/footage/${u.id}`)).then(reload);
   const mins = (s) => (s >= 60 ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : `${Math.round(s)}s`);
   return html`<details class="panel pad" open=${!!ft || uploads.length > 0}>
