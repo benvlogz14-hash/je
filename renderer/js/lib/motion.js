@@ -14,13 +14,9 @@ export function setReduced(v) {
   document.documentElement.toggleAttribute('data-reduce-motion', !!v);
 }
 
-/** Run a change to the page as a View Transition (a soft cross-fade/slide), when the browser can and motion is on. */
-export function transition(apply) {
-  if (reduced() || !document.startViewTransition || document.hidden) { apply(); return; }
-  // The update must not wait for an animation frame: the browser holds frames back until it returns, so waiting for one
-  // deadlocked every page switch until the browser's 4 s timeout. Preact renders on a microtask, so a macrotask is enough.
-  try { document.startViewTransition(() => new Promise((done) => { apply(); setTimeout(done, 0); })); } catch { apply(); }
-}
+/** Page and tab changes apply at once. (They used to run as a View Transition, which in the desktop app froze every
+ *  switch for up to 4 s; the new screen now just fades in with CSS, `.screen.on` in app.css, which never blocks input.) */
+export function transition(apply) { apply(); }
 
 /** A damped spring as a CSS easing curve (linear() with 40 points): settles with a hint of overshoot. */
 const SPRING = (() => {
