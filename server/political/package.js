@@ -107,7 +107,8 @@ async function stepFootage(p, h) {
   if (!footageStyle(p)) return { skip: true, note: 'Only used for the ad styles made from their own footage' };
   const pkg = p.pkg; const pr = pkg.profile || {};
   const links = [].concat(p.footageLinks || []).flatMap((x) => String(x).split(/\s+/)).filter((x) => /^https?:\/\//.test(x));
-  const uploads = (p.footageUploads || []).map((x) => x.file).filter((f) => f && fs.existsSync(f));
+  const uploads = (p.footageUploads || []).filter((x) => !x.off).map((x) => x.file).filter((f) => f && fs.existsSync(f)); // only the ones ticked in the footage bank
+  if ((p.footageUploads || []).length && !uploads.length && !links.length) { save(p.id, () => ({ footage: { clips: [], bites: { short: [], long: [] }, errors: ['Every uploaded video is unticked in the footage bank. Tick the ones to use.'] } })); return { note: 'No footage ticked in the footage bank, so the graphic ads will be used' }; }
   // Turning their speech into text needs OpenAI or the free local Whisper: install Whisper once if neither is there.
   if (!ai.connected('openai') && !require('../setup/whisper').status().ready) {
     try { await require('../setup/whisper').install({ progress: (f, t) => h.progress(0.1 + f * 0.1, `Installing free speech-to-text (one time): ${t || ''}`) }); } catch { /* the step explains what's missing */ }

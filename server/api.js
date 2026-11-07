@@ -909,10 +909,29 @@ r.post('/api/prospects/:id/footage/upload', async (req, res, p) => {
   events.publish('prospects', { id: pr.id });
   const { file: _f, ...out } = item; return send(res, 200, out);
 }, { stream: true, raw: true });
+// The footage bank: a still and a playable copy of each upload, and which ones the ads may use.
+const footageItem = (req, p) => { const pr = ctx.store.get('prospects', p.id); const it = (pr?.footageUploads || []).find((x) => x.id === p.fid); return it && it.file && paths.inside(path.join(paths.root, 'political'), it.file) && fs.existsSync(it.file) ? it : null; };
+r.get('/api/prospects/:id/footage/:fid/thumb', async (req, res, p) => {
+  const it = footageItem(req, p); if (!it) return send(res, 404, { error: 'Not found' });
+  const thumb = `${it.file}.thumb.jpg`;
+  if (!fs.existsSync(thumb)) { try { await ff.thumbnail(it.file, thumb, Math.min(2, Math.max(0, (it.duration || 3) / 3)), 360); } catch { return send(res, 404, { error: 'No picture' }); } }
+  return serveFile(req, res, thumb);
+}, { stream: true });
+r.get('/api/prospects/:id/footage/:fid/media', (req, res, p) => { const it = footageItem(req, p); return it ? serveFile(req, res, it.file) : send(res, 404, { error: 'Not found' }); }, { stream: true });
+r.patch('/api/prospects/:id/footage/:fid', (req, b, p) => {
+  must(ctx.store.get('prospects', p.id));
+  ctx.store.update('prospects', p.id, (cur) => ({ footageUploads: (cur.footageUploads || []).map((x) => (x.id === p.fid ? { ...x, off: !!b.off } : x)) }));
+  events.publish('prospects', { id: p.id }); return { ok: true };
+});
+r.post('/api/prospects/:id/footage/select', (req, b, p) => {
+  must(ctx.store.get('prospects', p.id));
+  ctx.store.update('prospects', p.id, (cur) => ({ footageUploads: (cur.footageUploads || []).map((x) => ({ ...x, off: !b.all })) }));
+  events.publish('prospects', { id: p.id }); return { ok: true };
+});
 r.del('/api/prospects/:id/footage/:fid', (req, b, p) => {
   const pr = must(ctx.store.get('prospects', p.id)); const it = (pr.footageUploads || []).find((x) => x.id === p.fid);
   if (!it) throw new HttpError(404, 'Not found');
-  if (paths.inside(path.join(paths.root, 'political'), it.file)) { try { fs.unlinkSync(it.file); } catch { /* gone */ } }
+  if (paths.inside(path.join(paths.root, 'political'), it.file)) { for (const f of [it.file, `${it.file}.thumb.jpg`]) { try { fs.unlinkSync(f); } catch { /* gone */ } } }
   ctx.store.update('prospects', pr.id, (cur) => ({ footageUploads: (cur.footageUploads || []).filter((x) => x.id !== p.fid) }));
   events.publish('prospects', { id: pr.id });
   return { ok: true };

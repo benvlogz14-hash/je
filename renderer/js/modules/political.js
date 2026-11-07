@@ -221,6 +221,38 @@ async function uploadFootage(pid, files, setUp) {
   setUp(null);
 }
 
+/** Every uploaded video as a still with its length: hover to play, tick which ones the ads may use, remove. */
+function FootageBank({ p, reload }) {
+  const ups = p.footageUploads || [];
+  if (!ups.length) return null;
+  const usedFiles = new Set((p.pkg?.footage?.clips || []).map((c) => c.file).filter(Boolean));
+  const on = ups.filter((u) => !u.off).length;
+  const mins = (s) => `${Math.floor((s || 0) / 60)}:${String(Math.round((s || 0) % 60)).padStart(2, '0')}`;
+  const toggle = (u) => api.patch(`/api/prospects/${p.id}/footage/${u.id}`, { off: !u.off }).then(reload).catch((e) => toast(e.message, { kind: 'error' }));
+  const all = (v) => act(() => api.post(`/api/prospects/${p.id}/footage/select`, { all: v })).then(reload);
+  const remove = async (u) => { if (await confirmDialog({ title: `Remove ${u.name}?`, text: 'The file is deleted from this candidate. Ads already made keep their copy.', confirm: 'Remove' })) act(() => api.del(`/api/prospects/${p.id}/footage/${u.id}`)).then(reload); };
+  const hover = (e, u, play) => { const v = e.currentTarget.querySelector('video'); if (!v) return; if (play) { if (!v.src) v.src = api.url(`/api/prospects/${p.id}/footage/${u.id}/media`); v.currentTime = Math.min(5, (u.duration || 10) / 4); v.play().catch(() => {}); v.style.opacity = 1; } else { v.pause(); v.style.opacity = 0; } };
+  return html`<div class="col" style="gap:8px">
+    <div class="row wrap" style="gap:8px;align-items:center"><b style="font-size:var(--fs-sm)" class="grow">Footage bank <span class="faint" style="font-weight:400">${on} of ${ups.length} will be used</span></b>
+      <button class="btn ghost sm" onClick=${() => all(true)}>Use all</button><button class="btn ghost sm" onClick=${() => all(false)}>Use none</button></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px;max-height:420px;overflow:auto;padding:2px">
+      ${ups.map((u) => html`<div key=${u.id} class="col" style=${`gap:4px;min-width:0;opacity:${u.off ? 0.45 : 1}`}>
+        <div style=${`position:relative;aspect-ratio:16/10;border-radius:10px;overflow:hidden;background:#111;cursor:pointer;outline:3px solid ${u.off ? 'transparent' : 'var(--accent, #6c5ce7)'};outline-offset:-3px`}
+          onClick=${() => toggle(u)} onMouseEnter=${(e) => hover(e, u, true)} onMouseLeave=${(e) => hover(e, u, false)} title=${u.off ? 'Not used: click to use it' : 'Used in the ads: click to leave it out'}>
+          <img src=${api.url(`/api/prospects/${p.id}/footage/${u.id}/thumb`)} loading="lazy" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" onError=${(e) => { e.target.style.display = 'none'; }} />
+          <video muted playsinline preload="none" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .15s" />
+          <span style="position:absolute;left:6px;top:6px;width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;background:${u.off ? 'rgba(0,0,0,0.55)' : 'var(--accent, #6c5ce7)'};color:#fff;border:2px solid #fff">${u.off ? '' : '✓'}</span>
+          <span style="position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,0.7);color:#fff;font-size:11px;padding:1px 6px;border-radius:6px">${mins(u.duration)}</span>
+          ${usedFiles.has(u.file) ? html`<span style="position:absolute;left:6px;bottom:6px;background:var(--moss, #2e9e5b);color:#fff;font-size:10px;padding:1px 6px;border-radius:6px">in the ads</span>` : null}
+          ${u.hasAudio === false ? html`<span style="position:absolute;right:6px;top:6px;background:rgba(0,0,0,0.7);color:#fff;font-size:10px;padding:1px 6px;border-radius:6px">B-roll</span>` : null}
+        </div>
+        <div class="row" style="gap:4px;align-items:center;min-width:0"><span class="ellipsis grow" style="font-size:11px" title=${u.name}>${u.name}</span><button class="btn ghost sm" style="padding:0 6px" title="Remove" onClick=${() => remove(u)}>×</button></div>
+      </div>`)}
+    </div>
+    <span class="faint" style="font-size:var(--fs-xs)">Hover to play. Click a video to leave it out of the ads, or back in. Silent videos are used as B-roll.</span>
+  </div>`;
+}
+
 /** The ad machine, up front on Politics: pick the candidate, drop their footage, pick or describe a style, make the ads. */
 export function AdMachine({ list, jobs, onOpen, reload }) {
   const { data: looks } = useApi('/api/political/looks');
@@ -258,6 +290,7 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
           <input type="file" accept="video/*" multiple style="display:none" disabled=${!!up || !p} onChange=${(e) => { drop(e.target.files); e.target.value = ''; }} />
         </label>
         ${up ? html`<${Progress} value=${up.frac} />` : null}
+        ${p ? html`<${FootageBank} p=${p} reload=${reload} />` : null}
         ${made.length ? html`<b style="font-size:var(--fs-sm);margin-top:4px">Made recently</b><div class="row wrap" style="gap:8px">${made.map((x) => html`<button class="ghost" title=${`Open ${x.name}`} onClick=${() => onOpen(x.id)} style="padding:0;border:0;background:none;cursor:pointer;display:flex;flex-direction:column;gap:3px;align-items:center"><img src=${api.url(`/api/prospects/${x.id}/file/posterV`)} alt="" style="height:96px;border-radius:8px;border:1px solid var(--line)" onError=${(e) => { e.target.closest('button').style.display = 'none'; }} /><span class="faint ellipsis" style="font-size:10px;max-width:70px">${x.name.split(' ').slice(-1)[0]}</span></button>`)}</div>` : null}
       </div>
       <div class="col" style="gap:10px;min-width:0">
@@ -267,7 +300,7 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
       </div>
     </div>
     <div class="row wrap" style="gap:10px;align-items:center">
-      ${job ? html`<div class="col grow" style="gap:4px;min-width:200px"><${Progress} value=${job.progress || 0} /><span class="faint" style="font-size:var(--fs-xs)">${Math.round((job.progress || 0) * 100)}% · ${job.note || 'working'}</span></div>` : html`<span class="faint grow" style="font-size:var(--fs-xs)">${p ? `${p.name}: ${(p.footageUploads || []).length ? 'footage ready' : 'no footage yet (it will look for public videos)'} · ${prompt.trim() ? 'your described style' : sel ? (looks?.presets || []).find((x) => x.id === sel)?.name : curLook}` : ''}</span>`}
+      ${job ? html`<div class="col grow" style="gap:4px;min-width:200px"><${Progress} value=${job.progress || 0} /><span class="faint" style="font-size:var(--fs-xs)">${Math.round((job.progress || 0) * 100)}% · ${job.note || 'working'}</span></div>` : html`<span class="faint grow" style="font-size:var(--fs-xs)">${p ? `${p.name}: ${(p.footageUploads || []).length ? `${(p.footageUploads || []).filter((u) => !u.off).length} of ${(p.footageUploads || []).length} videos ticked` : 'no footage yet (it will look for public videos)'} · ${prompt.trim() ? 'your described style' : sel ? (looks?.presets || []).find((x) => x.id === sel)?.name : curLook}` : ''}</span>`}
       ${p ? html`<${Button} kind="ghost" size="sm" onClick=${() => onOpen(p.id)}>Open ${p.name.split(' ')[0]}</${Button}>` : null}
       <${Button} kind="primary" icon="sparkle" disabled=${!p || busy || !!up} onClick=${make}>Make the ads</${Button}>
     </div>
@@ -330,7 +363,6 @@ function FootageLinks({ p, pkg, run, busy, reload }) {
   const ft = pkg.footage; const uploads = p.footageUploads || [];
   const save = () => act(() => api.patch(`/api/prospects/${p.id}`, { footageLinks: links.split(/\s+/).filter((x) => /^https?:\/\//.test(x)) }), { ok: 'Saved' }).then(reload);
   const send = (files) => uploadFootage(p.id, files, setUp).then(reload);
-  const remove = (u) => act(() => api.del(`/api/prospects/${p.id}/footage/${u.id}`)).then(reload);
   const mins = (s) => (s >= 60 ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : `${Math.round(s)}s`);
   return html`<details class="panel pad" open=${!!ft || uploads.length > 0}>
     <summary><b>Their footage</b> <span class="faint">${uploads.length ? `${uploads.length} uploaded · ` : ''}${ft ? `${ft.clips?.length || 0} videos used · ${ft.bites?.short?.length || 0} + ${ft.bites?.long?.length || 0} lines` : 'for the ads made from their own videos'}</span></summary>
@@ -342,7 +374,7 @@ function FootageLinks({ p, pkg, run, busy, reload }) {
         <input type="file" accept="video/*" multiple style="display:none" disabled=${!!up} onChange=${(e) => { const fs = e.target.files; send(fs); e.target.value = ''; }} />
       </label>
       ${up ? html`<${Progress} value=${up.frac} />` : null}
-      ${uploads.length ? html`<ul style="padding-left:18px;font-size:var(--fs-sm)">${uploads.map((u) => html`<li>${u.name} <span class="faint">${mins(u.duration || 0)} · ${(u.size / 1e6).toFixed(0)} MB${u.hasAudio ? '' : ' · no sound (B-roll only)'}</span> <button class="btn ghost sm" title="Remove" onClick=${() => remove(u)}>×</button></li>`)}</ul>` : null}
+      <${FootageBank} p=${p} reload=${reload} />
       ${(ft?.clips || []).filter((c) => c.url).length ? html`<ul style="padding-left:18px;font-size:var(--fs-sm)">${ft.clips.filter((c) => c.url).map((c) => html`<li><a href=${c.url} target="_blank" rel="noreferrer">${c.title || c.url}</a> <span class="faint">${c.platform}${c.uploader ? ` · ${c.uploader}` : ''}</span></li>`)}</ul>` : null}
       ${(ft?.bites?.short || []).length ? html`<div class="col" style="gap:4px;font-size:var(--fs-sm)"><b>Lines in the short ads</b>${ft.bites.short.map((b) => html`<div>${b.label ? html`<span class="badge lav">${b.label}</span> ` : null}"${b.text}"</div>`)}</div>` : null}
       ${ft?.errors?.length ? html`<div class="faint" style="font-size:var(--fs-xs)">${ft.errors.slice(-3).join(' · ')}</div>` : null}
