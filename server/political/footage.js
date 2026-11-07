@@ -165,7 +165,16 @@ function heuristicPick(list, name, targetSec) {
     .filter((y) => y.score >= 2).sort((a, b) => b.score - a.score);
   const pick = []; let total = 0;
   for (const { x } of scored) { if (total + (x.e - x.s) > targetSec + 2) continue; pick.push(x); total += x.e - x.s; if (total >= targetSec) break; }
-  pick.sort((a, b) => (intro.test(b.text) ? 1 : 0) - (intro.test(a.text) ? 1 : 0));
+  // Few lines with promise words (most real speeches): fill up with their other clean statements, in the order said,
+  // so uploaded footage always gives an ad instead of being dropped for the graphics-only one.
+  if (total < targetSec * 0.7) {
+    for (const x of list) {
+      if (pick.includes(x) || /\?$/.test(x.text) || x.shot?.usable === false || x.e - x.s < 1.5) continue;
+      if (total + (x.e - x.s) > targetSec + 3) continue;
+      pick.push(x); total += x.e - x.s; if (total >= targetSec) break;
+    }
+  }
+  pick.sort((a, b) => (intro.test(b.text) ? 1 : 0) - (intro.test(a.text) ? 1 : 0) || a.clip - b.clip || a.s - b.s);
   return pick;
 }
 
@@ -217,6 +226,9 @@ function visualBroll(clips) {
 /** Everything the speech ads need, saved on prospect.pkg.footage. */
 async function prepare({ uploads = [], name, office, socials, sites, links, dir, themes, shortSec, longSec, contrast, notes, want = 4, onStep = () => {} }) {
   // Footage the founders uploaded comes first (all of it); then pasted links, and a web search only when nothing was uploaded.
+  // Transcripts, stills and level maps are written here; with uploads only (nothing downloaded) it was never created,
+  // so FFmpeg couldn't write the sound out and every upload failed ("exited with code 4294967294").
+  fs.mkdirSync(path.join(dir, 'footage'), { recursive: true });
   const up = [];
   for (const f of uploads) {
     try { const info = await ff.probe(f); if (info.hasVideo && info.duration >= 2) up.push({ url: '', platform: 'upload', how: 'uploaded', own: true, uploader: '', title: path.basename(f).replace(/^\d+-/, ''), file: f, duration: info.duration, width: info.width, height: info.height, brollOnly: !info.hasAudio }); }

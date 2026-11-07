@@ -119,7 +119,11 @@ async function stepFootage(p, h) {
     notes: (pkg.notes || []).filter((n) => n.target !== 'email').map((n) => n.text).join(' | '), want: Number(S('footageClips', 4)) || 4, onStep: (x) => h.progress(0.3, x),
   });
   save(p.id, () => ({ footage: r }));
-  if ((r.bites.short || []).length < 2) return { note: `Not enough usable speech found, so the graphic ads will be used. ${r.errors.slice(-1)[0] || ''}`.trim() };
+  if ((r.bites.short || []).length < 2) {
+    // Footage was uploaded but couldn't be used: stop and say why, instead of quietly making the old graphics-only ads.
+    if (uploads.length) throw Object.assign(new Error(`Couldn't get usable lines from the uploaded footage (${r.clips.length} video${r.clips.length === 1 ? '' : 's'} read, ${(r.bites.short || []).length} usable line${(r.bites.short || []).length === 1 ? '' : 's'}). ${r.errors.slice(-2).join(' · ').slice(0, 400) || 'No clear speech was found.'}`), { permanent: true });
+    return { note: `Not enough usable speech found, so the graphic ads will be used. ${r.errors.slice(-1)[0] || ''}`.trim() };
+  }
   return { note: `${r.clips.length} video${r.clips.length === 1 ? '' : 's'} · ${r.bites.short.length} + ${r.bites.long.length} lines picked` };
 }
 
@@ -495,6 +499,8 @@ async function run(prospectId, { from = 'research', only = null, actor = 'system
       setStep(p.id, step, { status: 'done', note });
     } catch (e) {
       setStep(p.id, step, { status: 'failed', error: e.message });
+      // With their own footage uploaded, the ads don't depend on web research: note it and carry on.
+      if (['research', 'images', 'opponent'].includes(step) && (p.footageUploads || []).some((u) => !u.off)) continue;
       save(p.id, () => ({ status: 'failed', error: `${label}: ${e.message}` }));
       throw e;
     }
