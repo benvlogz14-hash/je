@@ -25,6 +25,17 @@
  *    "those stairs...", "I found this", "a story later", "yoooo" as something is opened.
  *  - Layout: 10 full frame, 2 "framed" (the video in a band in the middle, blurred grainy bars above and below with the
  *    title in the top bar and captions in the bottom one).
+ *
+ * Five more (Nov 7 2026: "What did we find???", "THIS HOME WAS WORTH MILLIONS", "This was a community of millionaires...",
+ * "Rotting French Mansion...", "ABANDONED DATA CENTER"; 20-29 s, all full frame, all walk-and-talk with the voice from
+ * frame 1) agree on length, captions (2-3 words, white heavy sans, key words yellow, about 77% down) and open-loop
+ * endings ("should we go?", "let's see", "I wonder"), and add three things:
+ *  - Titles can be a claim about the place's value or past, not only "they left...": "worth millions", "a community of
+ *    millionaires". Two of the five show the title only for the first 5-7 s, then let the footage run clean.
+ *  - Long takes are fine when the camera is moving through the place or onto a find: the safe video is one 27 s shot
+ *    (hand, then the hole, then "let's see"), and two others hold 8-9 s shots. Shot length matters less than something
+ *    new coming into view every couple of seconds.
+ *  - Loudness varies more than the first 12 (-12 to -22 LUFS).
  */
 const ctx = require('../core/ctx');
 
@@ -43,6 +54,7 @@ const TITLES = [
   'ABANDONED FACTORY...', 'they left it all behind...', 'WHAT did we find in a CIA agent\'s home:', 'WHY DID they leave it all behind...',
   'They left the whole town to rot...', 'tunnels under minneapolis...', 'we outran the cops...', 'ABANDONED GHOST TOWN', 'THEY LEFT MILLIONS TO FREEZE',
   'THEY LEFT millions behind in this mansion...', 'Island lost to time...', 'who left this boat here...',
+  'What did we find???', 'THIS HOME WAS WORTH MILLIONS', 'This was a community of millionaires...', 'Rotting French Mansion...', 'ABANDONED DATA CENTER',
 ];
 // Written for ANY footage: the 12 titles are examples of the structure, not words or topics to reuse.
 const rulesFor = (titles) => `On-screen titles copy the STRUCTURE of this channel's best shorts (each 10k+ views), never their words or topics: ${titles.map((t) => `"${t}"`).join(', ')}. What they share, for any subject: 2-6 words; names the single most intriguing thing in THIS video (a place, a person, an object, an event, a result); reads as an unanswered mystery or a stake, not a description; one of these shapes: (1) "<someone> <did/left/lost> <something surprising>..." ("they left it all behind..."), (2) a who/why/what/how question the video teases but doesn't answer ("who left this boat here..."), (3) "<the thing> + a twist word" ("tunnels under minneapolis...", "Island lost to time..."), (4) the stake in first person ("we outran the cops..."), (5) the subject in capitals ("ABANDONED GHOST TOWN"). Never a quote of what is said. End with "..." (or ":" / "?"). The first one or two words may be in CAPITALS for emphasis. Adapt to this video's own subject, whatever it is (a person, a sport, a business, a trip, food, a politician, a place).`;
@@ -53,7 +65,7 @@ const TITLE_RULES = rulesFor(TITLES);
 // what/where/when ("today we're...", "On August 3rd, 2012..."), a reaction ("I can't believe..."), a find or a stake.
 const OPENER = /^\W*(today (we|i)('re| are| am|'m)?|so (this|here) (is|was)|this is (the|my|our|a|what|how|why|where)|i (can'?t|cannot|couldn'?t) believe|(we|i) (just )?(found|discovered|got|made|bought|tried|went|drove|flew|spent)|nobody|no one|(they|he|she) (left|built|lost|made|spent|said|told)|on (january|february|march|april|may|june|july|august|september|october|november|december) \d|in \d{4}|the (owner|reason|craziest|first|last|only)|it'?s (just |actually |so )?(crazy|insane|wild|unreal)|time flies|look at|welcome to|what (did|is|was|happens|would)|why (did|would|is|do)|how (did|could|is|do)|(we|i)('re| are|'m| am) (going|about|inside|in|at|finally)|there (were|was|is|are)|(\d[\d,]*|one|two|three|ten|a hundred|a million) )/i;
 // Endings that left people hanging in the winners.
-const CLIFF = /(\?\?|\?\s*["']?$|\.\.\.\s*["']?$|…\s*$|\bmore to (this|it)\b|\bnever (returned|came back|seen)\b|\bi found (this|something)\b|\b(a )?story (for )?later\b|\bthose (stairs|doors?)\b|\bnot sure what\b|\bwhat('s| is) (in|inside|behind|down) (there|here)\b|\byo{3,}\b|\blet'?s (see|find out|check)\b|\bwhat (we|i) found\b)/i;
+const CLIFF = /(\blet'?s see\b|\bi wonder\b|\bshould we go\b|\?\?|\?\s*["']?$|\.\.\.\s*["']?$|…\s*$|\bmore to (this|it)\b|\bnever (returned|came back|seen)\b|\bi found (this|something)\b|\b(a )?story (for )?later\b|\bthose (stairs|doors?)\b|\bnot sure what\b|\bwhat('s| is) (in|inside|behind|down) (there|here)\b|\byo{3,}\b|\blet'?s (see|find out|check)\b|\bwhat (we|i) found\b)/i;
 
 /** Ensure the on-screen title reads like the winners: ends in "..." unless it ends in ? ! : already. */
 function titleFinish(h) {
@@ -96,12 +108,15 @@ function check({ clip, version, words = [], style = {} }) {
 }
 
 // ------------------------------------------------------------------ the library: more winners, a formula that keeps learning
-/** The 12 measured on Nov 3 2026 (seconds): length, shots, first cut, longest shot, loudness. */
+/** The 12 measured on Nov 3 2026 and 5 more on Nov 7 (seconds): length, shots, first cut, longest shot, loudness. */
 const BUILTIN = [
   [27.2, 11, 1.9, 7.3, -15.8, 'ABANDONED FACTORY...'], [28.2, 13, 1.4, 4.7, -17.7, 'they left it all behind...'], [26.9, 13, 4.8, 4.8, -14.0, "WHAT did we find in a CIA agent's home:"],
   [20.2, 9, 1.9, 5.9, -14.2, 'WHY DID they leave it all behind...'], [26.1, 7, 3.1, 7.8, -13.8, 'They left the whole town to rot...'], [28.5, 7, 3.8, 6.0, -16.1, 'tunnels under minneapolis...'],
   [26.2, 12, 3.1, 4.8, -15.1, 'we outran the cops...'], [25.2, 18, 0.9, 3.1, -13.8, 'ABANDONED GHOST TOWN'], [35.4, 20, 2.3, 3.5, -17.5, 'THEY LEFT MILLIONS TO FREEZE'],
   [25.9, 6, 1.3, 9.4, -14.9, 'THEY LEFT millions behind in this mansion...'], [46.1, null, null, null, null, 'Island lost to time...'], [36.4, null, null, null, null, 'who left this boat here...'],
+  // Nov 7 2026, five more Ryan sent (Stringer):
+  [20.0, 11, 2.6, 5.7, -14.5, 'What did we find???'], [25.8, 7, 2.2, 8.2, -21.6, 'THIS HOME WAS WORTH MILLIONS'], [22.5, 4, 1.7, 9.2, -14.4, 'This was a community of millionares...'],
+  [29.0, 2, 27.4, 27.4, -11.9, 'Rotting French Mansion...'], [23.6, 6, 2.5, 9.3, -14.4, 'ABANDONED DATA CENTER'],
 ].map(([dur, shots, firstCut, longest, lufs, title]) => ({ builtin: true, title, dur, shots, firstCut, longest, lufs }));
 const added = () => ctx.store?.settings?._winners || [];
 const fs = require('fs'); const path = require('path');
