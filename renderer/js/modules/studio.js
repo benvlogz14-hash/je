@@ -200,6 +200,15 @@ const playUrl = (m, still) => api.url(`/api/media?path=${encodeURIComponent((!st
 function liveSet(obj, key, val, id) { if (!live.has(id)) live.set(id, { obj, key, orig: clone(obj[key]) }); obj[key] = val; redraw(); }
 function revertLive() { for (const { obj, key, orig } of live.values()) obj[key] = orig; live.clear(); }
 const HEAD_W = 132;
+/**
+ * Playback, shared by the monitor and the timeline. While playing, the monitor's loop owns the time and writes it here;
+ * the timeline's playhead and the timecodes read it straight from here (no re-draw of the editor while it plays, which
+ * made everything lag), and the editor gets the time once, when playback stops. stop() pauses every player at once,
+ * seek(t) moves playback while it runs (both set by the monitor).
+ */
+const PB = { playing: false, t: 0, subs: new Set(), stop: null, seek: null, editorT: null };
+const onPlayhead = (fn) => { PB.subs.add(fn); return () => PB.subs.delete(fn); };
+const livePlayhead = (t) => { PB.t = t; PB.editorT?.(t); for (const f of PB.subs) { try { f(t); } catch { /* a closed panel */ } } };
 const SNAP_BACK_TIP = (on) => (on ? 'Snap back is on: when you delete, everything after it slides back to fill the space (and to 0:00), on every track so captions stay in sync. Click to turn off.' : 'Snap back: turn on and anything you delete leaves no empty space; everything after it slides back to fill it. Turning it on also closes the gaps already there.');
 
 export function Studio() {
@@ -244,11 +253,22 @@ function Editor({ id }) {
   const [proj, setProj] = useState(null);
   const [data, setDataRaw] = useState(null);
   const [sel, setSel] = useState([]); // clip ids (strings)
-  const [t, setTRaw] = useState(0);
+  const [tState, setTRaw] = useState(0);
+  // The playhead time. While playing the editor isn't re-drawn, so the monitor's loop keeps this render's `t` current
+  // (PB.editorT): cuts, pastes, titles and markers made during playback land where the playhead really is.
+  let t = tState; PB.editorT = (x) => { const f = fpsRef.current || 30; t = Math.max(0, Math.round(x * f) / f); };
   const fpsRef = useRef(30);
   /** The playhead always sits exactly on a frame, so keyframes, splits and edits line up with what's shown. */
-  const setT = useCallback((v) => setTRaw((prev) => { const x = typeof v === 'function' ? v(prev) : v; const f = fpsRef.current || 30; return Math.max(0, Math.round(x * f) / f); }), []);
-  const [playing, setPlaying] = useState(false);
+  const setT = useCallback((v) => {
+    const f = fpsRef.current || 30; const rnd = (x) => Math.max(0, Math.round(x * f) / f);
+    // While playing: carry on playing from the new spot.
+    if (PB.playing) { const x = rnd(typeof v === 'function' ? v(PB.t) : v); PB.seek?.(x); setTRaw(x); return; }
+    setTRaw((prev) => rnd(typeof v === 'function' ? v(prev) : v));
+  }, []);
+  const [playing, setPlayingRaw] = useState(false);
+  // Pausing stops every player right away (before the editor re-draws), so nothing keeps sounding after you pause.
+  const setPlaying = useCallback((v) => { const n = !!(typeof v === 'function' ? v(PB.playing) : v); if (!n) PB.stop?.(); else PB.playing = true; setPlayingRaw(n); }, []);
+  useEffect(() => () => { PB.stop?.(); PB.playing = false; }, []);
   // Leaving the Studio tab (or the window being hidden) stops playback, so its sound doesn't carry on under other pages.
   const edRoot = useRef(null);
   useEffect(() => {
@@ -683,14 +703,14 @@ function Editor({ id }) {
       else if (key === '-') setZoom((z) => Math.max(4, z / 1.25));
     };
     const k0 = k; const kk = (e) => { if (document.body.dataset.screen && document.body.dataset.screen !== '/studio') return; k0(e); }; window.addEventListener('keydown', kk); return () => window.removeEventListener('keydown', kk);
-  }, [sel, t, duration, seq, data]);
-
-  if (!data || !seq) return html`<div class="page"><${Loading} /></div>`;
-  const selected = sel.length === 1 ? findClip(seq, sel[0]) : null;
+  }); // every draw: the keys always act on this draw's state, and the playhead as it is while playing (PB.editorT)
 
   // The Export window opens straight away; the save runs alongside and the export starts only once it has landed
   // (on a busy PC the save could take a while and the button just spun).
   const savingFor = useRef(null);
+  if (!data || !seq) return html`<div class="page"><${Loading} /></div>`;
+  const selected = sel.length === 1 ? findClip(seq, sel[0]) : null;
+
   const exportNow = () => { savingFor.current = save(true); setExporting(true); };
   return html`<div ref=${edRoot} style=${`position:absolute;inset:0;display:grid;grid-template-columns:minmax(0, 1fr);grid-template-rows:46px minmax(0, 1fr) min(${bottomH}px, calc(100% - 46px - 260px));background:var(--ed-bg)`}>
     <div class="row" style="padding:0 12px;background:var(--surface);border-bottom:1px solid var(--line);gap:10px;min-width:0;overflow-x:auto">
@@ -1127,8 +1147,13 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
   const tRef = useRef(t); const playedTo = useRef(null);
   if (!playing && playedTo.current == null) tRef.current = t;
   const typedSeen = useRef(new Map()); // typewriter titles: letters showing at the last frame (for the key clicks)
-  const uiT = useRef(null); // the last time the playback loop itself put on the playhead
-  const stalled = useRef(false); const hold = useRef({ since: 0, drawn: false, retry: 0 });
+  const hold = useRef({ since: 0, drawn: false, retry: 0 });
+  // The clock follows the sound: the player you hear (the "master", the first audible audio clip, else the video) is
+  // never pulled back, so sound never repeats; the picture and the other players follow it. Before, the clock was the
+  // wall clock and held still whenever a video buffered while the sound played on, then the sound was dragged back
+  // to match (heard as repeats).
+  const ms = useRef({ id: null, ct: -1, moved: 0, waitFrom: 0, bad: new Set() });
+  const tcEl = useRef(null);
   const [qualitySel, setQuality] = useState(0.5);
   const raf = useRef(0);
   // Fit the sequence frame inside the monitor area at any window size.
@@ -1186,7 +1211,14 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     seq.audioTracks.forEach((tr) => { if (tr.muted) return; for (const c of tr.clips) if (c.enabled !== false && time >= c.start && time < c.start + c.duration) a.push({ c, tr }); });
     return { v, a };
   };
-  const sync = (time, isPlaying) => {
+  /** The player the clock follows: the first audible audio clip, else the topmost video. */
+  const pickMaster = (time) => {
+    const { v, a } = activeAt(time); const bad = ms.current.bad;
+    for (const { c, tr } of a) { if (c.type !== 1 || bad.has(c.id)) continue; const el = els.current.get(c.id); if (el instanceof HTMLMediaElement && !el.ended && !el.error && valAt(c.volume, time - c.start, 1) * base(tr?.volume, 1) > 0.01) return { c, el }; }
+    for (let i = v.length - 1; i >= 0; i--) { const { c } = v[i]; if (c.type !== 0 || bad.has(c.id)) continue; const el = els.current.get(c.id); if (el instanceof HTMLVideoElement && !el.ended && !el.error) return { c, el }; }
+    return null;
+  };
+  const sync = (time, isPlaying, masterId = null) => {
     const { v, a } = activeAt(time); const live = new Set();
     for (const { c } of [...v, ...a.map((x) => ({ c: x.c, tr: x.tr }))]) {
       if (c.type === 3) continue;
@@ -1196,17 +1228,24 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       if (c.type === 1) { const tr = a.find((x) => x.c.id === c.id)?.tr; el.volume = Math.max(0, Math.min(1, valAt(c.volume, time - c.start, 1) * base(tr?.volume, 1))); }
       const rate = Math.min(4, Math.max(0.25, c.speed || 1));
       if (isPlaying) {
-        // Small drift is evened out by playing a touch faster or slower; only a real jump seeks (each seek stutters).
         const drift = want - el.currentTime;
-        if (Math.abs(drift) > 0.6 || (el.paused && Math.abs(drift) > 0.12)) { el.currentTime = want; el.playbackRate = rate; }
-        else el.playbackRate = Math.min(4, Math.max(0.25, rate * (1 + Math.max(-0.08, Math.min(0.08, drift * 0.8)))));
+        if (c.id === masterId) {
+          // The clock follows this one: it plays at its own speed and is only moved when it's really off (after a seek).
+          if (!el.seeking && (drift > 0.25 || drift < -0.6 || (el.paused && Math.abs(drift) > 0.1))) el.currentTime = want;
+          el.playbackRate = rate;
+        } else {
+          // Small drift is evened out by playing a touch faster or slower; only a real jump seeks (each seek stutters).
+          const far = c.type === 1 ? 0.3 : 0.5, nudge = c.type === 1 ? 0.05 : 0.08;
+          if (!el.seeking && (Math.abs(drift) > far || (el.paused && Math.abs(drift) > 0.1))) { el.currentTime = want; el.playbackRate = rate; }
+          else el.playbackRate = Math.min(4, Math.max(0.25, rate * (1 + Math.max(-nudge, Math.min(nudge, drift * 0.8)))));
+        }
         if (el.paused) el.play().catch(() => {});
-        if (c.type !== 1 && !el.paused && (el.seeking || el.readyState < 3)) stalled.current = true;
       } else { el.playbackRate = rate; if (!el.paused) el.pause(); if (Math.abs(el.currentTime - want) > 0.5 / (seq.fps || 30)) el.currentTime = want; }
     }
     for (const [cid, el] of els.current) if (!live.has(cid) && el instanceof HTMLMediaElement && !el.paused) el.pause();
-    // Get the next clips ready ahead of time (loaded and parked on their first frame), so they don't flash black when they start.
-    for (const tr of seq.videoTracks) for (const c of tr.clips) {
+    // Get the next clips ready ahead of time (loaded and parked on their first frame), so they don't flash black (or
+    // start late) when they begin.
+    for (const tr of [...seq.videoTracks, ...seq.audioTracks]) for (const c of tr.clips) {
       if (c.type === 3 || c.enabled === false || c.start <= time || c.start - time > 2.5) continue;
       const el = getEl(c); if (el instanceof HTMLMediaElement && el.paused && Math.abs(el.currentTime - (c.in || 0)) > 0.05) el.currentTime = c.in || 0;
     }
@@ -1217,17 +1256,20 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     const W = Math.round(seq.width * quality), H = Math.round(seq.height * quality);
     if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; } cv.__seqW = seq.width;
     const time = tRef.current; const { v } = activeAt(time);
+    // How far a video's frame may be from the exact time and still be shown. While playing a frame a little behind is
+    // far better than black (it was 0.35 s, and videos sitting 0.35-0.6 s behind were skipped: the black flashes).
+    const tol = PB.playing ? 1.0 : 0.35;
     // A video still seeking or loading its frame: keep the last picture up instead of flashing black (for up to ~0.7 s;
     // after that it draws what it has, so a file that can't play never freezes the preview).
     const waiting = v.some(({ c }) => {
       if (c.type === 3 || c.type === FX_LAYER) return false; const el = getEl(c);
       if (el instanceof HTMLImageElement) return !(el.complete && el.naturalWidth);
-      return el instanceof HTMLVideoElement && (el.readyState < 2 || el.seeking || Math.abs(el.currentTime - ((c.in || 0) + (time - c.start) * (c.speed || 1))) > 0.35);
+      return el instanceof HTMLVideoElement && (el.readyState < 2 || el.seeking || Math.abs(el.currentTime - ((c.in || 0) + (time - c.start) * (c.speed || 1))) > tol);
     });
     const now = performance.now();
     if (waiting && hold.current.drawn && cv.width === W && cv.height === H) {
       if (!hold.current.since) hold.current.since = now;
-      if (now - hold.current.since < 700) { clearTimeout(hold.current.retry); hold.current.retry = setTimeout(() => draw(), 40); return; }
+      if (now - hold.current.since < (PB.playing ? 1200 : 700)) { clearTimeout(hold.current.retry); hold.current.retry = setTimeout(() => draw(), 40); return; }
     }
     hold.current.since = 0; hold.current.drawn = true;
     const g = cv.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
@@ -1271,7 +1313,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       else {
         const el = getEl(c); const m = media[c.mediaId];
         // A player still on the wrong spot (catching up after a jump) is skipped, so the layer underneath shows instead of a wrong or black frame.
-        const onSpot = !(el instanceof HTMLVideoElement) || Math.abs(el.currentTime - ((c.in || 0) + local * (c.speed || 1))) < 0.35;
+        const onSpot = !(el instanceof HTMLVideoElement) || Math.abs(el.currentTime - ((c.in || 0) + local * (c.speed || 1))) < tol;
         if (el && onSpot && ((el instanceof HTMLVideoElement && el.readyState >= 2) || (el instanceof HTMLImageElement && el.complete && el.naturalWidth))) {
           const nw = (m.width || el.videoWidth || el.naturalWidth) * sx * quality, nh = (m.height || el.videoHeight || el.naturalHeight) * sy * quality;
           const iw = el.videoWidth || el.naturalWidth, ih = el.videoHeight || el.naturalHeight;
@@ -1327,31 +1369,72 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     }
     if (snapGuide.current) { g.save(); g.strokeStyle = 'rgba(208,113,95,0.9)'; g.lineWidth = 1; if (snapGuide.current.x) { g.beginPath(); g.moveTo(W / 2, 0); g.lineTo(W / 2, H); g.stroke(); } if (snapGuide.current.y) { g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke(); } g.restore(); }
   };
+  // Where the master player really is, on the timeline (or null).
+  const masterTime = () => { const st = ms.current; const c = st.id && st.c; const el = c && els.current.get(c.id); if (!(el instanceof HTMLMediaElement) || el.seeking) return null; return c.start + (el.currentTime - (c.in || 0)) / (c.speed || 1); };
+  // The loop runs the newest sync/draw, so edits made while playing (a cut, a moved clip) show straight away.
+  const fns = useRef(null); fns.current = { sync, draw, pickMaster, duration };
+  // Set once: stop() and seek() for the editor (they read only refs, so the first ones are always right).
+  if (!PB.__mon || PB.__mon !== els) {
+    PB.__mon = els;
+    PB.stop = () => {
+      cancelAnimationFrame(raf.current);
+      if (PB.playing) { const mt = masterTime(); if (mt != null && playedTo.current != null && Math.abs(mt - playedTo.current) < 0.3) { playedTo.current = mt; tRef.current = mt; } }
+      PB.playing = false;
+      for (const el of els.current.values()) if (el instanceof HTMLMediaElement && !el.paused) el.pause();
+    };
+    PB.seek = (x) => { clock.current = { wall: performance.now(), t0: x }; tRef.current = x; playedTo.current = x; ms.current.id = null; ms.current.bad.clear(); livePlayhead(x); };
+  }
   // playback loop
   useEffect(() => {
     if (!playing) {
-      cancelAnimationFrame(raf.current);
-      if (playedTo.current != null) { const at = playedTo.current; playedTo.current = null; tRef.current = at; setT(at); }
+      cancelAnimationFrame(raf.current); PB.playing = false;
+      if (playedTo.current != null) { const at = playedTo.current; playedTo.current = null; tRef.current = at; setT(at); livePlayhead(at); }
       sync(tRef.current, false); draw(); return;
     }
-    clock.current = { wall: performance.now(), t0: tRef.current }; let prev = performance.now(); let lastUi = 0;
+    PB.playing = true; PB.t = tRef.current;
+    clock.current = { wall: performance.now(), t0: tRef.current }; let prev = performance.now();
+    ms.current = { id: null, ct: -1, moved: 0, waitFrom: 0, bad: new Set() };
+    sync(tRef.current, true);
     const loop = () => {
-      const perf = performance.now();
-      // A video still buffering holds the clock (instead of the picture falling behind the sound and jumping to catch up).
-      if (stalled.current) clock.current.wall += perf - prev; stalled.current = false; prev = perf;
+      if (!PB.playing) return;
+      const { sync, draw, pickMaster, duration } = fns.current;
+      const perf = performance.now(); const dt = perf - prev; prev = perf;
+      const wallNow = clock.current.t0 + (perf - clock.current.wall) / 1000;
+      // Follow the sound: wait for it to start (or finish buffering), and jump the picture to it when it runs ahead.
+      const M = pickMaster(wallNow); const st = ms.current;
+      if (M) {
+        const el = M.el;
+        if (st.id !== M.c.id) { st.id = M.c.id; st.ct = el.currentTime; st.moved = 0; st.waitFrom = perf; }
+        st.c = M.c;
+        if (el.currentTime !== st.ct) { st.ct = el.currentTime; st.moved = perf; }
+        const moving = !el.paused && !el.seeking && st.moved && perf - st.moved < 160;
+        const mt = M.c.start + (el.currentTime - (M.c.in || 0)) / (M.c.speed || 1);
+        if (moving && Math.abs(mt - wallNow) < 1) {
+          st.waitFrom = 0; const err = mt - wallNow;
+          if (err > 0.04) clock.current = { wall: perf, t0: mt };
+          else if (err > -0.25) clock.current.t0 += err * 0.1; // else it's behind: sync() moves it up to the clock
+        } else if (!moving) {
+          if (!st.waitFrom) st.waitFrom = perf;
+          // Starting or buffering: the clock waits (up to 0.4 s to start, 1.5 s mid-play), else carry on without it.
+          if (perf - st.waitFrom < (st.moved ? 1500 : 400)) {
+            clock.current.wall += dt;
+            // Held on the clip's own start (at a cut the clock was a hair before it, so its sound was never started).
+            if (clock.current.t0 + (perf - clock.current.wall) / 1000 < M.c.start) clock.current = { wall: perf, t0: M.c.start };
+          } else { st.bad.add(st.id); st.id = null; }
+        }
+      }
       const now = clock.current.t0 + (perf - clock.current.wall) / 1000;
-      if (now >= duration) { playedTo.current = null; setPlaying(false); setT(duration); return; }
-      tRef.current = now; playedTo.current = now;
-      if (perf - lastUi > 66) { lastUi = perf; uiT.current = now; setT(now); }
-      sync(now, true); draw();
+      if (now >= duration) { playedTo.current = null; tRef.current = duration; setPlaying(false); setT(duration); livePlayhead(duration); return; }
+      tRef.current = now; playedTo.current = now; livePlayhead(now);
+      sync(now, true, ms.current.id); draw();
       raf.current = requestAnimationFrame(loop);
     };
     raf.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf.current);
   }, [playing]);
   useEffect(() => { if (!playing) { sync(t, false); draw(); } }, [t, seq, quality, selected?.c?.id]);
-  // Clicking the ruler or a shortcut moves the playhead during playback: carry on playing from there.
-  useEffect(() => { if (playing && uiT.current != null && Math.abs(t - uiT.current) > 0.01) { clock.current = { wall: performance.now(), t0: t }; tRef.current = t; playedTo.current = t; uiT.current = t; } }, [t]);
+  // The timecode under the monitor follows playback without re-drawing the panel.
+  useEffect(() => onPlayhead((x) => { const s = tc(x, seq.fps); if (tcEl.current && tcEl.current.textContent !== s) tcEl.current.textContent = s; }), [seq.fps]);
   useEffect(() => { const f = () => draw(); window.addEventListener('studio-redraw', f); return () => window.removeEventListener('studio-redraw', f); }, [seq, quality, selected]);
   useEffect(() => () => { for (const el of els.current.values()) if (el instanceof HTMLMediaElement) { el.pause(); el.removeAttribute('src'); el.load(); } }, []);
 
@@ -1427,11 +1510,11 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       <canvas ref=${canvas} style=${{ position: 'absolute', left: fit.x + view.x + 'px', top: fit.y + view.y + 'px', width: fit.w * view.k + 'px', height: fit.h * view.k + 'px', background: '#000', borderRadius: '8px', boxShadow: 'var(--shadow-2)', cursor: 'default' }} onPointerDown=${onDown} onPointerMove=${onMove} onPointerUp=${onUp} onDblClick=${onDbl} />
     </div>
     <div class="row" style="padding:6px 12px 10px;justify-content:center;gap:6px">
-      <span class="mono tnum" style="width:100px;color:var(--teal-ink)">${tc(t, seq.fps)}</span>
+      <span ref=${tcEl} class="mono tnum" style="width:100px;color:var(--teal-ink)">${tc(t, seq.fps)}</span>
       <${Button} kind="ghost" size="sm" icon="skipBack" title="Go to start (Home)" onClick=${() => setT(0)} />
-      <${Button} kind="ghost" size="sm" icon="chevronLeft" title="Previous frame (←)" onClick=${() => setT(Math.max(0, t - 1 / seq.fps))} />
+      <${Button} kind="ghost" size="sm" icon="chevronLeft" title="Previous frame (←)" onClick=${() => setT((x) => Math.max(0, x - 1 / seq.fps))} />
       <button class="send-btn" style="width:36px;height:36px" aria-label=${playing ? 'Pause' : 'Play'} onClick=${() => { sfx('tap'); setPlaying(!playing); }}><${Icon} name=${playing ? 'pause' : 'play'} size=${16} /></button>
-      <${Button} kind="ghost" size="sm" icon="chevronRight" title="Next frame (→)" onClick=${() => setT(t + 1 / seq.fps)} />
+      <${Button} kind="ghost" size="sm" icon="chevronRight" title="Next frame (→)" onClick=${() => setT((x) => x + 1 / seq.fps)} />
       <${Button} kind="ghost" size="sm" icon="skipFwd" title="Go to end (End)" onClick=${() => setT(duration)} />
       <span class="mono tnum faint" style="width:100px;text-align:right">${tc(duration, seq.fps)}</span>
     </div></div>`;
@@ -1803,8 +1886,28 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
   }, []);
   usePinch(scroller, (f, x) => zoomAround(f, x));
   useEffect(() => { const a = anchor.current; if (a && scroller.current) { scroller.current.scrollLeft = Math.max(0, a.at * zoom - a.mx); anchor.current = null; } }, [zoom]);
-  const [, force] = useState(0);
+  const [redrawN, force] = useState(0);
   useEffect(() => { const f = () => force((n) => n + 1); window.addEventListener('studio-redraw', f); return () => window.removeEventListener('studio-redraw', f); }, []);
+  // While playing, the playhead and timecode move straight on the page (no re-draw of every clip), and the view
+  // scrolls along a page at a time when the playhead reaches its right edge.
+  const phEl = useRef(null); const tcEl = useRef(null);
+  // The view's width and scroll position are kept from events (reading them each frame made the browser lay out the
+  // whole timeline every frame).
+  const vw = useRef({ w: 0, sl: 0 });
+  useEffect(() => {
+    const el = scroller.current; if (!el) return;
+    const ro = new ResizeObserver(() => { vw.current.w = el.clientWidth; }); ro.observe(el);
+    const on = () => { vw.current.sl = el.scrollLeft; }; el.addEventListener('scroll', on, { passive: true });
+    vw.current = { w: el.clientWidth, sl: el.scrollLeft };
+    return () => { ro.disconnect(); el.removeEventListener('scroll', on); };
+  }, []);
+  useEffect(() => onPlayhead((x) => {
+    const el = scroller.current; const px = x * zoomRef.current; const { w, sl } = vw.current;
+    const turn = el && PB.playing && w && (px > sl + w - HEAD_W - 24 || px < sl);
+    if (phEl.current) phEl.current.style.left = HEAD_W + px + 'px';
+    const s = tc(x, seq.fps || 30); if (tcEl.current && tcEl.current.textContent !== s) tcEl.current.textContent = s;
+    if (turn) { el.scrollLeft = Math.max(0, px - 40); vw.current.sl = Math.max(0, px - 40); }
+  }), [seq.fps]);
   const lanes = [...seq.videoTracks.map((tr, i) => ({ tr, type: 0, i })).reverse(), ...seq.audioTracks.map((tr, i) => ({ tr, type: 1, i }))];
   const width = Math.max(800, (duration + 30) * zoom);
   const xOf = (s) => s * zoom; const sOf = (x) => Math.max(0, x / zoom);
@@ -1824,8 +1927,11 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
 
   const onRuler = (e) => {
     // the playhead snaps to clip edges and the selected clip's keyframes (hold Alt to scrub freely)
-    const r = scroller.current.getBoundingClientRect(); const skip = new Set([t]); const move = (ev) => setT(doSnap(sOf(ev.clientX - r.left + scroller.current.scrollLeft - HEAD_W), ev.altKey, skip));
-    move(e); const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    // Scrubbing moves the playhead at most once per screen frame (every mouse move re-drew the whole editor).
+    const r = scroller.current.getBoundingClientRect(); const skip = new Set([t]); let pend = null, fr = 0;
+    const apply = () => { fr = 0; if (pend) setT(doSnap(sOf(pend.x - r.left + scroller.current.scrollLeft - HEAD_W), pend.alt, skip)); };
+    const move = (ev) => { pend = { x: ev.clientX, alt: ev.altKey }; if (!fr) fr = requestAnimationFrame(apply); };
+    move(e); const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); if (fr) { cancelAnimationFrame(fr); apply(); } };
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
   };
 
@@ -1922,9 +2028,11 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
     onAdd(media[mid], lane.type === 0 ? lane.i : 0, at, lane.type === 1 ? lane.i : 0, e.ctrlKey || e.metaKey, e.shiftKey ? 'up' : 'down');
   };
 
+  const cb = useRef(null); cb.current = { toggleTrack, onDropMedia, startBox, onClipMenu, onEditTitle, onClipDown };
+  const lanesV = useMemo(() => html`<${TimelineLanes} lanes=${lanes} media=${media} sel=${sel} tool=${tool} zoom=${zoom} drag=${drag} view=${view} cb=${cb} />`, [seq, media, sel, tool, zoom, drag, redrawN]);
   return html`<div style="flex:1;display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--ed-panel);border-top:1px solid var(--line)">
     <div class="row" style="padding:6px 12px;border-bottom:1px solid var(--line);gap:10px">
-      <span class="eyebrow">Timeline</span><span class="mono tnum" style="color:var(--teal-ink)">${tc(t, fps)}</span><span class="faint" style="font-size:var(--fs-xs)">${sel.length ? `${sel.length} selected` : ''}</span>${dragHint ? html`<span class="badge ${drag?.ctrl ? 'coral' : drag?.shift ? 'lav' : 'sky'}">${dragHint}</span>` : null}
+      <span class="eyebrow">Timeline</span><span ref=${tcEl} class="mono tnum" style="color:var(--teal-ink)">${tc(t, fps)}</span><span class="faint" style="font-size:var(--fs-xs)">${sel.length ? `${sel.length} selected` : ''}</span>${dragHint ? html`<span class="badge ${drag?.ctrl ? 'coral' : drag?.shift ? 'lav' : 'sky'}">${dragHint}</span>` : null}
       <div class="spacer" /><${Button} kind="ghost" size="sm" icon="plus" onClick=${() => addTrack(0)}>Video track</${Button}><${Button} kind="ghost" size="sm" icon="plus" onClick=${() => addTrack(1)}>Audio track</${Button}>
       <${Icon} name="zoomOut" size=${15} style="color:var(--ink-3)" /><input type="range" class="range" style="width:140px" min="4" max="600" value=${zoom} onInput=${(e) => setZoom(Number(e.target.value))} aria-label="Timeline zoom" title="Or pinch / Ctrl + scroll on the timeline" /><${Icon} name="zoomIn" size=${15} style="color:var(--ink-3)" />
     </div>
@@ -1935,23 +2043,33 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
           <div style=${{ width: HEAD_W + 'px', flex: 'none', position: 'sticky', left: 0, background: 'var(--ed-panel)', zIndex: 4, borderRight: '1px solid var(--line)', display: 'flex', alignItems: 'center', padding: '0 4px' }}>${onSnapBack ? html`<button type="button" class=${'chip' + (snapBack ? ' on' : '')} style="height:18px;padding:0 7px;font-size:10px;gap:4px" title=${SNAP_BACK_TIP(snapBack)} onClick=${onSnapBack}><${Icon} name="layers" size=${11} />Snap back</button>` : null}</div>
           <div style="position:relative;flex:1;cursor:text" onPointerDown=${onRuler}>${(seq.markers || []).map((m) => html`<div class="tl-marker" style=${{ left: xOf(m.t) - 5 + 'px' }} title="Marker (M adds or removes at the playhead, ; and ' jump between them). Right-click to remove." onPointerDown=${(e) => { e.stopPropagation(); setT(m.t); }} onContextMenu=${(e) => { e.preventDefault(); edit((d, s) => { s.markers = (s.markers || []).filter((x) => Math.abs(x.t - m.t) > 1e-6); }); }} />`)}${ticks.map((s) => html`<div style=${{ position: 'absolute', left: xOf(s) + 'px', top: 0, bottom: 0, borderLeft: '1px solid var(--line-strong)', paddingLeft: '4px', fontSize: '10px', color: 'var(--ink-3)', lineHeight: '22px' }} class="tnum">${dur(s)}</div>`)}</div>
         </div>
-        ${lanes.map((lane) => html`<div style=${{ display: 'flex', height: TH(lane.type) + 'px', borderBottom: '1px solid var(--line)' }}>
+        ${lanesV}
+        <div ref=${phEl} style=${{ position: 'absolute', top: 0, bottom: 0, left: HEAD_W + xOf(t) + 'px', width: '2px', background: 'var(--playhead)', zIndex: 6, pointerEvents: 'none' }}><div style="position:absolute;top:0;left:-5px;width:12px;height:12px;border-radius:3px;background:var(--playhead)" /></div>
+      </div>
+    </div></div>`;
+}
+
+/**
+ * The timeline's tracks and clips. Drawn only when the clips, selection, zoom, tool or a drag change: moving the
+ * playhead (playing, scrubbing, stepping frames) no longer re-draws hundreds of clips. Handlers come through `cb`, so
+ * they always see the newest state.
+ */
+function TimelineLanes({ lanes, media, sel, tool, zoom, drag, view, cb }) {
+  const xOf = (s) => s * zoom; const TH = (type) => TRACK_H[type === 1 ? 1 : 0];
+  return html`${lanes.map((lane) => html`<div style=${{ display: 'flex', height: TH(lane.type) + 'px', borderBottom: '1px solid var(--line)' }}>
           <div style=${{ width: HEAD_W + 'px', flex: 'none', position: 'sticky', left: 0, zIndex: 2, background: lane.type === 1 ? 'var(--ed-track-alt)' : 'var(--ed-track)', borderRight: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: '2px', padding: '0 6px' }}>
             <b class="ellipsis" style="font-size:var(--fs-sm);flex:1">${lane.tr.name}</b>
-            <button class="btn ghost sm icon" title=${lane.type === 1 ? (lane.tr.muted ? 'Unmute' : 'Mute') : lane.tr.muted ? 'Show track' : 'Hide track'} onClick=${() => { sfx('toggle'); toggleTrack(lane, 'muted'); }}><${Icon} name=${lane.type === 1 ? (lane.tr.muted ? 'mute' : 'volume') : lane.tr.muted ? 'eyeOff' : 'eye'} size=${14} /></button>
-            <button class="btn ghost sm icon" title=${lane.tr.locked ? 'Unlock' : 'Lock'} onClick=${() => { sfx('toggle'); toggleTrack(lane, 'locked'); }}><${Icon} name=${lane.tr.locked ? 'lock' : 'unlock'} size=${14} /></button>
+            <button class="btn ghost sm icon" title=${lane.type === 1 ? (lane.tr.muted ? 'Unmute' : 'Mute') : lane.tr.muted ? 'Show track' : 'Hide track'} onClick=${() => { sfx('toggle'); cb.current.toggleTrack(lane, 'muted'); }}><${Icon} name=${lane.type === 1 ? (lane.tr.muted ? 'mute' : 'volume') : lane.tr.muted ? 'eyeOff' : 'eye'} size=${14} /></button>
+            <button class="btn ghost sm icon" title=${lane.tr.locked ? 'Unlock' : 'Lock'} onClick=${() => { sfx('toggle'); cb.current.toggleTrack(lane, 'locked'); }}><${Icon} name=${lane.tr.locked ? 'lock' : 'unlock'} size=${14} /></button>
           </div>
-          <div style=${{ position: 'relative', flex: 1, background: lane.tr.locked ? 'repeating-linear-gradient(135deg, transparent 0 6px, var(--surface-3) 6px 7px)' : 'transparent', opacity: lane.tr.muted ? 0.5 : 1 }} onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => onDropMedia(e, lane)} onPointerDown=${startBox}>
+          <div style=${{ position: 'relative', flex: 1, background: lane.tr.locked ? 'repeating-linear-gradient(135deg, transparent 0 6px, var(--surface-3) 6px 7px)' : 'transparent', opacity: lane.tr.muted ? 0.5 : 1 }} onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => cb.current.onDropMedia(e, lane)} onPointerDown=${(e) => cb.current.startBox(e)}>
             ${lane.tr.clips.map((c) => { const v = view(c); const isSel = sel.includes(c.id); const colors = c.type === 1 ? ['--clip-a', '--clip-a-line'] : c.type === 3 ? ['--clip-t', '--clip-t-line'] : c.type === FX_LAYER ? ['--clip-fx', '--clip-fx-line'] : ['--clip-v', '--clip-v-line'];
-              return html`<div key=${c.id} data-clip=${c.id} title=${clipLabel(c)} onContextMenu=${(e) => onClipMenu(e, c)} onDblClick=${() => { if (c.type === 3) onEditTitle(c.id); }} onPointerDown=${(e) => { if (e.button === 2) return; onClipDown(e, c, lane); }} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(4, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
+              return html`<div key=${c.id} data-clip=${c.id} title=${clipLabel(c)} onContextMenu=${(e) => cb.current.onClipMenu(e, c)} onDblClick=${() => { if (c.type === 3) cb.current.onEditTitle(c.id); }} onPointerDown=${(e) => { if (e.button === 2) return; cb.current.onClipDown(e, c, lane); }} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(4, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
                 ${c.type === 0 && media[c.mediaId] && xOf(v.duration) > 50 ? html`<div style=${{ position: 'absolute', inset: 0, backgroundImage: `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(media[c.mediaId].path)}&t=${Math.round(c.in || 0) + 1}`)})`, backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x', opacity: 0.45 }} />` : null}
                 <div class="ellipsis" style="position:relative;font-size:11px;font-weight:600;padding:3px 7px;color:var(--ink)">${clipLabel(c)}${c.effects?.length ? ' ·fx' : ''}${(c.speed || 1) !== 1 ? ` · ${Math.round((c.speed || 1) * 100)}%` : ''}</div>
                 ${keyTimesOf(c).map((kt) => html`<span title=${`Keyframe at ${kt.toFixed(2)}s`} style=${{ position: 'absolute', left: Math.max(0, xOf(kt) - 4) + 'px', bottom: '3px', width: '7px', height: '7px', background: 'var(--gold)', border: '1px solid var(--gold-ink)', transform: 'rotate(45deg)', pointerEvents: 'none' }} />`)}
                 ${c.transIn?.type ? html`<div style=${{ position: 'absolute', left: 0, top: 0, bottom: 0, width: xOf(c.transIn.duration) + 'px', background: 'linear-gradient(90deg, rgba(0,0,0,0.25), transparent)' }} />` : null}
                 ${c.transOut?.type ? html`<div style=${{ position: 'absolute', right: 0, top: 0, bottom: 0, width: xOf(c.transOut.duration) + 'px', background: 'linear-gradient(270deg, rgba(0,0,0,0.25), transparent)' }} />` : null}
               </div>`; })}
-          </div></div>`)}
-        <div style=${{ position: 'absolute', top: 0, bottom: 0, left: HEAD_W + xOf(t) + 'px', width: '2px', background: 'var(--playhead)', zIndex: 6, pointerEvents: 'none' }}><div style="position:absolute;top:0;left:-5px;width:12px;height:12px;border-radius:3px;background:var(--playhead)" /></div>
-      </div>
-    </div></div>`;
+          </div></div>`)}`;
 }
