@@ -490,7 +490,9 @@ async function run(prospectId, { from = 'research', only = null, actor = 'system
   let p = ctx.store.get('prospects', prospectId); if (!p) throw Object.assign(new Error('Prospect not found'), { permanent: true });
   const keys = STEPS.map((s) => s[0]); const start = Math.max(0, keys.indexOf(from));
   const todo = only ? [only] : keys.slice(start);
-  save(p.id, () => ({ status: 'running', startedAt: now(), error: null, noAds: null }));
+  // The "no ad made" reason is only cleared by a run that makes the ads again (a sheet-only step used to wipe it, so the
+  // page showed nothing after "One-page sheet" and the ding).
+  save(p.id, () => ({ status: 'running', startedAt: now(), error: null, ...(only && !/^video_/.test(only) ? {} : { noAds: null }) }));
   const total = todo.length;
   for (let i = 0; i < todo.length; i++) {
     const step = todo[i]; p = ctx.store.get('prospects', prospectId);
@@ -603,7 +605,12 @@ async function restyle(prospectId, { preset = null, prompt = '', actor = 'user' 
   save(p.id, () => ({ proLook: { look: looks.strip(r.look), name: r.look.name, prompt: String(prompt || '').slice(0, 1500), preset, notes: r.notes, by: r.by, at: now() } }));
   audit.log(actor, 'political.restyled', { prospectId, look: r.look.name, by: r.by });
   p = ctx.store.get('prospects', prospectId);
-  if (!p.pkg?.creative || !(p.pkg?.footage?.clips || []).length) return run(prospectId, { from: p.pkg?.creative ? 'footage' : 'research', actor }, h);
+  // Read the footage again unless the last read gave usable lines from exactly the videos ticked now (an earlier failed
+  // read, e.g. every transcript failing, used to be reused for good, so each new look made no ads at all).
+  const ft = p.pkg?.footage; const ticked = (p.footageUploads || []).filter((u) => !u.off).map((u) => u.file).sort().join('|');
+  const usedUploads = (ft?.clips || []).map((c) => c.file).filter((f) => (p.footageUploads || []).some((u) => u.file === f)).sort().join('|');
+  const fresh = (ft?.clips || []).length && usableBites(ft, ft.bites?.short).length >= 2 && (!ticked || ticked === usedUploads);
+  if (!p.pkg?.creative || !fresh) return run(prospectId, { from: p.pkg?.creative ? 'footage' : 'research', actor }, h);
   const steps = ['video_v', 'video_h', ...(S('longVideo', true) ? ['video_hl'] : []), ...(S('socialVideo', true) ? ['video_s'] : []), 'sheet'];
   for (let i = 0; i < steps.length; i++) {
     const sub = { progress: (f, t) => h.progress(0.03 + 0.97 * ((i + Math.max(0, Math.min(1, f))) / steps.length), t) };
