@@ -1490,7 +1490,7 @@ r.del('/api/clipper/:id', (req, b, p) => { clipper().forget(p.id); return { ok: 
 r.post('/api/clipper/:id/export', (req, b, p) => {
   const e = must(clipper().get(p.id), 'Open the video again');
   if (b.folder) { const d = path.resolve(String(b.folder)); try { fs.mkdirSync(d, { recursive: true }); fs.accessSync(d, fs.constants.W_OK); } catch { throw new HttpError(400, `Euclidean can't save into ${d}. Choose another folder.`); } ctx.store.setSettings({ studio: { exportFolder: d } }); }
-  return queue.enqueue('clipper.export', { id: e.id, start: Number(b.start), end: Number(b.end), crop: b.crop || null, size: b.size || 'original', name: String(b.name || '').slice(0, 120), folder: b.folder ? path.resolve(String(b.folder)) : '', clientId: b.clientId || null, reveal: b.reveal !== false }, { actor: actorOf(req), title: `Quick cut: ${e.name}`, priority: 8 });
+  return queue.enqueue('clipper.export', { id: e.id, start: Number(b.start), end: Number(b.end), crop: b.crop || null, aspect: ['9:16', '1:1', '4:5', '16:9'].includes(b.aspect) ? b.aspect : null, size: b.size || 'original', name: String(b.name || '').slice(0, 120), folder: b.folder ? path.resolve(String(b.folder)) : '', clientId: b.clientId || null, reveal: b.reveal !== false }, { actor: actorOf(req), title: `Quick cut: ${e.name}`, priority: 8 });
 });
 r.get('/api/media', (req, res) => {
   const f = String(req.query.path || '');

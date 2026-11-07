@@ -79,7 +79,7 @@ const stamp = (s) => { const m = Math.floor(s / 60); const r = Math.floor(s % 60
  * Export the stretch [start, end] (seconds), cropped to crop = { x, y, w, h } (0-1 of the frame) if given, optionally
  * scaled (size: 'original' | '1080' (the short side to 1080) | '720'). Frame-accurate (re-encoded from the original).
  */
-async function exportCut({ id, start, end, crop = null, size = 'original', name = '', folder = '', signal, onProgress }) {
+async function exportCut({ id, start, end, crop = null, aspect = null, size = 'original', name = '', folder = '', signal, onProgress }) {
   const e = get(id); if (!e) throw new Error('Open the video again: it is no longer in the list.');
   const D = e.info.duration;
   start = Math.max(0, Math.min(D, Number(start) || 0)); end = Math.max(start + 0.1, Math.min(D, Number(end) || D));
@@ -89,11 +89,32 @@ async function exportCut({ id, start, end, crop = null, size = 'original', name 
   let out = path.join(outDir, `${base}.mp4`); let n = 2;
   while (fs.existsSync(out)) out = path.join(outDir, `${base} (${n++}).mp4`);
   const vf = [];
-  if (crop && crop.w > 0 && crop.h > 0 && (crop.w < 0.999 || crop.h < 0.999)) {
+  // A picked shape (9:16, 1:1, 4:5, 16:9) comes out exactly that shape: the box is worked out in whole pixels from the
+  // video's real size (rounding each side on its own gave 1080x1924 for a 9:16 cut).
+  const R = { '9:16': 9 / 16, '1:1': 1, '4:5': 4 / 5, '16:9': 16 / 9 }[aspect] || null;
+  const W = e.info.width, H = e.info.height; const even = (v) => Math.max(2, Math.floor(v / 2) * 2);
+  let outW = W, outH = H;
+  if (crop && crop.w > 0 && crop.h > 0 && (crop.w < 0.999 || crop.h < 0.999 || R)) {
     const c = { x: Math.max(0, Math.min(1, crop.x)), y: Math.max(0, Math.min(1, crop.y)), w: Math.max(0.05, Math.min(1, crop.w)), h: Math.max(0.05, Math.min(1, crop.h)) };
-    vf.push(`crop=trunc(iw*${c.w.toFixed(5)}/2)*2:trunc(ih*${c.h.toFixed(5)}/2)*2:trunc(iw*${c.x.toFixed(5)}/2)*2:trunc(ih*${c.y.toFixed(5)}/2)*2`);
+    let cw = c.w * W, ch = c.h * H;
+    if (R) { if (cw / ch > R) cw = ch * R; else ch = cw / R; }
+    if (R) {
+      // Whole steps of the shape (9:16 → 18x32 pixels), so the box is exactly that shape and both sides are even.
+      const [a, b2] = { '9:16': [9, 16], '1:1': [1, 1], '4:5': [4, 5], '16:9': [16, 9] }[aspect];
+      const k = Math.max(1, Math.floor(Math.min(Math.min(cw, W) / (2 * a), Math.min(ch, H) / (2 * b2)))); cw = 2 * a * k; ch = 2 * b2 * k;
+    } else { cw = even(Math.min(cw, W)); ch = even(Math.min(ch, H)); }
+    const cx = Math.max(0, Math.min(W - cw, Math.round(c.x * W / 2) * 2)), cy = Math.max(0, Math.min(H - ch, Math.round(c.y * H / 2) * 2));
+    vf.push(`crop=${cw}:${ch}:${cx}:${cy}`); outW = cw; outH = ch;
   }
-  if (size === '1080' || size === '720') { const s = Number(size); vf.push(`scale='if(lt(iw,ih),${s},-2)':'if(lt(iw,ih),-2,${s})'`); }
+  if (size === '1080' || size === '720') {
+    const s = Number(size); const short = Math.min(outW, outH);
+    if (short > s || R) {
+      // Exact sizes for the picked shapes (1080x1920, 1080x1350, 1080x1080, 1920x1080), else short side to the size.
+      const sw = R ? (R < 1 ? s : Math.round((s * R) / 2) * 2) : outW < outH ? s : even((outW * s) / outH);
+      const sh = R ? (R < 1 ? Math.round(s / R / 2) * 2 : s) : outW < outH ? even((outH * s) / outW) : s;
+      vf.push(`scale=${sw}:${sh}`);
+    }
+  }
   vf.push('format=yuv420p');
   const enc = await ff.pickEncoder();
   const args = ['-y', '-ss', start.toFixed(3), '-i', e.path, '-t', (end - start).toFixed(3), '-map', '0:v:0', '-map', '0:a:0?', '-vf', vf.join(','), ...ff.encoderArgs(enc, 18), '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', out];
@@ -121,6 +142,11 @@ async function transcribe(id, { jobId, onProgress } = {}) {
   const e = get(id); if (!e) return null;
   if (!e.info.hasAudio) { update(id, { tx: { status: 'none', note: 'This video has no sound.' } }); return null; }
   update(id, { tx: { status: 'working', at: new Date().toISOString() } });
+  // No speech-to-text on this PC yet: install the free Whisper first (like Production's transcribe), instead of failing.
+  try {
+    const ai = require('../integrations/ai'); const wh = require('../setup/whisper');
+    if (!ai.connected('openai') && !wh.status().ready) await wh.install({ progress: (f, t) => onProgress?.(f * 0.2, `Installing free speech-to-text (one time): ${t || ''}`) });
+  } catch { /* the transcribe step below says what's missing */ }
   try {
     const t = await require('./intelligence').transcribe(asAsset(e), { jobId, fast: true, onProgress });
     update(id, { tx: { status: 'ready', words: (t.words || []).length, at: new Date().toISOString() } });

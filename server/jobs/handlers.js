@@ -609,7 +609,11 @@ queue.register('clipper.proxy', { title: () => 'Quick cut: preview copy', maxAtt
   await require('../video/clipper').makeProxy(job.payload.id, (f) => h.progress(f, 'Making a smooth preview copy'));
   events.publish('clipper', { id: job.payload.id }); return { ok: true };
 } });
-queue.register('clipper.transcribe', { title: () => 'Quick cut: transcript', maxAttempts: 1, priority: 6, run: async (job, h) => {
+// Local Whisper is heavy (like Production's transcribe): one at a time and only when the PC has room, so opening a few
+// long videos doesn't run several Whispers at once and freeze the app.
+queue.register('clipper.transcribe', { title: () => 'Quick cut: transcript', maxAttempts: 1, priority: 6,
+  heavy: () => !!(ctx.setting('ai.transcription.localWhisperPath', '') && ctx.setting('ai.transcription.localWhisperModel', '')) || !require('../integrations/ai').connected('openai'),
+  run: async (job, h) => {
   const t = await require('../video/clipper').transcribe(job.payload.id, { jobId: job.id, onProgress: (f, n) => h.progress(f, n || 'Writing down everything that is said') });
   events.publish('clipper', { id: job.payload.id, transcript: true }); return { words: (t?.words || []).length };
 } });

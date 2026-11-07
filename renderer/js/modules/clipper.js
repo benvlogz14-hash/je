@@ -60,7 +60,11 @@ function Home() {
   return html`<div class="page qc-home">
     <div class="page-head"><div class="grow"><h1>Quick cut</h1><div class="sub">Drop in a long video or a YouTube link. It writes down everything that's said, so you can search it, then drag the handles, crop and export.</div></div></div>
     <div class=${'qc-drop' + (drag ? ' on' : '')} onDragOver=${(e) => { e.preventDefault(); setDrag(true); }} onDragLeave=${() => setDrag(false)}
-      onDrop=${(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (!f) return; if (f.path && data?.desktop) openPath({ path: f.path }); else upload(f); }}>
+      onDrop=${(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (!f) return;
+        // Desktop app: open the file where it is (instant, even for a huge video). The old file.path is gone in this
+        // Electron, so every drop uploaded a whole copy first (minutes for a long video, looked stuck).
+        const local = (window.euclidean?.pathForFile && window.euclidean.pathForFile(f)) || f.path || '';
+        if (local && data?.desktop) openPath({ path: local }); else upload(f); }}>
       <div class="qc-drop-ico"><${Icon} name="scissors" size=${30} /></div>
       <b style="font-size:18px">Drop a video here</b>
       <span class="faint">Any length: a two-and-a-half-hour debate is fine.</span>
@@ -134,7 +138,7 @@ class Transcript extends Component {
     this.box.querySelector('.qc-para.now')?.classList.remove('now'); const el = this.box.querySelector(`[data-p="${lo}"]`); el?.classList.add('now');
     if (this.state.follow && Date.now() - this.lastScroll > 2500 && el && !this.state.q && !this.state.sel) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
-  render({ data, status, pct, onSeek, onCut, onRetry }, { q, at, count, sel, follow }) {
+  render({ data, status, pct, note, onSeek, onCut, onRetry }, { q, at, count, sel, follow }) {
     const paras = data?.paras || []; if (this.lastParas !== paras) { this.lastParas = paras; this.allWords = null; this.marked = []; }
     const working = status === 'working' || status === 'queued';
     return html`<div class="qc-tx">
@@ -151,7 +155,7 @@ class Transcript extends Component {
       <div class="qc-tx-body selectable" ref=${(el) => { this.box = el; }} onScroll=${() => { this.lastScroll = Date.now(); }}
         onClick=${(e) => { const s = window.getSelection(); if (s && !s.isCollapsed) return; const ts = e.target.closest('[data-ts]'); const w = e.target.closest('[data-t]'); if (ts) onSeek(Number(ts.dataset.ts)); else if (w) onSeek(Number(w.dataset.t)); }}>
         ${paras.length ? html`<${Words} paras=${paras} />`
-          : html`<div class="qc-tx-empty">${working ? html`<span class="spinner" /><b>Writing down everything that's said${pct != null ? ` · ${Math.round(pct * 100)}%` : ''}</b><span class="faint">Long videos take a while. You can already scrub, cut and export.</span>`
+          : html`<div class="qc-tx-empty">${working ? html`<span class="spinner" /><b>Writing down everything that's said${pct != null ? ` · ${Math.round(pct * 100)}%` : ''}</b><span class="faint">${note || 'Long videos take a while.'} You can already scrub, cut and export.</span>`
             : status === 'failed' ? html`<b>The transcript didn't work</b><span class="faint">${data?.note || ''}</span><${Button} size="sm" onClick=${onRetry}>Try again</${Button}>`
             : status === 'none' && data?.note ? html`<span class="faint">${data.note}</span>` : html`<span class="spinner" /><span class="faint">Getting the transcript ready…</span>`}</div>`}
       </div>
@@ -173,12 +177,19 @@ function Editor({ id }) {
   const [playing, setPlaying] = useState(false); const [loop, setLoop] = useState(true);
   const [aspect, setAspect] = useState('none'); const [crop, setCrop] = useState({ x: 0, y: 0, w: 1, h: 1 });
   const [size, setSize] = useState('original'); const [name, setName] = useState(''); const [clientId, setClientId] = useState('');
-  const [folder, setFolder] = useState(''); const [job, setJob] = useState(null); const [done, setDone] = useState(null); const [proxyPct, setProxyPct] = useState(null); const [txPct, setTxPct] = useState(null);
+  const [folder, setFolder] = useState(''); const [job, setJob] = useState(null); const [done, setDone] = useState(null); const [proxyPct, setProxyPct] = useState(null); const [txPct, setTxPct] = useState(null); const [txNote, setTxNote] = useState('');
   const [rw, setRw] = useState(800); const [box, setBox] = useState(null); const [tab, setTab] = useState('text'); const [dragging, setDragging] = useState(null);
   const st = useRef({}); st.current = { inP, outP, view, loop, D, fps, rw };
   const anim = useRef(null);
+  // Loop / stop at the end only applies to playback that's inside the cut: playing (or clicking a word) anywhere else in
+  // the video plays on freely instead of snapping back to the cut's start.
+  const inside = useRef(false);
+  // Worked out right when you seek, play or change the cut (the player's own events come too late: a click on a word
+  // past the cut was caught by the loop check in between and sent back to the cut's start).
+  const markInside = (t) => { const v = vid.current; const s = st.current; const at = t ?? v?.currentTime ?? 0; inside.current = at >= s.inP - 0.05 && at < s.outP - 0.02; };
 
   useEffect(() => { if (D && !outP) { setOut(D); setView([0, D]); } }, [D]);
+  useEffect(() => { markInside(); }, [inP, outP]);
   useEffect(() => { if (meta?.folder && !folder) setFolder(meta.folder); }, [meta]);
   useEffect(() => { const el = ruler.current; if (!el) return; const ro = new ResizeObserver(() => setRw(el.clientWidth)); ro.observe(el); return () => ro.disconnect(); }, [e]);
   useEffect(() => {
@@ -203,7 +214,7 @@ function Editor({ id }) {
       const v = vid.current; const s = st.current;
       if (v && head.current) {
         const t = v.currentTime;
-        if (!v.paused && t >= s.outP - 0.02) { if (s.loop) v.currentTime = s.inP; else { v.pause(); v.currentTime = s.outP; } }
+        if (!v.paused && inside.current && t >= s.outP - 0.02) { if (s.loop) v.currentTime = s.inP; else { v.pause(); v.currentTime = s.outP; } }
         const [a, b] = s.view; const px = ((t - a) / Math.max(0.001, b - a)) * s.rw;
         head.current.style.transform = `translateX(${px}px)`; head.current.style.opacity = px < -2 || px > s.rw + 2 ? 0 : 1;
         const tc = document.getElementById('qc-time'); if (tc) tc.textContent = fmt(t);
@@ -222,8 +233,14 @@ function Editor({ id }) {
     for (let px = 0; px < rw; px += 2) { const t = view[0] + (px / rw) * (view[1] - view[0]); const v = peaks[Math.min(peaks.length - 1, Math.floor((t / D) * peaks.length))] || 0; const h = Math.max(1, v * 30); g.fillRect(px, 17 - h / 2, 1.4, h); }
   }, [wv, view, rw, D]);
 
-  const seek = (t, fast = false) => { const v = vid.current; if (!v) return; t = Math.max(0, Math.min(D, t)); if (fast && v.fastSeek) v.fastSeek(t); else v.currentTime = t; };
-  const play = (fromIn = false) => { const v = vid.current; if (!v) return; if (!v.paused) { v.pause(); return; } if (fromIn || (loop && (v.currentTime >= outP - 0.05 || v.currentTime < inP))) v.currentTime = inP; v.play().catch(() => {}); };
+  const seek = (t, fast = false) => { const v = vid.current; if (!v) return; t = Math.max(0, Math.min(st.current.D || D, t)); markInside(t); if (fast && v.fastSeek) v.fastSeek(t); else v.currentTime = t; };
+  // Reads the newest start/end (st), so Space from the keyboard handler never plays from a stale start.
+  const play = (fromIn = false) => {
+    const v = vid.current; if (!v) return; if (!v.paused) { v.pause(); return; } const s = st.current;
+    // Sitting at the cut's end (where it stopped): start the cut again; anywhere else: play from where you are.
+    if (fromIn || Math.abs(v.currentTime - s.outP) < 0.06) v.currentTime = s.inP;
+    markInside(v.currentTime); v.play().catch(() => {});
+  };
   const frame = 1 / fps;
   /** From the transcript: seek (and bring that moment into view on the ruler). */
   const seekFromText = (t, fromSearch) => {
@@ -327,14 +344,14 @@ function Editor({ id }) {
   useEvent('job', (j) => {
     if (job && j.id === job.id) setJob({ ...job, ...j });
     if (j.type === 'clipper.proxy' && j.status === 'running') setProxyPct(j.progress || 0);
-    if (j.type === 'clipper.transcribe' && (j.status === 'running' || j.status === 'queued')) setTxPct(j.progress || 0);
+    if (j.type === 'clipper.transcribe' && (j.status === 'running' || j.status === 'queued')) { setTxPct(j.progress || 0); setTxNote(j.status === 'queued' ? (j.note && !/^Recovered/.test(j.note) ? `Waiting its turn: ${j.note}` : 'Waiting its turn (one transcript at a time, after work already running)') : j.note || ''); }
     if (j.type === 'clipper.transcribe' && ['done', 'failed'].includes(j.status)) { setTxPct(null); reloadTx(); reload(); }
   }, [job]);
   useEvent('clipper.exported', (x2) => { if (x2.id === id) { setDone(x2.path); setJob(null); toast(`Saved: ${x2.path}`, { kind: 'ok', title: 'Cut exported' }); } }, [id]);
   useEvent('clipper', (x2) => { if (x2.id === id) { setProxyPct(null); reload(); reloadTx(); } }, [id]);
   const doExport = async () => {
     setDone(null);
-    const j = await act(() => api.post(`/api/clipper/${id}/export`, { start: inP, end: outP, crop: aspect === 'none' ? null : crop, size, name, folder, clientId: clientId || null }));
+    const j = await act(() => api.post(`/api/clipper/${id}/export`, { start: inP, end: outP, crop: aspect === 'none' ? null : crop, aspect: aspect === 'none' || aspect === 'free' ? null : aspect, size, name, folder, clientId: clientId || null }));
     if (j?.id) setJob({ id: j.id, progress: 0, status: 'queued' });
   };
   const chooseFolder = async () => { const r = await act(() => api.post('/api/system/pick-folder', { title: 'Save cuts in…', defaultPath: folder })); if (r?.path) setFolder(r.path); };
@@ -374,7 +391,7 @@ function Editor({ id }) {
       <div class="qc-side">
         <div class="qc-tabs"><${Seg} value=${tab} onChange=${setTab} options=${[{ value: 'text', label: 'Transcript' }, { value: 'cut', label: 'Crop & export' }]} /></div>
         <div style=${{ display: tab === 'text' ? 'flex' : 'none', flex: 1, minHeight: 0 }}>
-          <${Transcript} ref=${txRef} data=${tx} status=${txStatus} pct=${txPct} onSeek=${seekFromText} onCut=${cutFromText} onRetry=${() => act(() => api.post(`/api/clipper/${id}/transcript`, {}), { ok: 'Writing the transcript again' }).then(() => { reload(); reloadTx(); })} />
+          <${Transcript} ref=${txRef} data=${tx} status=${txStatus} pct=${txPct} note=${txNote} onSeek=${seekFromText} onCut=${cutFromText} onRetry=${() => act(() => api.post(`/api/clipper/${id}/transcript`, {}), { ok: 'Writing the transcript again' }).then(() => { reload(); reloadTx(); })} />
         </div>
         <div class="qc-cutpanel" style=${{ display: tab === 'cut' ? 'flex' : 'none' }}>
           <div class="qc-card2"><b>Crop</b><${Seg} value=${aspect} onChange=${setAsp} options=${ASPECTS} /><span class="faint" style="font-size:var(--fs-xs)">${aspect === 'none' ? 'The whole frame.' : 'Drag the box to move it, the corners to resize.'}</span></div>
