@@ -1,6 +1,6 @@
 // Political outreach: names or a scout query in, finished packages out
 // (cited brief, vertical + horizontal video, one-page sheet, email draft waiting in Approvals).
-import { html, useState, useEffect, useApi, navigate, Button, Drawer, Field, Tabs, Progress, Toggle, act, toast, confirmDialog, store } from '../lib/ui.js';
+import { html, useState, useEffect, useRef, useApi, navigate, Button, Drawer, Modal, Field, Tabs, Progress, Toggle, act, toast, confirmDialog, store } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { ago, providerLabel } from '../lib/format.js';
@@ -138,7 +138,7 @@ function PackageSettings() {
 }
 
 function PackageDrawer({ p, steps, job, onClose, reload }) {
-  const [tab, setTab] = useState('about');
+  const [tab, setTab] = useState(() => (p.pkg?.files?.v || p.pkg?.files?.h ? 'videos' : 'about'));
   const [email, setEmail] = useState(p.publicContact || '');
   const pkg = p.pkg || {}; const b = pkg.brief || {}; const c = pkg.creative || {};
   const run = (body, ok = 'Started') => act(() => api.post(`/api/prospects/${p.id}/package`, body), { ok });
@@ -151,6 +151,7 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
         <div class="row wrap" style="gap:6px">${steps.map((s) => { const st = pkg.steps?.[s.key]; return html`<button class=${'chip' + (st?.status === 'done' ? ' on' : '')} title=${st?.error || st?.note || 'Not run yet'} disabled=${!!job} onClick=${() => run({ only: s.key }, `${s.label}: started`)}>${STEP_ICON[st?.status] || '○'} ${s.label}</button>`; })}</div>
         <div class="faint" style="font-size:var(--fs-xs)">Click a step to re-run just that step (for example after editing the email address).</div>
         ${pkg.error ? html`<div class="notice coral">${pkg.error}</div>` : null}
+        ${!pkg.error && pkg.noAds ? html`<div class="notice gold">${pkg.noAds}</div>` : null}
       </div>
       <${FootageLinks} p=${p} pkg=${pkg} run=${run} busy=${!!job} reload=${reload} />
       <${LookPanel} p=${p} pkg=${pkg} busy=${!!job} reload=${reload} />
@@ -166,12 +167,7 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
         ${!b.headline && !pkg.profile ? html`<div class="faint">Details fill in as the research step runs.</div>` : null}
       </div>` : null}
       ${tab === 'videos' ? html`<div class="col" style="gap:12px">
-        ${pkg.files?.v || pkg.files?.h ? html`<div class="row" style="gap:12px;align-items:flex-start">
-          ${pkg.files?.v ? html`<div class="col" style="gap:6px;width:200px"><video src=${file('v')} poster=${pkg.files?.posterV ? file('posterV') : undefined} controls playsinline style="width:200px;border-radius:12px;background:#000" /><a class="faint" href=${file('v') + '&download=1'}>Download vertical</a></div>` : null}
-          ${pkg.files?.h ? html`<div class="col grow" style="gap:6px"><video src=${file('h')} poster=${pkg.files?.posterH ? file('posterH') : undefined} controls playsinline style="width:100%;border-radius:12px;background:#000" /><a class="faint" href=${file('h') + '&download=1'}>Download horizontal</a></div>` : null}
-        </div>` : html`<div class="faint">Videos appear here when the package is made.</div>`}
-        ${pkg.files?.s ? html`<div class="col" style="gap:6px;width:200px"><span class="label">Social video (not an ad)</span><video src=${file('s')} poster=${pkg.files?.posterS ? file('posterS') : undefined} controls playsinline style="width:200px;border-radius:12px;background:#000" /><a class="faint" href=${file('s') + '&download=1'}>Download social video</a></div>` : null}
-        ${pkg.files?.hl ? html`<div class="col" style="gap:6px"><video src=${file('hl')} poster=${pkg.files?.posterHL ? file('posterHL') : undefined} controls playsinline style="width:100%;border-radius:12px;background:#000" /><a class="faint" href=${file('hl') + '&download=1'}>Download long horizontal</a></div>` : null}
+        ${pkg.files?.v || pkg.files?.h || pkg.files?.hl || pkg.files?.s ? html`<${FinishedAds} p=${p} compact />` : html`<div class="faint">Videos appear here when the package is made.</div>`}
         ${pkg.files?.sheet ? html`<div class="row" style="gap:8px"><${Icon} name="film" size=${16} /><a href=${file('sheet')} target="_blank">Open the one-page sheet (PDF)</a></div>` : null}
         ${c.storyboard?.length ? html`<details><summary class="muted">Storyboard (${c.storyboard.length} scenes)</summary><ol style="padding-left:18px;font-size:var(--fs-sm)">${c.storyboard.map((s) => html`<li><b>${s.type}</b> · ${[s.headline, s.value, s.label, s.quote, (s.items || []).join(', '), s.sub].filter(Boolean).join(' · ')}</li>`)}</ol></details>` : null}
       </div>` : null}
@@ -253,6 +249,54 @@ function FootageBank({ p, reload }) {
   </div>`;
 }
 
+/**
+ * The finished ads for one candidate, playable right where they were made: vertical, horizontal, long and social,
+ * each with Download and Show in folder (desktop). A stamp on the address makes a remade ad load fresh.
+ */
+function FinishedAds({ p, compact = false }) {
+  const pkg = p?.pkg || {}; const f = pkg.files || {};
+  const kinds = [['v', 'Vertical', 'posterV', 'video_v'], ['h', 'Horizontal', 'posterH', 'video_h'], ['hl', 'Long horizontal', 'posterHL', 'video_hl'], ['s', 'Social video', 'posterS', 'video_s']].filter(([k]) => f[k]);
+  if (!kinds.length) return null;
+  const desktop = !!(window.euclidean || store.get().boot?.electron);
+  const url = (k, st, extra = '') => api.url(`/api/prospects/${p.id}/file/${k}?at=${encodeURIComponent(pkg.steps?.[st]?.at || pkg.finishedAt || '')}${extra}`);
+  const reveal = (k) => api.get(`/api/prospects/${p.id}/file/${k}?reveal=1`).catch((e) => toast(e.message, { kind: 'error' }));
+  const name = (file) => String(file || '').split(/[\\/]/).pop();
+  return html`<div class="col" style="gap:10px">
+    <div class="row" style="gap:8px;align-items:center"><b style="font-size:var(--fs-sm)" class="grow">${p.name}'s ads${pkg.finishedAt ? html` <span class="faint" style="font-weight:400">· made ${ago(pkg.finishedAt)}${pkg.pro?.v?.look ? ` · ${pkg.pro.v.look}` : ''}</span>` : null}</b>
+      ${desktop ? html`<${Button} size="sm" kind="ghost" icon="folder" onClick=${() => reveal(kinds[0][0])}>Open the folder</${Button}>` : null}</div>
+    <div class="row wrap" style="gap:12px;align-items:flex-start">
+      ${kinds.map(([k, label, poster, st]) => { const vert = k === 'v' || k === 's'; const w = vert ? (compact ? 150 : 200) : (compact ? 300 : 420);
+        return html`<div class="col" style=${`gap:5px;width:${w}px;max-width:100%`}>
+          <video key=${url(k, st)} src=${url(k, st)} poster=${f[poster] ? url(poster, st) : undefined} controls playsinline preload="metadata" style=${`width:100%;aspect-ratio:${k === 'v' || k === 's' ? '9/16' : '16/9'};border-radius:12px;background:#000;object-fit:contain`} />
+          <b style="font-size:var(--fs-xs)">${label}</b>
+          <span class="faint ellipsis" style="font-size:10px" title=${f[k]}>${name(f[k])}</span>
+          <div class="row" style="gap:10px;font-size:var(--fs-xs)"><a href=${url(k, st, '&download=1')}>Download</a>${f[k + 'Mail'] ? html`<a href=${url(k + 'Mail', st, '&download=1')} title="A smaller 720p copy for attaching to an email">Email size</a>` : null}${desktop ? html`<a href="#" onClick=${(e) => { e.preventDefault(); reveal(k); }}>Show in folder</a>` : null}</div>
+        </div>`; })}
+    </div>
+  </div>`;
+}
+
+/** Every candidate's finished ads as cards, newest first: click one to open it and play, download or find the files. */
+function FinishedGallery({ list, jobs, onOpen }) {
+  const done = list.filter((x) => ['v', 'h', 'hl', 's'].some((k) => x.pkg?.files?.[k])).sort((a, b) => String(b.pkg?.finishedAt || '').localeCompare(String(a.pkg?.finishedAt || '')));
+  if (!done.length) return html`<div class="faint pad" style="text-align:center">No finished ads yet. Make some on the Make ads tab and they show up here.</div>`;
+  const busy = (id) => (jobs || []).some((j) => ['political.package', 'political.restyle'].includes(j.type) && j.payload?.prospectId === id);
+  return html`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px">
+    ${done.map((x) => { const f = x.pkg.files; const n = ['v', 'h', 'hl', 's'].filter((k) => f[k]).length; const pk = f.posterV ? 'posterV' : f.posterH ? 'posterH' : f.posterHL ? 'posterHL' : 'posterS';
+      return html`<button type="button" key=${x.id} onClick=${() => onOpen(x.id)} title=${`Open ${x.name}'s ads`}
+        style="display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:14px;border:1px solid var(--line);background:var(--surface);cursor:pointer;text-align:left;min-width:0">
+        <div style="position:relative;width:100%;aspect-ratio:9/12;border-radius:10px;overflow:hidden;background:#111">
+          <img src=${api.url(`/api/prospects/${x.id}/file/${pk}?at=${encodeURIComponent(x.pkg?.finishedAt || '')}`)} alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" onError=${(e) => { e.target.style.display = 'none'; }} />
+          <span style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center"><span style="width:44px;height:44px;border-radius:50%;background:rgba(0,0,0,0.55);color:#fff;display:flex;align-items:center;justify-content:center"><${Icon} name="play" size=${20} /></span></span>
+          <span style="position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,0.7);color:#fff;font-size:11px;padding:1px 7px;border-radius:6px">${n} video${n === 1 ? '' : 's'}</span>
+          ${busy(x.id) ? html`<span style="position:absolute;left:6px;top:6px;background:var(--sky-ink, #3b82c4);color:#fff;font-size:10px;padding:1px 7px;border-radius:6px">Remaking</span>` : null}
+        </div>
+        <b class="ellipsis" style="font-size:var(--fs-sm)">${x.name}</b>
+        <span class="faint ellipsis" style="font-size:var(--fs-xs)">${[x.pkg?.pro?.v?.look || x.pkg?.proLook?.name, x.pkg?.finishedAt ? ago(x.pkg.finishedAt) : ''].filter(Boolean).join(' · ') || (x.pkg?.profile?.office || x.location || '')}</span>
+      </button>`; })}
+  </div>`;
+}
+
 /** The ad machine, up front on Politics: pick the candidate, drop their footage, pick or describe a style, make the ads. */
 export function AdMachine({ list, jobs, onOpen, reload }) {
   const { data: looks } = useApi('/api/political/looks');
@@ -260,6 +304,8 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
   const [newName, setNewName] = useState(''); const [newOffice, setNewOffice] = useState('');
   const [sel, setSel] = useState(null); const [prompt, setPrompt] = useState('');
   const [up, setUp] = useState(null); const [over, setOver] = useState(false);
+  // Make ads | Finished: every finished ad as a card; click one to open it (`viewing`).
+  const [tab, setTab] = useState('make'); const [viewing, setViewing] = useState(null);
   useEffect(() => { if (list.length && !list.some((x) => x.id === pid)) setPid(list[list.length - 1].id); }, [list.length]);
   const p = list.find((x) => x.id === pid);
   const busy = p && (jobs || []).some((j) => ['political.package', 'political.restyle'].includes(j.type) && j.payload?.prospectId === p.id);
@@ -273,10 +319,22 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
     return act(() => req, { ok: `Making ${p.name}'s ads. Progress shows here and on the lead.` }).then(() => { setPrompt(''); reload(); });
   };
   const made = list.filter((x) => x.pkg?.files?.posterV).slice(-6).reverse();
+  const nDone = list.filter((x) => ['v', 'h', 'hl', 's'].some((k) => x.pkg?.files?.[k])).length;
+  // When the ads being made finish, the Finished tab opens with them playing.
+  const wasBusy = useRef(new Set());
+  useEffect(() => {
+    const now = new Set((jobs || []).filter((j) => ['political.package', 'political.restyle'].includes(j.type) && j.payload?.prospectId).map((j) => j.payload.prospectId));
+    for (const id of wasBusy.current) if (!now.has(id)) { const x = list.find((y) => y.id === id); if (x && ['v', 'h', 'hl', 's'].some((k) => x.pkg?.files?.[k])) { setTab('finished'); setViewing(id); } }
+    wasBusy.current = now;
+  }, [jobs, list]);
+  const viewed = viewing && list.find((x) => x.id === viewing);
   const curLook = p?.pkg?.proLook?.name || looks?.current?.name || 'Bold blocks';
   return html`<div class="panel pad col" style="gap:14px">
     <div class="row" style="gap:10px;align-items:center"><div class="avatar" style="background:var(--coral-soft, var(--sky-soft));color:var(--coral-ink, var(--sky-ink))"><${Icon} name="film" size=${16} /></div>
       <div class="col grow" style="gap:2px"><h4>Ad machine</h4><span class="faint" style="font-size:var(--fs-xs)">Upload a candidate's footage. Their best lines, word for word, become motion-graphics ads in 9:16 and 16:9, in 15 styles or one you describe.</span></div></div>
+    <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ value: 'make', label: 'Make ads' }, { value: 'finished', label: `Finished${nDone ? ` (${nDone})` : ''}` }]} />
+    ${viewed ? html`<${Modal} wide title=${`${viewed.name}'s ads`} onClose=${() => setViewing(null)} footer=${html`<${Button} kind="ghost" onClick=${() => { setViewing(null); onOpen(viewed.id); }}>Open ${viewed.name.split(' ')[0]}'s lead</${Button}><${Button} kind="ghost" onClick=${() => { setPid(viewed.id); setViewing(null); setTab('make'); }}>Make them again</${Button}><${Button} kind="primary" onClick=${() => setViewing(null)}>Done</${Button}>`}><${FinishedAds} p=${viewed} /></${Modal}>` : null}
+    ${tab === 'finished' ? html`<${FinishedGallery} list=${list} jobs=${jobs} onOpen=${setViewing} />` : html`<div class="col" style="gap:14px">
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;align-items:start">
       <div class="col" style="gap:10px;min-width:0">
         <b style="font-size:var(--fs-sm)">1 · The candidate</b>
@@ -291,7 +349,7 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
         </label>
         ${up ? html`<${Progress} value=${up.frac} />` : null}
         ${p ? html`<${FootageBank} p=${p} reload=${reload} />` : null}
-        ${made.length ? html`<b style="font-size:var(--fs-sm);margin-top:4px">Made recently</b><div class="row wrap" style="gap:8px">${made.map((x) => html`<button class="ghost" title=${`Open ${x.name}`} onClick=${() => onOpen(x.id)} style="padding:0;border:0;background:none;cursor:pointer;display:flex;flex-direction:column;gap:3px;align-items:center"><img src=${api.url(`/api/prospects/${x.id}/file/posterV`)} alt="" style="height:96px;border-radius:8px;border:1px solid var(--line)" onError=${(e) => { e.target.closest('button').style.display = 'none'; }} /><span class="faint ellipsis" style="font-size:10px;max-width:70px">${x.name.split(' ').slice(-1)[0]}</span></button>`)}</div>` : null}
+        ${made.length ? html`<b style="font-size:var(--fs-sm);margin-top:4px">Made recently</b><div class="row wrap" style="gap:8px">${made.map((x) => html`<button class="ghost" title=${`Show ${x.name}'s ads`} onClick=${() => setViewing(x.id)} style="padding:0;border:0;background:none;cursor:pointer;display:flex;flex-direction:column;gap:3px;align-items:center"><img src=${api.url(`/api/prospects/${x.id}/file/posterV?at=${encodeURIComponent(x.pkg?.steps?.video_v?.at || '')}`)} alt="" style="height:96px;border-radius:8px;border:1px solid var(--line)" onError=${(e) => { e.target.closest('button').style.display = 'none'; }} /><span class="faint ellipsis" style="font-size:10px;max-width:70px">${x.name.split(' ').slice(-1)[0]}</span></button>`)}</div>` : null}
       </div>
       <div class="col" style="gap:10px;min-width:0">
         <b style="font-size:var(--fs-sm)">3 · The style <span class="faint" style="font-weight:400">now: ${curLook}</span></b>
@@ -304,6 +362,10 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
       ${p ? html`<${Button} kind="ghost" size="sm" onClick=${() => onOpen(p.id)}>Open ${p.name.split(' ')[0]}</${Button}>` : null}
       <${Button} kind="primary" icon="sparkle" disabled=${!p || busy || !!up} onClick=${make}>Make the ads</${Button}>
     </div>
+    ${p && !job && p.pkg?.error ? html`<div class="notice coral">${p.name}: ${p.pkg.error}</div>` : null}
+    ${p && !job && !p.pkg?.error && p.pkg?.noAds ? html`<div class="notice gold">${p.name}: ${p.pkg.noAds}</div>` : null}
+    ${p && !job && ['v', 'h', 'hl', 's'].some((k) => p.pkg?.files?.[k]) ? html`<div class="row" style="gap:8px;border-top:1px solid var(--line);padding-top:10px"><span class="grow" style="font-size:var(--fs-sm)">${p.name}'s ads are finished${p.pkg?.finishedAt ? ` (${ago(p.pkg.finishedAt)})` : ''}.</span><${Button} kind="moss" icon="play" onClick=${() => setViewing(p.id)}>Watch them</${Button}></div>` : null}
+    </div>`}
   </div>`;
 }
 

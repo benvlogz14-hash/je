@@ -99,7 +99,16 @@ async function stepImages(p, h) {
 }
 /** Real clips of them speaking (Facebook, YouTube, their sites) for the "their own speeches" ad style. */
 /** Ad styles built from the candidate's own footage: "speech" (their speeches with B-roll) and "pro" (motion graphics). */
-const footageStyle = (p) => ['speech', 'pro'].includes(S('videoStyle', 'campaign')) || !!p?.pkg?.proLook;
+/** Footage uploaded (and ticked) or video links pasted on the lead. */
+const hasOwnFootage = (p) => (p?.footageUploads || []).some((u) => !u.off) || [].concat(p?.footageLinks || []).some((x) => /https?:\/\//.test(String(x)));
+/**
+ * Ads made from the candidate's own footage: the pro and speech styles, any lead with a look picked, and any lead with
+ * footage uploaded or linked (whatever the style setting says). These never fall back to the old graphics-only ad
+ * (checklists over a capitol photo): with no usable footage the ads are skipped with the reason.
+ */
+const footageStyle = (p) => ['speech', 'pro'].includes(S('videoStyle', 'pro')) || !!p?.pkg?.proLook || hasOwnFootage(p);
+/** The lines whose video file is still there (a removed upload no longer throws out all the footage). */
+const usableBites = (ft, list) => (list || []).filter((b) => ft?.clips?.[b.clip]?.file && fs.existsSync(ft.clips[b.clip].file));
 /** The pro ads' look for this lead: its own (picked or described on the lead), else the default in Package settings. */
 function lookFor(p) { const own = p?.pkg?.proLook; const all = S('proLook', null); return { look: own?.look || all?.look || null, notes: own?.notes || all?.notes || '' }; }
 
@@ -108,7 +117,7 @@ async function stepFootage(p, h) {
   const pkg = p.pkg; const pr = pkg.profile || {};
   const links = [].concat(p.footageLinks || []).flatMap((x) => String(x).split(/\s+/)).filter((x) => /^https?:\/\//.test(x));
   const uploads = (p.footageUploads || []).filter((x) => !x.off).map((x) => x.file).filter((f) => f && fs.existsSync(f)); // only the ones ticked in the footage bank
-  if ((p.footageUploads || []).length && !uploads.length && !links.length) { save(p.id, () => ({ footage: { clips: [], bites: { short: [], long: [] }, errors: ['Every uploaded video is unticked in the footage bank. Tick the ones to use.'] } })); return { note: 'No footage ticked in the footage bank, so the graphic ads will be used' }; }
+  if ((p.footageUploads || []).length && !uploads.length && !links.length) { save(p.id, () => ({ footage: { clips: [], bites: { short: [], long: [] }, errors: ['Every uploaded video is unticked in the footage bank. Tick the ones to use.'] } })); return { note: 'No footage ticked in the footage bank: tick the videos to use, then make the ads' }; }
   // Turning their speech into text needs OpenAI or the free local Whisper: install Whisper once if neither is there.
   if (!ai.connected('openai') && !require('../setup/whisper').status().ready) {
     try { await require('../setup/whisper').install({ progress: (f, t) => h.progress(0.1 + f * 0.1, `Installing free speech-to-text (one time): ${t || ''}`) }); } catch { /* the step explains what's missing */ }
@@ -122,7 +131,7 @@ async function stepFootage(p, h) {
   if ((r.bites.short || []).length < 2) {
     // Footage was uploaded but couldn't be used: stop and say why, instead of quietly making the old graphics-only ads.
     if (uploads.length) throw Object.assign(new Error(`Couldn't get usable lines from the uploaded footage (${r.clips.length} video${r.clips.length === 1 ? '' : 's'} read, ${(r.bites.short || []).length} usable line${(r.bites.short || []).length === 1 ? '' : 's'}). ${r.errors.slice(-2).join(' · ').slice(0, 400) || 'No clear speech was found.'}`), { permanent: true });
-    return { note: `Not enough usable speech found, so the graphic ads will be used. ${r.errors.slice(-1)[0] || ''}`.trim() };
+    return { note: `No usable footage of them found online, so no ads yet: upload their videos in the Ad machine. ${r.errors.slice(-1)[0] || ''}`.trim() };
   }
   return { note: `${r.clips.length} video${r.clips.length === 1 ? '' : 's'} · ${r.bites.short.length} + ${r.bites.long.length} lines picked` };
 }
@@ -351,8 +360,15 @@ async function stepVideo(p, h, kind) {
   const ref = S('reference', null);
   const paced = ref?.avgShot ? board.map((x) => (x.sec ? x : { ...x, sec: Math.max(2.5, Math.min(7, ref.avgShot * (['issues', 'checklist', 'chart', 'contrast'].includes(x.type) ? 1.6 : 1))) })) : board;
   const ft = p.pkg.footage; const bites = ft?.bites?.[K.social ? 'long' : K.board] || [];
-  const haveFootage = footageStyle(p) && bites.length >= 2 && ft.clips.every((x) => fs.existsSync(x.file));
-  const speechAd = () => require('./footage').renderSpeechAd({ bites, footage: ft, info, vertical: K.vertical, out, work, music, tagline: K.social ? `What *${p.name.split(/\s+/)[0]}* has been working on` : ft.tagline || `${p.name} is *fighting for you*`, office: shortOffice(pr.office || ''), site: siteOf(p.pkg), social: !!K.social, onProgress: (f, t) => h.progress(f * 0.92, t) });
+  const okBites = usableBites(ft, bites);
+  const haveFootage = footageStyle(p) && okBites.length >= 2;
+  if (footageStyle(p) && !haveFootage) {
+    // No graphics-only fallback: say what's missing, and drop an earlier ad of this kind so an old graphics ad isn't shown as the result.
+    save(p.id, (pkg) => { const f = { ...(pkg.files || {}) }; for (const k of [kind, `${kind}Mail`, { v: 'posterV', h: 'posterH', hl: 'posterHL', s: 'posterS' }[kind]]) delete f[k]; return { files: f }; });
+    const why = (p.footageUploads || []).length && !(p.footageUploads || []).some((u) => !u.off) ? 'every uploaded video is unticked in the footage bank' : (p.footageUploads || []).length ? `the uploaded footage gave ${okBites.length} usable line${okBites.length === 1 ? '' : 's'} (2 needed)` : 'there is no footage of them yet';
+    throw Object.assign(new Error(`No ad made: ${why}. Upload or tick their videos in the Ad machine, then press Make the ads.`), { noFootage: true });
+  }
+  const speechAd = () => require('./footage').renderSpeechAd({ bites: okBites, footage: ft, info, vertical: K.vertical, out, work, music, tagline: K.social ? `What *${p.name.split(/\s+/)[0]}* has been working on` : ft.tagline || `${p.name} is *fighting for you*`, office: shortOffice(pr.office || ''), site: siteOf(p.pkg), social: !!K.social, onProgress: (f, t) => h.progress(f * 0.92, t) });
   let res = null;
   if (haveFootage && (S('videoStyle', 'campaign') === 'pro' || p.pkg.proLook)) {
     // Motion-graphics ad (Remotion): the AI plans it from their lines, the research and the founders' notes.
@@ -360,7 +376,7 @@ async function stepVideo(p, h, kind) {
     const lk = lookFor(p);
     const notes = [lk.notes, ...(p.pkg.notes || []).filter((n) => n.target !== 'email').slice(-3).map((n) => n.text)].filter(Boolean).join(' | ');
     try {
-      const r = await eng.make({ bites, footage: ft, vertical: K.vertical, out, work, music, name: p.name, office: shortOffice(pr.office || ''), place: p.pkg.brief?.place || '', state: pr.state || '', cta: K.social ? 'Follow' : 'Vote', site: siteOf(p.pkg), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes, look: lk.look, prev: p.pkg.pro?.[kind]?.plan || null, onProgress: (f, t) => h.progress(f * 0.92, t) });
+      const r = await eng.make({ bites: okBites, footage: ft, vertical: K.vertical, out, work, music, name: p.name, office: shortOffice(pr.office || ''), place: p.pkg.brief?.place || '', state: pr.state || '', cta: K.social ? 'Follow' : 'Vote', site: siteOf(p.pkg), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes, look: lk.look, prev: p.pkg.pro?.[kind]?.plan || null, onProgress: (f, t) => h.progress(f * 0.92, t) });
       save(p.id, (pkg) => ({ pro: { ...(pkg.pro || {}), [kind]: { plan: r.plan, agent: r.agent, look: r.spec.look?.name || '', at: new Date().toISOString() } } }));
       res = r;
     } catch (e) {
@@ -474,7 +490,7 @@ async function run(prospectId, { from = 'research', only = null, actor = 'system
   let p = ctx.store.get('prospects', prospectId); if (!p) throw Object.assign(new Error('Prospect not found'), { permanent: true });
   const keys = STEPS.map((s) => s[0]); const start = Math.max(0, keys.indexOf(from));
   const todo = only ? [only] : keys.slice(start);
-  save(p.id, () => ({ status: 'running', startedAt: now(), error: null }));
+  save(p.id, () => ({ status: 'running', startedAt: now(), error: null, noAds: null }));
   const total = todo.length;
   for (let i = 0; i < todo.length; i++) {
     const step = todo[i]; p = ctx.store.get('prospects', prospectId);
@@ -493,11 +509,12 @@ async function run(prospectId, { from = 'research', only = null, actor = 'system
       else if (step === 'video_v') note = await stepVideo(p, sub, 'v');
       else if (step === 'video_h') note = await stepVideo(p, sub, 'h');
       else if (step === 'video_hl') { if (S('longVideo', true)) note = await stepVideo(p, sub, 'hl'); else { setStep(p.id, step, { status: 'skipped', note: 'Long ad is off' }); continue; } }
-      else if (step === 'video_s') { if (S('socialVideo', true)) { try { note = await stepVideo(p, sub, 's'); } catch (e) { setStep(p.id, step, { status: 'failed', error: e.message }); continue; } } else { setStep(p.id, step, { status: 'skipped', note: 'Social video is off' }); continue; } }
+      else if (step === 'video_s') { if (S('socialVideo', true)) { try { note = await stepVideo(p, sub, 's'); } catch (e) { setStep(p.id, step, { status: e.noFootage ? 'skipped' : 'failed', [e.noFootage ? 'note' : 'error']: e.message }); continue; } } else { setStep(p.id, step, { status: 'skipped', note: 'Social video is off' }); continue; } }
       else if (step === 'sheet') note = await stepSheet(p);
       else if (step === 'email') { const r = await stepEmail(p, actor); note = r.note; if (r.skip) { setStep(p.id, step, { status: 'skipped', note }); continue; } }
       setStep(p.id, step, { status: 'done', note });
     } catch (e) {
+      if (e.noFootage) { setStep(p.id, step, { status: 'skipped', note: e.message }); save(p.id, () => ({ noAds: e.message })); continue; }
       setStep(p.id, step, { status: 'failed', error: e.message });
       // With their own footage uploaded, the ads don't depend on web research: note it and carry on.
       if (['research', 'images', 'opponent'].includes(step) && (p.footageUploads || []).some((u) => !u.off)) continue;
