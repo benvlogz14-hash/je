@@ -131,14 +131,29 @@ r.get('/api/hal/status', async () => {
 r.post('/api/hal/brain', (req, b) => { const brain = b.brain === 'grok' ? 'grok' : 'local'; ctx.store.setSettings({ hal: { brain } }); return { brain }; });
 r.post('/api/hal/chat', async (req, b) => {
   const text = String(b.text || '').trim().slice(0, 4000); if (!text) throw new HttpError(400, 'Say something first.');
+  const claude = require('./hal/claude');
+  const fromClaude = String(req.headers['x-euclidean-via'] || '').startsWith('claude');
+  // "@claude ..." in HAL's panel goes to Claude (its reply lands in this chat), not to HAL.
+  const q = !fromClaude && claude.forClaude(text);
+  if (q) {
+    const r = await claude.ask(q, actorOf(req));
+    if (!r.text) return { text: '', id: r.posted, claude: true };
+    const m = ctx.store.insert('halMessages', { who: 'hal', text: r.text, by: 'HAL' }); events.publish('hal', { id: m.id });
+    return { text: r.text, id: m.id, claude: 'queued' };
+  }
   const history = ctx.store.all('halMessages').slice(-10);
-  ctx.store.insert('halMessages', { who: 'you', text, by: actorOf(req), context: b.context || null });
+  ctx.store.insert('halMessages', fromClaude ? { who: 'claude', text, by: 'Claude (the Claude app)' } : { who: 'you', text, by: actorOf(req), context: b.context || null });
+  claude.learnFromChat(text, fromClaude ? 'Claude' : (actorOf(req)[0] || 'R').toUpperCase() + actorOf(req).slice(1)).catch(() => {}); // HAL keeps what's worth keeping
   const res = await require('./hal').handle(text, { history, context: b.context || {}, actor: actorOf(req) });
   const saved = ctx.store.insert('halMessages', { who: 'hal', text: res.text || '', by: res.by || null, draft: res.draft || null, gmail: res.gmail || null, confirm: res.confirm || null, navigate: res.navigate || null });
   const all = ctx.store.all('halMessages'); for (const m of all.slice(0, Math.max(0, all.length - HAL_KEEP))) ctx.store.remove('halMessages', m.id);
   events.publish('hal', { id: saved.id });
   return { ...res, id: saved.id };
 });
+// Claude's inbox in HAL's chat: Ryan's "@claude ..." messages not answered yet, and the recent chat (for the Claude app).
+r.get('/api/hal/claude-inbox', () => require('./hal/claude').inbox());
+// Claude answers in HAL's chat: { text, replyTo }. Shown as Claude; HAL's notebook keeps what's worth keeping.
+r.post('/api/hal/claude-reply', (req, b) => require('./hal/claude').reply(b.text, b.replyTo || null));
 r.post('/api/hal/confirm', async (req, b) => {
   const res = await require('./hal').confirm(String(b.id || ''), actorOf(req));
   // the button is used up: the message no longer offers it

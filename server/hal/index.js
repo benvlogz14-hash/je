@@ -277,7 +277,7 @@ function notebook(low, text, actor) {
     const hrs = /\bweek\b/.test(low) ? 168 : 24; const g = memory.digest(hrs);
     return { text: g ? `In the last ${hrs === 24 ? 'day' : 'week'}, ${g.count} new note${g.count === 1 ? '' : 's'}:\n${g.text}` : 'Nothing new in my notebook yet. It fills as scouts, leads, replies, ads and clip decisions happen.' };
   }
-  m = /\bwhat (?:do|else do) you (?:know|remember|have)(?: (?:about|on))?\s+(.{2,}?)\??$/.exec(low) || /\b(?:show|open) (?:me )?your (?:notebook|memory|notes)(?: (?:on|about) (.+))?/.exec(low);
+  m = /\bwhat (?:do|else do) you (?:know|remember|have)(?: (?:about|on))?\s+(.{2,}?)\??$/.exec(low) || /\bwhat(?:'s| is) in your (?:notebook|memory|notes)(?: (?:about|on|for))?\s*(.*?)\??$/.exec(low) || /\b(?:show|open) (?:me )?your (?:notebook|memory|notes)(?: (?:on|about) (.+))?/.exec(low);
   if (m) {
     const q = (m[1] || '').replace(/^(?:the|our)\s+/, '').trim(); const p = q ? nameIn(q) : null;
     const notes = q ? memory.recall(q, { limit: 12, about: p?.name || q }) : memory.list({ limit: 12 });

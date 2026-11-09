@@ -653,6 +653,10 @@ h4 { font-weight: 750; letter-spacing: -0.01em; }
 .hal-ctx { font-size: var(--fs-xs); padding: 6px 12px; color: var(--ink-2); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hal-list { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .hal-notes > * { flex-shrink: 0; }
+.hal-msg.hal.claude .hal-bubble { background: #f4ece4; color: #3b2a1e; border: 1px solid #e3c9b3; }
+.hal-who { font-size: var(--fs-xs); color: var(--ink-2); margin: 0 4px 2px; font-weight: 600; }
+.hal-who.you { text-align: right; }
+html[data-night] .hal-msg.hal.claude .hal-bubble { background: #1c120c; color: #f2d9c4; border-color: #6b3a1e; }
 .hal-notes .hal-msg { width: 100%; }
 .hal-empty { margin: auto; text-align: center; color: var(--ink-2); font-size: var(--fs-sm); display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 10px 18px; }
 .hal-msg { display: flex; flex-direction: column; gap: 4px; max-width: 92%; }

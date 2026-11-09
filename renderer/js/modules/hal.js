@@ -117,7 +117,8 @@ export function HalDock() {
       ${notes ? html`<${Notebook} />` : null}
       <div class="hal-list" ref=${list} style=${notes ? { display: 'none' } : null}>
         ${!(history || []).length ? html`<div class="hal-empty"><span class="hal-eye lg" /><p>Good evening. I read the web for you while the app is open and post new stories and leads here. I can research anyone, draft outreach by the guide (Ben sends it by hand), and drive the app: "re-edit this clip, start at the reveal", "email Siela Bynoe", "what's in the queue".</p></div>` : null}
-        ${(history || []).map((m) => html`<div key=${m.id} class=${'hal-msg ' + (m.who === 'hal' ? 'hal' : 'you') + (m.watch ? ' watch' : '')}>
+        ${(history || []).map((m) => html`<div key=${m.id} class=${'hal-msg ' + (m.who === 'hal' ? 'hal' : m.who === 'claude' ? 'hal claude' : 'you') + (m.watch ? ' watch' : '')}>
+          ${m.who === 'claude' ? html`<div class="hal-who">Claude</div>` : m.toClaude ? html`<div class="hal-who you">to Claude${m.answered ? '' : ' · waiting'}</div>` : null}
           <div class="hal-bubble"><${Rich} text=${m.text} /></div>
           ${m.draft ? html`<div class="hal-draft"><pre>${m.draft}</pre><div class="row gap-s"><${Button} size="sm" kind="ghost" icon="paperclip" onClick=${() => { navigator.clipboard?.writeText(m.draft); toast('Copied', { kind: 'success' }); }}>Copy</${Button}>${m.gmail ? html`<${Button} size="sm" kind="ghost" icon="mail" onClick=${() => window.open(m.gmail, '_blank')}>Open in Gmail</${Button}>` : null}</div></div>` : null}
           ${m.confirm ? html`<div class="hal-confirm">${m.confirm.done ? html`<span class="faint">Done</span>` : html`<${Button} size="sm" kind="primary" icon="check" onClick=${() => ok(m)}>Confirm: ${m.confirm.label}</${Button}>`}</div>` : null}
@@ -125,7 +126,7 @@ export function HalDock() {
         </div>`)}
         ${busy ? html`<div class="hal-msg hal"><div class="hal-bubble hal-dots"><i /><i /><i /></div></div>` : null}
       </div>
-      <div class="hal-chips">${[["What did you find?", 'what did you find'], ["What's in the news?", "what's in the news today"], ['Best picks', 'who are our best picks'], ['Draft the batch', 'draft the batch for the new prospects'], ['Queue', '/queue']].map(([l, q]) => html`<button type="button" class="chip" onClick=${() => send(q)}>${l}</button>`)}</div>
+      <div class="hal-chips">${[["What did you find?", 'what did you find'], ["What's in the news?", "what's in the news today"], ['Best picks', 'who are our best picks'], ['Draft the batch', 'draft the batch for the new prospects'], ['Queue', '/queue']].map(([l, q]) => html`<button type="button" class="chip" onClick=${() => send(q)}>${l}</button>`)}<button type="button" class="chip" title="Start a message to Claude: it answers here" onClick=${() => { setText('@claude '); input.current?.focus(); }}>Ask Claude</button></div>
       <div class="hal-input">
         <textarea ref=${input} rows="1" placeholder=${rec ? 'Listening… click the mic again when you are done' : label ? 'Tell HAL what to change in this clip, or ask anything' : 'Ask HAL anything, or tell him what to do'} value=${text} onInput=${(e) => setText(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
         <button type="button" class=${'hal-ico mic' + (rec ? ' rec' : '')} title=${rec ? 'Stop and send' : 'Talk to HAL'} onClick=${mic}><${Icon} name="mic" size=${17} /></button>

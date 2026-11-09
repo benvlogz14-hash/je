@@ -110,6 +110,14 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: { limit: { type: 'number' } } },
     run: async ({ limit = 30 }) => { const a = await get('/api/approvals?status=pending'); return (Array.isArray(a) ? a : a.items || []).slice(0, Number(limit) || 30).map((x) => ({ id: x.id, kind: x.kind, title: x.title, summary: x.summary, created: x.createdAt })); } },
 
+  // ---------------------------------------------------------------- HAL's chat with Claude
+  { name: 'hal_inbox', description: "Messages Ryan left for you (Claude) in HAL's chat inside Euclidean (\"@claude ...\"), not answered yet, plus the recent chat between Ryan, HAL and Claude. Check it when Ryan says to check HAL's inbox, or at the start of a session.",
+    annotations: { readOnlyHint: true }, inputSchema: { type: 'object', properties: {} },
+    run: async () => get('/api/hal/claude-inbox') },
+  { name: 'reply_in_hal', description: "Answer in HAL's chat inside Euclidean, as Claude (Ryan sees it in HAL's panel; HAL's notebook keeps what's worth keeping). replyTo = the inbox message id you're answering (omit to answer all waiting). To ask HAL something and get his answer, use talk_to_hal instead.",
+    inputSchema: { type: 'object', properties: { text: { type: 'string' }, replyTo: { type: 'string' } }, required: ['text'] },
+    run: async ({ text, replyTo }) => post('/api/hal/claude-reply', { text, replyTo }) },
+
   // ---------------------------------------------------------------- the notebook (what Euclidean and HAL have learned)
   { name: 'notebook_recall', description: "Euclidean's notebook (HAL's memory): what the app has learned, as dated notes with their source: every lead and client (one living note each), scouts and imports, replies, emails, finished ads, clip approvals and rejections with the reason, news from HAL's watch, his lookups, and notes people or Claude added. Give a search or a name; empty = newest. Read it before writing to or about someone.",
     annotations: { readOnlyHint: true },
@@ -173,7 +181,7 @@ async function upload(file, to, fields) {
   return data;
 }
 
-const INSTRUCTIONS = `You control the Euclidean app running on this PC (Euclidean Media's video agency program: clients, footage, clips, Studio, Quick cut, political ads and outreach, messages, approvals, finance, HAL). The quick tools (status, list_jobs, list_candidates, make_ads...) cover common checks. For anything else: find_features with a few words, then look (read), use_feature (do it inside the app), upload_file, or talk_to_hal. show_in_app opens the page so the person can watch. The notebook (notebook_recall / notebook_learn) is what Euclidean and HAL have learned: read it before acting on a person or client, and add what you learn (true and sourced) so the app keeps getting smarter. Anything that sends, approves, posts, calls or deletes is send_or_publish: say exactly what will happen, wait for the person's yes in chat, then call it with their words. Political emails are sent by a person: draft them, never approve them on your own. When unsure what a feature expects, read the matching GET first.`;
+const INSTRUCTIONS = `You control the Euclidean app running on this PC (Euclidean Media's video agency program: clients, footage, clips, Studio, Quick cut, political ads and outreach, messages, approvals, finance, HAL). The quick tools (status, list_jobs, list_candidates, make_ads...) cover common checks. For anything else: find_features with a few words, then look (read), use_feature (do it inside the app), upload_file, or talk_to_hal (you appear as Claude in HAL's chat; hal_inbox has what Ryan left for you there, answer with reply_in_hal). show_in_app opens the page so the person can watch. The notebook (notebook_recall / notebook_learn) is what Euclidean and HAL have learned: read it before acting on a person or client, and add what you learn (true and sourced) so the app keeps getting smarter. Anything that sends, approves, posts, calls or deletes is send_or_publish: say exactly what will happen, wait for the person's yes in chat, then call it with their words. Political emails are sent by a person: draft them, never approve them on your own. When unsure what a feature expects, read the matching GET first.`;
 
 // ------------------------------------------------------------------ the protocol (JSON-RPC 2.0 over stdio, one message per line)
 const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\n');
