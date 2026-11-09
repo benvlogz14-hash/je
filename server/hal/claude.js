@@ -55,9 +55,12 @@ function inbox() {
 }
 
 /** Claude answers in HAL's chat (from the Claude app). replyTo: the inbox message id it answers (all waiting when omitted). */
-function reply(text, replyTo = null) {
+function reply(text, replyTo = null, asked = null) {
   const t = String(text || '').trim().slice(0, 8000); if (!t) throw Object.assign(new Error('Say something first.'), { status: 400 });
   for (const m of ctx.store.all('halMessages', (x) => x.toClaude && !x.answered && (!replyTo || x.id === replyTo))) ctx.store.update('halMessages', m.id, { answered: true });
+  // The conversation in the Claude app, copied here so it can be read in Euclidean: what Ryan asked Claude there, then Claude's answer.
+  const q = String(asked || '').trim().slice(0, 4000);
+  if (q) { post({ who: 'you', text: q, by: 'Ryan (in the Claude app)', inClaudeApp: true }); learnFromChat(q, 'Ryan').catch(() => {}); }
   const m = post({ who: 'claude', text: t, by: 'Claude (the Claude app)' });
   learnFromChat(t, 'Claude').catch(() => {});
   return { id: m.id };

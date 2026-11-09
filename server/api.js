@@ -153,7 +153,7 @@ r.post('/api/hal/chat', async (req, b) => {
 // Claude's inbox in HAL's chat: Ryan's "@claude ..." messages not answered yet, and the recent chat (for the Claude app).
 r.get('/api/hal/claude-inbox', () => require('./hal/claude').inbox());
 // Claude answers in HAL's chat: { text, replyTo }. Shown as Claude; HAL's notebook keeps what's worth keeping.
-r.post('/api/hal/claude-reply', (req, b) => require('./hal/claude').reply(b.text, b.replyTo || null));
+r.post('/api/hal/claude-reply', (req, b) => require('./hal/claude').reply(b.text, b.replyTo || null, b.asked || null));
 r.post('/api/hal/confirm', async (req, b) => {
   const res = await require('./hal').confirm(String(b.id || ''), actorOf(req));
   // the button is used up: the message no longer offers it
