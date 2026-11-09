@@ -97,9 +97,33 @@ function ensure() {
   if (ctx.setting('claude.connect', true) === false || !fs.existsSync(SCRIPT)) return { skipped: true };
   const want = entry();
   const changed = connectDesktop(want);
+  try { watch(); } catch { /* optional */ }
   try { connectCode(want); } catch { /* optional */ }
   if (changed.length) require('../core/audit').log('system', 'claude.connected', { files: changed, command: want.command });
   return { changed, entry: want };
+}
+
+/**
+ * The Claude app keeps its own preferences in the same file and rewrites it from what it has in memory, which drops our
+ * entry when it was added while Claude was running (seen on Ryan's PC: the file had no mcpServers after Claude saved).
+ * So each Claude settings folder is watched and the entry is put back a moment after any rewrite; Claude reads the file
+ * when it starts, so it then loads the connector, and keeps it from then on. Our own write doesn't loop: an entry that's
+ * already right isn't written again.
+ */
+const watchers = new Map();
+function watch() {
+  for (const f of desktopConfigs()) {
+    const dir = path.dirname(f); if (watchers.has(dir)) continue;
+    let t = null;
+    try {
+      const w = fs.watch(dir, { persistent: false }, (ev, name) => {
+        if (name && String(name).toLowerCase() !== 'claude_desktop_config.json') return;
+        clearTimeout(t); t = setTimeout(() => { try { const ch = connectDesktop(entry()); if (ch.length) require('../core/audit').log('system', 'claude.reconnected', { files: ch }); } catch { /* next time */ } }, 1500);
+      });
+      w.on('error', () => { try { w.close(); } catch { /* gone */ } watchers.delete(dir); });
+      watchers.set(dir, w);
+    } catch { /* folder can't be watched: the 5-minute check covers it */ }
+  }
 }
 
 /** What's connected, for Settings → Connections → Claude app: each Claude settings file and whether it has us. */
@@ -118,4 +142,4 @@ function status() {
   return { on: ctx.setting('claude.connect', true) !== false, script: SCRIPT, scriptFound: fs.existsSync(SCRIPT), command: want.command, files, looked, claudeFound: files.length > 0 };
 }
 
-module.exports = { ensure, entry, desktopConfigs, status, SCRIPT };
+module.exports = { ensure, entry, desktopConfigs, status, watch, SCRIPT };
