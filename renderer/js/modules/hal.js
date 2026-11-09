@@ -47,6 +47,7 @@ export function HalDock() {
   };
   const up = () => { const d = drag.current; drag.current = null; if (d?.moved) SAVE('eu.halPos', pos); else toggle(); };
   const [voice, setVoice] = useState(() => PREF('eu.halSpeak', false));
+  const [notes, setNotes] = useState(false);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [rec, setRec] = useState(null);
@@ -104,6 +105,7 @@ export function HalDock() {
     <button type="button" class=${'hal-fab' + (open ? ' on' : '') + (busy ? ' busy' : '')} style=${{ right: `${pos.right}px`, bottom: `${pos.bottom}px` }} title="HAL (Ctrl+Shift+H). Drag to move." aria-label="Open HAL" onPointerDown=${down} onPointerMove=${move} onPointerUp=${up} onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } }}><span class="hal-eye" /></button>
     ${open ? html`<section class="hal-panel" role="dialog" aria-label="HAL" style=${{ right: `${Math.min(pos.right, Math.max(6, window.innerWidth - 440))}px`, bottom: `${Math.min(pos.bottom + 54, Math.max(10, window.innerHeight - 640))}px` }}>
       <header class="hal-head"><span class="hal-eye sm" /><b class="grow">HAL</b>
+        <button type="button" class=${'hal-ico' + (notes ? ' on' : '')} title="HAL's notebook: what Euclidean has learned" onClick=${() => setNotes(!notes)}><${Icon} name="book" size=${15} /></button>
         <button type="button" class="hal-ico" title=${`Play a game with HAL (he's ${moodWord(halMood())})`} onClick=${() => openArcade()}><${Icon} name="gamepad" size=${15} /></button>
         <button type="button" class=${'hal-ico watch' + (watch?.on ? ' on' : '')} title=${watch?.on ? `Watching the web for news and leads every ${watch.everyMin} min${watch.grok ? ', live through your Grok login (JEV link)' : ''}${watch.last?.at ? `. Last look ${new Date(watch.last.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}. Click to stop.` : 'Not watching. Click and HAL reads the news and looks for leads through the day.'} onClick=${() => setWatch(!watch?.on)}><${Icon} name="globe" size=${15} /></button>
         <${Seg} value=${status?.brain || 'local'} onChange=${setBrain} options=${[{ value: 'local', label: 'Local' }, { value: 'grok', label: 'Grok' }]} />
@@ -112,7 +114,8 @@ export function HalDock() {
         <button type="button" class="hal-ico" title="Close" onClick=${() => toggle(false)}><${Icon} name="x" size=${16} /></button></header>
       ${offline ? html`<div class="hal-note">${status.brain === 'local' ? "My local brain (Llama) isn't running. Open Ollama, or switch me to Grok." : 'Grok needs your xAI key in Settings → Connections, or switch me to Local.'}${status.any ? ' Until then I use whatever AI is connected.' : ''}</div>` : null}
       ${label ? html`<div class="hal-ctx"><${Icon} name="eye" size=${12} /> Looking at ${label}</div>` : null}
-      <div class="hal-list" ref=${list}>
+      ${notes ? html`<${Notebook} />` : null}
+      <div class="hal-list" ref=${list} style=${notes ? { display: 'none' } : null}>
         ${!(history || []).length ? html`<div class="hal-empty"><span class="hal-eye lg" /><p>Good evening. I read the web for you while the app is open and post new stories and leads here. I can research anyone, draft outreach by the guide (Ben sends it by hand), and drive the app: "re-edit this clip, start at the reveal", "email Siela Bynoe", "what's in the queue".</p></div>` : null}
         ${(history || []).map((m) => html`<div key=${m.id} class=${'hal-msg ' + (m.who === 'hal' ? 'hal' : 'you') + (m.watch ? ' watch' : '')}>
           <div class="hal-bubble"><${Rich} text=${m.text} /></div>
@@ -129,4 +132,28 @@ export function HalDock() {
         <button type="button" class="hal-ico send" title="Send (Enter)" disabled=${!text.trim() || busy} onClick=${() => send()}><${Icon} name="send" size=${16} /></button>
       </div>
     </section>` : null}`;
+}
+
+/** HAL's notebook: what Euclidean has learned (server/hal/memory.js), searchable; teach him something, pin or forget a note. */
+const KIND = { fact: 'Fact', event: 'Happened', lesson: 'Lesson', news: 'News', lookup: 'Looked up', note: 'Note' };
+function Notebook() {
+  const [q, setQ] = useState(''); const [teach, setTeach] = useState('');
+  const [debounced, setD] = useState('');
+  useEffect(() => { const t = setTimeout(() => setD(q.trim()), 250); return () => clearTimeout(t); }, [q]);
+  const { data, reload } = useApi(`/api/hal/memory?limit=150${debounced ? `&q=${encodeURIComponent(debounced)}` : ''}`, ['hal-memory']);
+  const add = () => { const t = teach.trim(); if (!t) return; act(() => api.post('/api/hal/memory', { text: t, kind: 'note' }), { ok: 'HAL will remember that', sound: 'tap' }).then(() => { setTeach(''); reload(); }); };
+  const pin = (n) => act(() => api.patch(`/api/hal/memory/${n.id}`, { pinned: !n.pinned }), { sound: 'tap' }).then(reload);
+  const forget = (n) => act(() => api.del(`/api/hal/memory/${n.id}`), { ok: 'Forgotten', sound: 'tap' }).then(reload);
+  const list = data || [];
+  return html`<div class="hal-list hal-notes">
+    <div class="hal-note" style="margin:0">Everything Euclidean learns lands here: leads and scouts, replies, ads, clip decisions, news, and what you or Claude tell it. HAL uses it when he answers.</div>
+    <input class="input" placeholder="Search the notebook (a name, a topic)" value=${q} onInput=${(e) => setQ(e.target.value)} />
+    <div class="row gap-s"><input class="input grow" placeholder="Teach HAL something" value=${teach} onInput=${(e) => setTeach(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter') add(); }} /><${Button} size="sm" kind="primary" disabled=${!teach.trim()} onClick=${add}>Remember</${Button}></div>
+    ${!list.length ? html`<div class="faint" style="font-size:var(--fs-sm)">${debounced ? `Nothing about "${debounced}" yet.` : 'Empty so far. It fills as the app works.'}</div>` : null}
+    ${list.map((n) => html`<div key=${n.id} class="hal-msg hal"><div class="hal-bubble" style="width:100%">
+      <div class="row gap-s" style="font-size:var(--fs-xs);margin-bottom:3px"><span class="badge">${KIND[n.kind] || n.kind}</span><span class="faint grow">${new Date(n.at || n.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}${n.source ? ` · ${n.source}` : ''}</span>
+        <button type="button" class=${'hal-ico' + (n.pinned ? ' on' : '')} title=${n.pinned ? 'Pinned: kept forever' : 'Pin: keep forever'} onClick=${() => pin(n)}><${Icon} name="pin" size=${12} /></button>
+        <button type="button" class="hal-ico" title="Forget this" onClick=${() => forget(n)}><${Icon} name="x" size=${12} /></button></div>
+      <div style="font-size:var(--fs-sm)">${n.text}${n.link ? html` <a href=${n.link} target="_blank" rel="noreferrer">source</a>` : null}</div></div></div>`)}
+  </div>`;
 }

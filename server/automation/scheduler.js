@@ -103,6 +103,7 @@ function tick() {
     } catch (e) { audit.log('system', 'store.prune_error', { error: e.message }, 'warn'); }
   }
   try { require('../hal/watch').tick(); } catch { /* HAL's watch is best-effort */ }
+  try { require('../hal/memory').sweep(); } catch { /* the notebook is best-effort */ }
   try { require('../outreach/autopilot').tick(); } catch (e) { audit.log('system', 'outreach.autopilot_error', { error: e.message }, 'error'); }
   const tz = ctx.setting('agency.timezone', 'America/New_York');
   const hour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: tz }).format(new Date()));
@@ -119,7 +120,7 @@ function tick() {
   }
 }
 
-function start() { timer = setInterval(tick, 60000); setTimeout(tick, 5000); }
+function start() { try { require('../hal/memory').start(); } catch { /* notebook */ } timer = setInterval(tick, 60000); setTimeout(tick, 5000); }
 function stop() { clearInterval(timer); }
 
 module.exports = { start, stop, tick, feedClient, digest };

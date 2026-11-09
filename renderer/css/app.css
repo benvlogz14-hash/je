@@ -652,6 +652,8 @@ h4 { font-weight: 750; letter-spacing: -0.01em; }
 .hal-note { font-size: var(--fs-xs); padding: 7px 12px; background: var(--gold-soft, #fff4d6); color: var(--gold-ink, #7a5a00); border-bottom: 1px solid var(--line); }
 .hal-ctx { font-size: var(--fs-xs); padding: 6px 12px; color: var(--ink-2); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hal-list { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.hal-notes > * { flex-shrink: 0; }
+.hal-notes .hal-msg { width: 100%; }
 .hal-empty { margin: auto; text-align: center; color: var(--ink-2); font-size: var(--fs-sm); display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 10px 18px; }
 .hal-msg { display: flex; flex-direction: column; gap: 4px; max-width: 92%; }
 .hal-msg.you { align-self: flex-end; align-items: flex-end; }

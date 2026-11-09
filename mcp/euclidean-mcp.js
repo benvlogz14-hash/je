@@ -110,6 +110,15 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: { limit: { type: 'number' } } },
     run: async ({ limit = 30 }) => { const a = await get('/api/approvals?status=pending'); return (Array.isArray(a) ? a : a.items || []).slice(0, Number(limit) || 30).map((x) => ({ id: x.id, kind: x.kind, title: x.title, summary: x.summary, created: x.createdAt })); } },
 
+  // ---------------------------------------------------------------- the notebook (what Euclidean and HAL have learned)
+  { name: 'notebook_recall', description: "Euclidean's notebook (HAL's memory): what the app has learned, as dated notes with their source: every lead and client (one living note each), scouts and imports, replies, emails, finished ads, clip approvals and rejections with the reason, news from HAL's watch, his lookups, and notes people or Claude added. Give a search or a name; empty = newest. Read it before writing to or about someone.",
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: 'object', properties: { search: { type: 'string' }, about: { type: 'string', description: 'A person or client name.' }, kind: { type: 'string', enum: ['fact', 'event', 'lesson', 'news', 'lookup', 'note'] }, limit: { type: 'number' } } },
+    run: async ({ search = '', about = '', kind = '', limit = 25 }) => (await get(`/api/hal/memory?q=${encodeURIComponent(search)}&about=${encodeURIComponent(about)}&kind=${kind}&limit=${Math.min(200, Number(limit) || 25)}`)).map((n) => ({ id: n.id, at: n.at, kind: n.kind, about: n.about, text: n.text, source: n.source, link: n.link || undefined, pinned: n.pinned || undefined, key: n.key || undefined })) },
+  { name: 'notebook_learn', description: "Teach Euclidean something so HAL and the app use it from now on: a fact you found (with its link), a lesson (what worked, what the founders like), a note about a lead or client. Only things that are true and sourced. To correct a note, pass its id and the new text (the old text is kept in its history); pinned keeps it forever; ttl_days makes passing news expire.",
+    inputSchema: { type: 'object', properties: { text: { type: 'string' }, about: { type: 'array', items: { type: 'string' } }, kind: { type: 'string', enum: ['fact', 'lesson', 'note', 'news', 'event'] }, link: { type: 'string' }, id: { type: 'string', description: 'Correct this note instead of adding one.' }, pinned: { type: 'boolean' }, ttl_days: { type: 'number' } }, required: ['text'] },
+    run: async ({ text, about, kind, link, id, pinned, ttl_days: ttlDays }) => (id ? call('PATCH', `/api/hal/memory/${encodeURIComponent(id)}`, { text, about, kind, link, pinned, ttlDays }) : post('/api/hal/memory', { text, about, kind: kind || 'note', link, pinned, ttlDays })) },
+
   // ---------------------------------------------------------------- everything else in the app
   { name: 'find_features', description: "Search everything Euclidean can do (about 300 features: clients, footage, clips, Studio projects, Quick cut, music, political leads and ads, outreach, messages, approvals, finance, analytics, SEO lab, HAL, settings, setup). Give a few words (e.g. 'studio export', 'prospect footage', 'invoice'); empty lists all. Each result: method, path, kind (read = looks only, change = works inside Euclidean, outward = sends/approves/posts/deletes and needs the person's OK), what it does, and upload type if it takes a file. Then call it with use_feature, look, or send_or_publish.",
     annotations: { readOnlyHint: true },
@@ -164,7 +173,7 @@ async function upload(file, to, fields) {
   return data;
 }
 
-const INSTRUCTIONS = `You control the Euclidean app running on this PC (Euclidean Media's video agency program: clients, footage, clips, Studio, Quick cut, political ads and outreach, messages, approvals, finance, HAL). The quick tools (status, list_jobs, list_candidates, make_ads...) cover common checks. For anything else: find_features with a few words, then look (read), use_feature (do it inside the app), upload_file, or talk_to_hal. show_in_app opens the page so the person can watch. Anything that sends, approves, posts, calls or deletes is send_or_publish: say exactly what will happen, wait for the person's yes in chat, then call it with their words. Political emails are sent by a person: draft them, never approve them on your own. When unsure what a feature expects, read the matching GET first.`;
+const INSTRUCTIONS = `You control the Euclidean app running on this PC (Euclidean Media's video agency program: clients, footage, clips, Studio, Quick cut, political ads and outreach, messages, approvals, finance, HAL). The quick tools (status, list_jobs, list_candidates, make_ads...) cover common checks. For anything else: find_features with a few words, then look (read), use_feature (do it inside the app), upload_file, or talk_to_hal. show_in_app opens the page so the person can watch. The notebook (notebook_recall / notebook_learn) is what Euclidean and HAL have learned: read it before acting on a person or client, and add what you learn (true and sourced) so the app keeps getting smarter. Anything that sends, approves, posts, calls or deletes is send_or_publish: say exactly what will happen, wait for the person's yes in chat, then call it with their words. Political emails are sent by a person: draft them, never approve them on your own. When unsure what a feature expects, read the matching GET first.`;
 
 // ------------------------------------------------------------------ the protocol (JSON-RPC 2.0 over stdio, one message per line)
 const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\n');
@@ -172,7 +181,7 @@ const reply = (id, result) => send({ jsonrpc: '2.0', id, result });
 const fail = (id, code, message) => send({ jsonrpc: '2.0', id, error: { code, message } });
 
 async function handle(m) {
-  if (m.method === 'initialize') return reply(m.id, { protocolVersion: m.params?.protocolVersion || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'euclidean', version: '1.1.0' }, instructions: INSTRUCTIONS });
+  if (m.method === 'initialize') return reply(m.id, { protocolVersion: m.params?.protocolVersion || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'euclidean', version: '1.2.0' }, instructions: INSTRUCTIONS });
   if (m.method === 'ping') return reply(m.id, {});
   if (m.method === 'tools/list') return reply(m.id, { tools: TOOLS.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, ...(annotations ? { annotations } : {}) })) });
   if (m.method === 'tools/call') {

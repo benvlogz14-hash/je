@@ -85,6 +85,12 @@ async function run({ force = false } = {}) {
 
 /** One message in HAL's panel, links on their own lines; leads come with a Confirm button. */
 function post(stories, leads, via) {
+  // Into the notebook: each story with its link (kept 45 days), each possible lead (90 days).
+  try {
+    const mem = require('./memory');
+    for (const s of stories) mem.add({ text: `News${s.about && s.about !== 'live web' ? ` on ${s.about}` : ''}: ${s.t}`, about: s.about && s.about !== 'live web' ? [s.about] : [], kind: 'news', source: via ? `watch (${via})` : 'watch', link: s.url, ttlDays: 45 });
+    for (const l of leads) mem.add({ text: `Possible lead from the news: ${l.name}${l.office ? `, ${l.office}` : ''} (${l.headline || 'headline'}).`, about: [l.name], kind: 'news', source: 'watch', link: l.url, ttlDays: 90 });
+  } catch { /* notebook */ }
   const lines = [];
   if (stories.length) lines.push(`While you were working, ${stories.length} new stor${stories.length === 1 ? 'y' : 'ies'}${via ? ` (live web through ${via})` : ''}:`, ...stories.map((s) => `- ${s.t}${s.about && s.about !== 'live web' ? ` [${s.about}]` : ''}\n${s.url}`));
   if (leads.length) lines.push('', `${leads.length} possible lead${leads.length === 1 ? '' : 's'}, straight from the headlines (not added yet):`, ...leads.map((l) => `- ${l.name}${l.office ? `, ${l.office}` : ''}: ${l.headline}\n${l.url}`));

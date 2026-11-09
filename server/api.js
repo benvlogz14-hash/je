@@ -178,6 +178,21 @@ r.post('/api/hal/puzzle', async (req, b) => {
     return { thinking: String(j.thinking || '').slice(0, 400), answer: answer.slice(0, 40), by: /ollama/.test(r2.by) ? 'local brain' : /xai/.test(r2.by) ? 'Grok' : String(r2.by || '').split(':')[0] };
   } catch { return { offline: true }; }
 });
+// HAL's notebook (Euclidean's memory, server/hal/memory.js): what the app has learned, newest first, or the notes most
+// about ?q= / ?about= (a name). kind: fact, event, lesson, news, lookup, note.
+r.get('/api/hal/memory', (req) => require('./hal/memory').list({ q: req.query.q || '', about: req.query.about || '', kind: req.query.kind || '', limit: Math.min(500, Number(req.query.limit) || 100) }));
+// Add to the notebook (or correct a living note by its key): { text, about: [names], kind, link, key, ttlDays, pinned }. Claude adds what it learns here.
+r.post('/api/hal/memory', (req, b) => {
+  const via = String(req.headers['x-euclidean-via'] || '');
+  const n = require('./hal/memory').add({ text: b.text, about: b.about, kind: ['fact', 'event', 'lesson', 'news', 'lookup', 'note'].includes(b.kind) ? b.kind : 'note', link: b.link || null, key: b.key || null, ttlDays: b.ttlDays || null, pinned: !!b.pinned, source: via.startsWith('claude') ? 'Claude' : actorOf(req), by: actorOf(req) });
+  if (!n) throw new HttpError(400, 'Give the note some text.'); return n;
+});
+// Change a note (fix it, pin it, set when it expires): { text, about, kind, link, pinned, ttlDays }. The old text is kept in its history.
+r.patch('/api/hal/memory/:id', (req, b, p) => { must(ctx.store.get('halNotes', p.id)); return require('./hal/memory').update(p.id, b); });
+// Remove a note from the notebook.
+r.del('/api/hal/memory/:id', (req, b, p) => ({ ok: require('./hal/memory').remove(p.id) }));
+// What the notebook learned in the last ?hours= (default 24), grouped.
+r.get('/api/hal/memory/digest', (req) => require('./hal/memory').digest(Number(req.query.hours) || 24) || { count: 0, text: '' });
 r.get('/api/hal/watch', () => require('./hal/watch').status());
 r.post('/api/hal/watch', (req, b) => { const w = {}; if (b.on != null) w.on = !!b.on; if (b.everyMin) w.everyMin = Math.max(15, Math.min(720, Number(b.everyMin) || 60)); if (b.topics != null) w.topics = String(b.topics).slice(0, 2000); if (b.useGrok != null) w.useGrok = !!b.useGrok; ctx.store.setSettings({ hal: { watch: w } }); return require('./hal/watch').status(); });
 r.post('/api/hal/watch/run', async () => { const res = await require('./hal/watch').run({ force: true }); return { stories: res?.stories?.length || 0, leads: res?.leads?.length || 0, busy: !!res?.busy }; });

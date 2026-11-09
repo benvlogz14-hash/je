@@ -20,6 +20,7 @@ const { think, PERSONA, mode } = require('./brain');
 const score = require('./score');
 const web = require('./web');
 const guide = require('../outreach/guide');
+const memory = require('./memory');
 
 // ------------------------------------------------------------------ confirmations (a person's click)
 const pending = new Map();
@@ -228,9 +229,11 @@ async function lookup(subject, question) {
   const heads = news.length ? lines(news, (n) => `- ${n.t} (${n.url})`) : 'none found';
   const webr = results.length ? lines(results, (x) => `- ${x.title}: ${x.snippet} (${x.url})`) : 'none found';
   if (!news.length && !results.length) return { text: `Nothing came back for "${subject}". Check the internet, or give me a link to read.` };
-  const rec = p ? `On record in our board: ${JSON.stringify({ name: p.name, office: p.office, stage: p.stage, why: p.why, hook: p.kit?.card?.hook_email, tier: p.kit?.tier })}` : 'Not on our board.';
+  const known = memory.context(`${subject} ${question}`, { about: p?.name || subject });
+  const rec = (p ? `On record in our board: ${JSON.stringify({ name: p.name, office: p.office, stage: p.stage, why: p.why, hook: p.kit?.card?.hook_email, tier: p.kit?.tier })}` : 'Not on our board.') + (known ? `\nFrom your notebook (dated; newer wins):\n${known}` : '');
   try {
     const r = await think({ maxTokens: 420, search: true, messages: [{ role: 'user', content: `Ryan asked: "${question}". Subject: ${subject}.\n${rec}\nReal recent headlines the app just pulled:\n${heads}\nWeb results the app just pulled:\n${webr}\n\nAnswer in 3 to 5 short sentences: the main points and, for a politician, who they are, their office and what's a good hook for a short video about them. Use ONLY the record, headlines and results above; anything else is "unverified - needs check". Finish with the single sharpest angle. Put one real URL on its own line at the end.` }] });
+    memory.add({ text: `Looked up ${subject}: ${String(r.text || '').slice(0, 420)}`, about: [p?.name || subject], kind: 'lookup', source: 'HAL lookup', link: (news[0] || results[0])?.url || null, ttlDays: 30 });
     return { text: r.text, by: r.by };
   } catch { return { text: `${subject}${p ? ` - ${p.office || ''}` : ''}\n${news.length ? `Recent:\n${heads}` : ''}${results.length ? `\nOn the web:\n${webr}` : ''}` }; }
 }
@@ -257,8 +260,41 @@ async function viaCommands(text, c, actor) {
 async function chat(text, history, c) {
   const msgs = (history || []).slice(-8).map((h) => ({ role: h.who === 'hal' ? 'assistant' : 'user', content: String(h.text || '').slice(0, 2000) }));
   msgs.push({ role: 'user', content: text });
-  const r = await think({ maxTokens: 300, system: `${PERSONA}\n\nWhat the app shows right now (the only facts about the app you may state): ${contextFacts(c)}`, messages: msgs });
+  const known = memory.context(`${text} ${(history || []).slice(-2).map((h) => h.text).join(' ')}`);
+  const r = await think({ maxTokens: 300, system: `${PERSONA}\n\nWhat the app shows right now (the only facts about the app you may state): ${contextFacts(c)}${known ? `\n\nYour notebook (what Euclidean has learned, dated, with where it came from; you may state these, newer wins, say the date when it matters):\n${known}` : ''}`, messages: msgs });
   return { text: r.text, by: r.by };
+}
+
+/** The notebook: "remember that ...", "what do you know about X", "forget X", "what did you learn today". */
+function notebook(low, text, actor) {
+  let m = /^(?:please\s+)?(?:remember|note|keep in mind|don'?t forget)(?:\s+that)?[:,]?\s+(.{3,})$/i.exec(text.replace(/^\s*(?:hey\s+)?hal[,\s]+/i, ''));
+  if (m) {
+    const p = nameIn(m[1]); const cl = ctx.store.all('clients').find((c) => c.name && m[1].toLowerCase().includes(c.name.toLowerCase()));
+    memory.add({ text: m[1], about: [p?.name, cl?.name].filter(Boolean), kind: 'note', source: actor && actor !== 'user' ? actor[0].toUpperCase() + actor.slice(1) : 'you', by: actor });
+    return { text: `Noted${p || cl ? ` under ${p?.name || cl.name}` : ''}. It's in my notebook and I'll use it from now on.` };
+  }
+  if (/\bwhat (?:did|have) you learn(?:ed)?\b|\bwhat'?s new in your (?:notebook|memory)\b/.test(low)) {
+    const hrs = /\bweek\b/.test(low) ? 168 : 24; const g = memory.digest(hrs);
+    return { text: g ? `In the last ${hrs === 24 ? 'day' : 'week'}, ${g.count} new note${g.count === 1 ? '' : 's'}:\n${g.text}` : 'Nothing new in my notebook yet. It fills as scouts, leads, replies, ads and clip decisions happen.' };
+  }
+  m = /\bwhat (?:do|else do) you (?:know|remember|have)(?: (?:about|on))?\s+(.{2,}?)\??$/.exec(low) || /\b(?:show|open) (?:me )?your (?:notebook|memory|notes)(?: (?:on|about) (.+))?/.exec(low);
+  if (m) {
+    const q = (m[1] || '').replace(/^(?:the|our)\s+/, '').trim(); const p = q ? nameIn(q) : null;
+    const notes = q ? memory.recall(q, { limit: 12, about: p?.name || q }) : memory.list({ limit: 12 });
+    if (!notes.length) return { text: q ? `Nothing in my notebook about ${q} yet.` : 'My notebook is empty so far.' };
+    return { text: `${q ? `What I have on ${p?.name || q}` : 'Newest in my notebook'}:\n${memory.block(notes)}`, navigate: null };
+  }
+  m = /^(?:please\s+)?forget(?: about| that)?\s+(.{2,})$/.exec(low);
+  if (m) {
+    // A name alone forgets what I noted about them; a sentence forgets only the notes that say it (living lead/client notes refresh themselves).
+    const nameOnly = m[1].split(/\s+/).length <= 3 && (nameIn(m[1]) || ctx.store.all('clients').some((c) => c.name && c.name.toLowerCase() === m[1].trim()));
+    const found = memory.recall(m[1], { limit: 20, about: m[1] }).filter((n) => !n.key);
+    const best = Math.max(0, ...found.map((n) => memory.overlap(m[1], n)));
+    const notes = nameOnly ? found : found.filter((n) => memory.overlap(m[1], n) >= Math.max(0.5, best - 0.15));
+    if (!notes.length) return { text: `I have nothing to forget about ${m[1]}.` };
+    return { text: `Forget ${notes.length} note${notes.length === 1 ? '' : 's'}?\n${memory.block(notes.slice(0, 6))}${notes.length > 6 ? `\n- and ${notes.length - 6} more` : ''}`, confirm: ask(`Forget ${notes.length}`, 'Removes them from my notebook.', () => { notes.forEach((n) => memory.remove(n.id)); return { text: `Forgotten (${notes.length}).` }; }) };
+  }
+  return null;
 }
 
 /** "Let's play pong" / "open the arcade": the games window opens on the screen (renderer/js/modules/arcade.js). */
@@ -283,6 +319,7 @@ async function handle(text, { history = [], context = {}, actor = 'user' } = {})
       return runCommand(t, actor);
     }
     const onThis = await onClip(low, t, context, actor); if (onThis) return onThis;
+    const mem = notebook(low, t, actor); if (mem) return mem;
     const game = arcade(low); if (game) return game;
     if (/\b(you (sent|found|added|gave|surfaced|flagged|mentioned)|the ones you|parse (through|the)|which (ones|prospect|candidate)|list (them|those|the new)|go (back|over)|what (were|was) (the|those))\b/.test(low) && /\b(prospect|candidate|lead|name|one)s?\b/.test(low)) return recall();
     if (/\b(what did you find|anything new|what('?s| is) new(?! with| on| about| for)|check (?:the )?(?:news|internet|web) now|scan (?:the )?(?:news|web|internet)|run (?:your|the) watch|look for (?:new )?leads)\b/.test(low)) return await watchNow();
