@@ -40,10 +40,17 @@ function desktopConfigs() {
   const home = os.homedir(); const out = [];
   if (process.platform === 'win32') {
     const appdata = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    const local = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    // Claude is installed (in AnthropicClaude) but has never run, so its settings folder doesn't exist yet: make it.
+    const installed = ['AnthropicClaude', path.join('Programs', 'Claude'), 'Claude'].some((d) => { try { return fs.statSync(path.join(local, d)).isDirectory(); } catch { return false; } });
+    if (installed) { try { fs.mkdirSync(path.join(appdata, 'Claude'), { recursive: true }); } catch { /* read-only */ } }
     out.push(path.join(appdata, 'Claude'));
     const pk = path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Packages');
     try { for (const d of fs.readdirSync(pk)) if (/^Claude_/i.test(d)) out.push(path.join(pk, d, 'LocalCache', 'Roaming', 'Claude')); } catch { /* none */ }
-  } else if (process.platform === 'darwin') out.push(path.join(home, 'Library', 'Application Support', 'Claude'));
+  } else if (process.platform === 'darwin') {
+    if (fs.existsSync('/Applications/Claude.app')) { try { fs.mkdirSync(path.join(home, 'Library', 'Application Support', 'Claude'), { recursive: true }); } catch { /* fine */ } }
+    out.push(path.join(home, 'Library', 'Application Support', 'Claude'));
+  }
   else out.push(path.join(home, '.config', 'Claude'));
   return out.filter((d) => { try { return fs.statSync(d).isDirectory(); } catch { return false; } }).map((d) => path.join(d, 'claude_desktop_config.json'));
 }
