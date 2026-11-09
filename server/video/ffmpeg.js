@@ -162,8 +162,13 @@ function priorityValue() {
 
 /** Run ffmpeg with -progress parsing. onProgress receives 0..1. */
 function ffmpegWithProgress(args, { totalSec, onProgress, cwd, signal }) {
-  const threads = ctx.setting('resources.renderThreads', 0);
-  const full = ['-hide_banner', '-y', '-nostats', '-progress', 'pipe:1', ...(threads ? ['-threads', String(threads)] : []), ...args];
+  // Threads: the setting, else all cores but 2 on a 6+ core PC (so the PC stays usable while it renders). Given to the
+  // filters and to the encoder (just before the output file); a global -threads before the inputs only capped decoding.
+  const cores = os.cpus().length;
+  const threads = Number(ctx.setting('resources.renderThreads', 0)) || (cores >= 6 ? cores - 2 : 0);
+  let a = [...args];
+  if (threads && a.length && !a.includes('-threads')) a = [...a.slice(0, -1), '-threads', String(threads), a[a.length - 1]];
+  const full = ['-hide_banner', '-y', '-nostats', '-progress', 'pipe:1', ...(threads ? ['-filter_threads', String(threads), '-filter_complex_threads', String(threads)] : []), ...a];
   return run(bin('ffmpeg'), full, {
     cwd, signal, priority: priorityValue(), timeoutMs: 4 * 3600000,
     onLine: (l) => {

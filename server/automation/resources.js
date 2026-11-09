@@ -74,6 +74,26 @@ async function sample() {
   return last;
 }
 
+/**
+ * The free local AI (Ollama: Llama, and llama3.2-vision for Look through) runs in its own process at normal priority;
+ * on a PC without a graphics card it can take every core for minutes per video. Once a minute, any Ollama process is
+ * turned down to below-normal priority (like Euclidean's own renders and Whisper), so the PC stays usable.
+ * Setting resources.lowerOllama = false leaves it alone.
+ */
+const lowered = new Set(); let lastOllama = 0;
+function lowerOllama() {
+  if (process.platform !== 'win32' || ctx.setting('resources.lowerOllama', true) === false || Date.now() - lastOllama < 60000) return;
+  lastOllama = Date.now();
+  require('child_process').execFile('tasklist', ['/FO', 'CSV', '/NH'], { windowsHide: true, timeout: 10000 }, (err, out) => {
+    if (err) return;
+    for (const line of String(out).split(/\r?\n/)) {
+      const m = /^"(ollama[^"]*\.exe)","(\d+)"/i.exec(line); if (!m) continue;
+      const pid = Number(m[2]); if (lowered.has(pid)) continue;
+      try { os.setPriority(pid, os.constants.priority.PRIORITY_BELOW_NORMAL); lowered.add(pid); } catch { /* not ours to change */ }
+    }
+  });
+}
+
 /** Decide whether a heavy job may start right now. */
 function heavyGate() {
   if (!last) return { ok: true };
@@ -89,7 +109,7 @@ function heavyGate() {
 }
 
 function interval() { return ctx.setting('resources.mode', 'full') === 'lite' ? 30000 : 4000; }
-function schedule() { clearTimeout(timer); timer = setTimeout(async () => { try { await sample(); } catch { /* sampling never crashes the engine */ } schedule(); }, interval()); }
+function schedule() { clearTimeout(timer); timer = setTimeout(async () => { try { await sample(); } catch { /* sampling never crashes the engine */ } try { lowerOllama(); } catch { /* fine */ } schedule(); }, interval()); }
 function start() { sample().catch(() => {}); schedule(); }
 
 const modeListeners = new Set();
