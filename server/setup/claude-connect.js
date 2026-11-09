@@ -102,4 +102,20 @@ function ensure() {
   return { changed, entry: want };
 }
 
-module.exports = { ensure, entry, desktopConfigs, SCRIPT };
+/** What's connected, for Settings → Connections → Claude app: each Claude settings file and whether it has us. */
+function status() {
+  const home = os.homedir();
+  const looked = process.platform === 'win32'
+    ? [path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'Claude')]
+    : process.platform === 'darwin' ? [path.join(home, 'Library', 'Application Support', 'Claude')] : [path.join(home, '.config', 'Claude')];
+  const want = entry();
+  const files = desktopConfigs().map((f) => {
+    let cfg = null; let error = null;
+    try { cfg = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, '') || '{}') : {}; } catch (e) { error = `Can't read it: ${e.message}`; }
+    const have = cfg?.mcpServers?.euclidean;
+    return { file: f, exists: fs.existsSync(f), connected: !!have && same(have, want), entry: have || null, error };
+  });
+  return { on: ctx.setting('claude.connect', true) !== false, script: SCRIPT, scriptFound: fs.existsSync(SCRIPT), command: want.command, files, looked, claudeFound: files.length > 0 };
+}
+
+module.exports = { ensure, entry, desktopConfigs, status, SCRIPT };

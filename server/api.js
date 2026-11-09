@@ -865,6 +865,9 @@ r.post('/api/setup/:action', (req, b, p) => {
   return queue.enqueue(job, {}, { actor: actorOf(req), dedupeKey: job });
 }, { roles: OWNER });
 r.get('/api/political/steps', () => polPkg.STEPS.map(([key, label]) => ({ key, label })));
+// The Claude app on this PC and Euclidean's connector (Settings → Connections → Claude app).
+r.get('/api/claude/connect', () => require('./setup/claude-connect').status());
+r.post('/api/claude/connect', () => ({ ...require('./setup/claude-connect').ensure(), status: require('./setup/claude-connect').status() }), { roles: OWNER });
 // GrokBot's Oct 28 research packs (shipped with the app): how many there are, and Import (a founder presses it).
 r.get('/api/political/grokbot', () => require('./outreach/leads').grokStatus());
 r.post('/api/political/grokbot/import', (req) => require('./outreach/leads').importGrok(actorOf(req)), { roles: OWNER });

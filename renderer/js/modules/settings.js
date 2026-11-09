@@ -133,6 +133,22 @@ function VoiceSetup() {
   </div>`;
 }
 
+/** Is the Claude app on this PC connected to Euclidean (the MCP connector)? Shows where it looked and what it wrote. */
+function ClaudeApp() {
+  const { data: c, reload } = useApi('/api/claude/connect', []);
+  const connect = () => act(() => api.post('/api/claude/connect', {}), { ok: (r) => (r.status?.files?.some((f) => f.connected) ? 'Connected. Quit the Claude app (icon by the clock → Quit) and open it again.' : 'Claude app not found yet') }).then(reload);
+  if (!c) return null;
+  const ok = c.files.some((f) => f.connected);
+  return html`<${Section} title="Claude app" sub="Lets the Claude desktop app on this PC check Euclidean's jobs, candidates and ad runs for you (it can't send or approve anything)." action=${html`<span class=${'badge ' + (ok ? 'moss' : '')}>${ok ? 'Connected' : 'Not connected'}</span>`}>
+    <div class="col" style="gap:8px;font-size:var(--fs-sm)">
+      ${!c.claudeFound ? html`<span>The Claude app wasn't found on this PC. Install it from claude.ai/download, open it once, then press Connect now.</span>`
+        : c.files.map((f) => html`<div class="row" style="gap:8px;align-items:flex-start"><span class=${'badge ' + (f.connected ? 'moss' : f.error ? 'coral' : 'gold')}>${f.connected ? 'Connected' : f.error ? 'Problem' : 'Not yet'}</span><span class="selectable grow" style="overflow-wrap:anywhere">${f.file}${f.error ? html`<br /><span class="faint">${f.error}</span>` : null}</span></div>`)}
+      ${ok ? html`<span class="faint">If Claude doesn't list "euclidean" under its Connectors, quit Claude completely (right-click its icon by the clock → Quit) and open it again. Keep Euclidean open while you use it.</span>` : null}
+      <div class="row" style="gap:8px"><${Button} size="sm" kind="primary" onClick=${connect}>Connect now</${Button}><span class="faint selectable" style="font-size:var(--fs-xs);overflow-wrap:anywhere">Runs with ${c.command}</span></div>
+    </div>
+  </${Section}>`;
+}
+
 function Connections() {
   const boot = useStore((s) => s.boot);
   const { data: st, reload } = useApi('/api/secrets/status', ['connections']);
@@ -145,6 +161,7 @@ function Connections() {
   const row = (label, ok) => html`<span class=${'badge ' + (ok ? 'moss' : '')}>${ok ? 'Connected' : 'Not connected'}</span>`;
   return html`
     <div class="notice" style="margin-bottom:14px"><${Icon} name="lock" size=${16} />Credentials are encrypted on this computer (sealed with Windows DPAPI in the desktop app) and are never shown again or sent anywhere except the service they belong to.</div>
+    <${ClaudeApp} />
     <${LocalAI} st=${st} test=${test} />
     <${Section} title="AI providers" sub="Claude, GPT and Grok. Each role in System → Agents picks one, with fallbacks." action=${html`${row('', st?.ai?.anthropic || st?.ai?.openai || st?.ai?.xai)}`}>
       <div class="form-grid">${[['global.anthropic.apiKey', 'Anthropic (Claude) API key', 'anthropic'], ['global.openai.apiKey', 'OpenAI (GPT + Whisper) API key', 'openai'], ['global.xai.apiKey', 'xAI (Grok) API key', 'xai']].map(([k, l, p]) => html`<div class="col" style="gap:6px"><${SecretInput} k=${k} label=${l} status=${status} value=${v} onChange=${setV} /><div class="row"><${Button} size="sm" kind="soft" onClick=${() => saveKeys([k], p)}>Save & test</${Button}>${status[k] ? html`<${Button} size="sm" kind="ghost" onClick=${() => test(p)}>Test</${Button}>` : null}</div></div>`)}</div>
