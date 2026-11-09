@@ -126,6 +126,53 @@ function watch() {
   }
 }
 
+// ------------------------------------------------------------------ the drag-in file (Claude extension, .mcpb)
+/**
+ * A Claude extension file (MCP Bundle: a zip with manifest.json and the connector), made from this app's own copy of
+ * the connector, so it always matches the version installed. Dragged onto Claude → Settings → Extensions (or the
+ * "Drag .MCPB or .DXT files here" box) it installs without any settings file; Claude runs it with its own built-in Node,
+ * so nothing else is needed. Written to <data>/Euclidean.mcpb (and again when the connector changes).
+ */
+const zlib = require('zlib');
+const CRC = (() => { const t = new Int32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c; } return t; })();
+function crc32(buf) { let c = -1; for (let i = 0; i < buf.length; i++) c = CRC[(c ^ buf[i]) & 0xff] ^ (c >>> 8); return (c ^ -1) >>> 0; }
+/** A plain zip (deflate) of [{ name, data }]. */
+function zip(files) {
+  const parts = []; const central = []; let off = 0;
+  for (const f of files) {
+    const name = Buffer.from(f.name); const data = Buffer.isBuffer(f.data) ? f.data : Buffer.from(f.data); const comp = zlib.deflateRawSync(data); const crc = crc32(data);
+    const h = Buffer.alloc(30); h.writeUInt32LE(0x04034b50, 0); h.writeUInt16LE(20, 4); h.writeUInt16LE(0x0800, 6); h.writeUInt16LE(8, 8); h.writeUInt16LE(0, 10); h.writeUInt16LE(0x21, 12);
+    h.writeUInt32LE(crc, 14); h.writeUInt32LE(comp.length, 18); h.writeUInt32LE(data.length, 22); h.writeUInt16LE(name.length, 26); h.writeUInt16LE(0, 28);
+    const c = Buffer.alloc(46); c.writeUInt32LE(0x02014b50, 0); c.writeUInt16LE(20, 4); c.writeUInt16LE(20, 6); c.writeUInt16LE(0x0800, 8); c.writeUInt16LE(8, 10); c.writeUInt16LE(0, 12); c.writeUInt16LE(0x21, 14);
+    c.writeUInt32LE(crc, 16); c.writeUInt32LE(comp.length, 20); c.writeUInt32LE(data.length, 24); c.writeUInt16LE(name.length, 28); c.writeUInt32LE(0, 30); c.writeUInt32LE(0, 34); c.writeUInt32LE(0, 38); c.writeUInt32LE(off, 42);
+    parts.push(h, name, comp); central.push(c, name); off += 30 + name.length + comp.length;
+  }
+  const cd = Buffer.concat(central); const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10); end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(off, 16);
+  return Buffer.concat([...parts, cd, end]);
+}
+function manifest() {
+  const src = fs.readFileSync(SCRIPT, 'utf8');
+  const tools = [...src.matchAll(/\{ name: '([a-z_]+)', description: (["'])(.*?)\2/g)].map((m) => ({ name: m[1], description: m[3].replace(/\\'/g, "'") }));
+  let version = '1.0.0'; try { version = require('../../package.json').version || version; } catch { /* default */ }
+  return {
+    manifest_version: '0.3', name: 'euclidean', display_name: 'Euclidean', version,
+    description: "Check Euclidean's jobs, candidates and ad runs, and start Make the ads. It can't approve, send or post anything.",
+    long_description: 'Connects Claude to the Euclidean app running on this PC. Keep Euclidean open while you use it.',
+    author: { name: 'Euclidean Media' }, icon: 'icon.png',
+    server: { type: 'node', entry_point: 'server/euclidean-mcp.js', mcp_config: { command: 'node', args: ['${__dirname}/server/euclidean-mcp.js'], env: {} } },
+    tools, compatibility: { platforms: ['win32', 'darwin', 'linux'], runtimes: { node: '>=18.0.0' } }, license: 'UNLICENSED',
+  };
+}
+function bundle() {
+  if (!fs.existsSync(SCRIPT)) return null;
+  const out = path.join(require('../core/paths').root || os.tmpdir(), 'Euclidean.mcpb');
+  const files = [{ name: 'manifest.json', data: JSON.stringify(manifest(), null, 2) }, { name: 'server/euclidean-mcp.js', data: fs.readFileSync(SCRIPT) }];
+  const icon = path.join(__dirname, '..', '..', 'build', 'icon.png'); if (fs.existsSync(icon)) files.push({ name: 'icon.png', data: fs.readFileSync(icon) });
+  const buf = zip(files);
+  try { if (fs.existsSync(out) && fs.readFileSync(out).equals(buf)) return out; } catch { /* rewrite */ }
+  fs.writeFileSync(out, buf); return out;
+}
+
 /** What's connected, for Settings → Connections → Claude app: each Claude settings file and whether it has us. */
 function status() {
   const home = os.homedir();
@@ -139,7 +186,8 @@ function status() {
     const have = cfg?.mcpServers?.euclidean;
     return { file: f, exists: fs.existsSync(f), connected: !!have && same(have, want), entry: have || null, error };
   });
-  return { on: ctx.setting('claude.connect', true) !== false, script: SCRIPT, scriptFound: fs.existsSync(SCRIPT), command: want.command, files, looked, claudeFound: files.length > 0 };
+  let ext = null; try { ext = bundle(); } catch { /* shown as missing */ }
+  return { on: ctx.setting('claude.connect', true) !== false, extension: ext, script: SCRIPT, scriptFound: fs.existsSync(SCRIPT), command: want.command, files, looked, claudeFound: files.length > 0 };
 }
 
-module.exports = { ensure, entry, desktopConfigs, status, watch, SCRIPT };
+module.exports = { ensure, entry, desktopConfigs, status, watch, bundle, manifest, zip, SCRIPT };

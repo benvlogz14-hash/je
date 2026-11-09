@@ -136,15 +136,19 @@ function VoiceSetup() {
 /** Is the Claude app on this PC connected to Euclidean (the MCP connector)? Shows where it looked and what it wrote. */
 function ClaudeApp() {
   const { data: c, reload } = useApi('/api/claude/connect', []);
+  const getExt = () => act(() => api.post('/api/claude/extension', {}), { ok: 'The file is open in its folder: drag Euclidean.mcpb into Claude → Settings → Extensions' });
   const connect = () => act(() => api.post('/api/claude/connect', {}), { ok: (r) => (r.status?.files?.some((f) => f.connected) ? 'Connected. Quit the Claude app (icon by the clock → Quit) and open it again.' : 'Claude app not found yet') }).then(reload);
   if (!c) return null;
   const ok = c.files.some((f) => f.connected);
   return html`<${Section} title="Claude app" sub="Lets the Claude desktop app on this PC check Euclidean's jobs, candidates and ad runs for you (it can't send or approve anything)." action=${html`<span class=${'badge ' + (ok ? 'moss' : '')}>${ok ? 'Connected' : 'Not connected'}</span>`}>
     <div class="col" style="gap:8px;font-size:var(--fs-sm)">
+      <div class="panel pad col" style="gap:6px;padding:10px 12px"><b>Easiest way: drag one file into Claude</b>
+        <span>Press the button, then drag <b>Euclidean.mcpb</b> from the folder that opens into Claude → Settings → Extensions (the "Drag .MCPB or .DXT files here" box) and press Install. No link or settings needed.</span>
+        <div class="row" style="gap:8px"><${Button} size="sm" kind="primary" icon="download" onClick=${getExt}>Show the Claude file</${Button}>${c.extension ? html`<span class="faint selectable" style="font-size:var(--fs-xs);overflow-wrap:anywhere">${c.extension}</span>` : null}</div></div>
       ${!c.claudeFound ? html`<span>The Claude app wasn't found on this PC. Install it from claude.ai/download, open it once, then press Connect now.</span>`
         : c.files.map((f) => html`<div class="row" style="gap:8px;align-items:flex-start"><span class=${'badge ' + (f.connected ? 'moss' : f.error ? 'coral' : 'gold')}>${f.connected ? 'Connected' : f.error ? 'Problem' : 'Not yet'}</span><span class="selectable grow" style="overflow-wrap:anywhere">${f.file}${f.error ? html`<br /><span class="faint">${f.error}</span>` : null}</span></div>`)}
       ${ok ? html`<span class="faint">If Claude doesn't list "euclidean" under its Connectors, quit Claude completely (right-click its icon by the clock → Quit) and open it again. Keep Euclidean open while you use it.</span>` : null}
-      <div class="row" style="gap:8px"><${Button} size="sm" kind="primary" onClick=${connect}>Connect now</${Button}><span class="faint selectable" style="font-size:var(--fs-xs);overflow-wrap:anywhere">Runs with ${c.command}</span></div>
+      <div class="row" style="gap:8px"><${Button} size="sm" kind="ghost" onClick=${connect}>Connect now</${Button}><span class="faint selectable" style="font-size:var(--fs-xs);overflow-wrap:anywhere">Runs with ${c.command}</span></div>
     </div>
   </${Section}>`;
 }

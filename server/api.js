@@ -867,6 +867,7 @@ r.post('/api/setup/:action', (req, b, p) => {
 r.get('/api/political/steps', () => polPkg.STEPS.map(([key, label]) => ({ key, label })));
 // The Claude app on this PC and Euclidean's connector (Settings → Connections → Claude app).
 r.get('/api/claude/connect', () => require('./setup/claude-connect').status());
+r.post('/api/claude/extension', () => { const f = require('./setup/claude-connect').bundle(); if (!f) throw Object.assign(new Error('The connector file is missing from this copy of Euclidean.'), { status: 404 }); if (ctx.revealFile) ctx.revealFile(f); return { path: f }; }, { roles: OWNER });
 r.post('/api/claude/connect', () => ({ ...require('./setup/claude-connect').ensure(), status: require('./setup/claude-connect').status() }), { roles: OWNER });
 // GrokBot's Oct 28 research packs (shipped with the app): how many there are, and Import (a founder presses it).
 r.get('/api/political/grokbot', () => require('./outreach/leads').grokStatus());
