@@ -193,8 +193,12 @@ async function ask({ role = 'operations', system, prompt, messages, json = false
   // Looking at pictures: the local AI only when its vision model is downloaded.
   if (images?.length) chain = chain.filter((p) => (p !== 'ollama' || hasVisionModel()) && p !== 'bridge');
   // Free web search for providers without built-in search (everything except Grok): results go in as context.
-  if (search && !(chain.find((p) => connected(p) && !overBudget(p)) === 'xai')) {
-    try { const ws = await require('./websearch').forPrompt(prompt || (messages || []).slice(-1)[0]?.content || ''); if (ws) system = `${system || ''}\n\n${ws}`; } catch { /* search unavailable */ }
+  // The free local AI and your own AI account can't browse, so they get the pages' own words (search + read the
+  // best pages); paid APIs get the results plus the top page, to keep token costs down.
+  const first = chain.find((p) => connected(p) && !overBudget(p));
+  if (search && first !== 'xai') {
+    const deep = first === 'ollama' || first === 'bridge';
+    try { const ws = await require('./websearch').forPrompt(prompt || (messages || []).slice(-1)[0]?.content || '', { deep: true, pages: deep ? Number(ctx.setting('ai.web.readPages', 3)) : 1, recent: typeof search === 'string' ? search : null }); if (ws) system = `${system || ''}\n\n${ws}`; } catch { /* search unavailable */ }
   }
   const sys = [system, clientContext(clientId)].filter(Boolean).join('\n\n');
   const msgs = messages || [{ role: 'user', content: prompt }];

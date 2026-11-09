@@ -224,10 +224,13 @@ async function lookup(subject, question) {
     } catch { return { text: `Top headlines right now:\n${heads}` }; }
   }
   const p = match(subject);
-  const [news, results, lv] = await Promise.all([p ? web.newsAbout(p.name, 4) : web.newsFor(subject, 5), web.search(subject, 6), web.live(`Find the latest news and facts about ${subject}.`).catch(() => null)]);
+  // The free web search reads the best two pages too, so HAL works from their own words, not one-line snippets.
+  const [news, deep, lv] = await Promise.all([p ? web.newsAbout(p.name, 4) : web.newsFor(subject, 5), require('../integrations/websearch').research(`${subject} ${question}`, { query: subject, pages: 2, results: 6 }).catch(() => null), web.live(`Find the latest news and facts about ${subject}.`).catch(() => null)]);
+  const results = deep?.results || [];
   if (lv?.items.length) news.push(...lv.items);
   const heads = news.length ? lines(news, (n) => `- ${n.t} (${n.url})`) : 'none found';
-  const webr = results.length ? lines(results, (x) => `- ${x.title}: ${x.snippet} (${x.url})`) : 'none found';
+  const webr = (results.length ? lines(results, (x) => `- ${x.title}: ${x.snippet} (${x.url})`) : 'none found')
+    + (deep?.pages.length ? `\nPages the app read just now (their own words):\n${deep.pages.map((pg) => `[${pg.title} (${pg.url})]\n${pg.passages.join('\n').slice(0, 1400)}`).join('\n\n')}` : '');
   if (!news.length && !results.length) return { text: `Nothing came back for "${subject}". Check the internet, or give me a link to read.` };
   const known = memory.context(`${subject} ${question}`, { about: p?.name || subject });
   const rec = (p ? `On record in our board: ${JSON.stringify({ name: p.name, office: p.office, stage: p.stage, why: p.why, hook: p.kit?.card?.hook_email, tier: p.kit?.tier })}` : 'Not on our board.') + (known ? `\nFrom your notebook (dated; newer wins):\n${known}` : '');
@@ -309,6 +312,20 @@ function arcade(low) {
 }
 
 /** One message from Ryan or Ben. Returns { text, by?, confirm?, navigate?, card?, draft? }. */
+/** "ask Scout to find ...", "have the Builder make ...": hand the job to a bot on the Bots page and bring its answer back. */
+async function toBot(low, t, actor) {
+  const m = /^(?:can you |please )?(?:ask|tell|have|get|send)\s+(?:the\s+)?(.+?)\s+(?:bot\s+)?(?:to\s+|for\s+|about\s+|:\s*)([\s\S]{4,})$/i.exec(t.replace(/^\s*(?:hey\s+)?hal[,\s]+/i, ''));
+  if (!m) return null;
+  let bots; try { bots = require('../bots'); } catch { return null; }
+  const bot = bots.findBot(m[1].replace(/\s+bot$/i, ''));
+  if (!bot) return null;
+  try {
+    const r = await bots.ask(bot.id, m[2].trim(), actor === 'user' ? 'hal' : actor);
+    if (r.waiting) return { text: `${bot.name} needs your OK for a step. It's waiting on the Bots page.`, navigate: `/bots?bot=${bot.id}` };
+    return { text: `${bot.emoji || ''} ${bot.name}:\n${r.answer || 'No answer.'}`.trim(), by: bot.name };
+  } catch (e) { return { text: `${bot.name} couldn't do it: ${e.message}` }; }
+}
+
 async function handle(text, { history = [], context = {}, actor = 'user' } = {}) {
   const t = String(text || '').trim(); if (!t) return { text: 'Say something and I will consider it.' };
   const low = t.toLowerCase().replace(/^\s*(?:hey\s+)?hal[,\s]+/, '');
@@ -321,6 +338,7 @@ async function handle(text, { history = [], context = {}, actor = 'user' } = {})
     const onThis = await onClip(low, t, context, actor); if (onThis) return onThis;
     const mem = notebook(low, t, actor); if (mem) return mem;
     const game = arcade(low); if (game) return game;
+    const handOff = await toBot(low, t, actor); if (handOff) return handOff;
     if (/\b(you (sent|found|added|gave|surfaced|flagged|mentioned)|the ones you|parse (through|the)|which (ones|prospect|candidate)|list (them|those|the new)|go (back|over)|what (were|was) (the|those))\b/.test(low) && /\b(prospect|candidate|lead|name|one)s?\b/.test(low)) return recall();
     if (/\b(what did you find|anything new|what('?s| is) new(?! with| on| about| for)|check (?:the )?(?:news|internet|web) now|scan (?:the )?(?:news|web|internet)|run (?:your|the) watch|look for (?:new )?leads)\b/.test(low)) return await watchNow();
     if (/\b(stop|pause|turn off) (?:your |the )?watch(?:ing)?\b/.test(low)) { ctx.store.setSettings({ hal: { watch: { on: false } } }); return { text: 'Watch off. I stop reading the web in the background until you say "start watching".' }; }

@@ -937,6 +937,9 @@ queue.register('video.reverse', {
 
 queue.register('setup.ollama', { title: () => 'Turn on Ollama', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setup(h) });
 queue.register('setup.vision', { title: () => 'Download free video vision (Llama vision)', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setupVision(h) });
+// The bots' own computer (server/bots/computer.js): build its Linux image once, or install Docker Desktop on Windows.
+queue.register('bots.computer.setup', { title: () => "Set up the bots' computer", maxAttempts: 1, run: (job, h) => require('../bots/computer').setup(h) });
+queue.register('bots.computer.install', { title: () => 'Install Docker Desktop', maxAttempts: 1, run: (job, h) => require('../bots/computer').installDocker(h) });
 queue.register('setup.ffmpeg', { title: () => 'Install FFmpeg and yt-dlp', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/production').installFfmpeg(h) });
 // Best shorts library (winners.js): measure an uploaded top performer so the formula learns from it.
 queue.register('winners.measure', { title: (p) => `Measure best short: ${p.title || ''}`.slice(0, 80), maxAttempts: 1, run: async (job, h) => {

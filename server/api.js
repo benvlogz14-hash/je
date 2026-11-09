@@ -1550,6 +1550,37 @@ r.get('/api/media/thumb', async (req, res) => {
   return serveFile(req, res, out, { cache: true });
 }, { stream: true });
 
+// Bots (sidebar "Bots", server/bots/): Euclidean's own team of AI bots with live web, a browser and a VM each.
+const bots = () => require('./bots');
+const botErr = (fn) => (...a) => { try { const r = fn(...a); return r && r.then ? r.catch((e) => { throw e instanceof HttpError ? e : new HttpError(400, e.message); }) : r; } catch (e) { throw e instanceof HttpError ? e : new HttpError(400, e.message); } };
+r.get('/api/bots', () => ({ bots: bots().list().map((b) => bots().summary(b)), brains: Object.fromEntries(bots().BRAINS.map((k) => [k, { label: require('./bots/agent').brainLabel(k), ready: k === 'auto' ? ai.anyConnected() : ai.connected(k) }])), desktop: !!ctx.botBrowser, web: { searxng: !!ctx.setting('ai.searxngUrl', ''), localNetwork: ctx.setting('web.localNetwork', false) === true } }));
+r.post('/api/bots', botErr((req, b) => bots().create(b, actorOf(req))), { roles: OWNER });
+r.get('/api/bots/shot', (req, res) => {
+  const f = path.resolve(String(req.query.file || '')); const base = path.join(paths.root, 'bots');
+  if (!f.startsWith(base + path.sep) || !/\.png$/i.test(f) || !fs.existsSync(f)) return send(res, 404, {});
+  return serveFile(req, res, f, { cache: true });
+}, { stream: true });
+r.get('/api/bots/:id', (req, b, p) => { const bot = must(bots().get(p.id), 'No such bot'); return { bot: bots().summary(bot), ...bots().thread(p.id) }; });
+r.patch('/api/bots/:id', botErr((req, b, p) => bots().update(p.id, b, actorOf(req))), { roles: OWNER });
+r.del('/api/bots/:id', (req, b, p) => bots().remove(p.id, actorOf(req)), { roles: OWNER });
+r.post('/api/bots/:id/send', botErr((req, b, p) => bots().send(p.id, b.text, actorOf(req))));
+r.del('/api/bots/:id/thread', (req, b, p) => bots().clear(p.id));
+r.post('/api/bots/runs/:id/decide', botErr((req, b, p) => bots().decide(p.id, b.allow === true, actorOf(req))));
+r.post('/api/bots/runs/:id/stop', (req, b, p) => bots().stop(p.id, actorOf(req)));
+// The bot's computer (Docker VM) and browser.
+r.get('/api/bots/:id/computer', async (req, b, p) => { must(bots().get(p.id), 'No such bot'); const c = require('./bots/computer'); const st = await c.status(p.id, { force: req.query.force === '1' }); return { ...st, files: st.ready ? c.listFiles(p.id).slice(0, 200) : [] }; });
+r.post('/api/bots/computer/setup', () => queue.enqueue('bots.computer.setup', {}, { title: "Set up the bots' computer", dedupeKey: 'bots.computer.setup' }), { roles: OWNER });
+r.post('/api/bots/computer/install', () => queue.enqueue('bots.computer.install', {}, { title: 'Install Docker Desktop', dedupeKey: 'bots.computer.install' }), { roles: OWNER });
+r.post('/api/bots/:id/computer/stop', botErr((req, b, p) => require('./bots/computer').stop(p.id)));
+r.post('/api/bots/:id/computer/reset', botErr((req, b, p) => require('./bots/computer').reset(p.id, { wipe: !!b.wipe })), { roles: OWNER });
+r.post('/api/bots/:id/computer/folder', (req, b, p) => { const d = require('./bots/computer').workDir(p.id); if (ctx.openPath) ctx.openPath(d); return { folder: d }; });
+r.post('/api/bots/:id/browser/show', (req, b, p) => { if (!ctx.botBrowser) throw new HttpError(400, 'This works in the Euclidean desktop app.'); return ctx.botBrowser.show(p.id); });
+r.post('/api/bots/:id/browser/clear', async (req, b, p) => { if (!ctx.botBrowser) throw new HttpError(400, 'This works in the Euclidean desktop app.'); return ctx.botBrowser.clearData(p.id); }, { roles: OWNER });
+// Live web for everyone (free, no key): search, read a page, or search-and-read.
+r.get('/api/web/search', botErr((req) => require('./integrations/websearch').search(String(req.query.q || ''), Math.min(20, Number(req.query.n) || 8), { recent: req.query.recent || null })));
+r.get('/api/web/read', botErr((req) => require('./integrations/websearch').read(String(req.query.url || ''))));
+r.get('/api/web/research', botErr((req) => require('./integrations/websearch').research(String(req.query.q || ''), { pages: Math.min(5, Number(req.query.pages) || 3), recent: req.query.recent || null })));
+
 // Settings → Agent Connections and the Agent Conversations panel (peer-to-peer agent messaging).
 require('./agents/routes')(r);
 // For Claude (the MCP connector): every feature, searchable, with how careful each one is (server/core/endpoints.js).

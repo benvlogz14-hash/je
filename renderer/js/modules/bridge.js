@@ -50,12 +50,12 @@ export function Bridge() {
         <div class="notice gold">Grok, Claude and ChatGPT's terms don't allow heavy automated use of personal accounts, and they can limit accounts that do it. Keep this for light use; looking at video still needs an API key or Llama.</div>
         <div class="row wrap" style="gap:6px"><${Button} size="sm" kind=${st?.use === 'first' ? 'primary' : 'ghost'} onClick=${() => setUse('first')}>Use ${label} first</${Button}><${Button} size="sm" kind=${st?.use === 'fallback' ? 'primary' : 'ghost'} onClick=${() => setUse('fallback')}>Only when paid AI is out</${Button}><${Button} size="sm" kind=${st?.use === 'off' || !st?.use ? 'primary' : 'ghost'} onClick=${() => setUse('off')}>Off</${Button}></div>
       </div></details>
-    <${GrokBots} />
+    <div class="panel pad row wrap" style="gap:10px;margin-top:14px"><${Icon} name="robot" size=${18} /><div class="grow"><b>Bots</b> <span class="faint" style="font-size:var(--fs-sm)">Your own team of bots (the GrokBot alternative) now has its own page: live web, their own browser and computer, and your GrokBots by email.</span></div><${Button} size="sm" kind="soft" onClick=${() => navigate('/bots')}>Open Bots</${Button}></div>
   </div>`;
 }
 
 /** GrokBots by email: add your bots, send them tasks, read their answers (no API keys). */
-function GrokBots() {
+export function GrokBots() {
   const { data, reload } = useApi('/api/grokbots', ['botTasks']);
   const [list, setList] = useState(null); const [bot, setBot] = useState(''); const [task, setTask] = useState(''); const [open, setOpen] = useState(null);
   useEffect(() => { if (data && list == null) setList(data.bots.length ? data.bots : [{ name: 'Research bot', email: '', role: 'research' }]); }, [data]);
