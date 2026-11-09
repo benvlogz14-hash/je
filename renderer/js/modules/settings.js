@@ -43,10 +43,11 @@ function PhoneSetup() {
     : html`<div class="row wrap" style="gap:22px;align-items:flex-start">
         <div style="width:210px;height:210px;background:#fff;border-radius:12px;padding:8px;box-shadow:var(--shadow-1)" dangerouslySetInnerHTML=${{ __html: ph.qr }} aria-label="QR code with your phone link" />
         <div class="col grow" style="gap:10px;min-width:240px">
-          ${step(1, 'Make sure your iPhone is on the same Wi-Fi as this computer.')}
+          ${step(1, ph.tailscale ? 'This link goes through Tailscale, so it works anywhere (home, work, on cell data) while this PC is on. Tailscale must be on in the iPhone app too.' : 'Make sure your iPhone is on the same Wi-Fi as this computer.')}
           ${step(2, 'Open the iPhone Camera and point it at the code. Tap the link that appears; Euclidean opens in Safari.')}
           ${step(3, html`In Safari tap <b>Share</b> (the square with an arrow), then <b>Add to Home Screen</b>, then <b>Add</b>.`)}
           ${step(4, 'Open Euclidean from its new home-screen icon. It runs full-screen and stays signed in.')}
+          ${ph.tailscale ? null : html`<div class="faint" style="font-size:var(--fs-xs)"><b>Away from home too:</b> install Tailscale (free, tailscale.com) on this PC and on your iPhone, sign in to both with the same account, then restart Euclidean. This code then works from anywhere, and nothing is opened to the internet.</div>`}
           <div class="row" style="gap:6px"><input class="input mono grow" readonly value=${ph.url} onFocus=${(e) => e.target.select()} aria-label="Phone link" /><${Button} size="sm" kind="ghost" onClick=${() => { navigator.clipboard?.writeText(ph.url).then(() => toast('Link copied', { kind: 'ok' })).catch(() => toast('Select the link and copy it', { kind: 'info' })); }}>Copy</${Button}></div>
           <div class="faint" style="font-size:var(--fs-xs)">This link signs your phone in, so keep it private. ${ph.publicUrl ? 'It works anywhere because a public address is set.' : 'It works on your home or office Wi-Fi. To use it anywhere, expose Euclidean with Cloudflare Tunnel and enter that address as the Public URL under Network below.'} The computer must be on with Euclidean running.</div>
           <div><${Button} size="sm" kind="coral" onClick=${async () => { if (await confirmDialog({ title: 'Disconnect your phone?', text: 'The home-screen app stops working until you create a new link.', confirm: 'Disconnect' })) act(() => api.post('/api/phone/unlink'), { ok: 'Phone disconnected' }).then(reload); }}>Disconnect phone</${Button}></div>

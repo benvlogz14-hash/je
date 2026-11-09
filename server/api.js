@@ -1311,10 +1311,11 @@ function phoneUser(owner, create) {
 }
 r.get('/api/phone', async (req) => {
   const lanOn = !!ctx.setting('server.lan', false); const pub = String(ctx.setting('server.publicUrl', '') || '').replace(/\/$/, '');
-  const host = pub || (ctx.lanAddress ? `http://${ctx.lanAddress}:${ctx.port}` : null);
+  // Tailscale first (works at home and away), then this Wi-Fi's address. A public address set in Settings wins.
+  const host = pub || (ctx.tailscaleAddress ? `http://${ctx.tailscaleAddress}:${ctx.port}` : ctx.lanAddress ? `http://${ctx.lanAddress}:${ctx.port}` : null);
   const u = phoneUser(req.user, false);
   const url = host && u ? `${host}/?token=${u.token}` : null;
-  return { lanOn, lanActive: !!ctx.lanAddress, publicUrl: pub || null, host, url, qr: url ? await require('qrcode').toString(url, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }) : null, canRestart: !!ctx.relaunch };
+  return { lanOn, lanActive: !!ctx.lanAddress, tailscale: ctx.tailscaleAddress || null, publicUrl: pub || null, host, url, qr: url ? await require('qrcode').toString(url, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }) : null, canRestart: !!ctx.relaunch };
 }, { roles: OWNER });
 r.post('/api/phone/link', (req) => { const u = phoneUser(req.user, true); audit.log(actorOf(req), 'phone.linked', { userId: u.id }); return { ok: true }; }, { roles: OWNER });
 r.post('/api/phone/unlink', (req) => { const u = phoneUser(req.user, false); if (u) ctx.store.remove('users', u.id); audit.log(actorOf(req), 'phone.unlinked', {}); return { ok: true }; }, { roles: OWNER });
