@@ -960,7 +960,7 @@ queue.register('outreach.kits', {
     const sum = guide.summary(ids.map((id) => ctx.store.get('prospects', id)).filter(Boolean));
     if (job.payload.hal || ids.length > 1) {
       const c = sum.counts; const ex = Object.entries(c.excluded).map(([k, v]) => `${v} ${k}`).join(', ');
-      const text = [`Batch done: ${c.drafted} drafted, ${c.queued} in Approvals for Ben, ${c.onlyIfWin} only-if-they-win, ${c.notOnBallot} not on the ballot, ${c.hold} on HOLD${ex ? `, excluded: ${ex}` : ''}.`,
+      const text = [`Batch done: ${c.drafted} drafted, ${c.queued} in Approvals for Ben, ${c.notOnBallot} not on the ballot, ${c.hold} on HOLD${ex ? `, excluded: ${ex}` : ''}.`,
         sum.best.length ? `Best picks:\n${sum.best.map((b) => `- ${b.name}: ${b.why}`).join('\n')}` : '', sum.flags.length ? `Flags:\n${sum.flags.slice(0, 25).map((f) => `- ${f}`).join('\n')}${sum.flags.length > 25 ? `\n(${sum.flags.length - 25} more on the cards)` : ''}` : '', errors.length ? `Couldn't finish: ${errors.join('; ')}` : ''].filter(Boolean).join('\n\n');
       const m = ctx.store.insert('halMessages', { who: 'hal', text, by: 'guide', draft: sum.table.map((r) => `${r.name} | ${r.office} | ${r.tier} | ${r.channel} | ${r.status}`).join('\n') });
       events.publish('hal', { id: m.id });

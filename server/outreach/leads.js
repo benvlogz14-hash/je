@@ -134,8 +134,8 @@ function importGrok(actor = 'user') {
     // Real contact only ("never emailed", "unsent drafts" don't count), so the guide writes a thread reply when it should.
     const contacted = /emailed|thread|sent (on|oct)|dm'?d|called|replied/i.test(r.priorContact) && !/never|unsent|not (yet )?(sent|contacted)/i.test(r.priorContact);
     const ex = ctx.store.find('prospects', (p) => p.type === 'political' && nameMatch(p.name, r.name) && nameMatch(r.name, p.name));
-    const flags = [r.hold && 'HOLD', r.onlyIfWin && 'Contact only if they win', r.notOnBallot && 'Not on the Nov 3 ballot (no "congrats on the win")', r.ryans && "Ryan's thread: Ryan sends", r.replyInThread && 'Reply in the existing thread', r.emailUnverified && 'Verify the email before sending'].filter(Boolean);
-    const grok = { pack: r.pack, status: r.status, odds: r.odds, tier: r.tier, finance: r.finance, bestChannel: r.bestChannel, hook: r.hook, emailNote: r.emailNote, phone: r.phone, social: r.social, priorContact: r.priorContact, sources: r.sources, flags, drafts: r.drafts, importedAt: new Date().toISOString() };
+    const flags = [r.hold && 'HOLD', r.notOnBallot && 'Not on the Nov 3 ballot (no "congrats on the win")', r.ryans && "Ryan's thread: Ryan sends", r.replyInThread && 'Reply in the existing thread', r.emailUnverified && 'Verify the email before sending'].filter(Boolean);
+    const grok = { pack: r.pack, status: String(r.status || '').replace(/\s*(only if (s?he|they) wins?|non-incumbent)\.?/gi, '').trim() || 'Incumbent', tier: r.tier, finance: r.finance, bestChannel: r.bestChannel, hook: r.hook, emailNote: r.emailNote, phone: r.phone, social: r.social, priorContact: r.priorContact, sources: r.sources, flags, drafts: r.drafts, importedAt: new Date().toISOString() };
     const fields = { type: 'political', office: r.office, location: ex?.location || r.office, why: ex?.why || r.hook, listSource: 'GrokBot Oct 28', grok,
       ...(email && !ex?.publicContact ? { publicContact: email, contactVerified: !r.emailUnverified, imported: true } : {}),
       ...(r.hold ? { hold: `GrokBot: ${r.status}`.slice(0, 200) } : {}),

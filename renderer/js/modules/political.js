@@ -156,8 +156,9 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
       <${FootageLinks} p=${p} pkg=${pkg} run=${run} busy=${!!job} reload=${reload} />
       <${LookPanel} p=${p} pkg=${pkg} busy=${!!job} reload=${reload} />
       <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ value: 'about', label: 'About' }, { value: 'videos', label: 'Videos & sheet' }, { value: 'email', label: 'Email' }, { value: 'brief', label: 'Brief' }, { value: 'call', label: 'Call' }, { value: 'sources', label: `Sources ${pkg.sources?.length || ''}` }, ...(p.grok ? [{ value: 'grok', label: 'GrokBot' }] : [])]} />
-      ${tab === 'grok' && p.grok ? html`<${GrokTab} g=${p.grok} />` : null}
+      ${tab === 'grok' && p.grok ? html`<div class="col" style="gap:10px"><${ElectionResult} p=${p} reload=${reload} /><${GrokTab} g=${p.grok} /></div>` : null}
       ${tab === 'about' ? html`<div class="col selectable" style="gap:10px;font-size:var(--fs-sm);line-height:1.55">
+        <${ElectionResult} p=${p} reload=${reload} />
         ${b.headline ? html`<h3>${b.headline}</h3>` : null}
         <div class="grid c2" style="gap:8px">${[['Office', pkg.profile?.office || p.location], ['Party', pkg.profile?.party], ['Stage', p.stage || 'new'], ['Contact email', p.publicContact || pkg.profile?.contact || 'not found yet'], ['Office phone', pkg.profile?.officePhone], ['Found by', p.source ? `${p.source}${p.query ? ` ("${p.query}")` : ''}` : '']].filter(([, v]) => v).map(([k, v]) => html`<div class="panel pad" style="padding:8px 12px"><div class="faint" style="font-size:var(--fs-xs)">${k}</div><b style="overflow-wrap:anywhere">${v}</b></div>`)}</div>
         ${p.why || p.angle || b.angle ? html`<div class="notice sky">${b.angle || p.angle || p.why}</div>` : null}
@@ -198,6 +199,15 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
     </div></${Drawer}>`;
 }
 
+/** Won or lost on Nov 3. Everyone counts as having won (an officeholder now) unless marked Lost; Lost is never contacted. */
+function ElectionResult({ p, reload }) {
+  const lost = p.electionResult === 'lost';
+  const set = (v) => act(() => api.patch(`/api/prospects/${p.id}`, { electionResult: v }), { ok: v === 'lost' ? `${p.name} marked Lost: nothing will be sent` : `${p.name} marked Won` }).then(reload);
+  return html`<div class=${`notice ${lost ? 'coral' : ''}`} style="align-items:center">
+    <span class="grow">${lost ? `${p.name} lost on Nov 3, so nothing is drafted or sent to them.` : `${p.name} is treated as an officeholder (won Nov 3 or in office). Mark Lost if they lost.`}</span>
+    <${Button} size="sm" kind=${lost ? 'primary' : 'ghost'} onClick=${() => set(lost ? 'won' : 'lost')}>${lost ? 'They won' : 'They lost'}</${Button}></div>`;
+}
+
 /** GrokBot's research and drafts for this candidate (imported from its Oct 28 packs), each draft with Copy. */
 function GrokTab({ g }) {
   const copy = (t) => { navigator.clipboard?.writeText(t).then(() => toast('Copied', { kind: 'ok', ms: 1200 })).catch(() => toast('Select the text and copy it', { kind: 'warn' })); };
@@ -206,7 +216,7 @@ function GrokTab({ g }) {
   const words = (t) => String(t || '').split(/\s+/).filter(Boolean).length;
   return html`<div class="col" style="gap:10px">
     ${g.flags?.length ? html`<div class="row wrap" style="gap:6px">${g.flags.map((f) => html`<span class=${`badge ${/HOLD|Ryan/.test(f) ? 'coral' : 'gold'}`}>${f}</span>`)}</div>` : null}
-    <div class="grid c2" style="gap:8px;font-size:var(--fs-sm)">${[['Status', g.status], ['Win odds', g.odds], ['Tier (internal)', [g.tier, g.finance].filter(Boolean).join(' · ')], ['Best channel', g.bestChannel], ['Email', g.emailNote], ['Phone', g.phone], ['Social', g.social], ['Prior contact', g.priorContact]].filter(([, v]) => v).map(([k, v]) => html`<div class="panel pad" style="padding:8px 12px"><div class="faint" style="font-size:var(--fs-xs)">${k}</div><span class="selectable" style="overflow-wrap:anywhere">${v}</span></div>`)}</div>
+    <div class="grid c2" style="gap:8px;font-size:var(--fs-sm)">${[['Status', g.status], ['Tier (internal)', [g.tier, g.finance].filter(Boolean).join(' · ')], ['Best channel', g.bestChannel], ['Email', g.emailNote], ['Phone', g.phone], ['Social', g.social], ['Prior contact', g.priorContact]].filter(([, v]) => v).map(([k, v]) => html`<div class="panel pad" style="padding:8px 12px"><div class="faint" style="font-size:var(--fs-xs)">${k}</div><span class="selectable" style="overflow-wrap:anywhere">${v}</span></div>`)}</div>
     ${g.hook ? html`<div class="notice sky selectable">${g.hook}</div>` : null}
     ${block(`First email${D.subject ? `: "${D.subject}"` : ''}`, D.email ? `${D.subject ? `Subject: ${D.subject}\n\n` : ''}${D.email}` : '')}
     ${block('Follow-up (day 4, same thread)', D.followup)}
@@ -417,9 +427,10 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
   return html`<div class="panel pad col" style="gap:14px">
     <div class="row" style="gap:10px;align-items:center"><div class="avatar" style="background:var(--coral-soft, var(--sky-soft));color:var(--coral-ink, var(--sky-ink))"><${Icon} name="film" size=${16} /></div>
       <div class="col grow" style="gap:2px"><h4>Ad machine</h4><span class="faint" style="font-size:var(--fs-xs)">Upload a candidate's footage. Their best lines, word for word, become motion-graphics ads in 9:16 and 16:9, in 15 styles or one you describe.</span></div></div>
-    <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ value: 'make', label: 'Make ads' }, { value: 'finished', label: `Finished${nDone ? ` (${nDone})` : ''}` }]} />
+    <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ value: 'make', label: 'Make ads' }, { value: 'styles', label: `Styles (${(looks?.presets || []).length || 15})` }, { value: 'finished', label: `Finished${nDone ? ` (${nDone})` : ''}` }]} />
     ${viewed ? html`<${Modal} wide title=${`${viewed.name}'s ads`} onClose=${() => setViewing(null)} footer=${html`<${Button} kind="ghost" onClick=${() => { setViewing(null); onOpen(viewed.id); }}>Open ${viewed.name.split(' ')[0]}'s lead</${Button}><${Button} kind="ghost" onClick=${() => { setPid(viewed.id); setViewing(null); setTab('make'); }}>Make them again</${Button}><${Button} kind="primary" onClick=${() => setViewing(null)}>Done</${Button}>`}><${FinishedAds} p=${viewed} /></${Modal}>` : null}
-    ${tab === 'finished' ? html`<${FinishedGallery} list=${list} jobs=${jobs} onOpen=${setViewing} />` : html`<div class="col" style="gap:14px">
+    ${tab === 'styles' ? html`<${StylesGallery} presets=${looks?.presets || []} sel=${sel} onUse=${(id) => { setSel(id); setPrompt(''); setTab('make'); toast(`${(looks?.presets || []).find((x) => x.id === id)?.name || 'Style'} picked. Pick the candidate and press Make the ads.`, { kind: 'ok' }); }} />`
+    : tab === 'finished' ? html`<${FinishedGallery} list=${list} jobs=${jobs} onOpen=${setViewing} />` : html`<div class="col" style="gap:14px">
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;align-items:start">
       <div class="col" style="gap:10px;min-width:0">
         <b style="font-size:var(--fs-sm)">1 · The candidate</b>
@@ -452,12 +463,38 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
   </div>`;
 }
 
+/** Sample ad for a preset look (built in: renderer/assets/looks/<id>.mp4 + .jpg, made by the ad engine itself). */
+const lookVideo = (id) => `/ui/assets/looks/${id}.mp4`;
+const lookPoster = (id) => `/ui/assets/looks/${id}.jpg`;
+
+/** Every ad style as a moving sample (the showcase, in the app): watch them all, pick one with Use this style. */
+function StylesGallery({ presets, sel, onUse }) {
+  if (!presets?.length) return html`<div class="faint pad">Loading the styles…</div>`;
+  return html`<div class="col" style="gap:10px">
+    <span class="faint" style="font-size:var(--fs-xs)">A sample ad in each style, made by the ad engine from a real candidate's footage. Pick one, or describe your own on the Make ads tab.</span>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px">
+      ${presets.map((x) => html`<div key=${x.id} class="col" style=${`gap:6px;padding:8px;border-radius:14px;background:var(--surface);border:2px solid ${sel === x.id ? 'var(--accent, #6c5ce7)' : 'var(--line)'}`}>
+        <div style=${`position:relative;width:100%;aspect-ratio:9/16;border-radius:10px;overflow:hidden;background:linear-gradient(${x.colors.slice(0, 3).join(',')})`}>
+          <img src=${lookPoster(x.id)} alt="" loading="lazy" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" onError=${(e) => { e.target.style.display = 'none'; }} />
+          <video src=${lookVideo(x.id)} muted loop playsinline autoplay preload="metadata" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" onError=${(e) => { e.target.style.display = 'none'; }} />
+        </div>
+        <b style="font-size:var(--fs-sm)">${x.name}</b>
+        <span class="faint" style="font-size:var(--fs-xs);line-height:1.35;min-height:2.7em">${x.about}</span>
+        <${Button} size="sm" kind=${sel === x.id ? 'primary' : 'ghost'} onClick=${() => onUse(x.id)}>${sel === x.id ? 'Picked' : 'Use this style'}</${Button}>
+      </div>`)}
+    </div>
+  </div>`;
+}
+
 /** Preset looks as real preview stills (drawn by the ad engine itself), click to pick. */
 function LookPicker({ presets, sel, onSel }) {
-  return html`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:10px">${presets.map((x) => html`<button type="button" class=${'look-card' + (sel === x.id ? ' on' : '')} title=${x.about} onClick=${() => onSel(sel === x.id ? null : x.id)}
+  // Hover plays the style's sample ad (built in), so you see it move before picking.
+  const hover = (e, id, on) => { const v = e.currentTarget.querySelector('video'); if (!v) return; if (on) { if (!v.src) v.src = lookVideo(id); v.play().then(() => { v.style.opacity = 1; }).catch(() => {}); } else { v.pause(); v.style.opacity = 0; } };
+  return html`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:10px">${presets.map((x) => html`<button type="button" class=${'look-card' + (sel === x.id ? ' on' : '')} title=${x.about} onMouseEnter=${(e) => hover(e, x.id, true)} onMouseLeave=${(e) => hover(e, x.id, false)} onClick=${() => onSel(sel === x.id ? null : x.id)}
       style=${`display:flex;flex-direction:column;gap:4px;padding:6px;border-radius:12px;cursor:pointer;text-align:left;background:var(--surface);border:2px solid ${sel === x.id ? 'var(--accent, #6c5ce7)' : 'var(--line)'}`}>
       <div style=${`position:relative;width:100%;aspect-ratio:9/16;border-radius:8px;overflow:hidden;background:linear-gradient(${x.colors.slice(0, 3).join(',')})`}>
-        <img src=${api.url(`/api/political/looks/preview?preset=${x.id}`)} loading="lazy" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" onError=${(e) => { e.target.style.display = 'none'; }} />
+        <img src=${lookPoster(x.id)} loading="lazy" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" onError=${(e) => { if (!e.target.dataset.fb) { e.target.dataset.fb = '1'; e.target.src = api.url(`/api/political/looks/preview?preset=${x.id}`); } else e.target.style.display = 'none'; }} />
+        <video muted loop playsinline preload="none" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .15s" onError=${(e) => { e.target.remove(); }} />
       </div>
       <b style="font-size:var(--fs-xs)">${x.name}</b>
       <span class="faint" style="font-size:10px;line-height:1.3">${x.about}</span>

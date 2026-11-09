@@ -162,7 +162,7 @@ async function email(p, text, actor) {
   const flags = (k.flags || []).length ? `\nFlags: ${k.flags.join('; ')}` : '';
   const qa = (k.qa || []).length ? `\nQA didn't pass: ${k.qa.join('; ')}` : '';
   const head = k.queued ? `Drafted by the guide. ${p.name}'s email is waiting in Approvals; Ben sends it by hand.` : `Drafted ${p.name}'s kit, not queued (${k.blocked}).`;
-  return { text: `${head} ${k.framing === 'post-election' ? 'Post-election note (not on the Nov 3 ballot).' : k.framing === 'only-if-win' ? 'CONTACT ONLY IF THEY WIN.' : 'Congrats-on-the-win frame.'} Internal tier $${k.tier}.${flags}${qa}`, draft: kitText(ctx.store.get('prospects', p.id)), gmail: k.gmail || null };
+  return { text: `${head} ${k.framing === 'post-election' ? 'Post-election note (not on the Nov 3 ballot).' : 'Congrats-on-the-win frame.'} Internal tier $${k.tier}.${flags}${qa}`, draft: kitText(ctx.store.get('prospects', p.id)), gmail: k.gmail || null };
 }
 /** The batch run (Part 8) as a background job; HAL posts the summary when it's done. */
 function batch(low, actor) {

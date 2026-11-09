@@ -76,7 +76,7 @@ const noGovernor = (s) => String(s || '').replace(/\b(?:the\s+)?(?:lieutenant\s+
 const isRyans = (p) => { const n = `${p.name || ''} ${p.campaign || ''}`.toLowerCase(); const extra = String(S('ryansPeople', '') || '').split(/[\n,]+/).map((x) => x.trim().toLowerCase()).filter(Boolean); return [...RYANS, ...extra].some((r) => new RegExp(`\\b${r.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(n)); };
 
 /**
- * { draft, framing: 'win'|'only-if-win'|'post-election'|'hold'|'exclude', status, reason, flags[] } for one prospect,
+ * { draft, framing: 'win'|'post-election'|'hold'|'exclude', status, reason, flags[] } for one prospect,
  * from what's on the card (and the research card once there is one).
  */
 function classify(p, card = {}) {
@@ -95,13 +95,9 @@ function classify(p, card = {}) {
   if (/governor|attorney general|comptroller|secretary of state/.test(office)) flags.push('Statewide executive with an in-house team: long shot');
   if (/conflict/.test(status)) { flags.push('Status conflict between sources: verify before framing'); return { draft: true, framing: 'win', status, reason: '', flags }; }
   let framing = 'win';
+  // The election is over (Ryan, Nov 9): everyone on the ballot either won (an officeholder now: "Congrats on the win.")
+  // or lost (marked Lost, excluded above). No win odds and no "only if they win" anymore.
   if (/not on (?:the )?ballot/.test(status)) framing = 'post-election';
-  else if (/challenger|open/.test(status) && p.electionResult !== 'won') { framing = 'only-if-win'; flags.push('CONTACT ONLY IF THEY WIN NOV 3'); }
-  else if (/unknown/.test(status)) flags.push('Ballot status UNKNOWN: confirm on the county BOE list before sending');
-  const odds = Number(String(card.odds || '').replace(/[^\d.]/g, ''));
-  if (framing === 'only-if-win' && odds && odds < 5) flags.push('Near-zero odds: SKIP unless they win');
-  else if (framing === 'only-if-win' && odds && odds < 50) flags.push('Long shot: only if they win');
-  if (framing === 'win' && p.electionResult !== 'won' && !/unopposed/.test(status)) flags.push('Confirm the win on the county BOE list or AP before sending');
   return { draft: true, framing, status, reason: '', flags };
 }
 
@@ -150,7 +146,7 @@ async function gather(p, h = { progress() {} }) {
   const o = officeShort(p.office || profile?.office);
   const qs = [
     [`${p.name} ${o} secured funding million`, 'hook'], [`${p.name} ${o} bill sponsored passed`, 'hook'], [`"${p.name}" ${o}`, 'news'],
-    [`${p.name} 99chambers`, 'odds'], [st === 'CT' ? `${p.name} SEEC cash on hand` : st === 'NY' ? `${p.name} transparencyusa` : `${p.name} campaign finance cash on hand`, 'money'],
+    [`${p.name} 99chambers raised spent`, 'money'], [st === 'CT' ? `${p.name} SEEC cash on hand` : st === 'NY' ? `${p.name} transparencyusa` : `${p.name} campaign finance cash on hand`, 'money'],
     [`${p.name} campaign email contact`, 'contact'], [`${p.name} suspended OR "primary results" OR investigation`, 'status'],
   ];
   h.progress(0.4, 'Searching the web for their wins, money and contacts');
@@ -169,7 +165,7 @@ const nums = (s) => (String(s || '').match(/\$?\d[\d,.]*\s*(?:million|billion|th
 /** A claim survives only if each number in it appears in the material. */
 const grounded = (claim, material) => { const have = new Set(nums(material)); return nums(claim).every((n) => have.has(n) || have.has(n.replace(/\.0+$/, ''))); };
 
-const CARD_KEYS = ['name', 'office', 'district_towns', 'status', 'framing', 'opponent', 'odds', 'odds_source', 'cash_on_hand', 'receipts', 'public_match', 'state_grant', 'finance_as_of', 'finance_source', 'wealth_signal', 'tier', 'tier_basis', 'email', 'email_source', 'email_verified', 'phone', 'phone_source', 'phone_type', 'socials', 'last_post_dates', 'existing_vendors', 'hook_email', 'hook_voicemail', 'sample_topic', 'prior_contact', 'avoid', 'flags', 'sources'];
+const CARD_KEYS = ['name', 'office', 'district_towns', 'status', 'framing', 'cash_on_hand', 'receipts', 'public_match', 'state_grant', 'finance_as_of', 'finance_source', 'wealth_signal', 'tier', 'tier_basis', 'email', 'email_source', 'email_verified', 'phone', 'phone_source', 'phone_type', 'socials', 'last_post_dates', 'existing_vendors', 'hook_email', 'hook_voicemail', 'sample_topic', 'prior_contact', 'avoid', 'flags', 'sources'];
 
 /** Prior contact from the app's own messages (and any note on an imported list). */
 function priorContact(p) {
@@ -187,13 +183,13 @@ async function researchCard(p, res) {
   const emails = (pr.emails || []).map((e) => e.email); const own = new Set((pr.emails || []).filter((e) => /campaign|website/i.test(String(e.page || '')) || (pr.sites || []).some((s) => String(e.page || '').includes(s))).map((e) => e.email));
   let card = {};
   try {
-    const r = await require('../hal/brain').think({ json: true, maxTokens: 1400, system: `You are the outreach researcher for Euclidean Media. Fill a research card for ONE elected official or candidate from the MATERIAL only. Every value must come from the material; anything not in it is "UNKNOWN". Never guess a number, an email, a phone, odds or a date. Ignore Decision Desk HQ pre-result pages for Nov 3, 2026. Never use .gov or legislature email addresses as the email. No em or en dashes. Return JSON with exactly these keys: ${CARD_KEYS.filter((k) => !['tier', 'tier_basis', 'framing', 'flags', 'sources', 'prior_contact'].includes(k)).join(', ')}, plus "hook_source" (the [n] of the hook's source), "state" (NY, CT or other) and "already_makes_short_video" (true/false/UNKNOWN). status is one of: incumbent, open, challenger, not on ballot, unopposed, suspended, lost primary, status conflict, UNKNOWN. hook_email: ONE sentence, a specific sourced fact about them from the last 90 days if possible, in this order of preference: funding they secured for the district, a bill they sponsored or passed or a committee they chair, a memorable quote of theirs in local news, a personal story from their own About page, a local fight. Rephrase anything involving a governor as "state money". hook_voicemail: the same hook in under 15 words. sample_topic: a 3 to 6 word topic for a free 30-second video. avoid: controversies, investigations, opponent attacks or sensitive personal material found (never used in copy). socials and last_post_dates: handles and last post date per platform if the material shows them.`,
+    const r = await require('../hal/brain').think({ json: true, maxTokens: 1400, system: `You are the outreach researcher for Euclidean Media. Fill a research card for ONE elected official or candidate from the MATERIAL only. Every value must come from the material; anything not in it is "UNKNOWN". Never guess a number, an email, a phone or a date. The Nov 3, 2026 election is over: status is incumbent (in office or won Nov 3), not on ballot, or lost. Never use .gov or legislature email addresses as the email. No em or en dashes. Return JSON with exactly these keys: ${CARD_KEYS.filter((k) => !['tier', 'tier_basis', 'framing', 'flags', 'sources', 'prior_contact'].includes(k)).join(', ')}, plus "hook_source" (the [n] of the hook's source), "state" (NY, CT or other) and "already_makes_short_video" (true/false/UNKNOWN). status is one of: incumbent, open, challenger, not on ballot, unopposed, suspended, lost primary, status conflict, UNKNOWN. hook_email: ONE sentence, a specific sourced fact about them from the last 90 days if possible, in this order of preference: funding they secured for the district, a bill they sponsored or passed or a committee they chair, a memorable quote of theirs in local news, a personal story from their own About page, a local fight. Rephrase anything involving a governor as "state money". hook_voicemail: the same hook in under 15 words. sample_topic: a 3 to 6 word topic for a free 30-second video. avoid: controversies, investigations, opponent attacks or sensitive personal material found (never used in copy). socials and last_post_dates: handles and last post date per platform if the material shows them.`,
       messages: [{ role: 'user', content: `Person: ${p.name}${p.office ? `, ${p.office}` : ''}${p.location ? ` (${p.location})` : ''}.\nKnown campaign emails found by the app: ${emails.join(', ') || 'none'}.\nPhone found: ${pr.officePhone || 'none'}.\n\nMATERIAL:\n${material}` }] });
     card = r.json || {};
     card._by = r.by;
   } catch (e) { card = { _error: e.message }; }
   // Keep only what the material backs up.
-  for (const k of ['cash_on_hand', 'receipts', 'public_match', 'state_grant', 'odds', 'hook_email', 'hook_voicemail']) if (known(card[k]) && !grounded(card[k], material)) card[k] = UNKNOWN;
+  for (const k of ['cash_on_hand', 'receipts', 'public_match', 'state_grant', 'hook_email', 'hook_voicemail']) if (known(card[k]) && !grounded(card[k], material)) card[k] = UNKNOWN;
   if (known(card.hook_email) && !known(card.hook_source)) { const n = res.sources.find((s) => nums(card.hook_email).length && nums(card.hook_email).every((x) => nums(s.text).includes(x)))?.n; card.hook_source = n || UNKNOWN; }
   for (const k of CARD_KEYS) if (!known(card[k]) && !['tier', 'tier_basis', 'framing', 'flags', 'sources', 'prior_contact'].includes(k)) card[k] = UNKNOWN;
   card.name = p.name; if (!known(card.office)) card.office = p.office || pr.office || UNKNOWN;
@@ -231,7 +227,7 @@ async function writeParts(p, card, framing, prior) {
   const fallback = { subject: String(card.sample_topic || 'quick idea').toLowerCase().split(/\s+/).slice(0, 3).join(' '), fact: known(card.hook_email) ? card.hook_email : '', question: 'Who handles your social, you or someone on staff?', vm_hook: known(card.hook_voicemail) ? card.hook_voicemail.replace(/[.!]+$/, '') : '', topic: known(card.sample_topic) ? card.sample_topic : '', dm: '', text: '' };
   if (!known(card.hook_email)) return { ...fallback, by: 'template' };
   try {
-    const r = await require('../hal/brain').think({ json: true, maxTokens: 600, system: `You write first-touch outreach for Ben Gingold of Euclidean Media, one person writing to one person. Use ONLY the research card. Lead with THEM. Human and specific: if it could be sent to any politician by swapping the name, rewrite it.${EXAMPLES} Never mention prices, packages, links, attachments, governors (say "state money"), Isaiah Martin, opponents, scandals or sensitive personal material. No em or en dashes. Never use: ${BANNED.join(', ')}. Return JSON: {"subject":"2 to 4 lowercase words tied to the hook","fact":"one or two sentences: the specific sourced fact, why it matters to people in their district, and the gap (nobody has seen it, their feed doesn't show it) only if the card shows a real gap","question":"one easy question, e.g. Who handles your social, you or someone on staff? or Want me to cut that one as a free sample?","vm_hook":"the hook in under 15 words, a noun phrase that reads before 'is a great story'","topic":"3 to 6 words, the free 30-second video's topic","dm":"under 50 words, for Instagram/X/Facebook, no price, no link, ends with a question","text":"under 40 words, identifies Ben first: Hi <first>, Ben Gingold from Euclidean Media. ..."}. ${framing === 'post-election' ? 'They were NOT on the Nov 3 ballot: never congratulate them on a win.' : 'They won on Nov 3 (or will be contacted only if they win).'}${String(card.state) === 'NY' && /rockville centre/i.test(`${card.district_towns}`) ? ' Ben lives in Rockville Centre, so "my neighbors here" is true for this one.' : ''}`,
+    const r = await require('../hal/brain').think({ json: true, maxTokens: 600, system: `You write first-touch outreach for Ben Gingold of Euclidean Media, one person writing to one person. Use ONLY the research card. Lead with THEM. Human and specific: if it could be sent to any politician by swapping the name, rewrite it.${EXAMPLES} Never mention prices, packages, links, attachments, governors (say "state money"), Isaiah Martin, opponents, scandals or sensitive personal material. No em or en dashes. Never use: ${BANNED.join(', ')}. Return JSON: {"subject":"2 to 4 lowercase words tied to the hook","fact":"one or two sentences: the specific sourced fact, why it matters to people in their district, and the gap (nobody has seen it, their feed doesn't show it) only if the card shows a real gap","question":"one easy question, e.g. Who handles your social, you or someone on staff? or Want me to cut that one as a free sample?","vm_hook":"the hook in under 15 words, a noun phrase that reads before 'is a great story'","topic":"3 to 6 words, the free 30-second video's topic","dm":"under 50 words, for Instagram/X/Facebook, no price, no link, ends with a question","text":"under 40 words, identifies Ben first: Hi <first>, Ben Gingold from Euclidean Media. ..."}. ${framing === 'post-election' ? 'They were NOT on the Nov 3 ballot: never congratulate them on a win.' : 'They hold the office: they won on Nov 3 or are the incumbent.'}${String(card.state) === 'NY' && /rockville centre/i.test(`${card.district_towns}`) ? ' Ben lives in Rockville Centre, so "my neighbors here" is true for this one.' : ''}`,
       messages: [{ role: 'user', content: JSON.stringify({ name: p.name, office: card.office, district_towns: card.district_towns, hook: card.hook_email, hook_voicemail: card.hook_voicemail, sample_topic: card.sample_topic, socials: card.socials, last_post_dates: card.last_post_dates, prior_contact: prior.text }) }] });
     const j = r.json || {}; const out = { ...fallback };
     for (const k of Object.keys(fallback)) if (typeof j[k] === 'string' && j[k].trim()) out[k] = j[k].trim();
@@ -318,7 +314,7 @@ function qa(drafts, card, framing) {
 // ------------------------------------------------------------------ one person, end to end
 /**
  * Research, classify, tier, write and QA one prospect. Saves everything on prospect.kit. The first email goes to
- * Approvals only when the person is draftable now (winners and post-election officials, not HOLD, not only-if-win),
+ * Approvals only when the person is draftable now (winners and post-election officials, not HOLD, not marked Lost),
  * a real non-.gov email exists, and QA passed. Nothing is ever sent from here.
  */
 async function draftFor(prospectId, { actor = 'user', h = { progress() {} }, refresh = false, queue = true } = {}) {
@@ -352,7 +348,7 @@ async function draftFor(prospectId, { actor = 'user', h = { progress() {} }, ref
   if (drafts.email) kit.gmail = `https://mail.google.com/mail/?view=cm&fs=1${known(card.email) ? `&to=${encodeURIComponent(card.email)}` : ''}&su=${encodeURIComponent(drafts.email.subject)}&body=${encodeURIComponent(withFooter(drafts.email.body))}`;
   p = save(p, kit);
   // Into Approvals (a person decides; Ben can also copy it into Gmail and send by hand).
-  const blocked = !queue ? 'not queued' : !drafts.email ? 'no email draft' : !known(card.email) ? 'no email address' : cls.framing === 'only-if-win' && p.electionResult !== 'won' ? 'contact only if they win' : fails.length ? 'QA failed' : excluded({ name: p.name, email: card.email, handle: p.handle }) ? 'on the exclusions list' : flags.some((f) => /TOO BROKE|HOLD|coordinate with Ryan/.test(f)) ? 'flagged' : null;
+  const blocked = !queue ? 'not queued' : !drafts.email ? 'no email draft' : !known(card.email) ? 'no email address' : fails.length ? 'QA failed' : excluded({ name: p.name, email: card.email, handle: p.handle }) ? 'on the exclusions list' : flags.some((f) => /TOO BROKE|HOLD|coordinate with Ryan/.test(f)) ? 'flagged' : null;
   if (!blocked) {
     const messaging = require('../automation/messaging');
     let contact = p.contactId ? ctx.store.get('contacts', p.contactId) : ctx.store.find('contacts', (x) => (x.emails || []).includes(card.email));
@@ -385,7 +381,7 @@ function save(p, kit) {
 }
 
 // ------------------------------------------------------------------ batch (Part 8)
-const CERT = { win: 0, 'post-election': 1, 'only-if-win': 2 };
+const CERT = { win: 0, 'post-election': 1 };
 const routeRank = (c) => (c.email_verified === 'verified' ? 0 : known(c.email) ? 1 : 2);
 /** Rank per 2.2: certainty they hold office, tier, hook strength, route quality, no existing vendor. */
 function bestPicks(list, n = 5) {
@@ -394,15 +390,15 @@ function bestPicks(list, n = 5) {
 }
 const channelOf = (k) => (k.card?.email_verified === 'verified' ? 'email (verified)' : known(k.card?.email) ? 'email (verify first)' : k.drafts?.dm ? 'DM' : known(k.card?.phone) ? `phone (${k.card.phone_type})` : 'UNKNOWN');
 function summary(list) {
-  const counts = { drafted: 0, queued: 0, onlyIfWin: 0, notOnBallot: 0, hold: 0, excluded: {} };
+  const counts = { drafted: 0, queued: 0, notOnBallot: 0, hold: 0, excluded: {} };
   for (const p of list) {
     const k = p.kit || {}; if (k.framing === 'exclude') { counts.excluded[k.excluded || 'other'] = (counts.excluded[k.excluded || 'other'] || 0) + 1; continue; }
     if (k.framing === 'hold') { counts.hold++; continue; }
-    if (k.drafts) counts.drafted++; if (k.queued) counts.queued++; if (k.framing === 'only-if-win') counts.onlyIfWin++; if (k.framing === 'post-election') counts.notOnBallot++;
+    if (k.drafts) counts.drafted++; if (k.queued) counts.queued++; if (k.framing === 'post-election') counts.notOnBallot++;
   }
-  const best = bestPicks(list).map((p) => ({ id: p.id, name: p.name, why: `${p.kit.framing === 'only-if-win' ? 'only if they win, ' : ''}$${p.kit.tier} tier, ${channelOf(p.kit)}; hook: ${String(p.kit.card.hook_email).slice(0, 110)}` }));
+  const best = bestPicks(list).map((p) => ({ id: p.id, name: p.name, why: `$${p.kit.tier} tier, ${channelOf(p.kit)}; hook: ${String(p.kit.card.hook_email).slice(0, 110)}` }));
   const flags = list.flatMap((p) => (p.kit?.flags || []).filter((f) => !/^Excluded/.test(f)).map((f) => `${p.name}: ${f}`));
-  const table = list.map((p) => ({ id: p.id, name: p.name, office: p.kit?.card?.office || p.office || '', tier: p.kit?.tier ? `$${p.kit.tier}` : '', channel: p.kit ? channelOf(p.kit) : '', status: p.kit?.framing === 'exclude' ? `excluded: ${p.kit.excluded}` : `${p.kit?.status || ''}${p.kit?.card?.odds && known(p.kit.card.odds) ? `, ${p.kit.card.odds}` : ''}` }));
+  const table = list.map((p) => ({ id: p.id, name: p.name, office: p.kit?.card?.office || p.office || '', tier: p.kit?.tier ? `$${p.kit.tier}` : '', channel: p.kit ? channelOf(p.kit) : '', status: p.kit?.framing === 'exclude' ? `excluded: ${p.kit.excluded}` : `${p.kit?.status || ''}` }));
   return { counts, best, flags, table };
 }
 function csv(list) {
