@@ -927,6 +927,19 @@ r.get('/api/political/looks/preview', async (req, res) => {
   catch (e) { return send(res, 503, { error: `Preview unavailable: ${String(e.message).slice(0, 160)}` }); }
 }, { stream: true });
 r.del('/api/political/looks/default', () => { ctx.store.setSettings({ political: { proLook: null } }); return { ok: true }; });
+// The ad's story (Ad machine → The story): { mode: 'auto' | 'topic' | 'brief', topicId, brief }. Saved on the lead; the
+// next Make the ads tells that story (only the lines are picked again when the same videos are ticked).
+r.post('/api/prospects/:id/story', (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id));
+  const mode = ['auto', 'topic', 'brief'].includes(b.mode) ? b.mode : 'auto';
+  let story = { mode: 'auto' };
+  if (mode === 'topic') { const t = (pr.pkg?.topics?.options || []).find((x) => x.id === b.topicId); if (!t) throw new HttpError(400, 'Find the 3 stories first, then pick one.'); story = { mode, topic: t }; }
+  if (mode === 'brief') { const brief = String(b.brief || '').trim().slice(0, 2000); if (brief.length < 8) throw new HttpError(400, 'Write a sentence or two about the story you want.'); story = { mode, brief }; }
+  ctx.store.update('prospects', pr.id, { story: { ...story, at: new Date().toISOString(), by: actorOf(req) } }); events.publish('prospects', { id: pr.id });
+  return { ok: true, story };
+});
+// Three story options from the candidate's own words (reads their footage first when needed). Job political.topics.
+r.post('/api/prospects/:id/topics', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); return queue.enqueue('political.topics', { prospectId: pr.id, name: pr.name }, { actor: actorOf(req), priority: 4, dedupeKey: `poltopics:${pr.id}` }); });
 r.post('/api/prospects/:id/look', (req, b, p) => {
   const pr = must(ctx.store.get('prospects', p.id));
   const looks = require('./political/looks');
@@ -1431,6 +1444,30 @@ r.put('/api/projects/:id', (req, b, p) => {
   return ctx.store.update('projects', p.id, { ...(b.data ? { data: b.data } : {}), ...(b.name ? { name: String(b.name).slice(0, 120) } : {}) });
 });
 r.del('/api/projects/:id', (req, b, p) => ({ ok: ctx.store.remove('projects', p.id) }));
+// The compression engine (server/video/convert.js): the formats it can make.
+r.get('/api/convert/formats', () => require('./video/convert').formats());
+// Convert or compress a file already on this PC (a path, a footage id, a clip's latest render, or a Studio project's last export):
+// { path | assetId | clipId | projectId, format, quality: high|balanced|small, targetMB (e.g. 20), height, name, outDir, reveal }.
+r.post('/api/convert', (req, b) => {
+  let input = b.path ? path.resolve(String(b.path)) : null;
+  if (!input && b.assetId) input = must(ctx.store.get('assets', b.assetId), 'Footage not found').path;
+  if (!input && b.clipId) { const c = must(ctx.store.get('clips', b.clipId), 'Clip not found'); const v = c.versions?.[(c.currentVersion || c.versions.length) - 1]; input = v?.path || v?.file; }
+  if (!input && b.projectId) { const pr = must(ctx.store.get('projects', b.projectId), 'Project not found'); input = (pr.exports || []).slice(-1)[0]?.path; }
+  if (!input || !fs.existsSync(input)) throw new HttpError(400, 'Pick a video first (or export the Studio project once).');
+  return queue.enqueue('video.convert', convertPayload(input, b), { actor: actorOf(req), title: `${b.targetMB ? `Compress under ${b.targetMB} MB` : 'Convert'}: ${path.basename(input)}` });
+});
+// The same for a file sent from a browser or phone (multipart). Fields: format, quality, targetMB, height, name.
+r.post('/api/convert/upload', async (req) => {
+  const { files, fields } = await receiveUpload(req, paths.tmp('convert-in'), { maxBytes: 8 * 1024 ** 3 });
+  if (!files.length) throw new HttpError(400, 'No file arrived. Try again.');
+  return queue.enqueue('video.convert', { ...convertPayload(files[0].path, fields), upload: true }, { actor: actorOf(req) });
+}, { raw: true });
+// Download a finished conversion (the browser and phone).
+r.get('/api/convert/:jobId/file', (req, res, p) => { const j = ctx.store.get('jobs', p.jobId); const f = j?.type === 'video.convert' ? j.result?.path : null; if (!f || !fs.existsSync(f)) return send(res, 404, { error: 'Not ready yet' }); res.setHeader('Content-Disposition', `attachment; filename="${path.basename(f).replace(/"/g, '')}"`); return serveFile(req, res, f); }, { stream: true });
+function convertPayload(input, b) {
+  const fmts = require('./video/convert').FORMATS;
+  return { input, format: fmts[b.format] ? b.format : 'mp4', quality: ['high', 'balanced', 'small'].includes(b.quality) ? b.quality : 'balanced', targetMB: Math.max(0, Math.min(4000, Number(b.targetMB) || 0)), height: Number(b.height) || 0, fps: Number(b.fps) || 0, name: b.name ? String(b.name).slice(0, 120) : null, outDir: b.outDir ? path.resolve(String(b.outDir)) : null, reveal: !!b.reveal };
+}
 r.get('/api/projects/:id/export-defaults', (req, b, p) => {
   const pr = must(ctx.store.get('projects', p.id));
   const folder = ctx.setting('studio.exportFolder', '') || path.join(require('os').homedir(), 'Videos', 'Euclidean');
@@ -1447,7 +1484,8 @@ r.post('/api/projects/:id/export', (req, b, p) => {
   if (b.fileName) fileName = path.basename(String(b.fileName)).replace(/[<>:"/\\|?*]+/g, '').replace(/\.mp4$/i, '').trim().slice(0, 120) || null;
   // A clip fixed by hand in Studio teaches the clip machine how this editor cuts (server/video/taste.js learnEdit).
   if (pr.clipId && pr.origSegs) { try { const c = ctx.store.get('clips', pr.clipId); const a = c && ctx.store.get('assets', c.assetId); const words = a ? require('./jobs/handlers').loadTranscript(a)?.words : null; if (words) require('./video/taste').learnEdit({ project: pr, clip: c, words }); } catch { /* learning never blocks an export */ } }
-  return queue.enqueue('studio.export', { projectId: pr.id, outDir, fileName, reveal: b.reveal !== false }, { clientId: pr.clientId, actor: actorOf(req), title: `Export ${pr.name}` });
+  const fmts = require('./video/convert').FORMATS; const format = fmts[b.format] ? b.format : 'mp4';
+  return queue.enqueue('studio.export', { projectId: pr.id, outDir, fileName, reveal: b.reveal !== false, format, quality: ['high', 'balanced', 'small'].includes(b.quality) ? b.quality : 'high', targetMB: Math.max(0, Math.min(4000, Number(b.targetMB) || 0)), height: [0, 2160, 1440, 1080, 720, 540, 480, 360].includes(Number(b.height)) ? Number(b.height) : 0 }, { clientId: pr.clientId, actor: actorOf(req), title: `Export ${pr.name}` });
 });
 r.get('/api/projects/:id/velo', (req, res, p) => { const pr = must(ctx.store.get('projects', p.id)); const f = path.join(paths.tmp('velo'), `${pr.id}.velo`); fs.writeFileSync(f, JSON.stringify(pr.data, null, 1)); return serveFile(req, res, f, { download: `${pr.name.replace(/[^\w\- ]/g, '')}.velo` }); }, { stream: true });
 r.post('/api/projects/:id/open-velo', (req, b, p) => {

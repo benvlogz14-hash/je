@@ -645,14 +645,39 @@ queue.register('studio.export', {
     const dir = job.payload.outDir || (proj.clientId ? paths.clientDir(proj.clientId, 'studio') : paths.exports('studio'));
     fs.mkdirSync(dir, { recursive: true });
     const baseName = job.payload.fileName || `${slug(proj.name || 'Untitled edit')}-${Date.now().toString(36)}`;
-    let out = path.join(dir, `${baseName}.mp4`); let n = 2;
-    while (fs.existsSync(out)) out = path.join(dir, `${baseName} (${n++}).mp4`); // never overwrite an earlier export
-    const r = await studio.exportProject(proj.data, out, { signal: h.signal, onProgress: (p) => h.progress(p * 0.95, 'Rendering timeline') });
+    // Another format, quality or a size limit (the compression engine, server/video/convert.js): the timeline is
+    // rendered to a full-quality MP4 first, then converted into the chosen file and the in-between copy removed.
+    const fmt = job.payload.format || 'mp4'; const targetMB = Number(job.payload.targetMB) || 0; const quality = job.payload.quality || 'high'; const height = Number(job.payload.height) || 0;
+    const convert = fmt !== 'mp4' || targetMB || quality !== 'high' || height;
+    let out = path.join(convert ? paths.tmp('studio-export') : dir, `${baseName}.mp4`); let n = 2;
+    while (fs.existsSync(out)) out = path.join(path.dirname(out), `${baseName} (${n++}).mp4`); // never overwrite an earlier export
+    const r = await studio.exportProject(proj.data, out, { signal: h.signal, onProgress: (p) => h.progress(p * (convert ? 0.7 : 0.95), 'Rendering timeline') });
+    if (convert) {
+      const c = await require('../video/convert').convert(out, { format: fmt, quality, targetMB, height, outDir: dir, name: baseName, signal: h.signal, onProgress: (p) => h.progress(0.7 + p * 0.28, `Making the ${fmt.toUpperCase()}${targetMB ? ` under ${targetMB} MB` : ''}`) });
+      try { fs.unlinkSync(out); } catch { /* temp */ }
+      out = c.path; r.converted = c;
+    }
     ctx.store.update('projects', proj.id, (p) => ({ exports: [...(p.exports || []), { path: out, at: now(), warnings: r.warnings }] }));
     events.publish('notify', { title: 'Export finished', body: path.basename(out) });
     events.publish('studio.exported', { projectId: proj.id, path: out, warnings: r.warnings });
     if (job.payload.reveal !== false && ctx.revealFile) ctx.revealFile(out);
-    return { path: out, warnings: r.warnings };
+    return { path: out, warnings: r.warnings, mb: r.converted?.mb ?? Math.round(fs.statSync(out).size / 10485.76) / 100 };
+  },
+});
+
+// The compression engine on any video or sound file (SEO lab → Compress a video, Claude, the phone).
+queue.register('video.convert', {
+  title: (p) => `${p.targetMB ? `Compress under ${p.targetMB} MB` : `Convert to ${String(p.format || 'mp4').toUpperCase()}`}: ${path.basename(p.input || 'video')}`,
+  heavy: true, priority: 8,
+  async run(job, h) {
+    const p = job.payload;
+    if (!p.input || !fs.existsSync(p.input)) throw permanent('That file is no longer there.');
+    const outDir = p.outDir || paths.exports('converted');
+    const r = await require('../video/convert').convert(p.input, { format: p.format, quality: p.quality, targetMB: p.targetMB, height: p.height, fps: p.fps, outDir, name: p.name, signal: h.signal, onProgress: (f) => h.progress(f * 0.98, p.targetMB ? `Compressing under ${p.targetMB} MB` : `Converting to ${String(p.format || 'mp4').toUpperCase()}`) });
+    if (p.upload) { try { fs.unlinkSync(p.input); } catch { /* temp upload */ } }
+    events.publish('notify', { title: p.targetMB ? `Compressed to ${r.mb} MB` : `Converted to ${String(p.format || 'mp4').toUpperCase()}`, body: path.basename(r.path) });
+    if (p.reveal && ctx.revealFile) ctx.revealFile(r.path);
+    return r;
   },
 });
 
@@ -899,6 +924,12 @@ queue.register('political.restyle', {
     if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
     return political.restyle(job.payload.prospectId, { preset: job.payload.preset || null, prompt: job.payload.prompt || '', actor: job.createdBy }, h);
   },
+});
+
+queue.register('political.topics', {
+  title: (p) => `Find stories: ${p.name || 'prospect'}`,
+  heavy: true, maxAttempts: 1,
+  async run(job, h) { return political.findTopics(job.payload.prospectId, h); },
 });
 
 queue.register('political.package', {

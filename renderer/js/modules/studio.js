@@ -6,6 +6,7 @@ import { Icon } from '../lib/icons.js';
 import { play as sfx } from '../lib/sound.js';
 import { tc, ago, dur } from '../lib/format.js';
 import { FONT_GROUPS, HEAVY } from '../lib/fonts.js';
+import { FormatFields, useFormats } from './compress.js';
 import { LOOKS } from './clip.js';
 import { RETRO_EFFECTS, RETRO_IDS, retroLook, retroOverlay } from '../lib/retro.js';
 
@@ -984,15 +985,19 @@ function AIPanel({ aiEdit, aiUndo, projectId, selected }) {
 function ExportDialog({ id, saving, onClose }) {
   const [d, setD] = useState(null);
   const [reveal, setReveal] = useState(true);
+  const formats = useFormats();
+  const [opt, setOpt] = useState(() => { try { return { format: 'mp4', quality: 'high', targetMB: 0, height: 0, ...JSON.parse(localStorage.getItem('eu.exportOpt') || '{}') }; } catch { return { format: 'mp4', quality: 'high', targetMB: 0, height: 0 }; } });
+  const setO = (o) => { setOpt(o); try { localStorage.setItem('eu.exportOpt', JSON.stringify(o)); } catch { /* fine */ } };
   useEffect(() => { api.get(`/api/projects/${id}/export-defaults`).then(setD).catch((e) => { toast(e.message, { kind: 'error' }); onClose(); }); }, [id]);
   const choose = async () => { const r = await act(() => api.post('/api/system/pick-folder', { title: 'Save the exported video in…', defaultPath: d.folder })); if (r?.path) setD({ ...d, folder: r.path }); };
-  const start = () => act(async () => { await saving; return api.post(`/api/projects/${id}/export`, { folder: d.folder, fileName: d.fileName, reveal }); }, { ok: 'Exporting. Progress is in the status bar; the folder opens when the video is ready.' }).then(onClose);
+  const start = () => act(async () => { await saving; return api.post(`/api/projects/${id}/export`, { folder: d.folder, fileName: d.fileName, reveal, ...opt }); }, { ok: 'Exporting. Progress is in the status bar; the folder opens when the video is ready.' }).then(onClose);
   return html`<${Modal} title="Export video" icon="upload" onClose=${onClose} footer=${html`<${Button} kind="ghost" onClick=${onClose}>Cancel</${Button}><${Button} kind="primary" icon="upload" disabled=${!d} onClick=${start}>Export</${Button}>`}>
     ${!d ? html`<${Loading} rows=${2} />` : html`<div class="col" style="gap:14px">
       <${Field} label="Save in" id="ex-folder"><div class="row"><input id="ex-folder" class="input mono grow" value=${d.folder} onInput=${(e) => setD({ ...d, folder: e.target.value })} />${d.desktop ? html`<${Button} kind="soft" icon="folder" onClick=${choose}>Choose folder…</${Button}>` : null}</div></${Field}>
-      <${Field} label="File name" hint="An existing file is never overwritten; a number is added instead." id="ex-name"><input id="ex-name" class="input" value=${d.fileName} onInput=${(e) => setD({ ...d, fileName: e.target.value })} /></${Field}>
+      <${Field} label="File name" hint="An existing file is never overwritten; a number is added instead." id="ex-name"><input id="ex-name" class="input" value=${String(d.fileName).replace(/\.mp4$/i, '')} onInput=${(e) => setD({ ...d, fileName: e.target.value })} /></${Field}>
       <div class="check-row"><${Toggle} on=${reveal} label="Open folder when done" onChange=${setReveal} /><span>Open the folder when the video is ready</span></div>
-      <div class="faint" style="font-size:var(--fs-sm)">MP4 (H.264 + AAC) at the sequence size. Progress shows in the status bar at the bottom.</div>
+      <${FormatFields} value=${opt} onChange=${setO} formats=${formats} />
+      <div class="faint" style="font-size:var(--fs-sm)">${opt.format === 'mp4' && !opt.targetMB && opt.quality === 'high' && !opt.height ? 'MP4 (H.264 + AAC) at the sequence size.' : `Rendered at full quality, then made into ${(formats.find((f) => f.id === opt.format)?.label || opt.format.toUpperCase())}${opt.targetMB ? ` under ${opt.targetMB} MB` : ''}.`} Progress shows in the status bar at the bottom.</div>
     </div>`}</${Modal}>`;
 }
 
