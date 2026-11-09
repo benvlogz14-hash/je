@@ -865,6 +865,25 @@ r.post('/api/setup/:action', (req, b, p) => {
   return queue.enqueue(job, {}, { actor: actorOf(req), dedupeKey: job });
 }, { roles: OWNER });
 r.get('/api/political/steps', () => polPkg.STEPS.map(([key, label]) => ({ key, label })));
+// What happened with this candidate's ad runs: the last few jobs (status, reason, last log lines), the steps, and
+// anything holding a waiting job back, so the Ad machine can always say what's going on.
+r.get('/api/prospects/:id/runs', (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id));
+  const jobs = ctx.store.all('jobs', (j) => ['political.package', 'political.restyle'].includes(j.type) && j.payload?.prospectId === pr.id)
+    .sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt))).slice(0, 4)
+    .map((j) => ({ id: j.id, type: j.type, title: j.title, status: j.status, note: j.note || '', error: j.error || null, progress: j.progress || 0, createdAt: j.createdAt, startedAt: j.startedAt || null, finishedAt: j.finishedAt || null, runAt: j.runAt || null, log: (j.log || []).slice(-6).map((l) => l.msg) }));
+  const active = jobs.find((j) => ['queued', 'running'].includes(j.status));
+  let waiting = null;
+  if (active && active.status === 'queued') {
+    const heavy = ctx.store.all('jobs', (j) => j.status === 'running' && j.heavy && j.id !== active.id).map((j) => j.title);
+    waiting = queue.paused ? 'The work queue is paused. Press Resume in the status bar at the bottom.'
+      : ctx.setting('resources.mode', 'full') === 'lite' ? 'Euclidean is in Lite mode, so ad-making waits. Switch to Full at the top right.'
+      : !ctx.setting('resources.runHeavyJobsLocally', true) ? 'This PC is set to leave heavy work to other computers (Settings → Resources).'
+      : heavy.length ? `Waiting for this to finish first: ${heavy.slice(0, 2).join(', ')}`
+      : active.note || 'Starting in a moment';
+  }
+  return { jobs, waiting, steps: polPkg.STEPS.map(([key, label]) => ({ key, label })), pkgSteps: pr.pkg?.steps || {}, noAds: pr.pkg?.noAds || null, error: pr.pkg?.error || null };
+});
 // Looks for the pro ads: presets, a look designed from a typed description, per lead or as the default.
 r.get('/api/political/looks', () => ({ presets: require('./political/looks').list(), current: ctx.setting('political.proLook', null) }));
 r.post('/api/political/looks/design', async (req, b) => {

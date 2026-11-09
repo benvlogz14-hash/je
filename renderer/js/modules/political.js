@@ -276,6 +276,44 @@ function FinishedAds({ p, compact = false }) {
   </div>`;
 }
 
+/**
+ * What happened with the last "Make the ads" for this candidate, always on show: working (with the step), waiting (and
+ * exactly what for), finished (what was made or why no ads), or stopped (the reason and the last lines of its log).
+ */
+function RunStatus({ p, onWatch }) {
+  const { data: r } = useApi(`/api/prospects/${p.id}/runs`, ['job', 'prospects']);
+  const [open, setOpen] = useState(false);
+  if (!r) return null;
+  const j = r.jobs?.[0];
+  if (!j) return html`<div class="faint" style="font-size:var(--fs-xs)">${p.name} has no ads yet. Tick their footage, pick a style, then press Make the ads.</div>`;
+  const since = (t) => (t ? ago(t) : '');
+  const took = j.startedAt && j.finishedAt ? Math.max(1, Math.round((new Date(j.finishedAt) - new Date(j.startedAt)) / 1000)) : null;
+  const tookTxt = took == null ? '' : took < 90 ? `${took} s` : `${Math.round(took / 60)} min`;
+  const label = (k) => r.steps.find((x) => x.key === k)?.label || k;
+  // The steps this run touched (by their time), in order.
+  const from = j.startedAt || j.createdAt;
+  const ran = r.steps.map((x) => ({ ...x, st: r.pkgSteps[x.key] })).filter((x) => x.st && x.st.at && x.st.at >= from);
+  const made = ['v', 'h', 'hl', 's'].some((k) => p.pkg?.files?.[k]);
+  const icon = { done: '✓', failed: '!', skipped: '–', running: '…' };
+  const tone = j.status === 'failed' ? 'coral' : j.status === 'queued' ? 'gold' : j.status === 'running' ? 'sky' : r.noAds ? 'gold' : 'moss';
+  const head = j.status === 'running' ? `Working: ${j.note || 'starting'} (${Math.round(j.progress * 100)}%)`
+    : j.status === 'queued' ? `Waiting to start. ${r.waiting || ''}`
+    : j.status === 'failed' ? `Stopped ${since(j.finishedAt)}: ${j.error || r.error || 'no reason was given'}`
+    : j.status === 'canceled' ? `Canceled ${since(j.finishedAt)}.`
+    : r.noAds ? `Finished ${since(j.finishedAt)}${tookTxt ? ` in ${tookTxt}` : ''}, but no ads were made: ${r.noAds}`
+    : `Finished ${since(j.finishedAt)}${tookTxt ? ` in ${tookTxt}` : ''}.`;
+  return html`<div class=${`notice ${tone}`} style="display:grid;gap:8px">
+    <div class="row" style="gap:8px;align-items:flex-start"><b class="grow" style="font-weight:600">${head}</b>
+      ${made && !['running', 'queued'].includes(j.status) ? html`<${Button} size="sm" kind="moss" icon="play" onClick=${onWatch}>Watch the ads</${Button}>` : null}
+      ${ran.length || j.log?.length ? html`<${Button} size="sm" kind="ghost" onClick=${() => setOpen(!open)}>${open ? 'Hide steps' : 'Show steps'}</${Button}>` : null}</div>
+    ${open ? html`<div class="col" style="gap:3px;font-size:var(--fs-xs)">
+      ${ran.map((x) => html`<div class="row" style="gap:6px;align-items:baseline"><b style="width:14px;text-align:center">${icon[x.st.status] || '○'}</b><span style="min-width:190px">${x.label}</span><span class="faint grow" style="overflow-wrap:anywhere">${x.st.error || x.st.note || ''}</span></div>`)}
+      ${j.log?.length ? html`<details style="margin-top:4px"><summary class="faint">Log</summary><pre class="selectable" style="white-space:pre-wrap;font-size:11px;margin:4px 0 0">${j.log.join('\n')}</pre></details>` : null}
+      <span class="faint">Run started ${since(j.createdAt)} · ${j.type === 'political.restyle' ? 'new look' : 'package'} · job ${j.id}</span>
+    </div>` : null}
+  </div>`;
+}
+
 /** Every candidate's finished ads as cards, newest first: click one to open it and play, download or find the files. */
 function FinishedGallery({ list, jobs, onOpen }) {
   const done = list.filter((x) => ['v', 'h', 'hl', 's'].some((k) => x.pkg?.files?.[k])).sort((a, b) => String(b.pkg?.finishedAt || '').localeCompare(String(a.pkg?.finishedAt || '')));
@@ -314,9 +352,11 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
   const drop = (files) => { if (!p) { toast('Pick or add the candidate first.', { kind: 'error' }); return; } uploadFootage(p.id, files, setUp).then(reload); };
   const make = () => {
     if (!p) return;
+    const t0 = Date.now();
     const body = prompt.trim() ? { prompt: prompt.trim() } : sel ? { preset: sel } : null;
     const req = body ? api.post(`/api/prospects/${p.id}/look`, body) : api.post(`/api/prospects/${p.id}/package`, p.pkg?.creative ? { from: 'footage' } : {});
-    return act(() => req, { ok: `Making ${p.name}'s ads. Progress shows here and on the lead.` }).then(() => { setPrompt(''); reload(); });
+    // A run already open for this candidate comes back instead of a new one: say so rather than pretending to start.
+    return act(() => req, { ok: (j) => (j?.createdAt && new Date(j.createdAt).getTime() < t0 - 3000 ? `Already working on ${p.name}'s ads (${j.status === 'queued' ? 'waiting to start' : `${Math.round((j.progress || 0) * 100)}%`}). See below.` : `Making ${p.name}'s ads. Progress shows below.`) }).then(() => { setPrompt(''); reload(); });
   };
   const made = list.filter((x) => x.pkg?.files?.posterV).slice(-6).reverse();
   const nDone = list.filter((x) => ['v', 'h', 'hl', 's'].some((k) => x.pkg?.files?.[k])).length;
@@ -360,11 +400,9 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
     <div class="row wrap" style="gap:10px;align-items:center">
       ${job ? html`<div class="col grow" style="gap:4px;min-width:200px"><${Progress} value=${job.progress || 0} /><span class="faint" style="font-size:var(--fs-xs)">${Math.round((job.progress || 0) * 100)}% · ${job.note || 'working'}</span></div>` : html`<span class="faint grow" style="font-size:var(--fs-xs)">${p ? `${p.name}: ${(p.footageUploads || []).length ? `${(p.footageUploads || []).filter((u) => !u.off).length} of ${(p.footageUploads || []).length} videos ticked` : 'no footage yet (it will look for public videos)'} · ${prompt.trim() ? 'your described style' : sel ? (looks?.presets || []).find((x) => x.id === sel)?.name : curLook}` : ''}</span>`}
       ${p ? html`<${Button} kind="ghost" size="sm" onClick=${() => onOpen(p.id)}>Open ${p.name.split(' ')[0]}</${Button}>` : null}
-      <${Button} kind="primary" icon="sparkle" disabled=${!p || busy || !!up} onClick=${make}>Make the ads</${Button}>
+      <${Button} kind="primary" icon="sparkle" disabled=${!p || busy || !!up} title=${!p ? 'Pick or add the candidate first' : busy ? 'Already making this candidate\'s ads: see the progress below' : up ? 'Wait for the upload to finish' : ''} onClick=${make}>${busy ? 'Making the ads…' : up ? 'Uploading…' : 'Make the ads'}</${Button}>
     </div>
-    ${p && !job && p.pkg?.error ? html`<div class="notice coral">${p.name}: ${p.pkg.error}</div>` : null}
-    ${p && !job && !p.pkg?.error && p.pkg?.noAds ? html`<div class="notice gold">${p.name}: ${p.pkg.noAds}</div>` : null}
-    ${p && !job && ['v', 'h', 'hl', 's'].some((k) => p.pkg?.files?.[k]) ? html`<div class="row" style="gap:8px;border-top:1px solid var(--line);padding-top:10px"><span class="grow" style="font-size:var(--fs-sm)">${p.name}'s ads are finished${p.pkg?.finishedAt ? ` (${ago(p.pkg.finishedAt)})` : ''}.</span><${Button} kind="moss" icon="play" onClick=${() => setViewing(p.id)}>Watch them</${Button}></div>` : null}
+    ${p ? html`<${RunStatus} key=${p.id} p=${p} onWatch=${() => setViewing(p.id)} />` : null}
     </div>`}
   </div>`;
 }
