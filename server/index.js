@@ -148,6 +148,9 @@ async function start(opts = {}) {
   setTimeout(() => { require('./setup/ollama').autostart().catch(() => {}); try { require('./setup/whisper').adopt(); } catch { /* later */ } }, 3000);
   audit.log('system', 'engine.started', { version: ctx.version, port: ctx.port, lan: !!lan, host: os.hostname() });
   console.log(`[euclidean] engine ${ctx.version} on http://${lan ? (ctx.lanAddress || '0.0.0.0') : '127.0.0.1'}:${ctx.port} · data ${paths.root}`);
+  // For the Euclidean MCP connector (mcp/euclidean-mcp.js): where this engine listens and its pass code, in the
+  // owner's own data folder, so Claude on this PC can talk to the running app. Rewritten at every start.
+  try { fs.writeFileSync(path.join(paths.root, 'connect.json'), JSON.stringify({ url: `http://127.0.0.1:${ctx.port}`, token: ctx.store.get('users', 'ryan')?.token || null, pid: process.pid, at: new Date().toISOString() }, null, 1)); } catch { /* read-only folder */ }
   return { port: ctx.port, ownerToken: ctx.store.get('users', 'ryan')?.token, store: ctx.store };
 }
 
