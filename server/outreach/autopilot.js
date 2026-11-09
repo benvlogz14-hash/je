@@ -86,6 +86,7 @@ function maybeAutoSend(prospectId) {
   const lane = laneOf(p); const why = checks(p);
   const patchKey = p.type === 'political' ? 'pkg' : 'outreach';
   if (why.length) { ctx.store.update('prospects', p.id, (cur) => ({ [patchKey]: { ...(cur[patchKey] || {}), autoBlock: why } })); events.publish('prospects', { id: p.id }); return false; }
+  if (messaging.draftsOnly()) { ctx.store.update('prospects', p.id, (cur) => ({ [patchKey]: { ...(cur[patchKey] || {}), autoBlock: ['Drafts only is on: it waits in Approvals'] } })); events.publish('prospects', { id: p.id }); return false; }
   const msg = draftOf(p);
   messaging.approveMessage(msg.id, 'autopilot');
   const c = counters(); c.sent[lane] = (c.sent[lane] || 0) + 1; ctx.store.touch();

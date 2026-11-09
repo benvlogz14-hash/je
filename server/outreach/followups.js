@@ -86,13 +86,14 @@ let busy = false; let lastRun = 0;
 function videoTick() {
   const guide = require('./guide'); let made = 0;
   for (const p of ctx.store.all('prospects', (x) => x.type === 'political' && x.kit?.videoEmail && x.kit?.messageId && !x.kit?.videoMessageId)) {
-    const first = ctx.store.get('messages', p.kit.messageId);
-    if (!first || first.status !== 'sent' || !first.approvedBy || first.approvedBy === 'autopilot') continue;
+    const first = ctx.store.get('messages', p.kit.messageId); const drafts = messaging.draftsOnly();
+    if (!first || ['discarded', 'failed'].includes(first.status)) continue;
+    if (!drafts && (first.status !== 'sent' || !first.approvedBy || first.approvedBy === 'autopilot')) continue;
     const ve = guide.videoEmailFor(p); if (!ve) continue; // no Drive link yet
     const contact = ctx.store.get('contacts', first.contactId); if (!contact || contact.optedOut?.email) continue;
     const sendAt = new Date(Math.max(Date.now(), new Date(first.sentAt || first.createdAt).getTime() + 5 * 60000)).toISOString();
     let msg;
-    try { msg = messaging.createOutbound({ conversationId: first.conversationId, contactId: contact.id, channel: 'email', subject: ve.subject, body: withFooter(ve.body), category: 'prospecting', actor: 'autopilot', skipApproval: true, sendAt }); }
+    try { msg = messaging.createOutbound({ conversationId: first.conversationId, contactId: contact.id, channel: 'email', subject: ve.subject, body: withFooter(ve.body), category: 'prospecting', actor: 'autopilot', skipApproval: !drafts, sendAt: drafts ? null : sendAt, approvalNote: drafts ? 'Video email: send this one after their first email.' : '' }); }
     catch (e) { audit.log('autopilot', 'outreach.video_email_failed', { prospectId: p.id, error: e.message }, 'warn'); continue; }
     ctx.store.update('prospects', p.id, (cur) => ({ kit: { ...(cur.kit || {}), videoMessageId: msg.id, videoSentFor: p.videoLink } }));
     audit.log('autopilot', 'outreach.video_email', { prospectId: p.id, messageId: msg.id, sendAt });
@@ -121,11 +122,11 @@ async function tick() {
         try { msg = messaging.createOutbound({ conversationId: t.first.conversationId, contactId: contact.id, channel: 'email', subject, body, aiGenerated: true, category: 'prospecting', actor: 'autopilot' }); }
         catch (e) { audit.log('autopilot', 'outreach.followup_failed', { prospectId: p.id, error: e.message }, 'warn'); continue; }
         const why = blockers(p, lane, contact);
-        if (!why.length && msg.status === 'pending_approval') {
+        if (!why.length && msg.status === 'pending_approval' && !messaging.draftsOnly()) {
           messaging.approveMessage(msg.id, 'autopilot');
           const c = ctx.store.settings._outreach || {}; c.sent = c.sent || {}; c.sent[lane] = (c.sent[lane] || 0) + 1; ctx.store.touch();
         }
-        ctx.store.update('prospects', p.id, (cur) => ({ followUps: [...(cur.followUps || []), { n, messageId: msg.id, at: now(), auto: !why.length }] }));
+        ctx.store.update('prospects', p.id, (cur) => ({ followUps: [...(cur.followUps || []), { n, messageId: msg.id, at: now(), auto: !why.length && !messaging.draftsOnly() }] }));
         audit.log('autopilot', 'outreach.followup', { prospectId: p.id, lane, n, sent: !why.length });
         made++;
       }

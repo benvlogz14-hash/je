@@ -86,7 +86,16 @@ function needsApproval({ contact, category, aiGenerated }) {
  * for their own words unless the contact is a prospect being contacted for
  * the first time; AI drafts follow the policy above.
  */
+/**
+ * Drafts only (Settings → Autopilot, on by default while the founders test): nothing the app writes on its own sends or
+ * gets scheduled. Outreach, follow-ups, the video email and automatic notices all wait in Approvals as drafts, and only a
+ * person pressing Approve sends one. Messages a person writes and sends themselves are not affected.
+ */
+const draftsOnly = () => ctx.setting('outreach.draftsOnly', true) !== false;
+const AUTO_ACTORS = new Set(['autopilot', 'system', 'hal', 'agent', 'scheduler']);
+
 function createOutbound({ conversationId, contactId, channel, body, subject, aiGenerated = false, agent, category = 'routine', sendAt, actor = 'user', attachments = [], skipApproval = false, approvalNote = '' }) {
+  if (draftsOnly() && (skipApproval || aiGenerated || AUTO_ACTORS.has(actor))) { skipApproval = false; aiGenerated = aiGenerated || AUTO_ACTORS.has(actor); sendAt = null; }
   let conv = conversationId ? ctx.store.get('conversations', conversationId) : null;
   const contact = ctx.store.get('contacts', contactId || conv?.contactId);
   if (!contact) throw new Error('Contact not found');
@@ -96,7 +105,7 @@ function createOutbound({ conversationId, contactId, channel, body, subject, aiG
   if (channel === 'email' && !contact.emails?.length) throw new Error(`${contact.name} has no email address`);
   if (contact.optedOut?.[channel]) throw new Error(`${contact.name} opted out of ${channel === 'sms' ? 'texts' : 'email'}`);
   const firstContact = !ctx.store.find('messages', (m) => m.contactId === contact.id && m.direction === 'in');
-  const approval = !skipApproval && (aiGenerated ? needsApproval({ contact, category, aiGenerated }) : (contact.role === 'prospect' && firstContact));
+  const approval = (draftsOnly() && aiGenerated) || (!skipApproval && (aiGenerated ? needsApproval({ contact, category, aiGenerated }) : (contact.role === 'prospect' && firstContact)));
   const msg = addMessage(conv, {
     direction: 'out', channel, body, subject: channel === 'email' ? (subject || defaultSubject(conv)) : undefined, aiGenerated, agent: agent || null, category,
     status: approval ? 'pending_approval' : 'queued', sendAt: sendAt || null, createdBy: actor, attachments,
@@ -127,6 +136,7 @@ function scheduleSend(msg) {
 function approveMessage(messageId, actor, editedBody) {
   const msg = ctx.store.get('messages', messageId);
   if (!msg || msg.status !== 'pending_approval') throw new Error('Message is not awaiting approval');
+  if (draftsOnly() && AUTO_ACTORS.has(actor)) return; // a person approves while Drafts only is on
   ctx.store.update('messages', messageId, { status: 'queued', body: editedBody || msg.body, approvedBy: actor, approvedAt: now() });
   if (msg.approvalId) ctx.store.update('approvals', msg.approvalId, { status: 'approved', decidedBy: actor, decidedAt: now() });
   audit.log(actor, 'message.approved', { messageId, clientId: msg.clientId });
@@ -265,4 +275,4 @@ function startPollers() {
   loop(pollEmail, 'email', 'messaging.emailPollSeconds', 60);
 }
 
-module.exports = { createOutbound, approveMessage, rejectMessage, deliver, receive, ensureConversation, commandConversation, addMessage, findContactByAddress, startPollers, pollSms, pollEmail, inQuietHours };
+module.exports = { createOutbound, approveMessage, rejectMessage, deliver, receive, ensureConversation, commandConversation, addMessage, findContactByAddress, startPollers, pollSms, pollEmail, inQuietHours, draftsOnly };
