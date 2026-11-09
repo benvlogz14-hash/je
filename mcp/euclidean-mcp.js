@@ -144,6 +144,44 @@ const TOOLS = [
   { name: 'upload_file', description: "Send a file from this PC into Euclidean: a video for a client's footage (/api/clients/<id>/upload), a candidate's footage (/api/prospects/<id>/footage/upload), Quick cut (/api/clipper/upload), a best short (/api/winners/upload)... Use find_features with 'upload' to see them. file = the full path on this PC.",
     inputSchema: { type: 'object', properties: { file: { type: 'string' }, to: { type: 'string' }, fields: { type: 'object', description: 'Extra form fields some uploads take.' } }, required: ['file', 'to'] },
     run: async ({ file, to, fields }) => clip(await upload(file, route(to), fields || {})) },
+  // Bots (the Bots tab: Corbin the master bot, Juno the client bot, Scout, Data Bot and any added).
+  { name: 'list_bots', description: "Euclidean's bots (the team that replaced the GrokBots): each bot's name, kind (master, client, scout), job, brain, computer, whether it's busy or waiting for a person's OK, and its last message.",
+    inputSchema: { type: 'object', properties: {} },
+    run: async () => (await get('/api/bots')).bots.map((b) => ({ id: b.id, name: b.name, kind: b.kind || 'custom', job: b.role, brain: b.brain, computer: b.computer, busy: b.busy, last: b.last, scheduled: (b.routines || []).filter((r) => r.on).map((r) => `${r.every} ${r.at}: ${r.task}`) })) },
+  { name: 'ask_bot', description: "Give one of Euclidean's bots a job and wait for its answer (up to about 4 minutes): it searches the live web, reads pages, checks the Data tab, the leads board and the notebook, and can hand parts to other bots. Steps that act (adding leads, clicking on sites, running commands) wait for a person's OK on the Bots page; the result says so. bot = a name (Corbin, Juno, Scout, Data Bot) or master / client / scout.",
+    inputSchema: { type: 'object', properties: { bot: { type: 'string' }, message: { type: 'string' } }, required: ['bot', 'message'] },
+    run: async ({ bot, message }) => {
+      const all = (await get('/api/bots')).bots; const k = String(bot).toLowerCase();
+      const b = all.find((x) => x.id === bot || x.name.toLowerCase() === k) || all.find((x) => x.kind === k.replace(/\s*bot$/, '').replace('scouting', 'scout')) || all.find((x) => x.name.toLowerCase().startsWith(k));
+      if (!b) throw new Error(`No bot called ${bot}. Bots: ${all.map((x) => x.name).join(', ')}`);
+      const run = await post(`/api/bots/${b.id}/send`, { text: message });
+      for (let i = 0; i < 120; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const t = await get(`/api/bots/${b.id}`); const r = t.runs?.[run.id];
+        if (!r) continue;
+        const steps = (r.steps || []).filter((s) => s.tool).map((s) => `${s.tool} ${JSON.stringify(s.args || {}).slice(0, 160)}${s.waiting ? ' (WAITING FOR A PERSON)' : ''}`);
+        if (r.status === 'done') return { bot: b.name, answer: r.answer, steps };
+        if (r.status === 'waiting') return { bot: b.name, waiting: `It wants to ${(r.steps || []).find((s) => s.waiting)?.why || 'do something'}. A person allows or denies it on the Bots page (show_in_app /bots).`, steps };
+        if (r.status === 'failed' || r.status === 'stopped') return { bot: b.name, stopped: r.error || r.note, steps };
+      }
+      return { bot: b.name, note: 'Still working. Its answer will be in its chat on the Bots page.' };
+    } },
+  // Live internet through Euclidean (free DuckDuckGo search, safe page reading).
+  { name: 'web_research', description: 'Search the live web (free, through DuckDuckGo) and read the best pages: returns the results and the passages that answer the question, with links. recent: day, week, month or year.',
+    inputSchema: { type: 'object', properties: { question: { type: 'string' }, pages: { type: 'number' }, recent: { type: 'string' } }, required: ['question'] },
+    run: async ({ question, pages, recent }) => clip(await get(`/api/web/research?q=${encodeURIComponent(question)}&pages=${pages || 3}${recent ? `&recent=${encodeURIComponent(recent)}` : ''}`)) },
+  { name: 'web_read', description: 'Read one web page as clean text (title, date, text, links), through Euclidean\'s safe reader.',
+    inputSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
+    run: async ({ url }) => clip(await get(`/api/web/read?url=${encodeURIComponent(url)}`)) },
+  // The Data tab.
+  { name: 'data_list', description: "Everything in Euclidean's Data tab: the team's lists, winners lists, call sheets, research packs, master prompts and pages, each with how many people and tables it has.",
+    inputSchema: { type: 'object', properties: {} }, run: async () => (await get('/api/data')).datasets },
+  { name: 'data_search', description: 'Search the Data tab for people, rows and passages (a name, an office, a word).',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+    run: async ({ query }) => clip(await get(`/api/data/search?q=${encodeURIComponent(query)}`)) },
+  { name: 'data_add', description: "Add something to the Data tab: text you have (a list, a markdown or CSV table, notes; give it a name) or a web page (url). Euclidean reads it into people and tables. Adding those people to the leads board is a separate step a person takes in the app (or use_feature POST /api/data/<id>/leads).",
+    inputSchema: { type: 'object', properties: { name: { type: 'string' }, text: { type: 'string' }, url: { type: 'string' } } },
+    run: async ({ name, text, url }) => post('/api/data', url ? { url } : { files: [{ name: name || 'From Claude', text: text || '' }] }) },
 ];
 
 /** /api/... with the leading slash; full URLs are cut back to their path. */
@@ -173,7 +211,7 @@ async function upload(file, to, fields) {
   return data;
 }
 
-const INSTRUCTIONS = `You control the Euclidean app running on this PC (Euclidean Media's video agency program: clients, footage, clips, Studio, Quick cut, political ads and outreach, messages, approvals, finance, HAL). The quick tools (status, list_jobs, list_candidates, make_ads...) cover common checks. For anything else: find_features with a few words, then look (read), use_feature (do it inside the app), upload_file, or talk_to_hal. show_in_app opens the page so the person can watch. The notebook (notebook_recall / notebook_learn) is what Euclidean and HAL have learned: read it before acting on a person or client, and add what you learn (true and sourced) so the app keeps getting smarter. Anything that sends, approves, posts, calls or deletes is send_or_publish: say exactly what will happen, wait for the person's yes in chat, then call it with their words. Political emails are sent by a person: draft them, never approve them on your own. When unsure what a feature expects, read the matching GET first.`;
+const INSTRUCTIONS = `You control the Euclidean app running on this PC (Euclidean Media's video agency program: clients, footage, clips, Studio, Quick cut, political ads and outreach, messages, approvals, finance, HAL). The quick tools (status, list_jobs, list_candidates, make_ads...) cover common checks. Euclidean's own bots (list_bots, ask_bot: Corbin the master bot, Juno the client bot, Scout, Data Bot) do research and drafting inside the app; web_research and web_read give free live internet; data_list, data_search and data_add work with the Data tab (the team's lists and research). For anything else: find_features with a few words, then look (read), use_feature (do it inside the app), upload_file, or talk_to_hal. show_in_app opens the page so the person can watch. The notebook (notebook_recall / notebook_learn) is what Euclidean and HAL have learned: read it before acting on a person or client, and add what you learn (true and sourced) so the app keeps getting smarter. Anything that sends, approves, posts, calls or deletes is send_or_publish: say exactly what will happen, wait for the person's yes in chat, then call it with their words. Political emails are sent by a person: draft them, never approve them on your own. When unsure what a feature expects, read the matching GET first.`;
 
 // ------------------------------------------------------------------ the protocol (JSON-RPC 2.0 over stdio, one message per line)
 const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\n');

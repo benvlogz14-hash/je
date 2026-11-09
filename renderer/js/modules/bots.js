@@ -1,6 +1,6 @@
 // Bots: Euclidean's own team of AI bots (the GrokBot alternative). Each bot is a contact with its own job, brain,
 // thread and computer; you watch it search, read, click and run things, and allow the steps that act on the world.
-import { html, useState, useEffect, useRef, useApi, useRoute, navigate, Button, Seg, Toggle, Drawer, Field, Empty, act, toast, confirmDialog } from '../lib/ui.js';
+import { html, useState, useEffect, useRef, useApi, useRoute, navigate, Button, Seg, Toggle, Drawer, Modal, Field, Empty, act, toast, confirmDialog } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { GrokBots } from './bridge.js';
@@ -12,6 +12,9 @@ const TOOL = {
   notebook_recall: ['book', 'Checked the notebook'], notebook_learn: ['book', 'Wrote in the notebook'], app_records: ['layers', 'Looked in Euclidean'], ask_bot: ['robot', 'Asked'],
 };
 const COLORS = ['sky', 'coral', 'gold', 'lav', 'moss', 'teal', 'rose'];
+const KINDS = { master: 'Master', client: 'Client bot', scout: 'Scouting' };
+const EVERY = [{ value: 'day', label: 'Every day' }, { value: 'weekday', label: 'Weekdays' }, { value: 'week', label: 'Weekly' }, { value: 'hour', label: 'Every hour' }];
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const shotUrl = (f) => api.url(`/api/bots/shot?file=${encodeURIComponent(f)}`);
 const argLine = (s) => {
   const a = s.args || {};
@@ -38,7 +41,10 @@ export function Bots() {
   const [editing, setEditing] = useState(null);
   const [side, setSide] = useState(() => { try { return localStorage.getItem('eu.botSide') !== '0'; } catch { return true; } });
   const toggleSide = () => { setSide(!side); try { localStorage.setItem('eu.botSide', side ? '0' : '1'); } catch { /* fine */ } };
-  const newBot = () => act(() => api.post('/api/bots', { name: 'New bot', emoji: '🤖', color: COLORS[bots.length % COLORS.length], role: '' }), { ok: 'Bot added. Give it a job.' }).then((b) => { if (b) { setSel(b.id); setEditing(b.id); reload(); } });
+  const [making, setMaking] = useState(route.query.fromData ? { fromData: route.query.fromData } : null);
+  useEffect(() => { if (route.query.fromData) setMaking({ fromData: route.query.fromData }); }, [route.query.fromData]);
+  const newBot = () => setMaking({});
+  const made = (b) => { setMaking(null); if (b) { setSel(b.id); reload(); } navigate('/bots'); };
   return html`<div class="page bots-page">
     <div class="page-head"><div class="grow"><h1>Bots</h1><div class="sub">Your own team of AI bots. They look things up on the live web for free, use their own computer, and ask you before they act.</div></div>
       <${Button} kind="primary" icon="plus" onClick=${newBot}>New bot</${Button}></div>
@@ -47,7 +53,7 @@ export function Bots() {
       <div class="panel bots-list" data-animate>
         ${bots.map((b) => html`<button type="button" class=${'bot-row' + (cur?.id === b.id ? ' on' : '')} onClick=${() => setSel(b.id)} onContextMenu=${(e) => { e.preventDefault(); setSel(b.id); setEditing(b.id); }}>
           <${Avatar} bot=${b} />
-          <div class="grow" style="min-width:0;text-align:left"><div class="row" style="gap:6px"><b class="ellipsis">${b.name}</b>${b.pinned ? html`<${Icon} name="pin" size=${12} />` : null}</div>
+          <div class="grow" style="min-width:0;text-align:left"><div class="row" style="gap:6px"><b class="ellipsis">${b.name}</b>${KINDS[b.kind] ? html`<span class="faint" style="font-size:var(--fs-xs)">${KINDS[b.kind]}</span>` : null}${b.pinned ? html`<${Icon} name="pin" size=${12} />` : null}</div>
             <div class="faint ellipsis" style="font-size:var(--fs-xs)">${b.busy ? (b.busy.status === 'waiting' ? '⏸ Waiting for your OK' : html`<span class="spinner" style="width:9px;height:9px" /> ${b.busy.note || 'Working'}`) : b.last ? `${b.last.role === 'you' ? 'You: ' : ''}${b.last.text}` : b.role}</div></div>
           ${b.busy?.status === 'waiting' ? html`<span class="badge gold">1</span>` : null}
         </button>`)}
@@ -57,6 +63,7 @@ export function Bots() {
       ${cur && side ? html`<${ComputerPanel} key=${'c' + cur.id} bot=${cur} desktop=${data?.desktop} />` : null}
     </div>
     <details class="panel pad" style="margin-top:14px"><summary><b>GrokBots by email</b> <span class="faint" style="font-size:var(--fs-xs)">the older way: email a task to a GrokBot and read its reply here</span></summary><div style="margin-top:10px"><${GrokBots} /></div></details>
+    ${making ? html`<${NewBot} start=${making} onClose=${() => made(null)} onMade=${made} />` : null}
     ${editing ? html`<${BotSettings} id=${editing} brains=${data?.brains} desktop=${data?.desktop} onClose=${() => { setEditing(null); reload(); }} onDeleted=${() => { setEditing(null); setSel(''); reload(); }} />` : null}
   </div>`;
 }
@@ -79,7 +86,7 @@ function Chat({ bot, brains, desktop, onEdit, side, onSide }) {
   return html`<div class="panel bots-chat">
     <div class="bots-head">
       <${Avatar} bot=${bot} size=${42} />
-      <div class="grow" style="min-width:0"><div class="row" style="gap:8px"><b style="font-size:var(--fs-lg)">${bot.name}</b>
+      <div class="grow" style="min-width:0"><div class="row" style="gap:8px"><b style="font-size:var(--fs-lg)">${bot.name}</b>${KINDS[bot.kind] ? html`<span class="badge lav">${KINDS[bot.kind]}</span>` : null}${(bot.routines || []).some((r) => r.on) ? html`<span class="badge" title="Has scheduled tasks">⏰</span>` : null}
         <span class=${'badge ' + (brain?.ready ? 'moss' : 'coral')} title="Its brain">${brain?.label || bot.brain}${brain && !brain.ready ? ' · not connected' : ''}</span>
         <span class="badge" title="Its computer">${bot.computer === 'vm' ? 'Own computer (VM)' : bot.computer === 'browser' ? 'Own browser' : 'Web reader'}</span></div>
         <div class="faint ellipsis" style="font-size:var(--fs-sm)">${bot.role || 'No job yet. Press Settings to give it one.'}</div></div>
@@ -102,6 +109,10 @@ function Chat({ bot, brains, desktop, onEdit, side, onSide }) {
 }
 
 function examples(bot) {
+  if (bot.kind === 'master') return ['Plan my day: calls, emails and videos', 'Who on the master winners list have we not contacted yet? Make me a top 5 with drafts', 'Have Scout find 5 new CT winners and Juno draft their emails'];
+  if (bot.kind === 'client') return ['Draft the Day 6 follow-up for the people we called Nov 3', 'Find 5 urbex YouTubers with weak Shorts', 'What is waiting on Stringer Media?'];
+  if (bot.kind === 'scout') return ['Find 5 Connecticut Democrats who won town or state seats and have no social team', 'Research Lisa Kaul (SD-39): money, socials, a hook', 'Find NJ Assembly winners from this month'];
+  if (/data/i.test(bot.name)) return ['What lists are in the Data tab?', 'Clean the Master Winners list into a call sheet', 'Make a one-pager for political offices'];
   if (bot.computer === 'vm') return ['Make a CSV of the 10 biggest US cities and their population', 'Check what Python version your computer has'];
   if (/lead|politic/i.test(`${bot.name} ${bot.role}`)) return ['Find the campaign website and press email for the new mayor of Stamford, CT', 'Who won the open NY Assembly seats on Nov 3?'];
   if (/trend/i.test(`${bot.name} ${bot.role}`)) return ['What hooks are working on TikTok this week?', 'Give me 5 title ideas for an abandoned-places short'];
@@ -186,11 +197,11 @@ function ComputerPanel({ bot, desktop }) {
 function BotSettings({ id, brains, desktop, onClose, onDeleted }) {
   const { data } = useApi(`/api/bots/${id}`, []);
   const [b, setB] = useState(null);
-  useEffect(() => { if (data?.bot && !b) setB({ ...data.bot, tools: { web: true, notebook: true, app: true, team: true, ...(data.bot.tools || {}) } }); }, [data]);
+  useEffect(() => { if (data?.bot && !b) setB({ ...data.bot, tools: { web: true, notebook: true, app: true, team: true, leads: false, clients: false, ...(data.bot.tools || {}) } }); }, [data]);
   if (!b) return html`<${Drawer} title="Bot settings" onClose=${onClose}><div class="faint"><span class="spinner" /></div></${Drawer}>`;
   const set = (k, v) => setB({ ...b, [k]: v });
   const setTool = (k, v) => setB({ ...b, tools: { ...b.tools, [k]: v } });
-  const save = () => act(() => api.patch(`/api/bots/${id}`, { name: b.name, emoji: b.emoji, color: b.color, role: b.role, instructions: b.instructions, brain: b.brain, computer: b.computer, tools: b.tools, autoBrowse: b.autoBrowse, autoRun: b.autoRun, maxSteps: b.maxSteps, pinned: b.pinned }), { ok: 'Saved' }).then((r) => { if (r) onClose(); });
+  const save = () => act(() => api.patch(`/api/bots/${id}`, { name: b.name, emoji: b.emoji, color: b.color, role: b.role, instructions: b.instructions, brain: b.brain, computer: b.computer, tools: b.tools, autoBrowse: b.autoBrowse, autoRun: b.autoRun, maxSteps: b.maxSteps, pinned: b.pinned, routines: b.routines || [] }), { ok: 'Saved' }).then((r) => { if (r) onClose(); });
   const del = async () => { if (await confirmDialog({ title: `Delete ${b.name}?`, text: 'Its chat and its computer are removed.', confirm: 'Delete' })) act(() => api.del(`/api/bots/${id}`), { ok: 'Deleted' }).then(onDeleted); };
   const sw = (on, fn, label, hint) => html`<div class="row" style="gap:10px;align-items:flex-start"><${Toggle} on=${on} onChange=${fn} label=${label} /><div><div>${label}</div>${hint ? html`<div class="faint" style="font-size:var(--fs-xs)">${hint}</div>` : null}</div></div>`;
   return html`<${Drawer} title=${`${b.emoji} ${b.name}`} sub="Bot settings" onClose=${onClose} actions=${html`<${Button} kind="primary" size="sm" onClick=${save}>Save</${Button}>`}>
@@ -210,15 +221,55 @@ function BotSettings({ id, brains, desktop, onClose, onDeleted }) {
         ${sw(b.tools.notebook, (v) => setTool('notebook', v), 'The notebook', 'Reads and adds to what Euclidean and HAL have learned.')}
         ${sw(b.tools.app, (v) => setTool('app', v), "Euclidean's records (read only)", 'Leads, clients, clips and jobs.')}
         ${sw(b.tools.team, (v) => setTool('team', v), 'The other bots', 'Can hand part of a job to another bot.')}
+        ${sw(!!b.tools.leads, (v) => setTool('leads', v), 'Leads and outreach', 'Checks the leads board, proposes new leads (they wait for your OK), starts outreach drafts.')}
+        ${sw(!!b.tools.clients, (v) => setTool('clients', v), 'Clients', "Opens a client's file, clips and posts, and writes titles with the SEO lab.")}
       </div>
       <div class="col" style="gap:10px"><b>Asking first</b>
         ${sw(!b.autoBrowse, (v) => set('autoBrowse', !v), 'Ask before clicking or typing on websites', 'Recommended: it could otherwise fill in forms or post.')}
         ${b.computer === 'vm' ? sw(!b.autoRun, (v) => set('autoRun', !v), 'Ask before running commands in its computer', 'Its computer is walled off from your files, so turning this off is fairly safe.') : null}
         <div class="faint" style="font-size:var(--fs-xs)">Bots never send emails or messages, post, or change your records. They can write drafts for you.</div>
       </div>
+      <${Routines} list=${b.routines || []} onChange=${(v) => set('routines', v)} name=${b.name} />
       <${Field} label=${`Most steps per message: ${b.maxSteps || 12}`}><input type="range" min="3" max="30" value=${b.maxSteps || 12} onInput=${(e) => set('maxSteps', Number(e.target.value))} /></${Field}>
       ${sw(!!b.pinned, (v) => set('pinned', v), 'Pin to the top of the list')}
       <div class="row" style="gap:8px;margin-top:6px"><${Button} kind="primary" onClick=${save}>Save</${Button}><span class="grow" /><${Button} kind="ghost" icon="trash" onClick=${del}>Delete bot</${Button}></div>
     </div>
   </${Drawer}>`;
+}
+
+function Routines({ list, onChange, name }) {
+  const upd = (i, k, v) => onChange(list.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
+  return html`<div class="col" style="gap:8px"><b>Scheduled tasks</b>
+    <div class="faint" style="font-size:var(--fs-xs)">Like Grok's tasks: ${name} does these on its own while Euclidean is open, and the answer lands in its chat. They only research and draft.</div>
+    ${list.map((r, i) => html`<div class="panel pad col" style="gap:6px;background:var(--surface-2)">
+      <textarea class="input" style="height:58px;font-family:inherit" placeholder="What to do (e.g. Morning scout: 5 to 10 new CT winners with campaign emails)" value=${r.task} onInput=${(e) => upd(i, 'task', e.target.value)} />
+      <div class="row wrap" style="gap:6px;align-items:center">
+        <select class="input" style="width:auto" value=${r.every} onChange=${(e) => upd(i, 'every', e.target.value)}>${EVERY.map((o) => html`<option value=${o.value}>${o.label}</option>`)}</select>
+        ${r.every === 'week' ? html`<select class="input" style="width:auto" value=${r.day ?? 1} onChange=${(e) => upd(i, 'day', Number(e.target.value))}>${DAYS.map((d, k) => html`<option value=${k}>${d}</option>`)}</select>` : null}
+        ${r.every === 'hour' ? html`<span class="faint">at minute</span><input class="input" style="width:70px" type="number" min="0" max="59" value=${Number(String(r.at || '08:00').split(':')[1])} onInput=${(e) => upd(i, 'at', `00:${String(Math.max(0, Math.min(59, Number(e.target.value) || 0))).padStart(2, '0')}`)} />`
+          : html`<span class="faint">at</span><input class="input" style="width:110px" type="time" value=${r.at || '08:00'} onInput=${(e) => upd(i, 'at', e.target.value)} />`}
+        <span class="grow" /><${Toggle} on=${r.on !== false} onChange=${(v) => upd(i, 'on', v)} label="On" /><${Button} size="sm" kind="ghost" icon="trash" title="Remove" onClick=${() => onChange(list.filter((_, j) => j !== i))} />
+      </div>${r.lastRun ? html`<div class="faint" style="font-size:var(--fs-xs)">Last ran ${new Date(r.lastRun).toLocaleString()}</div>` : null}</div>`)}
+    ${list.length < 10 ? html`<div><${Button} size="sm" kind="ghost" icon="plus" onClick=${() => onChange([...list, { task: '', every: 'weekday', at: '08:00', on: true }])}>Add a scheduled task</${Button}></div>` : null}
+  </div>`;
+}
+
+function NewBot({ start, onClose, onMade }) {
+  const { data: tpl } = useApi('/api/bots/templates', []);
+  const [mode, setMode] = useState(start.fromData ? 'prompt' : 'template');
+  const [prompt, setPrompt] = useState(''); const [busy, setBusy] = useState(false);
+  const fileIn = useRef(null);
+  useEffect(() => { if (start.fromData) api.get(`/api/data/${start.fromData}`).then((d) => setPrompt(d.preview || '')).catch(() => {}); }, [start.fromData]);
+  const make = async (body) => { setBusy(true); try { const b = await api.post('/api/bots', body); toast(`${b.name} is on the team.`, { kind: 'success' }); onMade(b); } catch (e) { toast(e.message, { kind: 'error' }); } setBusy(false); };
+  return html`<${Modal} title="New bot" icon="robot" wide onClose=${onClose}>
+    <${Seg} value=${mode} onChange=${setMode} options=${[{ value: 'template', label: 'Ready-made' }, { value: 'prompt', label: 'From a master prompt' }]} />
+    ${mode === 'template' ? html`<div class="newbot-grid">${(tpl || []).map((t) => html`<button type="button" class="newbot-card" disabled=${busy} onClick=${() => make({ template: t.id })}>
+      <div class=${`bot-av c-${t.color}`} style="width:40px;height:40px;font-size:20px">${t.emoji}</div><div style="text-align:left;min-width:0"><b>${t.name}</b>${KINDS[t.kind] ? html` <span class="faint" style="font-size:var(--fs-xs)">${KINDS[t.kind]}</span>` : null}<div class="faint" style="font-size:var(--fs-xs)">${t.role || 'Start from scratch and give it a job.'}</div></div></button>`)}</div>`
+    : html`<div class="col" style="gap:8px;margin-top:10px">
+      <div class="faint" style="font-size:var(--fs-sm)">Paste a bot's master prompt (from Grok Bot, ChatGPT or Claude), or open the file. Euclidean reads its name, job and rules, and it gets the live web, the Data tab and the other bots. Lists inside the prompt go to the Data tab.</div>
+      <textarea class="input" style="height:260px;font-family:var(--mono, monospace);font-size:var(--fs-xs)" placeholder="# NAME MASTER PROMPT ..." value=${prompt} onInput=${(e) => setPrompt(e.target.value)} />
+      <input type="file" accept=".md,.txt" ref=${fileIn} style="display:none" onChange=${async (e) => { const f = e.target.files[0]; if (f) setPrompt(await f.text()); e.target.value = ''; }} />
+      <div class="row" style="gap:8px"><${Button} kind="ghost" icon="upload" onClick=${() => fileIn.current.click()}>Open a file</${Button}><span class="grow" />
+        <${Button} kind="primary" busy=${busy} disabled=${prompt.trim().length < 40} onClick=${async () => { if (!start.fromData && /=====\s*BEGIN/.test(prompt)) { try { await api.post('/api/data', { files: [{ name: 'Master prompt', text: prompt }] }); } catch { /* the bot still gets made */ } } make({ masterPrompt: prompt }); }}>Make the bot</${Button}></div></div>`}
+  </${Modal}>`;
 }

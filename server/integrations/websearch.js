@@ -84,6 +84,25 @@ async function searxng(base, q, n, recent) {
   return (j.results || []).slice(0, n).map((x) => ({ title: x.title, url: x.url, snippet: x.content || '' }));
 }
 
+/**
+ * DuckDuckGo's Instant Answer API (api.duckduckgo.com, free, no key): a short summary (usually Wikipedia's), a direct
+ * answer or a definition, with its source link. { heading, text, url, source, related: [{ text, url }] } or null.
+ */
+async function instant(q) {
+  q = String(q || '').trim().slice(0, 200); if (!q) return null;
+  const key = `ia|${q.toLowerCase()}`; const hit = cache.get(key); if (hit && Date.now() - hit.at < CACHE_MS) return hit.results;
+  try {
+    const base = process.env.EUCLIDEAN_DDG_API_URL || 'https://api.duckduckgo.com';
+    const r = await paced(() => safe.get(`${base}/?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1&t=euclidean`, { timeout: 10000, headers: { accept: 'application/json' } }));
+    const j = JSON.parse(r.text || '{}');
+    const text = j.Answer || j.AbstractText || j.Definition || '';
+    const related = (j.RelatedTopics || []).flatMap((t) => (t.Topics ? t.Topics : [t])).filter((t) => t.Text && t.FirstURL).slice(0, 5).map((t) => ({ text: t.Text, url: t.FirstURL }));
+    const out = text || related.length ? { heading: j.Heading || q, text, url: j.AbstractURL || j.DefinitionURL || j.AnswerURL || '', source: j.AbstractSource || j.DefinitionSource || '', related } : null;
+    cache.set(key, { at: Date.now(), results: out });
+    return out;
+  } catch { return null; }
+}
+
 /** Web search: [{ title, url, snippet }]. Throws only when every way failed and the internet looks down. */
 async function search(q, n = 8, { recent = null } = {}) {
   q = String(q || '').replace(/\s+/g, ' ').trim().slice(0, 300); if (!q) return [];
@@ -180,7 +199,7 @@ function queryOf(text) {
  */
 async function research(question, { query, pages = 3, results: n = 8, recent = null, perPage = 3 } = {}) {
   const q = query || queryOf(question);
-  const results = await search(q, n, { recent });
+  const [results, quick] = await Promise.all([search(q, n, { recent }), recent ? null : instant(q)]);
   const pick = results.filter((r) => !/\.(pdf|docx?|xlsx?|pptx?|zip|mp4|mp3)(\?|$)/i.test(r.url) && !/youtube\.com\/watch|tiktok\.com|instagram\.com|facebook\.com|x\.com\/|twitter\.com/i.test(r.url)).slice(0, pages);
   const failed = []; const read_ = [];
   await Promise.all(pick.map(async (r) => {
@@ -191,13 +210,14 @@ async function research(question, { query, pages = 3, results: n = 8, recent = n
     } catch (e) { failed.push({ url: r.url, error: e.message }); }
   }));
   read_.sort((a, b) => pick.findIndex((r) => r.url === a.url || r.title === a.title) - pick.findIndex((r) => r.url === b.url || r.title === b.title));
-  return { query: q, results, pages: read_, failed };
+  return { query: q, instant: quick, results, pages: read_, failed };
 }
 
 /** Research as prompt context. */
 function formatResearch(r, { maxChars = 9000 } = {}) {
-  if (!r.results.length) return '';
-  let out = `WEB SEARCH (searched just now for "${r.query}"; only trust what these actually say, and give the link for anything you use):\n`;
+  if (!r.results.length && !r.instant) return '';
+  let out = r.instant ? `DUCKDUCKGO INSTANT ANSWER (${r.instant.heading}${r.instant.source ? `, ${r.instant.source}` : ''}${r.instant.url ? `: ${r.instant.url}` : ''}): ${r.instant.text}${r.instant.related.length ? `\nRelated: ${r.instant.related.map((x) => `${x.text} (${x.url})`).join('; ')}` : ''}\n\n` : '';
+  out += `WEB SEARCH (searched just now for "${r.query}"; only trust what these actually say, and give the link for anything you use):\n`;
   out += r.results.map((x, i) => `${i + 1}. ${x.title} — ${x.url}\n   ${x.snippet}`).join('\n');
   if (r.pages.length) {
     out += '\n\nPAGES READ (the pages\' own words):';
@@ -221,4 +241,4 @@ async function forPrompt(text, { deep = false, pages = 3, recent = null } = {}) 
   } catch { return ''; }
 }
 
-module.exports = { search, read, extract, passages, research, formatResearch, forPrompt, queryOf, terms };
+module.exports = { instant, search, read, extract, passages, research, formatResearch, forPrompt, queryOf, terms };

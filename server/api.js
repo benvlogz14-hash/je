@@ -1555,6 +1555,8 @@ const bots = () => require('./bots');
 const botErr = (fn) => (...a) => { try { const r = fn(...a); return r && r.then ? r.catch((e) => { throw e instanceof HttpError ? e : new HttpError(400, e.message); }) : r; } catch (e) { throw e instanceof HttpError ? e : new HttpError(400, e.message); } };
 r.get('/api/bots', () => ({ bots: bots().list().map((b) => bots().summary(b)), brains: Object.fromEntries(bots().BRAINS.map((k) => [k, { label: require('./bots/agent').brainLabel(k), ready: k === 'auto' ? ai.anyConnected() : ai.connected(k) }])), desktop: !!ctx.botBrowser, web: { searxng: !!ctx.setting('ai.searxngUrl', ''), localNetwork: ctx.setting('web.localNetwork', false) === true } }));
 r.post('/api/bots', botErr((req, b) => bots().create(b, actorOf(req))), { roles: OWNER });
+// A bot from a pasted master prompt or a template (New bot → From a master prompt).
+r.get('/api/bots/templates', () => Object.entries(bots().TEMPLATES).map(([k, t]) => ({ id: k, name: t.name, emoji: t.emoji, color: t.color, role: t.role, kind: t.kind })));
 r.get('/api/bots/shot', (req, res) => {
   const f = path.resolve(String(req.query.file || '')); const base = path.join(paths.root, 'bots');
   if (!f.startsWith(base + path.sep) || !/\.png$/i.test(f) || !fs.existsSync(f)) return send(res, 404, {});
@@ -1576,6 +1578,23 @@ r.post('/api/bots/:id/computer/reset', botErr((req, b, p) => require('./bots/com
 r.post('/api/bots/:id/computer/folder', (req, b, p) => { const d = require('./bots/computer').workDir(p.id); if (ctx.openPath) ctx.openPath(d); return { folder: d }; });
 r.post('/api/bots/:id/browser/show', (req, b, p) => { if (!ctx.botBrowser) throw new HttpError(400, 'This works in the Euclidean desktop app.'); return ctx.botBrowser.show(p.id); });
 r.post('/api/bots/:id/browser/clear', async (req, b, p) => { if (!ctx.botBrowser) throw new HttpError(400, 'This works in the Euclidean desktop app.'); return ctx.botBrowser.clearData(p.id); }, { roles: OWNER });
+// The Data tab (server/data/index.js): lists, sheets, packs and pages read into tables and people.
+const dataMod = () => require('./data');
+r.get('/api/data', () => ({ datasets: dataMod().list() }));
+r.get('/api/data/search', (req) => dataMod().search(String(req.query.q || ''), { id: req.query.id || null, limit: Math.min(50, Number(req.query.limit) || 20) }));
+r.post('/api/data', botErr(async (req, b) => {
+  if (b.url) return dataMod().addUrl(String(b.url), actorOf(req));
+  const files = Array.isArray(b.files) ? b.files : b.text ? [{ name: b.name || 'Pasted text', text: b.text }] : [];
+  if (!files.length) throw new HttpError(400, 'Drop a file, paste some text, or give a link.');
+  return { added: files.slice(0, 20).map((f) => dataMod().add({ name: String(f.name || 'Data'), text: String(f.text || ''), source: f.name ? 'upload' : 'paste', by: actorOf(req) })) };
+}));
+r.get('/api/data/:id', (req, b, p) => { const d = must(dataMod().full(p.id), 'That data is gone'); const { text, ...rest } = d; return { ...rest, textLength: (text || '').length, preview: (text || '').slice(0, 20000) }; });
+r.patch('/api/data/:id', (req, b, p) => dataMod().rename(p.id, b.name));
+r.del('/api/data/:id', (req, b, p) => dataMod().remove(p.id, actorOf(req)));
+r.post('/api/data/:id/leads', botErr((req, b, p) => dataMod().toLeads(p.id, { only: Array.isArray(b.only) ? b.only : null, pending: !!b.pending, type: b.type || null, by: actorOf(req) })));
+r.post('/api/data/:id/notebook', botErr((req, b, p) => dataMod().toNotebook(p.id, actorOf(req))));
+r.get('/api/data/:id/csv', (req, res, p) => { try { const csv = dataMod().toCsv(p.id); res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="data-${p.id}.csv"` }); res.end(csv); } catch (e) { send(res, 404, { error: e.message }); } }, { stream: true });
+
 // Live web for everyone (free, no key): search, read a page, or search-and-read.
 r.get('/api/web/search', botErr((req) => require('./integrations/websearch').search(String(req.query.q || ''), Math.min(20, Number(req.query.n) || 8), { recent: req.query.recent || null })));
 r.get('/api/web/read', botErr((req) => require('./integrations/websearch').read(String(req.query.url || ''))));

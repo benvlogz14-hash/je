@@ -865,3 +865,20 @@ button.bot-av { cursor: pointer; }
 @media (max-width: 1150px) { .bots-grid, .bots-grid.no-side { grid-template-columns: 210px minmax(0, 1fr); } .bots-side { display: none; } }
 @media (max-width: 760px) { .bots-grid, .bots-grid.no-side { grid-template-columns: 1fr; height: auto; } .bots-list { flex-direction: row; overflow-x: auto; } .bot-row { width: auto; flex: none; } .bots-chat { height: 70vh; } }
 @media (max-width: 760px) { .bots-head { flex-wrap: wrap; } .bots-head .badge { display: none; } .bot-run { max-width: 100%; } .bot-msg .bubble { max-width: 92%; } }
+
+/* ---------------------------------------------------------------- Data (/data) */
+.data-drop { border: 1.5px dashed var(--line-strong); transition: background var(--t-fast), border-color var(--t-fast); }
+.data-drop.on { background: var(--gold-soft); border-color: var(--gold); }
+.data-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 12px; align-items: start; }
+.data-list { padding: 6px; display: flex; flex-direction: column; gap: 2px; max-height: 75vh; overflow: auto; }
+.data-table-wrap { overflow: auto; max-height: 62vh; border: 1px solid var(--line); border-radius: 10px; }
+.data-table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+.data-table th { position: sticky; top: 0; background: var(--surface-2); text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; z-index: 1; }
+.data-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+.data-table tr.on td { background: var(--accent-soft); }
+.data-tbl summary { cursor: pointer; padding: 4px 0; }
+.data-hit { padding: 8px 10px; border-radius: 10px; background: var(--surface-2); }
+@media (max-width: 900px) { .data-grid { grid-template-columns: 1fr; } .data-list { max-height: 220px; } }
+.newbot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; margin-top: 12px; }
+.newbot-card { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.newbot-card:hover { border-color: var(--teal); background: var(--surface-2); }

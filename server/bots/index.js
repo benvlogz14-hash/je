@@ -21,12 +21,46 @@ const agent = require('./agent');
 const BRAINS = ['auto', 'ollama', 'anthropic', 'openai', 'xai', 'bridge'];
 const COMPUTERS = ['none', 'browser', 'vm'];
 
-const STARTERS = [
-  { name: 'Scout', emoji: '🔎', color: 'sky', role: 'Finds out anything on the live web: searches, reads the pages, and answers with the links.', instructions: 'Read at least two sources for anything important. Say when sources disagree. Lead with the answer, then the links.', computer: 'browser' },
-  { name: 'Lead finder', emoji: '🗳️', color: 'coral', role: 'Researches politicians and campaigns for outreach: office, district, campaign website, the public campaign or press email, recent news and a good hook for a short video.', instructions: 'Only public, professional information: never home addresses or family details. Emails must be printed on the campaign\'s own site (never .gov). Check Euclidean\'s records first so we don\'t research someone twice, and write what you confirmed in the notebook.', computer: 'browser' },
-  { name: 'Trend watcher', emoji: '📈', color: 'gold', role: 'Watches what is working in short-form video right now (TikTok, Reels, Shorts) and turns it into titles, hooks and ideas for our clients.', instructions: 'Use recent sources (this week or month). Give concrete examples with links, then 3 to 5 ideas we could make.', computer: 'browser' },
-  { name: 'Builder', emoji: '🛠️', color: 'lav', role: 'Does hands-on work in its own Linux computer: writes and runs small scripts, collects data from websites into spreadsheets (CSV), checks files.', instructions: 'Explain what a command will do before running it. Save results as files in /work and say where they are.', computer: 'vm' },
-];
+// The team every install starts with (Ryan, Nov 9: "a master bot, a client bot, and a scouting bot with the ability to
+// add more bots"). Templates are the ready-made bots in New bot. `kind` only picks the default tools.
+const HOUSE = 'House rules: no em dashes or en dashes. Public, professional information only: never home addresses or family details. Never invent a number, name, email or quote: if you could not confirm it with a link, say UNKNOWN. Prefer campaign emails over official .gov ones for anything about paid work. You draft; Ben and Ryan send.';
+const IN_APP = `HOW THIS WORKS INSIDE EUCLIDEAN (the app replaced Grok Bot; you now run here):
+- Your lists, call sheets, winners lists, research packs and briefs are in the Data tab: data_search finds people and passages, data_read opens a list. Save anything you build (a call sheet, a list, a research table) with data_save so the founders see it there.
+- The leads board: lead_lookup before researching anyone; propose_leads to add confirmed people (they wait for a founder's OK); draft_outreach runs the outreach guide for a lead (drafts only).
+- Live internet is free and unlimited through DuckDuckGo: research (search and read the pages), web_search, read_page, news. Cite the link for every fact.
+- Other bots: ask_bot hands them a piece of work. The notebook (notebook_recall / notebook_learn) is what Euclidean has learned.
+- Nothing you do sends, posts or schedules. Messages are drafts for Ben.`;
+// Each starter bot's own job comes from its GrokBot master prompt (server/bots/seed/*.md), the part before the data.
+function promptRole(file) {
+  try {
+    const t = require('fs').readFileSync(require('path').join(__dirname, 'seed', file), 'utf8');
+    const cut = t.search(/^(=====|# EMBEDDED DATA)/m);
+    return (cut > 0 ? t.slice(0, cut) : t.slice(0, 9000)).split('\n').filter((l) => !/^Paste this entire file/i.test(l)).join('\n')
+      .replace(/Grok Bot usage is nearly exhausted[^.]*\.\s*/gi, '').replace(/Usage on Grok Bot is nearly exhausted[^.]*\.\s*/gi, '').replace(/Do (\w[\w ]*)'s job until then\.?/g, '').trim();
+  } catch { return ''; }
+}
+const TEMPLATES = {
+  master: { kind: 'master', name: 'Corbin', emoji: '🧠', color: 'lav', computer: 'browser', tools: { web: true, notebook: true, app: true, team: true, leads: true, clients: true }, maxSteps: 20,
+    role: 'Master bot (team lead and ops): runs the daily plan, keeps Ben pointed at the next call, email and video, builds call sheets and winners lists, fact-checks every hook, and hands work to Juno, Scout and Data Bot.',
+    instructions: () => `${promptRole('corbin.md')}\n\nAS THE MASTER BOT: for a big job, plan it, hand pieces to the other bots with ask_bot (one clear task each), check what comes back against the sources, and end with what Ben should do next in under 5 bullets.\n\n${IN_APP}\n\n${HOUSE}` },
+  client: { kind: 'client', name: 'Juno', emoji: '🤝', color: 'teal', computer: 'browser', tools: { web: true, notebook: true, app: true, team: true, clients: true, leads: true }, maxSteps: 16,
+    role: 'Client bot: drafts first-touch emails, voicemails and DMs and the follow-ups, scores fit and pay, suggests the package, and owns creator/YouTube clients and prospects (Stringer model). Knows each client\'s file.',
+    instructions: () => `${promptRole('juno.md')}\n\nFor a current client, open their file first (client_overview) and follow their voice and "never" list.\n\n${IN_APP}\n\n${HOUSE}` },
+  scout: { kind: 'scout', name: 'Scout', emoji: '🔎', color: 'coral', computer: 'browser', tools: { web: true, notebook: true, app: true, team: true, leads: true }, maxSteps: 18,
+    role: 'Scouting bot: finds and researches new leads (low-level local Democrats who won or hold office in CT, NY, MA, RI, NJ, and creators with weak Shorts), with verified contacts and a sharp hook, and proposes them for New prospects.',
+    instructions: () => `Scouting brief (from Juno's master prompt): research only, never contact anyone. Ideal political targets: state reps and senators, small-town mayors and first selectmen, council members and alders, school boards, registrars; incumbents or winners; Connecticut first, then NY, MA, RI, NJ. NEVER governors, Congress, US senators, big-city mayors or party committees. Ideal creators: active long-form with weak or missing Shorts, roughly 10K to 1M subs, urbex/exploration, true crime, commentary, political/news commentary.\nNever include: Silent Hills Urbex, Urbex Ontario, Isaiah Martin, Stringer Media, Paula Kay, Republicans, Holstein, Pepper-Macias, Joey. Anyone too broke (under about $3K raised and no wealth signal): drop.\nFor each person:\n1. lead_lookup and data_search first: skip anyone already on our board or in our lists (say so).\n2. Research: office and district, 2026 result (multistate.us, NYS BOE), party, money raised (state filings, SEEC for CT) with the number and link, the campaign email printed on their own site (government emails only in the official_email column), Instagram handle with rough followers and whether it's active, phones (campaign, district, Albany), and ONE verified hook. Watch for a predecessor's record credited to the new member.\n3. Score fit_score and pay_score 1 to 5, suggested package ($949 political; $1,500 only with $10K+ of their own money in filings; creators $1,200 Stringer model), one-line pitch angle.\n4. Save the table with data_save (Juno's CSV columns: type, name, office_or_channel, state, why_incumbent_or_likely_winner, public_contact, ig_handle, ig_active, ig_followers_approx, business_email, source_url, fit_score, pay_score, suggested_package, pitch_angle, official_email, campaign_site, race_status_2026), then propose_leads for the ones worth pitching, and write each confirmed fact in the notebook.\nLean output: top 10 at most, plus "Ready for Ben to approve".\n\n${IN_APP}\n\n${HOUSE}` },
+  data: { kind: 'custom', name: 'Data Bot', emoji: '📊', color: 'gold', computer: 'browser', tools: { web: true, notebook: true, app: true, team: true, leads: true, clients: true }, maxSteps: 14,
+    role: 'Data and sales materials: keeps the Data tab clean (parses new lists into tables and leads), and builds pitch decks, one-pagers, case studies, pricing leave-behinds and per-prospect pitch packs with Ben-approved numbers.',
+    instructions: () => `${promptRole('databot.md')}\n\nIN THE DATA TAB: when someone hands you a list, page or file, read it (data_read), clean it into a table (name, office, status, email, phones, hook, source) and save it with data_save; say who is new versus already on our board (lead_lookup).\n\n${IN_APP}\n\n${HOUSE}` },
+  research: { kind: 'custom', name: 'Researcher', emoji: '📚', color: 'sky', computer: 'browser', tools: { web: true, notebook: true, app: true, team: true },
+    role: 'Finds out anything on the live web: searches, reads the pages, and answers with the links.', instructions: `Read at least two sources for anything important. Say when sources disagree. Lead with the answer, then the links.\n${HOUSE}` },
+  trends: { kind: 'custom', name: 'Trend watcher', emoji: '📈', color: 'gold', computer: 'browser', tools: { web: true, notebook: true, app: true, team: true, clients: true },
+    role: 'Watches what is working in short-form video right now (TikTok, Reels, Shorts) and turns it into titles, hooks and ideas for our clients.', instructions: `Use recent sources (this week or month). Give concrete examples with links, then 3 to 5 ideas we could make.\n${HOUSE}` },
+  builder: { kind: 'custom', name: 'Builder', emoji: '🛠️', color: 'moss', computer: 'vm', tools: { web: true, notebook: true, app: true, team: true },
+    role: 'Does hands-on work in its own Linux computer: writes and runs small scripts, collects data from websites into spreadsheets (CSV), checks files.', instructions: 'Explain what a command will do before running it. Save results as files in /work and say where they are.' },
+  blank: { kind: 'custom', name: 'New bot', emoji: '🤖', color: 'sky', computer: 'browser', tools: { web: true, notebook: true, app: true, team: true }, role: '', instructions: '' },
+};
+const STARTERS = ['master', 'client', 'scout', 'data'];
 
 const clean = (s, n) => String(s ?? '').replace(/\s+$/g, '').slice(0, n);
 function sanitize(b, cur = {}) {
@@ -35,10 +69,12 @@ function sanitize(b, cur = {}) {
   if (b.emoji !== undefined) out.emoji = clean(b.emoji, 8).trim() || '🤖';
   if (b.color !== undefined) out.color = ['sky', 'coral', 'gold', 'lav', 'moss', 'teal', 'rose'].includes(b.color) ? b.color : 'sky';
   if (b.role !== undefined) out.role = clean(b.role, 400);
-  if (b.instructions !== undefined) out.instructions = clean(b.instructions, 4000);
+  if (b.instructions !== undefined) out.instructions = clean(b.instructions, 20000);
+  if (b.kind !== undefined) out.kind = ['master', 'client', 'scout', 'custom'].includes(b.kind) ? b.kind : 'custom';
   if (b.brain !== undefined) out.brain = BRAINS.includes(b.brain) ? b.brain : 'auto';
   if (b.computer !== undefined) out.computer = COMPUTERS.includes(b.computer) ? b.computer : 'browser';
-  if (b.tools !== undefined) out.tools = { web: b.tools.web !== false, notebook: b.tools.notebook !== false, app: b.tools.app !== false, team: b.tools.team !== false };
+  if (b.tools !== undefined) out.tools = { web: b.tools.web !== false, notebook: b.tools.notebook !== false, app: b.tools.app !== false, team: b.tools.team !== false, leads: !!b.tools.leads, clients: !!b.tools.clients };
+  if (b.routines !== undefined) out.routines = (Array.isArray(b.routines) ? b.routines : []).filter((r) => r && String(r.task || '').trim()).slice(0, 10).map((r, i) => ({ id: String(r.id || `r${Date.now().toString(36)}${i}`).slice(0, 24), task: clean(r.task, 2000).trim(), every: ['hour', 'day', 'weekday', 'week'].includes(r.every) ? r.every : 'day', at: /^\d{1,2}:\d{2}$/.test(r.at || '') ? r.at : '08:00', day: Math.max(0, Math.min(6, Number(r.day) || 1)), on: r.on !== false, lastRun: r.lastRun || null }));
   if (b.autoBrowse !== undefined) out.autoBrowse = !!b.autoBrowse;
   if (b.autoRun !== undefined) out.autoRun = !!b.autoRun;
   if (b.maxSteps !== undefined) out.maxSteps = Math.max(3, Math.min(30, Number(b.maxSteps) || 12));
@@ -46,18 +82,35 @@ function sanitize(b, cur = {}) {
   return out;
 }
 
-/** The roster (made with the starter team the first time). */
+const fromTemplate = (key, extra = {}) => { const t0 = TEMPLATES[key] || TEMPLATES.blank; const t = { ...t0, instructions: typeof t0.instructions === 'function' ? t0.instructions() : t0.instructions }; return { ...sanitize({ brain: 'auto', ...t, ...extra }), template: key, autoBrowse: false, autoRun: false, maxSteps: t.maxSteps || 12, routines: [], createdAt: now() }; };
+
+/**
+ * The roster. First time: the starter team (Master, Client, Scout). Installs that got the first team (Scout,
+ * Lead finder, Trend watcher, Builder) get Master and Client added, and their web-research Scout becomes the
+ * scouting bot (_botsV2); the others stay as extra bots.
+ */
 function list() {
-  if (!ctx.store.settings._botsV1) {
-    if (!ctx.store.all('bots').length) STARTERS.forEach((s, i) => ctx.store.insert('bots', { ...sanitize({ brain: 'auto', tools: {}, ...s }), autoBrowse: false, autoRun: false, maxSteps: 12, order: i, createdAt: now() }));
-    ctx.store.setSettings({ _botsV1: true });
+  if (!ctx.store.settings._botsV2) {
+    const have = ctx.store.all('bots');
+    if (!have.length) STARTERS.forEach((k, i) => ctx.store.insert('bots', { ...fromTemplate(k), order: i }));
+    else {
+      const oldScout = have.find((b) => b.name === 'Scout' && !b.kind && /^Finds out anything on the live web/.test(b.role || ''));
+      if (oldScout) { const { order, routines, createdAt, ...t } = fromTemplate('scout'); ctx.store.update('bots', oldScout.id, { ...t, order: 2 }); }
+      if (!have.some((b) => b.kind === 'master')) ctx.store.insert('bots', { ...fromTemplate('master'), order: 0 });
+      if (!have.some((b) => b.kind === 'client')) ctx.store.insert('bots', { ...fromTemplate('client'), order: 1 });
+      if (!oldScout && !have.some((b) => b.kind === 'scout')) ctx.store.insert('bots', { ...fromTemplate('scout'), order: 2 });
+      if (!have.some((b) => b.template === 'data')) ctx.store.insert('bots', { ...fromTemplate('data'), order: 3 });
+      for (const b of have) if (b.id !== oldScout?.id && (b.order ?? 0) < 4) ctx.store.update('bots', b.id, { order: (b.order ?? 0) + 4 });
+    }
+    ctx.store.setSettings({ _botsV1: true, _botsV2: true });
   }
   return ctx.store.all('bots').sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (a.order ?? 99) - (b.order ?? 99));
 }
 function findBot(nameOrId) {
   const k = String(nameOrId || '').toLowerCase().trim(); if (!k) return null;
   const all = list();
-  return all.find((b) => b.id === nameOrId) || all.find((b) => b.name.toLowerCase() === k) || all.find((b) => b.name.toLowerCase().startsWith(k)) || all.find((b) => k.includes(b.name.toLowerCase())) || null;
+  const byKind = { master: 'master', client: 'client', scout: 'scout', scouting: 'scout' }[k.replace(/\s*bot$/, '')];
+  return all.find((b) => b.id === nameOrId) || all.find((b) => b.name.toLowerCase() === k) || (byKind && all.find((b) => b.kind === byKind)) || all.find((b) => b.name.toLowerCase().startsWith(k)) || all.find((b) => k.includes(b.name.toLowerCase())) || null;
 }
 function get(id) { return ctx.store.get('bots', id); }
 
@@ -67,9 +120,28 @@ function summary(b) {
   return { ...b, last: last ? { role: last.role, text: String(last.text).slice(0, 120), at: last.at } : null, busy: running ? { status: running.status, note: running.note, runId: running.id } : null };
 }
 
+/**
+ * A new bot: from a template (master, client, scout, research, trends, builder, blank), and/or from a pasted master
+ * prompt (a GrokBot's or any other): the prompt becomes its instructions, and its name and job are read from it
+ * ("You are X, ..." / a first heading) unless given.
+ */
 function create(b, actor = 'user') {
-  const bot = ctx.store.insert('bots', { brain: 'auto', computer: 'browser', tools: { web: true, notebook: true, app: true, team: true }, autoBrowse: false, autoRun: false, maxSteps: 12, emoji: '🤖', color: 'sky', role: '', instructions: '', order: list().length, createdAt: now(), ...sanitize({ name: 'New bot', ...b }) });
-  audit.log(actor, 'bot.created', { botId: bot.id, name: bot.name });
+  // Only the prompt's own instructions: embedded lists ("===== BEGIN ..." blocks) belong in the Data tab.
+  let prompt = String(b.masterPrompt || '').trim(); { const cut = prompt.search(/^(=====|# EMBEDDED DATA)/m); if (cut > 200) prompt = prompt.slice(0, cut).trim(); }
+  prompt = prompt.split('\n').filter((l) => !/^Paste this entire file/i.test(l)).join('\n');
+  const base = fromTemplate(TEMPLATES[b.template] ? b.template : 'blank');
+  const extra = {};
+  if (prompt) {
+    const named = /^#\s*([A-Z][A-Za-z ]{1,30}?)\s+MASTER PROMPT/m.exec(prompt) || /\byou are\s+(?:called\s+|named\s+)?["“]?([A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,3})["”]?/.exec(prompt) || /^#+\s*(.{2,40})$/m.exec(prompt) || /^name\s*:\s*(.{2,40})$/im.exec(prompt);
+    if (named && !b.name) extra.name = named[1].replace(/[,.:;]+$/, '').trim().replace(/\b([A-Z])([A-Z]+)\b/g, (m, x, y) => x + y.toLowerCase());
+    const job = /\b(?:your (?:job|role|purpose|mission) is|you (?:help|are responsible for))\s+([^.\n]{10,300})/i.exec(prompt);
+    if (job && !b.role) extra.role = job[1].trim().replace(/^to\s+/i, '').replace(/^./, (c) => c.toUpperCase());
+    extra.instructions = `${prompt}\n\n${IN_APP}\n\n${HOUSE}`;
+    if (/\b(lead|prospect|candidate|politic|scout|campaign)/i.test(prompt)) extra.tools = { ...base.tools, leads: true };
+    if (/\bclient/i.test(prompt)) extra.tools = { ...(extra.tools || base.tools), clients: true };
+  }
+  const bot = ctx.store.insert('bots', { ...base, order: list().length, ...sanitize({ ...extra, ...Object.fromEntries(Object.entries(b).filter(([k, v]) => v !== undefined && v !== '' && !['template', 'masterPrompt'].includes(k))) }) });
+  audit.log(actor, 'bot.created', { botId: bot.id, name: bot.name, template: b.template || null, fromPrompt: !!prompt });
   events.publish('bots', { botId: bot.id });
   return bot;
 }
@@ -170,4 +242,32 @@ async function ask(nameOrId, text, actor = 'hal') {
   return { bot, answer: null, run };
 }
 
-module.exports = { list, findBot, get, summary, create, update, remove, thread, send, decide, stop, clear, start, ask, BRAINS, COMPUTERS, STARTERS };
+/**
+ * Scheduled tasks (like Grok's tasks): each bot can have routines, e.g. "every weekday at 8:00, find officials sworn in
+ * yesterday in NY and CT". Checked every minute by the scheduler; a routine runs only while the app is open, never
+ * twice for the same time, and skips while the bot is still busy.
+ */
+function routinesTick(at = new Date()) {
+  for (const b of ctx.store.all('bots')) {
+    const rs = b.routines || []; if (!rs.length) continue;
+    let changed = false;
+    const next = rs.map((r) => {
+      if (!r.on || !r.task) return r;
+      const [hh, mm] = String(r.at || '08:00').split(':').map(Number);
+      const due = new Date(at); due.setSeconds(0, 0);
+      if (r.every === 'hour') due.setMinutes(mm); else due.setHours(hh, mm);
+      if (due > at) return r;
+      const dow = at.getDay();
+      if (r.every === 'weekday' && (dow === 0 || dow === 6)) return r;
+      if (r.every === 'week' && dow !== Number(r.day ?? 1)) return r;
+      if (r.lastRun && new Date(r.lastRun) >= due) return r;
+      if (at - due > (r.every === 'hour' ? 50 : 180) * 60000) return r; // missed while closed: wait for the next one
+      if (ctx.store.find(agent.RUNS, (x) => x.botId === b.id && ['working', 'waiting'].includes(x.status))) return r;
+      try { send(b.id, `(Scheduled task) ${r.task}`, 'routine'); } catch { return r; }
+      changed = true; return { ...r, lastRun: at.toISOString() };
+    });
+    if (changed) ctx.store.update('bots', b.id, { routines: next });
+  }
+}
+
+module.exports = { routinesTick, TEMPLATES, HOUSE, list, findBot, get, summary, create, update, remove, thread, send, decide, stop, clear, start, ask, BRAINS, COMPUTERS, STARTERS };
