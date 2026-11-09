@@ -250,6 +250,30 @@ function FootageBank({ p, reload }) {
 }
 
 /**
+ * The Drive link for the video email. The first email tells them the video is coming separately (no attachment, so it
+ * stays out of spam); once that email has gone out and the link is here, the second email with the link follows in the
+ * same thread 5 minutes later.
+ */
+function VideoLink({ p }) {
+  const [v, setV] = useState(p.videoLink || ''); const [busy, setBusy] = useState(false);
+  useEffect(() => { setV(p.videoLink || ''); }, [p.id, p.videoLink]);
+  const ok = /^https?:\/\/\S+$/i.test(v.trim());
+  const save = async () => { setBusy(true); try { await act(() => api.patch(`/api/prospects/${p.id}`, { videoLink: v.trim() }), { ok: 'Link saved' }); } catch { /* shown */ } setBusy(false); };
+  const k = p.kit || {};
+  const state = k.videoMessageId ? 'The video email is queued or sent (in their Messages thread).'
+    : !k.videoEmail ? 'Make their email again after the ads are done, so it says the video is coming separately.'
+    : !k.messageId ? 'Their first email isn\'t written yet (it needs a campaign email address).'
+    : !p.videoLink ? 'Paste the Drive link below. The video email goes out 5 minutes after their first email is sent.'
+    : 'Ready: the video email goes out 5 minutes after their first email is approved and sent.';
+  return html`<div class="panel pad col" style="gap:8px;background:var(--surface-2)">
+    <b style="font-size:var(--fs-sm)">Video email (sent after the first email, with the Drive link)</b>
+    <div class="row" style="gap:6px"><input class="input grow" id=${`vl-${p.id}`} placeholder="https://drive.google.com/file/d/..." value=${v} onInput=${(e) => setV(e.target.value)} />
+      <${Button} size="sm" kind="primary" disabled=${busy || (v.trim() && !ok) || v.trim() === (p.videoLink || '')} onClick=${save}>Save link</${Button}></div>
+    <span class="faint" style="font-size:var(--fs-xs)">${v.trim() && !ok ? 'Paste the full link, starting with https://' : state} In Google Drive: right-click the video, Share, set "Anyone with the link", Copy link.</span>
+  </div>`;
+}
+
+/**
  * The finished ads for one candidate, playable right where they were made: vertical, horizontal, long and social,
  * each with Download and Show in folder (desktop). A stamp on the address makes a remade ad load fresh.
  */
@@ -262,6 +286,7 @@ function FinishedAds({ p, compact = false }) {
   const reveal = (k) => api.get(`/api/prospects/${p.id}/file/${k}?reveal=1`).catch((e) => toast(e.message, { kind: 'error' }));
   const name = (file) => String(file || '').split(/[\\/]/).pop();
   return html`<div class="col" style="gap:10px">
+    <${VideoLink} p=${p} />
     <div class="row" style="gap:8px;align-items:center"><b style="font-size:var(--fs-sm)" class="grow">${p.name}'s ads${pkg.finishedAt ? html` <span class="faint" style="font-weight:400">· made ${ago(pkg.finishedAt)}${pkg.pro?.v?.look ? ` · ${pkg.pro.v.look}` : ''}</span>` : null}</b>
       ${desktop ? html`<${Button} size="sm" kind="ghost" icon="folder" onClick=${() => reveal(kinds[0][0])}>Open the folder</${Button}>` : null}</div>
     <div class="row wrap" style="gap:12px;align-items:flex-start">

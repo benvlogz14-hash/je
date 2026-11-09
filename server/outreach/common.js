@@ -7,6 +7,12 @@ function noDashes(s) {
   return String(s || '').replace(/\s*—\s*/g, ', ').replace(/\s–\s/g, ' - ').replace(/–/g, '-').replace(/,\s*,/g, ',');
 }
 
+/** Euclidean's website, under the signature of every outreach email (Settings → Autopilot settings). */
+function website() {
+  const w = ctx.setting('outreach.website', null);
+  return String(w == null ? 'zspannetwork.com/euclidean' : w).trim();
+}
+
 function mailingAddress() {
   return String(ctx.setting('outreach.mailingAddress', '') || ctx.setting('political.mailingAddress', '') || '').trim();
 }
@@ -14,6 +20,8 @@ function mailingAddress() {
 /** Every commercial email carries an opt-out line and the sender's postal address (CAN-SPAM). */
 function withFooter(body) {
   let b = noDashes(String(body || '').trim());
+  const site = website();
+  if (site && !b.toLowerCase().includes(site.toLowerCase())) b += `\n${site}`; // right under the signature
   if (!/\bstop\b|unsubscribe|opt[\s-]?out|rather not hear/i.test(b)) b += `\n\nIf you'd rather not hear from us, just reply "stop" and we won't email again.`;
   const addr = mailingAddress();
   if (addr && !b.includes(addr.split('\n')[0])) b += `\n\n${ctx.setting('agency.name', 'Euclidean Media')} · ${addr.replace(/\n+/g, ', ')}`;
@@ -38,4 +46,4 @@ function excluded({ name, email, handle } = {}) {
   return lines.find((l) => hay.some((h) => h === l || h.includes(l))) || null;
 }
 
-module.exports = { noDashes, withFooter, isGov, isEmail, excluded, mailingAddress };
+module.exports = { noDashes, withFooter, isGov, isEmail, excluded, mailingAddress, website };

@@ -86,7 +86,7 @@ function needsApproval({ contact, category, aiGenerated }) {
  * for their own words unless the contact is a prospect being contacted for
  * the first time; AI drafts follow the policy above.
  */
-function createOutbound({ conversationId, contactId, channel, body, subject, aiGenerated = false, agent, category = 'routine', sendAt, actor = 'user', attachments = [], skipApproval = false }) {
+function createOutbound({ conversationId, contactId, channel, body, subject, aiGenerated = false, agent, category = 'routine', sendAt, actor = 'user', attachments = [], skipApproval = false, approvalNote = '' }) {
   let conv = conversationId ? ctx.store.get('conversations', conversationId) : null;
   const contact = ctx.store.get('contacts', contactId || conv?.contactId);
   if (!contact) throw new Error('Contact not found');
@@ -102,7 +102,7 @@ function createOutbound({ conversationId, contactId, channel, body, subject, aiG
     status: approval ? 'pending_approval' : 'queued', sendAt: sendAt || null, createdBy: actor, attachments,
   });
   if (approval) {
-    const a = ctx.store.insert('approvals', { kind: 'message', refId: msg.id, clientId: conv.clientId || null, title: `${aiGenerated ? 'AI draft' : 'Message'} to ${contact.name}`, summary: body.slice(0, 240), status: 'pending', stage: 'internal', category, createdBy: actor });
+    const a = ctx.store.insert('approvals', { kind: 'message', refId: msg.id, clientId: conv.clientId || null, title: `${aiGenerated ? 'AI draft' : 'Message'} to ${contact.name}`, summary: `${approvalNote ? `${approvalNote}\n\n` : ''}${body.slice(0, 240)}`, note: approvalNote || null, status: 'pending', stage: 'internal', category, createdBy: actor });
     ctx.store.update('messages', msg.id, { approvalId: a.id });
     events.publish('approval', a);
   } else {

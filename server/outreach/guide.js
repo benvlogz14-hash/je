@@ -21,6 +21,16 @@ const { isGov, isEmail, excluded, withFooter } = require('./common');
 
 // ------------------------------------------------------------------ fixed facts (Appendix B: do not change without Ben)
 const SIGNER = 'Ben Gingold';
+/** The two-email flow when their video is ready: the first says it's coming, the second carries the Drive link. */
+const VIDEO_NEXT = "I made you a free 30-second video on it. I'll send it in a separate email right after this one so it doesn't end up in spam.";
+const VIDEO_ASK = "It's yours to use free, whether or not we talk. Could you give us 20 minutes?";
+const hasVideo = (p) => !!(p?.pkg?.files?.v || p?.pkg?.files?.h);
+/** Email 2's text with the link filled in (or null while there's no link). */
+function videoEmailFor(p) {
+  const t = p?.kit?.videoEmail; const link = String(p?.videoLink || '').trim();
+  if (!t || !/^https?:\/\/\S+$/i.test(link)) return null;
+  return { subject: t.subject, body: t.body.replace('{{VIDEO_LINK}}', link) };
+}
 const PHONE = '917-699-4151';
 const PHONE_TWICE = '917-699-4151, that\'s nine one seven, six nine nine, four one five one.';
 const CRED = "I've helped political creators and politicians get tens of millions of views.";
@@ -30,7 +40,7 @@ const YOUTH_CALL = 'We run this together and we know what people our age actuall
 const WHAT_WE_DO = "We turn an office's votes, wins and events into short vertical videos and graphics for Instagram, TikTok, Facebook and YouTube Shorts, and handle all the editing and posting.";
 const ELECTION_DAY = '2026-11-03';
 
-const BANNED = ['leverage', 'synergy', 'elevate', 'amplify your message', 'digital presence', 'content strategy', 'full-service', 'full service', 'partner with you', "we'd love to partner", 'flat-rate', 'flat rate', 'posts a week', 'hundreds of millions of views', 'subsidiary', 'zspan', 'high-level political officials', 'real fire', "we're confident you're going to win", 'i was particularly struck by', 'incredibly compelling story', 'low risk way to try it', 'open to a 20 minute call', 'isaiah martin', 'governor'];
+const BANNED = ['leverage', 'synergy', 'elevate', 'amplify your message', 'digital presence', 'content strategy', 'full-service', 'full service', 'partner with you', "we'd love to partner", 'flat-rate', 'flat rate', 'posts a week', 'hundreds of millions of views', 'subsidiary', 'high-level political officials', 'real fire', "we're confident you're going to win", 'i was particularly struck by', 'incredibly compelling story', 'low risk way to try it', 'open to a 20 minute call', 'isaiah martin', 'governor'];
 const RYANS = ['lamont', 'bronin', 'jahana hayes', 'hayes', 'himes', 'delauro', 'courtney', 'connecticut democratic party', 'ct democratic party', 'werstler'];
 
 const S = (k, d) => ctx.setting(`outreach.political.${k}`, d);
@@ -231,6 +241,12 @@ function compose(p, card, parts, framing, prior) {
         body: [`Hi ${greetName},`, `${opener} Different idea from my last note: ${fact.replace(/^[A-Z]/, (c) => c.toLowerCase())} I'd make you a free 30-second video on it, no strings.`, CRED, "Who's the right person to send it to?", SIGNER].join('\n\n') };
     } else {
       out.email = { subject: parts.subject, body: [`Hi ${greetName},`, `${opener} ${fact}`, "I'm Ben, a political creator and journalist. I turn moments like that into short videos people in the district actually watch.", CRED, sentence(parts.question).replace(/\.$/, '?').replace(/\?\?$/, '?'), SIGNER].join('\n\n') };
+      // Their video is already made: the first email says it's coming separately, and the video email (a Drive link,
+      // no attachment, so neither lands in spam) follows in the same thread a few minutes after this one sends.
+      if (hasVideo(p)) {
+        out.email = { subject: parts.subject, videoNext: true, body: [`Hi ${greetName},`, `${opener} ${fact}`, "I'm Ben, a political creator and journalist. I turn moments like that into short videos people in the district actually watch.", CRED, VIDEO_NEXT, SIGNER].join('\n\n') };
+        out.videoEmail = { subject: /^re:/i.test(parts.subject) ? parts.subject : `Re: ${parts.subject}`, body: [`Hi ${greetName},`, 'Here is the video I mentioned:', '{{VIDEO_LINK}}', VIDEO_ASK, SIGNER].join('\n\n') };
+      }
     }
   }
   out.followup = `${first}, bumping this once. Even pointing me to the right person helps. Ben`;
@@ -311,6 +327,7 @@ async function draftFor(prospectId, { actor = 'user', h = { progress() {} }, ref
   const drafts = prior.count >= 2 ? { followup: compose(p, card, parts, cls.framing, prior).followup } : compose(p, card, parts, cls.framing, prior);
   const fails = qa(drafts, card, cls.framing);
   const kit = { research: res, card: { ...card, framing: cls.framing, tier: `$${tr.tier.toLocaleString('en-US')}`, tier_basis: tr.basis, prior_contact: prior.text, flags: flags.join('; ') }, framing: cls.framing, status: cls.status, tier: tr.tier, tierBasis: tr.basis, flags, drafts, qa: fails, by: parts.by, at: now() };
+  if (drafts.videoEmail) kit.videoEmail = drafts.videoEmail; else kit.videoEmail = null;
   if (drafts.email) kit.gmail = `https://mail.google.com/mail/?view=cm&fs=1${known(card.email) ? `&to=${encodeURIComponent(card.email)}` : ''}&su=${encodeURIComponent(drafts.email.subject)}&body=${encodeURIComponent(withFooter(drafts.email.body))}`;
   p = save(p, kit);
   // Into Approvals (a person decides; Ben can also copy it into Gmail and send by hand).
@@ -322,7 +339,7 @@ async function draftFor(prospectId, { actor = 'user', h = { progress() {} }, ref
     else if ((contact.emails || [])[0] !== card.email) contact = ctx.store.update('contacts', contact.id, { emails: [card.email, ...(contact.emails || []).filter((e) => e !== card.email && !isGov(e))] });
     if (contact.optedOut?.email) return save(p, { ...kit, queued: false, blocked: 'opted out' });
     if (p.kit?.messageId) { const old = ctx.store.get('messages', p.kit.messageId); if (old?.status === 'pending_approval') messaging.rejectMessage(old.id, actor); }
-    const m = messaging.createOutbound({ contactId: contact.id, conversationId: drafts.email.threadReply ? prior.last?.conversationId : undefined, channel: 'email', subject: drafts.email.subject, body: withFooter(drafts.email.body), aiGenerated: true, agent: 'Outreach guide', category: 'prospecting', actor });
+    const m = messaging.createOutbound({ contactId: contact.id, conversationId: drafts.email.threadReply ? prior.last?.conversationId : undefined, channel: 'email', subject: drafts.email.subject, body: withFooter(drafts.email.body), aiGenerated: true, agent: 'Outreach guide', category: 'prospecting', actor, approvalNote: drafts.email.videoNext ? 'Approving this also sends the video email (their Drive link) in the same thread 5 minutes after this one goes out.' : '' });
     ctx.store.update('prospects', p.id, { contactId: contact.id, ...(['new', undefined, null, ''].includes(p.stage) ? { stage: 'drafted' } : {}) });
     p = save(ctx.store.get('prospects', p.id), { ...kit, queued: true, messageId: m.id, blocked: null });
   } else p = save(p, { ...kit, queued: false, blocked });
@@ -372,4 +389,4 @@ function csv(list) {
   return [CARD_KEYS.join(','), ...list.filter((p) => p.kit?.card).map((p) => CARD_KEYS.map((k) => esc(p.kit.card[k] ?? UNKNOWN)).join(','))].join('\r\n');
 }
 
-module.exports = { draftFor, classify, tier, qa, compose, summary, bestPicks, csv, isRyans, noDash, CRED, CRED_VM, YOUTH, BANNED, CARD_KEYS, SIGNER, PHONE };
+module.exports = { draftFor, classify, tier, qa, compose, summary, bestPicks, csv, isRyans, noDash, CRED, CRED_VM, YOUTH, BANNED, CARD_KEYS, SIGNER, PHONE, videoEmailFor, hasVideo };

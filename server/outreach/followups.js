@@ -77,6 +77,31 @@ function blockers(p, lane, contact) {
 
 let busy = false; let lastRun = 0;
 /** Called from the autopilot tick; does real work at most every 10 minutes. */
+/**
+ * The video email (politics): the first email says their video is coming separately; once that email has gone out and
+ * the Drive link is on the lead, the second email with the link goes out in the same thread, 5 minutes after the first.
+ * A person approved the first email, whose approval said this one follows, so it doesn't wait for a second approval.
+ * Sending still re-checks opt-outs, quiet hours, the hourly limit and Test mode.
+ */
+function videoTick() {
+  const guide = require('./guide'); let made = 0;
+  for (const p of ctx.store.all('prospects', (x) => x.type === 'political' && x.kit?.videoEmail && x.kit?.messageId && !x.kit?.videoMessageId)) {
+    const first = ctx.store.get('messages', p.kit.messageId);
+    if (!first || first.status !== 'sent' || !first.approvedBy || first.approvedBy === 'autopilot') continue;
+    const ve = guide.videoEmailFor(p); if (!ve) continue; // no Drive link yet
+    const contact = ctx.store.get('contacts', first.contactId); if (!contact || contact.optedOut?.email) continue;
+    const sendAt = new Date(Math.max(Date.now(), new Date(first.sentAt || first.createdAt).getTime() + 5 * 60000)).toISOString();
+    let msg;
+    try { msg = messaging.createOutbound({ conversationId: first.conversationId, contactId: contact.id, channel: 'email', subject: ve.subject, body: withFooter(ve.body), category: 'prospecting', actor: 'autopilot', skipApproval: true, sendAt }); }
+    catch (e) { audit.log('autopilot', 'outreach.video_email_failed', { prospectId: p.id, error: e.message }, 'warn'); continue; }
+    ctx.store.update('prospects', p.id, (cur) => ({ kit: { ...(cur.kit || {}), videoMessageId: msg.id, videoSentFor: p.videoLink } }));
+    audit.log('autopilot', 'outreach.video_email', { prospectId: p.id, messageId: msg.id, sendAt });
+    made++;
+  }
+  if (made) events.publish('prospects', {});
+  return made;
+}
+
 async function tick() {
   if (busy || Date.now() - lastRun < 10 * 60000) return;
   busy = true; lastRun = Date.now();
@@ -109,4 +134,4 @@ async function tick() {
   } finally { busy = false; }
 }
 
-module.exports = { tick, due, thread, days, write };
+module.exports = { tick, due, thread, days, write, videoTick };

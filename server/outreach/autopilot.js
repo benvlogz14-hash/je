@@ -207,6 +207,8 @@ function tick() {
   }
   // Follow-ups for leads who haven't replied (throttled inside).
   require('./followups').tick().catch((e) => audit.log('autopilot', 'outreach.followups_error', { error: e.message }, 'warn'));
+  // The video email follows its first email (politics), whatever the follow-up setting.
+  try { require('./followups').videoTick(); } catch (e) { audit.log('autopilot', 'outreach.video_email_error', { error: e.message }, 'warn'); }
 }
 
 module.exports = { graduated, leadsToday, LANES, checks, maybeAutoSend, approve, skip, reviewQueue, status, tick, noteSettings, capToday, laneOf };
