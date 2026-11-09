@@ -107,6 +107,14 @@ async function start(opts = {}) {
         const roles = m.route.opts.roles || ['owner', 'contractor'];
         if (user.role !== 'owner' && !roles.includes(user.role)) return send(res, 403, { error: `Your role (${user.role}) cannot do this` });
         req.user = user;
+        // Claude (the MCP connector) marks its requests. Its ordinary tool can't reach anything that sends, approves,
+        // posts or deletes: those need the send_or_publish tool, which Claude only uses after the person said yes.
+        const via = String(req.headers['x-euclidean-via'] || '');
+        if (via.startsWith('claude') && req.method !== 'GET') {
+          const kind = require('./core/endpoints').kindOf(req.method, m.route.pattern);
+          if (kind === 'outward' && via !== 'claude-approved') return send(res, 403, { error: 'This sends, approves, posts or deletes something, so it needs the person\'s OK first: ask them, then use send_or_publish.' });
+          require('./core/audit').log(user.id, 'claude.action', { method: req.method, path: pathname, kind, approved: via === 'claude-approved' });
+        }
       }
       if (m.route.opts.stream) return await m.route.handler(req, res, m.params);
       const body = m.route.opts.raw ? null : await parseBody(req);
@@ -155,7 +163,7 @@ async function start(opts = {}) {
   // when the entry is already right).
   const claudeConnect = () => { try { require('./setup/claude-connect').ensure(); } catch { /* optional */ } };
   setTimeout(claudeConnect, 4000); setInterval(claudeConnect, 5 * 60000).unref?.();
-  try { fs.writeFileSync(path.join(paths.root, 'connect.json'), JSON.stringify({ url: `http://127.0.0.1:${ctx.port}`, token: ctx.store.get('users', 'ryan')?.token || null, pid: process.pid, at: new Date().toISOString() }, null, 1)); } catch { /* read-only folder */ }
+  try { fs.writeFileSync(path.join(paths.root, 'connect.json'), JSON.stringify({ url: `http://127.0.0.1:${ctx.port}`, token: ctx.store.get('users', 'ryan')?.token || null, pid: process.pid, at: new Date().toISOString(), mcp: path.join(__dirname, '..', 'mcp', 'euclidean-mcp.js') }, null, 1)); } catch { /* read-only folder */ }
   return { port: ctx.port, ownerToken: ctx.store.get('users', 'ryan')?.token, store: ctx.store };
 }
 

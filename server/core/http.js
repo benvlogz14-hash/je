@@ -19,7 +19,7 @@ class Router {
   add(method, pattern, handler, opts = {}) {
     const keys = [];
     const rx = new RegExp('^' + pattern.replace(/\//g, '\\/').replace(/:(\w+)/g, (_, k) => { keys.push(k); return '([^\\/]+)'; }).replace(/\*$/, '(.*)') + '\\/?$');
-    this.routes.push({ method, rx, keys, handler, opts, wildcard: pattern.endsWith('*') });
+    this.routes.push({ method, pattern, rx, keys, handler, opts, wildcard: pattern.endsWith('*') });
   }
   get(p, h, o) { this.add('GET', p, h, o); }
   post(p, h, o) { this.add('POST', p, h, o); }

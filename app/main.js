@@ -98,6 +98,7 @@ app.whenReady().then(async () => {
         openExternal: (u) => shell.openExternal(u),
         openPath: (p) => shell.openPath(p),
         revealFile: (p) => shell.showItemInFolder(p),
+        focusWindow: () => { if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } },
         relaunch: () => { quitting = true; app.relaunch(); app.quit(); },
         pickFolder: async (o = {}) => { const res = await dialog.showOpenDialog(win || undefined, { title: o.title || 'Choose a folder', defaultPath: o.defaultPath, properties: ['openDirectory', 'createDirectory'] }); return res.canceled ? null : res.filePaths[0]; },
         pickFiles: async (o = {}) => { const res = await dialog.showOpenDialog(win || undefined, { properties: ['openFile', ...(o.multi !== false ? ['multiSelections'] : [])], filters: o.filters }); return res.canceled ? [] : res.filePaths; },

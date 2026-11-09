@@ -1537,5 +1537,9 @@ r.get('/api/media/thumb', async (req, res) => {
 
 // Settings → Agent Connections and the Agent Conversations panel (peer-to-peer agent messaging).
 require('./agents/routes')(r);
+// For Claude (the MCP connector): every feature, searchable, with how careful each one is (server/core/endpoints.js).
+r.get('/api/_endpoints', (req) => require('./core/endpoints').list(r, req.query.q), { roles: OWNER });
+// Show a page in the app window (Claude's show_in_app): the renderer navigates on the 'ui' event.
+r.post('/api/ui/navigate', (req, b) => { const to = String(b.path || '/').slice(0, 300); if (!to.startsWith('/')) throw new HttpError(400, 'Pages start with /, like /growth or /studio'); events.publish('ui', { navigate: to }); if (ctx.focusWindow) try { ctx.focusWindow(); } catch { /* fine */ } return { ok: true, path: to }; }, { roles: OWNER });
 
 module.exports = { router: r, SECRET_KEYS };

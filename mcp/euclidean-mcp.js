@@ -19,26 +19,43 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// ------------------------------------------------------------------ finding the engine
-function connection() {
-  if (process.env.EUCLIDEAN_URL && process.env.EUCLIDEAN_TOKEN) return { url: process.env.EUCLIDEAN_URL.replace(/\/$/, ''), token: process.env.EUCLIDEAN_TOKEN };
-  const dirs = [process.env.EUCLIDEAN_DATA,
+// Installed as a Claude extension, this file is a copy frozen at install time. The app writes where its own copy lives
+// (connect.json → mcp), so the extension runs that one: every Euclidean update reaches Claude with no re-install
+// (Claude picks it up the next time it starts).
+if (!process.env.EUCLIDEAN_MCP_INNER) {
+  for (const d of dataDirs()) {
+    try {
+      const c = JSON.parse(fs.readFileSync(path.join(d, 'connect.json'), 'utf8'));
+      if (c.mcp && fs.existsSync(c.mcp) && path.resolve(c.mcp) !== path.resolve(__filename)) { process.env.EUCLIDEAN_MCP_INNER = '1'; require(c.mcp); return; }
+      break;
+    } catch { /* next */ }
+  }
+}
+function dataDirs() {
+  return [process.env.EUCLIDEAN_DATA,
     process.env.APPDATA && path.join(process.env.APPDATA, 'Euclidean', 'data'),
     path.join(os.homedir(), 'Library', 'Application Support', 'Euclidean', 'data'),
     path.join(os.homedir(), '.config', 'Euclidean', 'data'),
     path.join(os.homedir(), '.euclidean')].filter(Boolean);
-  for (const d of dirs) {
+}
+
+// ------------------------------------------------------------------ finding the engine
+function connection() {
+  if (process.env.EUCLIDEAN_URL && process.env.EUCLIDEAN_TOKEN) return { url: process.env.EUCLIDEAN_URL.replace(/\/$/, ''), token: process.env.EUCLIDEAN_TOKEN };
+  for (const d of dataDirs()) {
     try { const c = JSON.parse(fs.readFileSync(path.join(d, 'connect.json'), 'utf8')); if (c.url && c.token) return { url: c.url, token: c.token, dir: d }; } catch { /* next */ }
   }
   throw new Error("Can't find Euclidean. Open the Euclidean app first (it writes its connection details when it starts), then try again.");
 }
 
-async function call(method, route, body) {
+async function call(method, route, body, { via = 'claude', timeout = 60000 } = {}) {
   const c = connection();
   let res;
   try {
-    res = await fetch(`${c.url}${route}`, { method, headers: { authorization: `Bearer ${c.token}`, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000) });
+    res = await fetch(`${c.url}${route}`, { method, headers: { authorization: `Bearer ${c.token}`, 'content-type': 'application/json', 'x-euclidean-via': via }, body: body && method !== 'GET' ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(timeout) });
   } catch { throw new Error(`Euclidean isn't answering at ${c.url}. Is the app open?`); }
+  const type = res.headers.get('content-type') || '';
+  if (res.ok && !/json|text/.test(type)) return { file: true, type, bytes: Number(res.headers.get('content-length')) || null, note: 'This is a file (video, image or download). Open it in the app, or use show_in_app.' };
   const text = await res.text(); let data; try { data = JSON.parse(text); } catch { data = text; }
   if (!res.ok) throw new Error(`Euclidean said ${res.status}: ${data?.error || String(text).slice(0, 300)}`);
   return data;
@@ -92,7 +109,62 @@ const TOOLS = [
   { name: 'list_drafts', description: 'Drafts waiting in Approvals (emails, texts, clips). Read only: approving and sending stay with a person in the app.',
     inputSchema: { type: 'object', properties: { limit: { type: 'number' } } },
     run: async ({ limit = 30 }) => { const a = await get('/api/approvals?status=pending'); return (Array.isArray(a) ? a : a.items || []).slice(0, Number(limit) || 30).map((x) => ({ id: x.id, kind: x.kind, title: x.title, summary: x.summary, created: x.createdAt })); } },
+
+  // ---------------------------------------------------------------- everything else in the app
+  { name: 'find_features', description: "Search everything Euclidean can do (about 300 features: clients, footage, clips, Studio projects, Quick cut, music, political leads and ads, outreach, messages, approvals, finance, analytics, SEO lab, HAL, settings, setup). Give a few words (e.g. 'studio export', 'prospect footage', 'invoice'); empty lists all. Each result: method, path, kind (read = looks only, change = works inside Euclidean, outward = sends/approves/posts/deletes and needs the person's OK), what it does, and upload type if it takes a file. Then call it with use_feature, look, or send_or_publish.",
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: 'object', properties: { search: { type: 'string' } } },
+    run: async ({ search = '' }) => { const l = await get(`/api/_endpoints?q=${encodeURIComponent(search)}`); return l.length ? l.map((e) => `${e.method} ${e.path} [${e.kind}${e.upload ? `, upload ${e.upload}` : ''}]${e.about ? ` ${e.about}` : ''}`).join('\n') : 'Nothing matches. Try fewer or other words.'; } },
+  { name: 'look', description: 'Read anything in Euclidean (a GET path from find_features, with ids and ?query filled in), e.g. /api/clients, /api/prospects/<id>, /api/clips?status=review, /api/projects/<id>.',
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    run: async ({ path: p }) => clip(await get(route(p))) },
+  { name: 'use_feature', description: "Do something inside Euclidean (a POST/PUT/PATCH path whose kind is change): make clips, render, edit a Studio project, add or update a lead, make ads, start transcripts, change a clip's captions, run a scout, draft an email (drafts wait in Approvals)... The engine refuses anything that sends, approves, posts or deletes: use send_or_publish for those.",
+    inputSchema: { type: 'object', properties: { method: { type: 'string', enum: ['POST', 'PUT', 'PATCH'] }, path: { type: 'string' }, body: { type: 'object' } }, required: ['method', 'path'] },
+    run: async ({ method, path: p, body }) => clip(await call(String(method).toUpperCase(), route(p), body || {})) },
+  { name: 'send_or_publish', description: "For things that reach people or can't be undone (kind outward): approve or send a message or email, approve or publish a clip, call, start outreach autopilot, press a HAL Confirm button, delete anything, change safety settings or keys. ONLY after the person has said yes in this chat to this exact action: first tell them exactly what will happen (who gets what), wait for their yes, then call this with their words in person_said.",
+    annotations: { destructiveHint: true, openWorldHint: true },
+    inputSchema: { type: 'object', properties: { method: { type: 'string', enum: ['POST', 'PUT', 'PATCH', 'DELETE'] }, path: { type: 'string' }, body: { type: 'object' }, person_said: { type: 'string', description: "The person's own words agreeing to this action." } }, required: ['method', 'path', 'person_said'] },
+    run: async ({ method, path: p, body, person_said: ok }) => { if (!String(ok || '').trim()) throw new Error('Ask the person first and put their answer in person_said.'); return clip(await call(String(method).toUpperCase(), route(p), body || {}, { via: 'claude-approved' })); } },
+  { name: 'talk_to_hal', description: "Talk to HAL, the assistant built into Euclidean (he knows the app's commands, news watch, prospects, calendar, outreach guide). His reply comes back here and shows in his panel in the app. If he offers a Confirm button, pressing it is send_or_publish POST /api/hal/confirm { id }.",
+    inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+    run: async ({ text }) => { const r = await post('/api/hal/chat', { text, context: { from: 'Claude' } }); return { hal: r.text, confirm: r.confirm ? { id: r.confirm.id, label: r.confirm.label || r.confirm.text || 'Confirm' } : null, draft: r.draft || null, page: r.navigate || null, arcade: r.arcade || null }; } },
+  { name: 'show_in_app', description: 'Bring the Euclidean window forward and open a page: /messages, /production, /studio, /clipper, /growth, /approvals, /clients, /finance, /analytics, /seo, /bridge, /system, /settings (add ?query as the app uses it).',
+    inputSchema: { type: 'object', properties: { page: { type: 'string' } }, required: ['page'] },
+    run: async ({ page }) => post('/api/ui/navigate', { path: page.startsWith('/') ? page : `/${page}` }) },
+  { name: 'upload_file', description: "Send a file from this PC into Euclidean: a video for a client's footage (/api/clients/<id>/upload), a candidate's footage (/api/prospects/<id>/footage/upload), Quick cut (/api/clipper/upload), a best short (/api/winners/upload)... Use find_features with 'upload' to see them. file = the full path on this PC.",
+    inputSchema: { type: 'object', properties: { file: { type: 'string' }, to: { type: 'string' }, fields: { type: 'object', description: 'Extra form fields some uploads take.' } }, required: ['file', 'to'] },
+    run: async ({ file, to, fields }) => clip(await upload(file, route(to), fields || {})) },
 ];
+
+/** /api/... with the leading slash; full URLs are cut back to their path. */
+function route(p) { let s = String(p || '').trim(); s = s.replace(/^https?:\/\/[^/]+/, ''); if (!s.startsWith('/')) s = `/${s}`; if (!s.startsWith('/api/')) throw new Error('Paths start with /api/ (see find_features).'); return s; }
+/** Keep answers readable for Claude: long lists are cut with a note. */
+function clip(x) { const t = typeof x === 'string' ? x : JSON.stringify(x, null, 1); return t.length > 60000 ? `${t.slice(0, 60000)}\n... (cut at 60,000 characters: ask for less, e.g. with ?limit= or an id)` : x; }
+async function upload(file, to, fields) {
+  const c = connection();
+  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error(`No file at ${file}`);
+  const info = ((await get(`/api/_endpoints?q=${encodeURIComponent(to.split('?')[0].split('/').filter((x) => x && !/^[a-z0-9_-]{8,}$/i.test(x)).slice(-2).join(' '))}`)) || []).find((e) => e.method === 'POST' && new RegExp('^' + e.path.replace(/:\w+/g, '[^/]+') + '$').test(to.split('?')[0]));
+  const name = path.basename(file); const size = fs.statSync(file).size;
+  const headers = { authorization: `Bearer ${c.token}`, 'x-euclidean-via': 'claude', 'x-file-name': encodeURIComponent(name) };
+  let body;
+  if (info?.upload === 'multipart') {
+    const boundary = `----euclidean${Date.now().toString(16)}`;
+    const head = Object.entries(fields).map(([k, v]) => `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`).join('') + `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name.replace(/"/g, '')}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
+    const tail = `\r\n--${boundary}--\r\n`;
+    headers['content-type'] = `multipart/form-data; boundary=${boundary}`; headers['content-length'] = String(Buffer.byteLength(head) + size + Buffer.byteLength(tail));
+    body = require('stream').Readable.from((async function* () { yield Buffer.from(head); for await (const ch of fs.createReadStream(file)) yield ch; yield Buffer.from(tail); })());
+  } else {
+    headers['content-type'] = 'application/octet-stream'; headers['content-length'] = String(size);
+    body = fs.createReadStream(file);
+  }
+  let res; try { res = await fetch(`${c.url}${to}`, { method: 'POST', headers, body, duplex: 'half' }); } catch (e) { throw new Error(`Upload failed: ${e.message}. Is the app open?`); }
+  const text = await res.text(); let data; try { data = JSON.parse(text); } catch { data = text; }
+  if (!res.ok) throw new Error(`Euclidean said ${res.status}: ${data?.error || String(text).slice(0, 300)}`);
+  return data;
+}
+
+const INSTRUCTIONS = `You control the Euclidean app running on this PC (Euclidean Media's video agency program: clients, footage, clips, Studio, Quick cut, political ads and outreach, messages, approvals, finance, HAL). The quick tools (status, list_jobs, list_candidates, make_ads...) cover common checks. For anything else: find_features with a few words, then look (read), use_feature (do it inside the app), upload_file, or talk_to_hal. show_in_app opens the page so the person can watch. Anything that sends, approves, posts, calls or deletes is send_or_publish: say exactly what will happen, wait for the person's yes in chat, then call it with their words. Political emails are sent by a person: draft them, never approve them on your own. When unsure what a feature expects, read the matching GET first.`;
 
 // ------------------------------------------------------------------ the protocol (JSON-RPC 2.0 over stdio, one message per line)
 const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\n');
@@ -100,9 +172,9 @@ const reply = (id, result) => send({ jsonrpc: '2.0', id, result });
 const fail = (id, code, message) => send({ jsonrpc: '2.0', id, error: { code, message } });
 
 async function handle(m) {
-  if (m.method === 'initialize') return reply(m.id, { protocolVersion: m.params?.protocolVersion || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'euclidean', version: '1.0.0' }, instructions: 'Tools for the Euclidean app running on this PC: check jobs, logs and health, look at political candidates and their ad runs, and start Make the ads. Nothing here approves or sends messages.' });
+  if (m.method === 'initialize') return reply(m.id, { protocolVersion: m.params?.protocolVersion || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'euclidean', version: '1.1.0' }, instructions: INSTRUCTIONS });
   if (m.method === 'ping') return reply(m.id, {});
-  if (m.method === 'tools/list') return reply(m.id, { tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
+  if (m.method === 'tools/list') return reply(m.id, { tools: TOOLS.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, ...(annotations ? { annotations } : {}) })) });
   if (m.method === 'tools/call') {
     const t = TOOLS.find((x) => x.name === m.params?.name);
     if (!t) return fail(m.id, -32602, `Unknown tool ${m.params?.name}`);

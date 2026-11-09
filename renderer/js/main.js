@@ -83,6 +83,7 @@ function TitleBar({ onPalette }) {
   const [sound, setS] = useState(soundOn());
   useEvent('queue', (q) => setPaused(q.paused));
   useEvent('mode', (m) => setMode(m.mode));
+  useEvent('ui', (u) => { if (u?.navigate) navigate(u.navigate); }); // Claude's show_in_app
   const env = boot?.settings?.environment;
   const plat = window.euclidean?.platform;
   return html`<header class=${'titlebar' + (plat === 'win32' ? ' electron-win' : plat === 'darwin' ? ' electron-mac' : '')}>

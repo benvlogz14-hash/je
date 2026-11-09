@@ -153,7 +153,7 @@ function zip(files) {
 function manifest() {
   const src = fs.readFileSync(SCRIPT, 'utf8');
   const tools = [...src.matchAll(/\{ name: '([a-z_]+)', description: (["'])(.*?)\2/g)].map((m) => ({ name: m[1], description: m[3].replace(/\\'/g, "'") }));
-  let version = '1.0.0'; try { version = require('../../package.json').version || version; } catch { /* default */ }
+  const version = '1.1.0'; // raise when the extension itself changes (the tools come from the app's own copy anyway)
   return {
     manifest_version: '0.3', name: 'euclidean', display_name: 'Euclidean', version,
     description: "Check Euclidean's jobs, candidates and ad runs, and start Make the ads. It can't approve, send or post anything.",
