@@ -449,7 +449,7 @@ r.get('/api/assets/:id/detail', (req, b, p) => {
   const clips = ctx.store.all('clips', (c) => c.assetId === a.id).map((c) => ({ id: c.id, title: c.title, status: c.status, start: c.start, end: c.end, keep: c.keep || null, currentVersion: c.currentVersion, versions: (c.versions || []).map((v) => ({ duration: v.duration })) }));
   const done = (t) => jobs.some((j) => j.type === t && j.status === 'done');
   const steps = [['Import', a.status !== 'importing' && !!a.info], ['Speech to text', !!a.transcript || done('transcribe')], ['Look through it', !!a.vision || done('analyze')], ['Find clips', clips.length > 0 || done('discover')], ['Make the shorts', clips.some((c) => !['draft', 'rendering', 'queued'].includes(c.status))]].map(([label, ok]) => ({ label, ok }));
-  return { asset: { id: a.id, name: a.name, status: a.status, error: a.error || null, info: a.info, source: a.source, createdAt: a.createdAt, thumb: !!a.thumb }, steps, jobs, clips };
+  return { asset: { id: a.id, name: a.name, status: a.status, error: a.error || null, info: a.info, source: a.source, createdAt: a.createdAt, thumb: !!a.thumb, styleMix: a.styleMix || null, notes: a.notes || null }, steps, jobs, clips };
 });
 // Stop everything running for a footage file (optionally delete it).
 r.post('/api/assets/:id/cancel', (req, b, p) => {
@@ -462,6 +462,24 @@ r.post('/api/assets/:id/cancel', (req, b, p) => {
 });
 r.post('/api/clients/:id/broll', (req, b, p) => { const c = must(ctx.store.get('clients', p.id)); const count = (a) => ctx.store.all('clips', (x) => x.assetId === a.id && x.kind === 'broll').length; const a = ctx.store.all('assets', (x) => x.clientId === c.id && ['ready', 'waiting'].includes(x.status) && x.info?.hasVideo !== false).sort((x, y) => count(x) - count(y) || String(y.createdAt).localeCompare(String(x.createdAt)))[0]; if (!a) throw new HttpError(400, `${c.name} has no finished footage yet. Upload a video first.`); return require('./automation/pipeline').createBrollClip(a); });
 r.post('/api/assets/:id/broll', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); if (!a.info?.hasVideo) throw new HttpError(400, 'This file has no picture to make a B-roll edit from.'); return require('./automation/pipeline').createBrollClip(a); });
+// This video's own plan: { styleMix: { documentary: 2, story: 1 }, notes } (empty mix = the client's). Used when its clips are made.
+function planOf(b) {
+  const styles = require('./video/styles').PRESETS; const out = {};
+  if (b.styleMix !== undefined) { const m = Object.fromEntries(Object.entries(b.styleMix || {}).map(([k, v]) => [k, Math.max(0, Math.min(10, Math.round(Number(v) || 0)))]).filter(([k, v]) => v > 0 && (styles[k] || k === 'custom'))); out.styleMix = Object.keys(m).length ? m : null; }
+  if (b.notes !== undefined) out.notes = String(b.notes || '').trim().slice(0, 2000) || null;
+  return out;
+}
+r.post('/api/assets/:id/plan', (req, b, p) => { must(ctx.store.get('assets', p.id)); const a = ctx.store.update('assets', p.id, planOf(b)); events.publish('assets', a); return a; });
+// The footage inbox (server/automation/inbox.js): a Google Drive / Dropbox / OneDrive folder; videos dropped into a
+// client's folder from the phone are imported to Production. GET = status; POST { folder, on, moveDone } (owner).
+r.get('/api/inbox', () => require('./automation/inbox').status());
+r.post('/api/inbox', (req, b) => {
+  const set = {}; if (b.folder !== undefined) { const f = String(b.folder || '').trim(); if (f) { try { fs.mkdirSync(f, { recursive: true }); } catch { throw new HttpError(400, `Euclidean can't make or use ${f}. Choose another folder.`); } } set.folder = f; }
+  if (b.on !== undefined) set.on = !!b.on; if (b.moveDone !== undefined) set.moveDone = !!b.moveDone;
+  ctx.store.setSettings({ inbox: set }); const ib = require('./automation/inbox'); ib.ensureFolders(); return ib.status();
+}, { roles: OWNER });
+// Look through the inbox now (instead of within the minute).
+r.post('/api/inbox/scan', async () => require('./automation/inbox').scan({ force: true }));
 r.post('/api/assets/:id/process', (req, b, p) => {
   const a = must(ctx.store.get('assets', p.id));
   // Still importing/transcribing/analysing: mark it started, so clips are made the moment it's ready.
@@ -470,6 +488,8 @@ r.post('/api/assets/:id/process', (req, b, p) => {
   if (!a.info || a.status === 'importing') { ctx.store.update('assets', a.id, { error: null }); return queue.enqueue('ingest.file', { assetId: a.id, autoProcess: true }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `ingest:${a.id}:${Date.now()}`, priority: 6 }); }
   if (a.info && !a.info.hasVideo) throw new HttpError(400, 'This is an audio-only file, so there is no picture to make shorts from. Upload the video file (.mp4) instead.');
   // "Make clips" (or More clips): from now on this footage doesn't wait; clip length, count and AI tips are read now.
+  // This video's own styles and notes can come along (the phone / the footage panel): saved on the footage first.
+  if (b.styleMix || b.notes != null) ctx.store.update('assets', a.id, planOf(b));
   ctx.store.update('assets', a.id, { error: null, started: true, exhausted: false, ...(a.status === 'waiting' ? { status: 'ready' } : {}) });
   if (!a.transcript && a.info?.hasAudio) return queue.enqueue('transcribe', { assetId: a.id, thenDiscover: true }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `transcribe:${a.id}` });
   // fresh: Re-clip footage → "best moments, made again" (the old clips' moments can be picked again; the old clips stay).

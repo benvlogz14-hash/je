@@ -133,6 +133,25 @@ function VoiceSetup() {
   </div>`;
 }
 
+/** The footage inbox: a Google Drive (Dropbox, OneDrive) folder; videos dropped in a client's folder from the phone come into Production. */
+function FootageInbox() {
+  const { data: ib, reload } = useApi('/api/inbox', ['assets']);
+  const [folder, setFolder] = useState('');
+  useEffect(() => { if (ib && !folder) setFolder(ib.folder || ib.suggestions?.[0] || ''); }, [ib]);
+  if (!ib) return null;
+  const desktop = !!window.euclidean;
+  const choose = async () => { const r = await act(() => api.post('/api/system/pick-folder', { title: 'Choose the folder Google Drive syncs (Euclidean makes a folder per client in it)', defaultPath: folder || undefined })); if (r?.path) setFolder(r.path); };
+  const save = (patch) => act(() => api.post('/api/inbox', patch), { ok: patch.folder !== undefined ? 'Inbox set: a folder per client is ready in it' : 'Saved' }).then(reload);
+  return html`<${Section} title="Footage inbox (Google Drive)" sub="Drop videos into a client's folder in the Google Drive app on your phone; with this PC on, they come into that client's Production and wait for Make clips. A .txt file with the same name adds notes and styles (like: documentary 3, story 2, start at the reveal). Politics, then a folder with the candidate's name, goes to that candidate's footage on the Ad machine." action=${html`<span class=${'badge ' + (ib.exists && ib.on ? 'moss' : '')}>${ib.exists && ib.on ? 'Watching' : 'Off'}</span>`}>
+    <div class="col" style="gap:8px;font-size:var(--fs-sm)">
+      <ol style="margin:0;padding-left:18px;line-height:1.6"><li>Install <b>Google Drive for desktop</b> on this PC and sign in (it shows up as a G: drive or a "Google Drive" folder).</li><li>Choose a folder inside it below, e.g. <span class="mono">${'My Drive\\Euclidean Inbox'}</span>, and press Use this folder.</li><li>On your phone, open the Google Drive app, go to that folder and upload videos into a client's folder.</li></ol>
+      <div class="row" style="gap:8px"><input class="input mono grow" value=${folder} placeholder=${'G:\\My Drive\\Euclidean Inbox'} onInput=${(e) => setFolder(e.target.value)} />${desktop ? html`<${Button} size="sm" kind="soft" icon="folder" onClick=${choose}>Choose…</${Button}>` : null}<${Button} size="sm" kind="primary" disabled=${!folder.trim() || folder === ib.folder} onClick=${() => save({ folder: folder.trim(), on: true })}>Use this folder</${Button}></div>
+      ${ib.folder ? html`<div class="row wrap" style="gap:8px;align-items:center"><${Toggle} on=${ib.on} label="Watch the inbox" onChange=${(on) => save({ on })} /><span>Watch the inbox</span><${Toggle} on=${ib.moveDone} label="Move imported" onChange=${(moveDone) => save({ moveDone })} /><span>Move imported videos to an Imported folder</span><${Button} size="sm" kind="ghost" onClick=${() => act(() => api.post('/api/inbox/scan', {}), { ok: (r) => (r.imported?.length ? `Imported ${r.imported.length}` : 'Nothing new (files are taken once they finish syncing)') }).then(reload)}>Look now</${Button}></div>
+        <span class="faint">Folders: ${(ib.folders || []).join(' · ') || 'none yet'}${ib.last ? ` · last look ${new Date(ib.last.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}</span>` : null}
+    </div>
+  </${Section}>`;
+}
+
 /** Is the Claude app on this PC connected to Euclidean (the MCP connector)? Shows where it looked and what it wrote. */
 function ClaudeApp() {
   const { data: c, reload } = useApi('/api/claude/connect', []);
@@ -166,6 +185,7 @@ function Connections() {
   return html`
     <div class="notice" style="margin-bottom:14px"><${Icon} name="lock" size=${16} />Credentials are encrypted on this computer (sealed with Windows DPAPI in the desktop app) and are never shown again or sent anywhere except the service they belong to.</div>
     <${ClaudeApp} />
+    <${FootageInbox} />
     <${LocalAI} st=${st} test=${test} />
     <${Section} title="AI providers" sub="Claude, GPT and Grok. Each role in System → Agents picks one, with fallbacks." action=${html`${row('', st?.ai?.anthropic || st?.ai?.openai || st?.ai?.xai)}`}>
       <div class="form-grid">${[['global.anthropic.apiKey', 'Anthropic (Claude) API key', 'anthropic'], ['global.openai.apiKey', 'OpenAI (GPT + Whisper) API key', 'openai'], ['global.xai.apiKey', 'xAI (Grok) API key', 'xai']].map(([k, l, p]) => html`<div class="col" style="gap:6px"><${SecretInput} k=${k} label=${l} status=${status} value=${v} onChange=${setV} /><div class="row"><${Button} size="sm" kind="soft" onClick=${() => saveKeys([k], p)}>Save & test</${Button}>${status[k] ? html`<${Button} size="sm" kind="ghost" onClick=${() => test(p)}>Test</${Button}>` : null}</div></div>`)}</div>

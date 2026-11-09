@@ -291,11 +291,13 @@ queue.register('discover', {
     const asset = ctx.store.get('assets', job.payload.assetId);
     if (!asset) throw permanent('Asset no longer exists');
     const client = ctx.store.get('clients', asset.clientId);
-    const count = job.payload.count || client.production?.clipsPerFootage || ctx.setting('production.defaultClipCount', 6);
+    // A video's own plan (picked for this video on the phone or in its footage panel) wins over the client's settings.
+    const ownMix = asset.styleMix && Object.values(asset.styleMix).some((v) => Number(v) > 0) ? asset.styleMix : null;
+    const count = job.payload.count || (ownMix ? Object.values(ownMix).reduce((a, b) => a + (Number(b) || 0), 0) : 0) || client.production?.clipsPerFootage || ctx.setting('production.defaultClipCount', 6);
     // Style mix (Production → Video style → Mix): e.g. 2 Walkthrough + 2 Documentary + 2 Story text from each video,
     // all made in one go. Talking clips are found once and dealt the looks in turn; story edits are made alongside.
     const styles = require('../video/styles');
-    const mix = Object.fromEntries(Object.entries(client.production?.styleMix || {}).map(([k, v]) => [k, Math.max(0, Math.min(10, Math.round(Number(v) || 0)))]).filter(([k, v]) => v > 0 && (styles.PRESETS[k] || k === 'custom')));
+    const mix = Object.fromEntries(Object.entries(ownMix || client.production?.styleMix || {}).map(([k, v]) => [k, Math.max(0, Math.min(10, Math.round(Number(v) || 0)))]).filter(([k, v]) => v > 0 && (styles.PRESETS[k] || k === 'custom')));
     const mixTotal = Object.values(mix).reduce((a, b) => a + b, 0);
     let looks = null; let storyCount = 0;
     if (mixTotal > 0) {

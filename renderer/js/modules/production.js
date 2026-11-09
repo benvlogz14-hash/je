@@ -345,6 +345,7 @@ function FootageDrawer({ id, onClose, onShots }) {
       <div class="row wrap" style="gap:6px">${data.steps.map((s, i) => html`<span class=${'badge ' + (s.ok ? 'moss' : active.length && !data.steps.slice(0, i).some((x) => !x.ok) ? 'sky' : '')}>${s.ok ? '✓' : `${i + 1}.`} ${s.label}</span>`)}</div>
       ${a.error ? html`<div class="notice coral">Stopped: ${a.error}</div>` : null}
       ${active.map((j) => html`<div><div class="row" style="font-size:var(--fs-sm)"><span class="grow">${j.title}: ${j.note || j.status}</span><span class="faint tnum">${Math.round((j.progress || 0) * 100)}%</span></div><${Progress} value=${j.progress} indeterminate=${!j.progress} /></div>`)}
+      <${VideoPlan} a=${a} reload=${reload} />
       <div class="row wrap" style="gap:6px">
         <${Button} kind="primary" icon=${a.status === 'waiting' ? 'play' : 'refresh'} onClick=${retry}>${a.status === 'waiting' ? 'Make clips' : a.status === 'ready' ? 'Find more clips' : 'Retry'}</${Button}>
         ${active.length ? html`<${Button} kind="ghost" icon="stop" onClick=${() => cancel(false)}>Cancel</${Button}>` : null}
@@ -356,6 +357,29 @@ function FootageDrawer({ id, onClose, onShots }) {
       <div><h4>Clips from this video</h4>${data.clips.length ? html`<div class="list">${data.clips.map((c) => html`<div class="list-row" style="cursor:pointer" onClick=${() => { onClose(); navigate(`/production?clip=${c.id}`); }}><b class="grow">${c.title}</b><span class="faint tnum">${dur(clipLen(c))}</span><${StatusBadge} status=${c.status} /></div>`)}</div>` : html`<div class="faint">No clips yet. They appear here and on the board below as they're made.</div>`}</div>
       ${data.jobs.length ? html`<details><summary class="faint">History</summary><div class="col" style="gap:4px;font-size:var(--fs-xs);margin-top:6px">${data.jobs.slice().reverse().map((j) => html`<div><b>${j.title}</b> · ${j.status}${j.error ? `: ${j.error}` : ''}</div>`)}</div></details>` : null}
     </div></${Drawer}>`;
+}
+
+/**
+ * This video's own plan (Nov 9, Ryan: choose the clip styles and give notes per video, from the phone too): how many of
+ * each style and notes for the AI, saved on the footage (POST /api/assets/:id/plan) and used when its clips are made.
+ * Empty = the client's settings by the upload box. Videos from the Drive inbox arrive with their .txt notes filled in.
+ */
+function VideoPlan({ a, reload }) {
+  const { data: styles } = useApi('/api/video-styles', []);
+  const [mix, setMix] = useState(() => ({ ...(a.styleMix || {}) })); const [notes, setNotes] = useState(a.notes || '');
+  const total = Object.values(mix).reduce((x, y) => x + (Number(y) || 0), 0);
+  const dirty = JSON.stringify(mix) !== JSON.stringify(a.styleMix || {}) || notes !== (a.notes || '');
+  const step = (id, d) => setMix((m) => { const n = Math.max(0, Math.min(10, (Number(m[id]) || 0) + d)); const o = { ...m, [id]: n }; if (!n) delete o[id]; return o; });
+  const save = () => act(() => api.post(`/api/assets/${a.id}/plan`, { styleMix: mix, notes }), { ok: 'Saved for this video', sound: 'tap' }).then(reload);
+  const make = () => act(() => api.post(`/api/assets/${a.id}/process`, { styleMix: mix, notes }), { ok: 'Making clips with this plan' }).then(reload);
+  return html`<div class="panel pad col" style="gap:10px">
+    <div class="row" style="gap:8px;align-items:baseline"><b class="grow">This video's plan</b><span class="faint" style="font-size:var(--fs-xs)">${total ? `${total} clip${total === 1 ? '' : 's'}` : "the client's usual styles"}${a.source === 'drive inbox' ? ' · from your Drive inbox' : ''}</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px">${[...(styles || []), { id: 'custom', label: 'Custom (client look)' }].map((st) => html`<div class="row" style="gap:6px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:4px 6px">
+      <span class="grow ellipsis" style="font-size:var(--fs-sm)" title=${st.blurb || ''}>${st.label}</span>
+      <button type="button" class="btn ghost sm" style="min-width:28px;padding:2px 6px" onClick=${() => step(st.id, -1)}>−</button><b class="tnum" style="min-width:14px;text-align:center">${mix[st.id] || 0}</b><button type="button" class="btn ghost sm" style="min-width:28px;padding:2px 6px" onClick=${() => step(st.id, 1)}>+</button></div>`)}</div>
+    <textarea class="input" rows="2" placeholder=${'Notes for this video: "start at the reveal of the basement", "skip the intro", "focus on the drone shots"'} value=${notes} onInput=${(e) => setNotes(e.target.value)} />
+    <div class="row wrap" style="gap:6px">${a.status === 'waiting' ? html`<${Button} kind="primary" icon="play" onClick=${make}>Make clips with this plan</${Button}>` : null}<${Button} kind="ghost" disabled=${!dirty} onClick=${save}>Save plan</${Button}></div>
+  </div>`;
 }
 
 /** Which of the five footage steps a job is. */
