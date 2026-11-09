@@ -21,6 +21,20 @@ const { isGov, isEmail, excluded, withFooter } = require('./common');
 
 // ------------------------------------------------------------------ fixed facts (Appendix B: do not change without Ben)
 const SIGNER = 'Ben Gingold';
+/**
+ * Real first-touch lines from Ben's drafts (GrokBot's Oct 28 packs and the outreach guide's GOOD examples), shown to the
+ * writer as the level of specificity to hit. Their facts belong to those people: the writer uses only this card's facts.
+ */
+const EXAMPLES = ` Match the specificity of these real lines from Ben's drafts (their facts are theirs: use ONLY this card's facts):
+fact: "Up to $7 million to filter 1,4-dioxane out of Rockville Centre's water is the kind of thing people here would care about, and almost none of them have heard of it. Your campaign X account has 7 posts total." subject: "rvc water"
+fact: "Your @MonicaForSenate account still has 1,400 followers, and the last thing you posted there was a parks day photo in May 2021. You're the only Suffolk senator in the majority and you chair Local Government, and almost none of that shows up online." subject: "your x account"
+fact: "You just helped land $6 million for the Conte Community Center, $19.5 million total, a project named after the guy who held your seat. Your X account's last post is from Election Day 2018." subject: "the conte center"
+fact: "Your 9/11 post about serving on a Navy ship out of Norfolk was the best thing on your X this year, and it got 82 views." subject: "your 9/11 post"
+fact: "You won by 99 votes in 2024, so you know better than anyone every voter you reach counts. I couldn't find you on X at all." subject: "99 votes"
+fact: "Running Twin Mill Farms in Lisbon for 22 years and then winning NY-21 is a North Country story people would share." subject: "twin mill farms"
+question: "Who handles your social, you or someone on staff?" or "Want me to cut that one as a sample, no strings?" or "Who should I talk to about your social, you or your office?"
+dm: "Congrats Assemblyman. 'I voted for it. I would do it again.' That line deserved to be a video, not just a quote in the Beacon. Want me to cut a sample?"
+What works: one sourced, local, specific win (dollars, a place, a vote count, their own words) plus the gap you can see (posts, views, last post date). Never: opening with us, flattery that fits anyone ("your story drives this campaign", "it has real fire"), "as I mentioned", stats about us, client names.`;
 /** The two-email flow when their video is ready: the first says it's coming, the second carries the Drive link. */
 const VIDEO_NEXT = "I made you a free 30-second video on it. I'll send it in a separate email right after this one so it doesn't end up in spam.";
 const VIDEO_ASK = "It's yours to use free, whether or not we talk. Could you give us 20 minutes?";
@@ -198,6 +212,13 @@ async function researchCard(p, res) {
   if (known(card.phone) && !known(card.phone_type)) card.phone_type = 'unknown';
   card.sources = res.sources.filter((s) => s.text).map((s) => s.url);
   card.state = String(card.state || res.state || '').toUpperCase();
+  // Imported from GrokBot's Oct 28 research: its sourced hook and phone fill gaps Euclidean's own research left.
+  const g = p.grok;
+  if (g) {
+    const hook = String(g.hook || '').replace(/^(congrats( on the win)?|with the election behind us, quick note)[.!]\s*/i, '').trim();
+    if (!known(card.hook_email) && hook.length > 25) { card.hook_email = hook; card.hook_source = `GrokBot research (Oct 28): ${g.sources || 'its pack'}`; }
+    if (!known(card.phone) && /\d{3}\D{0,2}\d{3}\D?\d{4}/.test(g.phone || '')) { card.phone = (g.phone.match(/\(?\d{3}\)?\D{0,2}\d{3}\D?\d{4}/) || [''])[0]; card.phone_source = g.phone; card.phone_type = /cell|mobile/i.test(g.phone) ? 'cell' : /campaign/i.test(g.phone) ? 'campaign' : /district|office|legislative/i.test(g.phone) ? 'district office' : 'unknown'; }
+  }
   return card;
 }
 
@@ -210,7 +231,7 @@ async function writeParts(p, card, framing, prior) {
   const fallback = { subject: String(card.sample_topic || 'quick idea').toLowerCase().split(/\s+/).slice(0, 3).join(' '), fact: known(card.hook_email) ? card.hook_email : '', question: 'Who handles your social, you or someone on staff?', vm_hook: known(card.hook_voicemail) ? card.hook_voicemail.replace(/[.!]+$/, '') : '', topic: known(card.sample_topic) ? card.sample_topic : '', dm: '', text: '' };
   if (!known(card.hook_email)) return { ...fallback, by: 'template' };
   try {
-    const r = await require('../hal/brain').think({ json: true, maxTokens: 600, system: `You write first-touch outreach for Ben Gingold of Euclidean Media, one person writing to one person. Use ONLY the research card. Lead with THEM. Human and specific: if it could be sent to any politician by swapping the name, rewrite it. Never mention prices, packages, links, attachments, governors (say "state money"), Isaiah Martin, opponents, scandals or sensitive personal material. No em or en dashes. Never use: ${BANNED.join(', ')}. Return JSON: {"subject":"2 to 4 lowercase words tied to the hook","fact":"one or two sentences: the specific sourced fact, why it matters to people in their district, and the gap (nobody has seen it, their feed doesn't show it) only if the card shows a real gap","question":"one easy question, e.g. Who handles your social, you or someone on staff? or Want me to cut that one as a free sample?","vm_hook":"the hook in under 15 words, a noun phrase that reads before 'is a great story'","topic":"3 to 6 words, the free 30-second video's topic","dm":"under 50 words, for Instagram/X/Facebook, no price, no link, ends with a question","text":"under 40 words, identifies Ben first: Hi <first>, Ben Gingold from Euclidean Media. ..."}. ${framing === 'post-election' ? 'They were NOT on the Nov 3 ballot: never congratulate them on a win.' : 'They won on Nov 3 (or will be contacted only if they win).'}${String(card.state) === 'NY' && /rockville centre/i.test(`${card.district_towns}`) ? ' Ben lives in Rockville Centre, so "my neighbors here" is true for this one.' : ''}`,
+    const r = await require('../hal/brain').think({ json: true, maxTokens: 600, system: `You write first-touch outreach for Ben Gingold of Euclidean Media, one person writing to one person. Use ONLY the research card. Lead with THEM. Human and specific: if it could be sent to any politician by swapping the name, rewrite it.${EXAMPLES} Never mention prices, packages, links, attachments, governors (say "state money"), Isaiah Martin, opponents, scandals or sensitive personal material. No em or en dashes. Never use: ${BANNED.join(', ')}. Return JSON: {"subject":"2 to 4 lowercase words tied to the hook","fact":"one or two sentences: the specific sourced fact, why it matters to people in their district, and the gap (nobody has seen it, their feed doesn't show it) only if the card shows a real gap","question":"one easy question, e.g. Who handles your social, you or someone on staff? or Want me to cut that one as a free sample?","vm_hook":"the hook in under 15 words, a noun phrase that reads before 'is a great story'","topic":"3 to 6 words, the free 30-second video's topic","dm":"under 50 words, for Instagram/X/Facebook, no price, no link, ends with a question","text":"under 40 words, identifies Ben first: Hi <first>, Ben Gingold from Euclidean Media. ..."}. ${framing === 'post-election' ? 'They were NOT on the Nov 3 ballot: never congratulate them on a win.' : 'They won on Nov 3 (or will be contacted only if they win).'}${String(card.state) === 'NY' && /rockville centre/i.test(`${card.district_towns}`) ? ' Ben lives in Rockville Centre, so "my neighbors here" is true for this one.' : ''}`,
       messages: [{ role: 'user', content: JSON.stringify({ name: p.name, office: card.office, district_towns: card.district_towns, hook: card.hook_email, hook_voicemail: card.hook_voicemail, sample_topic: card.sample_topic, socials: card.socials, last_post_dates: card.last_post_dates, prior_contact: prior.text }) }] });
     const j = r.json || {}; const out = { ...fallback };
     for (const k of Object.keys(fallback)) if (typeof j[k] === 'string' && j[k].trim()) out[k] = j[k].trim();

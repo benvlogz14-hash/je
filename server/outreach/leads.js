@@ -113,6 +113,41 @@ function importCsv({ lane, csv, actor }) {
   return { added, updated, skipped, columns: headers, recognised: Object.keys(map) };
 }
 
+/**
+ * GrokBot's Oct 28 research packs (the founders' usual email system): ~90 political candidates in NY and CT with
+ * research, tier, flags, prior contact and GrokBot's drafts (first email, follow-up, live call, voicemail, DM, text).
+ * Shipped with the app (server/outreach/seed/grokbot-2026-10-28.json) and brought in only when a founder presses Import.
+ * Matched to existing leads by name (and office), so nobody is added twice; stage and anything a person set are kept.
+ * Holds stay held (prospect.hold), Ryan's threads and real prior contact are kept for the guide (prospect.priorContact).
+ */
+const GROK_FILE = require('path').join(__dirname, 'seed', 'grokbot-2026-10-28.json');
+function grokPack() { try { return JSON.parse(require('fs').readFileSync(GROK_FILE, 'utf8')); } catch { return { people: [] }; } }
+function grokStatus() {
+  const pack = grokPack(); const have = ctx.store.all('prospects', (p) => p.grok?.pack).length;
+  return { source: pack.source, people: pack.people.length, imported: have };
+}
+function importGrok(actor = 'user') {
+  const pack = grokPack(); let added = 0; let updated = 0; const skipped = [];
+  for (const r of pack.people) {
+    const email = r.email && !isGov(r.email) ? r.email : '';
+    if (excluded({ name: r.name, email })) { skipped.push(`${r.name}: on your never-contact list`); continue; }
+    // Real contact only ("never emailed", "unsent drafts" don't count), so the guide writes a thread reply when it should.
+    const contacted = /emailed|thread|sent (on|oct)|dm'?d|called|replied/i.test(r.priorContact) && !/never|unsent|not (yet )?(sent|contacted)/i.test(r.priorContact);
+    const ex = ctx.store.find('prospects', (p) => p.type === 'political' && nameMatch(p.name, r.name) && nameMatch(r.name, p.name));
+    const flags = [r.hold && 'HOLD', r.onlyIfWin && 'Contact only if they win', r.notOnBallot && 'Not on the Nov 3 ballot (no "congrats on the win")', r.ryans && "Ryan's thread: Ryan sends", r.replyInThread && 'Reply in the existing thread', r.emailUnverified && 'Verify the email before sending'].filter(Boolean);
+    const grok = { pack: r.pack, status: r.status, odds: r.odds, tier: r.tier, finance: r.finance, bestChannel: r.bestChannel, hook: r.hook, emailNote: r.emailNote, phone: r.phone, social: r.social, priorContact: r.priorContact, sources: r.sources, flags, drafts: r.drafts, importedAt: new Date().toISOString() };
+    const fields = { type: 'political', office: r.office, location: ex?.location || r.office, why: ex?.why || r.hook, listSource: 'GrokBot Oct 28', grok,
+      ...(email && !ex?.publicContact ? { publicContact: email, contactVerified: !r.emailUnverified, imported: true } : {}),
+      ...(r.hold ? { hold: `GrokBot: ${r.status}`.slice(0, 200) } : {}),
+      ...(contacted || r.ryans ? { priorContact: `${r.ryans ? "Ryan's thread. " : ''}${r.priorContact}`.slice(0, 300) } : {}) };
+    if (ex) { ctx.store.update('prospects', ex.id, fields); updated++; }
+    else { ctx.store.insert('prospects', { name: r.name, ...fields, angle: '', stage: 'new' }); added++; }
+  }
+  events.publish('prospects', {});
+  audit.log(actor, 'leads.grokbot_imported', { added, updated, skipped: skipped.length });
+  return { added, updated, skipped };
+}
+
 /** CSV of a lane's leads in the imported layout (or a standard one), new leads included. */
 function exportCsv(lane) {
   const type = lane === 'political' ? 'political' : 'creator';
@@ -129,4 +164,4 @@ function exportCsv(lane) {
   return '﻿' + [headers, ...rows].map((r) => r.map(q).join(',')).join('\r\n');
 }
 
-module.exports = { parseCsv, importCsv, exportCsv };
+module.exports = { parseCsv, importCsv, exportCsv, importGrok, grokStatus };

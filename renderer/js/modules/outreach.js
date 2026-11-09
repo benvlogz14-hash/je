@@ -165,6 +165,8 @@ function Bubble({ it, lane, picked, toggle, edit, setEdit, onApprove, onSkip, on
 
 export function Leads({ lane }) {
   const [busy, setBusy] = useState(false);
+  const { data: grok, reload: reGrok } = useApi(lane === 'political' ? '/api/political/grokbot' : null, ['prospects']);
+  const importGrok = () => act(() => api.post('/api/political/grokbot/import', {}), { ok: (r) => `GrokBot research: ${r.added} added, ${r.updated} updated${r.skipped.length ? `, ${r.skipped.length} skipped` : ''}` }).then(reGrok);
   const pick = (e) => {
     const f = e.target.files?.[0]; if (!f) return;
     setBusy(true);
@@ -175,6 +177,7 @@ export function Leads({ lane }) {
     <div class="grow"><b>Lead list</b><div class="faint" style="font-size:var(--fs-xs)">Import your spreadsheet (CSV) or a JSON list, like HAL's. Your columns are kept, and Export writes new leads back in the same layout.</div></div>
     <label class="btn ghost sm" style="cursor:pointer">${busy ? 'Importing…' : 'Import list'}<input type="file" accept=".csv,text/csv,.tsv,.txt,.json,application/json" style="display:none" onChange=${pick} /></label>
     <a class="btn ghost sm" href=${api.url(`/api/outreach/${lane}/export.csv`)}>Export CSV</a>
+    ${grok?.people ? html`<div class="row" style="gap:8px;width:100%;border-top:1px solid var(--line);padding-top:8px"><span class="grow faint" style="font-size:var(--fs-xs)"><b style="color:var(--ink)">GrokBot's research (Oct 28):</b> ${grok.people} candidates in NY and CT with tier, flags, prior contact and its drafts (email, follow-up, call, voicemail, DM).${grok.imported ? ` ${grok.imported} in your list.` : ''}</span><${Button} size="sm" kind=${grok.imported ? 'ghost' : 'primary'} onClick=${importGrok}>${grok.imported ? 'Import again' : 'Import them'}</${Button}></div>` : null}
     <${Button} size="sm" kind="primary" icon="sparkle" onClick=${() => act(() => api.post(`/api/outreach/${lane}/start`, {}), { ok: (r) => `Started ${r.started}` })}>${lane === 'political' ? 'Make packages for new leads' : 'Write emails for new leads'}</${Button}>
   </div>`;
 }

@@ -150,6 +150,8 @@ async function start(opts = {}) {
   console.log(`[euclidean] engine ${ctx.version} on http://${lan ? (ctx.lanAddress || '0.0.0.0') : '127.0.0.1'}:${ctx.port} · data ${paths.root}`);
   // For the Euclidean MCP connector (mcp/euclidean-mcp.js): where this engine listens and its pass code, in the
   // owner's own data folder, so Claude on this PC can talk to the running app. Rewritten at every start.
+  // ...and the Claude apps on this PC are pointed at the connector (no separate setup: it comes with every update).
+  setTimeout(() => { try { require('./setup/claude-connect').ensure(); } catch { /* optional */ } }, 4000);
   try { fs.writeFileSync(path.join(paths.root, 'connect.json'), JSON.stringify({ url: `http://127.0.0.1:${ctx.port}`, token: ctx.store.get('users', 'ryan')?.token || null, pid: process.pid, at: new Date().toISOString() }, null, 1)); } catch { /* read-only folder */ }
   return { port: ctx.port, ownerToken: ctx.store.get('users', 'ryan')?.token, store: ctx.store };
 }

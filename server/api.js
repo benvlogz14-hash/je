@@ -865,6 +865,9 @@ r.post('/api/setup/:action', (req, b, p) => {
   return queue.enqueue(job, {}, { actor: actorOf(req), dedupeKey: job });
 }, { roles: OWNER });
 r.get('/api/political/steps', () => polPkg.STEPS.map(([key, label]) => ({ key, label })));
+// GrokBot's Oct 28 research packs (shipped with the app): how many there are, and Import (a founder presses it).
+r.get('/api/political/grokbot', () => require('./outreach/leads').grokStatus());
+r.post('/api/political/grokbot/import', (req) => require('./outreach/leads').importGrok(actorOf(req)), { roles: OWNER });
 // What happened with this candidate's ad runs: the last few jobs (status, reason, last log lines), the steps, and
 // anything holding a waiting job back, so the Ad machine can always say what's going on.
 r.get('/api/prospects/:id/runs', (req, b, p) => {

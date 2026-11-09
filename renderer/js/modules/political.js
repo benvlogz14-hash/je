@@ -155,7 +155,8 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
       </div>
       <${FootageLinks} p=${p} pkg=${pkg} run=${run} busy=${!!job} reload=${reload} />
       <${LookPanel} p=${p} pkg=${pkg} busy=${!!job} reload=${reload} />
-      <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ value: 'about', label: 'About' }, { value: 'videos', label: 'Videos & sheet' }, { value: 'email', label: 'Email' }, { value: 'brief', label: 'Brief' }, { value: 'call', label: 'Call' }, { value: 'sources', label: `Sources ${pkg.sources?.length || ''}` }]} />
+      <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ value: 'about', label: 'About' }, { value: 'videos', label: 'Videos & sheet' }, { value: 'email', label: 'Email' }, { value: 'brief', label: 'Brief' }, { value: 'call', label: 'Call' }, { value: 'sources', label: `Sources ${pkg.sources?.length || ''}` }, ...(p.grok ? [{ value: 'grok', label: 'GrokBot' }] : [])]} />
+      ${tab === 'grok' && p.grok ? html`<${GrokTab} g=${p.grok} />` : null}
       ${tab === 'about' ? html`<div class="col selectable" style="gap:10px;font-size:var(--fs-sm);line-height:1.55">
         ${b.headline ? html`<h3>${b.headline}</h3>` : null}
         <div class="grid c2" style="gap:8px">${[['Office', pkg.profile?.office || p.location], ['Party', pkg.profile?.party], ['Stage', p.stage || 'new'], ['Contact email', p.publicContact || pkg.profile?.contact || 'not found yet'], ['Office phone', pkg.profile?.officePhone], ['Found by', p.source ? `${p.source}${p.query ? ` ("${p.query}")` : ''}` : '']].filter(([, v]) => v).map(([k, v]) => html`<div class="panel pad" style="padding:8px 12px"><div class="faint" style="font-size:var(--fs-xs)">${k}</div><b style="overflow-wrap:anywhere">${v}</b></div>`)}</div>
@@ -195,6 +196,25 @@ function PackageDrawer({ p, steps, job, onClose, reload }) {
       ${tab === 'sources' ? html`<ol class="selectable" style="padding-left:22px;font-size:var(--fs-sm);line-height:1.6">${(pkg.sources || []).map((s) => html`<li value=${s.n}><a href=${s.url} target="_blank" rel="noreferrer">${s.title}</a></li>`)}${pkg.researchErrors?.length ? html`<div class="faint" style="margin-top:8px;font-size:var(--fs-xs)">Unavailable: ${pkg.researchErrors.join(' · ')}</div>` : null}</ol>` : null}
       <div class="faint" style="font-size:var(--fs-xs)">${pkg.finishedAt ? `Made ${ago(pkg.finishedAt)}` : ''}</div>
     </div></${Drawer}>`;
+}
+
+/** GrokBot's research and drafts for this candidate (imported from its Oct 28 packs), each draft with Copy. */
+function GrokTab({ g }) {
+  const copy = (t) => { navigator.clipboard?.writeText(t).then(() => toast('Copied', { kind: 'ok', ms: 1200 })).catch(() => toast('Select the text and copy it', { kind: 'warn' })); };
+  const D = g.drafts || {};
+  const block = (title, text, extra) => (text ? html`<div class="panel pad col" style="gap:6px"><div class="row"><b class="grow" style="font-size:var(--fs-sm)">${title}</b>${extra || null}<${Button} size="sm" kind="ghost" onClick=${() => copy(text)}>Copy</${Button}></div><div class="selectable" style="white-space:pre-wrap;font-size:var(--fs-sm);line-height:1.55">${text}</div></div>` : null);
+  const words = (t) => String(t || '').split(/\s+/).filter(Boolean).length;
+  return html`<div class="col" style="gap:10px">
+    ${g.flags?.length ? html`<div class="row wrap" style="gap:6px">${g.flags.map((f) => html`<span class=${`badge ${/HOLD|Ryan/.test(f) ? 'coral' : 'gold'}`}>${f}</span>`)}</div>` : null}
+    <div class="grid c2" style="gap:8px;font-size:var(--fs-sm)">${[['Status', g.status], ['Win odds', g.odds], ['Tier (internal)', [g.tier, g.finance].filter(Boolean).join(' · ')], ['Best channel', g.bestChannel], ['Email', g.emailNote], ['Phone', g.phone], ['Social', g.social], ['Prior contact', g.priorContact]].filter(([, v]) => v).map(([k, v]) => html`<div class="panel pad" style="padding:8px 12px"><div class="faint" style="font-size:var(--fs-xs)">${k}</div><span class="selectable" style="overflow-wrap:anywhere">${v}</span></div>`)}</div>
+    ${g.hook ? html`<div class="notice sky selectable">${g.hook}</div>` : null}
+    ${block(`First email${D.subject ? `: "${D.subject}"` : ''}`, D.email ? `${D.subject ? `Subject: ${D.subject}\n\n` : ''}${D.email}` : '')}
+    ${block('Follow-up (day 4, same thread)', D.followup)}
+    ${block('Live call', D.call)}
+    ${block(`Voicemail (${words(D.voicemail)} words)`, D.voicemail)}
+    ${block('DM', D.dm)}${block('Text', D.text)}
+    <span class="faint" style="font-size:var(--fs-xs)">From ${g.pack} (GrokBot, Oct 28). Sources: ${g.sources || 'see the pack'}. Drafts only: nothing was sent.</span>
+  </div>`;
 }
 
 /** Upload video files to a lead's footage, one at a time, reporting { name, frac, n, of } (null when done). */
