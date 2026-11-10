@@ -882,3 +882,9 @@ button.bot-av { cursor: pointer; }
 .newbot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; margin-top: 12px; }
 .newbot-card { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); color: inherit; font: inherit; cursor: pointer; text-align: left; }
 .newbot-card:hover { border-color: var(--teal); background: var(--surface-2); }
+
+/* Their videos on Google (Politics → Ad machine and the lead panel) */
+.gv-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow: auto; }
+.gv-item { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border-radius: 10px; background: var(--surface-2); cursor: pointer; }
+.gv-item.off { opacity: .5; }
+.gv-item img, .gv-noimg { width: 64px; height: 36px; object-fit: cover; border-radius: 6px; flex: none; display: grid; place-items: center; background: var(--surface-3); }

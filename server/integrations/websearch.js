@@ -197,9 +197,12 @@ function queryOf(text) {
  * Search and read: the best `pages` results are read side by side and their passages about the question kept.
  * Returns { query, results, pages: [{ url, title, date, passages: [text] }], failed: [{ url, error }] }.
  */
-async function research(question, { query, pages = 3, results: n = 8, recent = null, perPage = 3 } = {}) {
+async function research(question, { query, pages = 3, results: n = 8, recent = null, perPage = 3, full = false } = {}) {
   const q = query || queryOf(question);
-  const [results, quick] = await Promise.all([search(q, n, { recent }), recent ? null : instant(q)]);
+  // A full inquiry uses Google (Serper) when it's set up and within budget; otherwise the free DuckDuckGo search.
+  let google = null;
+  if (full) { const s = require('./serper'); if (!s.blocked()) { try { google = await s.web(q, { num: Math.max(10, n), recent }); } catch { google = null; } } }
+  const [results, quick] = await Promise.all([google ? google.results.slice(0, n) : search(q, n, { recent }), recent || google ? null : instant(q)]);
   const pick = results.filter((r) => !/\.(pdf|docx?|xlsx?|pptx?|zip|mp4|mp3)(\?|$)/i.test(r.url) && !/youtube\.com\/watch|tiktok\.com|instagram\.com|facebook\.com|x\.com\/|twitter\.com/i.test(r.url)).slice(0, pages);
   const failed = []; const read_ = [];
   await Promise.all(pick.map(async (r) => {
@@ -210,7 +213,8 @@ async function research(question, { query, pages = 3, results: n = 8, recent = n
     } catch (e) { failed.push({ url: r.url, error: e.message }); }
   }));
   read_.sort((a, b) => pick.findIndex((r) => r.url === a.url || r.title === a.title) - pick.findIndex((r) => r.url === b.url || r.title === b.title));
-  return { query: q, instant: quick, results, pages: read_, failed };
+  const box = google?.box?.text ? { heading: google.box.title || 'Google', text: google.box.text, url: google.box.url, source: 'Google', related: [] } : google?.kg?.text ? { heading: google.kg.title, text: google.kg.text, url: google.kg.url, source: 'Google', related: [] } : null;
+  return { query: q, engine: google ? 'google' : 'duckduckgo', instant: box || quick, results, pages: read_, failed };
 }
 
 /** Research as prompt context. */

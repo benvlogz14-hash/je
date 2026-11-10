@@ -27,7 +27,8 @@ const HOUSE = 'House rules: no em dashes or en dashes. Public, professional info
 const IN_APP = `HOW THIS WORKS INSIDE EUCLIDEAN (the app replaced Grok Bot; you now run here):
 - Your lists, call sheets, winners lists, research packs and briefs are in the Data tab: data_search finds people and passages, data_read opens a list. Save anything you build (a call sheet, a list, a research table) with data_save so the founders see it there.
 - The leads board: lead_lookup before researching anyone; propose_leads to add confirmed people (they wait for a founder's OK); draft_outreach runs the outreach guide for a lead (drafts only).
-- Live internet is free and unlimited through DuckDuckGo: research (search and read the pages), web_search, read_page, news. Cite the link for every fact.
+- Live internet: DuckDuckGo is free and unlimited (research, web_search, read_page, news): use it first for quick facts and summaries. google_search (Google through Serper, about a tenth of a cent each, cached) is for a full inquiry when DuckDuckGo comes back thin. Never repeat a search you already did. Cite the link for every fact.
+- Videos and ads: find_videos lists a politician's public videos from Google's Videos tab (floor sessions, hearings, council meetings, interviews); make_ads starts the ad machine for leads on our board, hands-off (it finds and downloads their videos itself, cuts the ads, makes the one-pager and drafts the email in Approvals).
 - Other bots: ask_bot hands them a piece of work. The notebook (notebook_recall / notebook_learn) is what Euclidean has learned.
 - Nothing you do sends, posts or schedules. Messages are drafts for Ben.`;
 // Each starter bot's own job comes from its GrokBot master prompt (server/bots/seed/*.md), the part before the data.
@@ -42,7 +43,7 @@ function promptRole(file) {
 const TEMPLATES = {
   master: { kind: 'master', name: 'Corbin', emoji: '🧠', color: 'lav', computer: 'browser', tools: { web: true, notebook: true, app: true, team: true, leads: true, clients: true }, maxSteps: 20,
     role: 'Master bot (team lead and ops): runs the daily plan, keeps Ben pointed at the next call, email and video, builds call sheets and winners lists, fact-checks every hook, and hands work to Juno, Scout and Data Bot.',
-    instructions: () => `${promptRole('corbin.md')}\n\nAS THE MASTER BOT: for a big job, plan it, hand pieces to the other bots with ask_bot (one clear task each), check what comes back against the sources, and end with what Ben should do next in under 5 bullets.\n\n${IN_APP}\n\n${HOUSE}` },
+    instructions: () => `${promptRole('corbin.md')}\n\nAS THE MASTER BOT: for video picks, find_videos to check each one has usable public footage, then make_ads for the picks. For a big job, plan it, hand pieces to the other bots with ask_bot (one clear task each), check what comes back against the sources, and end with what Ben should do next in under 5 bullets.\n\n${IN_APP}\n\n${HOUSE}` },
   client: { kind: 'client', name: 'Juno', emoji: '🤝', color: 'teal', computer: 'browser', tools: { web: true, notebook: true, app: true, team: true, clients: true, leads: true }, maxSteps: 16,
     role: 'Client bot: drafts first-touch emails, voicemails and DMs and the follow-ups, scores fit and pay, suggests the package, and owns creator/YouTube clients and prospects (Stringer model). Knows each client\'s file.',
     instructions: () => `${promptRole('juno.md')}\n\nFor a current client, open their file first (client_overview) and follow their voice and "never" list.\n\n${IN_APP}\n\n${HOUSE}` },

@@ -30,12 +30,24 @@ function pageText(p, focus) {
 
 const TOOLS = [
   {
-    name: 'research', kinds: ['web'], args: '{"question": "what to find out", "recent": "day|week|month (optional)"}',
-    about: 'Search the web AND read the best 3 pages; returns the parts that answer the question, with links. Best first step for any question about the world.',
+    name: 'research', kinds: ['web'], args: '{"question": "what to find out", "recent": "day|week|month (optional)", "full": false}',
+    about: 'Search the web AND read the best 3 pages; returns the parts that answer the question, with links. Best first step for any question about the world. Free (DuckDuckGo); full: true uses Google instead (a tenth of a cent) for a full inquiry when DuckDuckGo came back thin.',
     async run(a) {
-      const r = await web.research(a.question || a.query || '', { pages: 3, recent: a.recent || null });
+      const r = await web.research(a.question || a.query || '', { pages: 3, recent: a.recent || null, full: a.full === true || a.full === 'true' });
       if (!r.results.length && !r.instant) return { text: `No web results for "${r.query}". Try other words.` };
       return { text: web.formatResearch(r, { maxChars: 7000 }) + (r.failed.length ? `\n(Couldn't read: ${r.failed.map((f) => `${f.url} (${f.error})`).join('; ')})` : ''), links: r.results.map((x) => x.url) };
+    },
+  },
+  {
+    name: 'google_search', kinds: ['web'], args: '{"query": "search words", "type": "web|news|videos", "recent": "day|week|month|year (optional)"}',
+    about: 'A real Google search (Serper) for a full inquiry: the exact pages, news or videos Google shows, plus its answer box. It costs a tenth of a cent, so use research (free) first for quick facts and summaries, and this when you need Google itself (finding a campaign site, filings, every video of someone). Results are cached.',
+    async run(a) {
+      const s = require('../integrations/serper'); const why = s.blocked(); if (why) return { text: `${why} Use research or web_search (free) instead.` };
+      const t = a.type === 'news' ? 'news' : a.type === 'videos' ? 'videos' : 'web';
+      if (t === 'videos') { const r = await s.videos(String(a.query || ''), { recent: a.recent || null }); return { text: r.videos.length ? r.videos.slice(0, 15).map((v, i) => `${i + 1}. ${v.title} (${v.channel || v.source}${v.duration ? `, ${Math.round(v.duration / 60)} min` : ''}${v.date ? `, ${v.date}` : ''}) ${v.url}`).join('\n') : 'No videos found.', links: r.videos.map((v) => v.url) }; }
+      if (t === 'news') { const n = await s.news(String(a.query || '')); return { text: n.length ? n.map((x, i) => `${i + 1}. ${x.title} (${x.source}, ${x.date}) ${x.url}\n   ${x.snippet}`).join('\n') : 'No news found.', links: n.map((x) => x.url) }; }
+      const r = await s.web(String(a.query || ''), { recent: a.recent || null });
+      return { text: [r.box?.text ? `GOOGLE ANSWER: ${r.box.text} ${r.box.url}` : '', r.kg ? `KNOWLEDGE PANEL: ${r.kg.title}${r.kg.type ? ` (${r.kg.type})` : ''}: ${r.kg.text} ${r.kg.url} ${Object.entries(r.kg.facts).map(([k, v]) => `${k}: ${v}`).join('; ')}` : '', r.results.map((x, i) => `${i + 1}. ${x.title} — ${x.url}${x.date ? ` (${x.date})` : ''}\n   ${x.snippet}`).join('\n')].filter(Boolean).join('\n\n') || 'Nothing found.', links: r.results.map((x) => x.url) };
     },
   },
   {
@@ -226,6 +238,26 @@ const TOOLS = [
       require('../core/audit').log(`bot:${t.bot.name}`, 'bot.leads_added', { added, by: t.bot.name });
       require('../core/events').publish('prospects', {});
       return { text: `${added} added to New prospects (they wait for a founder's OK).${skipped.length ? ` Skipped: ${skipped.join('; ')}.` : ''}` };
+    },
+  },
+  {
+    name: 'find_videos', kinds: ['leads'], args: '{"name": "a politician (on our board, or any name)", "office": "optional, e.g. Assembly AD-38"}',
+    about: "Find a politician's public videos on Google's Videos tab (floor sessions, hearings, council meetings, interviews, campaign videos), only the ones about them, best first. For someone on our board the list is saved on their lead, and the ad machine uses it.",
+    async run(a) {
+      const vf = require('../political/videofind');
+      const n = String(a.name || '').toLowerCase().trim(); const p = n && ctx.store.all('prospects', (x) => String(x.name || '').toLowerCase() === n)[0];
+      const r = p ? await vf.forLead(p.id, { actor: 'bot' }) : await vf.find({ name: a.name, office: a.office || '' }).then((x) => ({ found: x.videos, error: x.error }));
+      const list = r.found || [];
+      return { text: list.length ? `${list.length} video${list.length === 1 ? '' : 's'} of ${a.name}${p ? ' (saved on their lead)' : ''}:\n${list.map((v, i) => `${i + 1}. ${v.title} (${v.channel || v.source}${v.duration ? `, ${Math.round(v.duration / 60)} min` : ''}${v.date ? `, ${v.date}` : ''}; ${v.why.join(', ')}) ${v.url}`).join('\n')}` : `No videos of ${a.name} found${r.error ? ` (${r.error})` : ''}.`, links: list.map((v) => v.url) };
+    },
+  },
+  {
+    name: 'make_ads', kinds: ['leads'], args: '{"names": ["leads on our board"]}',
+    about: "Start the ad machine for leads on our board, hands-off: it finds their videos on Google (unless footage was uploaded), downloads the best, cuts the ads from their own words, makes the one-pager and drafts the email (Approvals; nothing is sent). Skips HOLD, lost and Ryan's people. Up to 25 at a time; each takes several minutes in the background.",
+    async run(a) {
+      const names = (Array.isArray(a.names) ? a.names : [a.names || a.name]).filter(Boolean).map(String);
+      const r = require('../political/autoads').start({ names, actor: 'bot' });
+      return { text: `Started the ad machine for ${r.started.length}: ${r.started.map((x) => x.name).join(', ') || 'nobody'}.${r.skipped.length ? ` Skipped: ${r.skipped.join('; ')}.` : ''} Progress shows on Politics → Ad machine; finished ads land in its Finished tab.` };
     },
   },
   {

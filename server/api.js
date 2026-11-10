@@ -43,6 +43,7 @@ const SECRET_KEYS = new Set([
   ...Object.values(twilio.K), ...Object.values(email.K),
   'global.ayrshare.apiKey', 'global.google.clientId', 'global.google.clientSecret',
   ...Object.values(require('./political/sources').KEYS), require('./video/cutout').KEY, require('./political/images').PEXELS, require('./integrations/elevenlabs').KEY,
+  require('./integrations/serper').KEY,
 ]);
 
 // ------------------------------------------------------------ bootstrap & settings
@@ -99,6 +100,7 @@ r.post('/api/connections/test/:name', async (req, b, p) => {
   if (n === 'email') return email.test();
   if (n === 'ayrshare') return publishing.ayrTest();
   if (n === 'elevenlabs') return require('./integrations/elevenlabs').test();
+  if (n === 'serper') return require('./integrations/serper').test();
   throw new HttpError(404, 'Unknown connection');
 }, { roles: OWNER });
 
@@ -1594,6 +1596,29 @@ r.del('/api/data/:id', (req, b, p) => dataMod().remove(p.id, actorOf(req)));
 r.post('/api/data/:id/leads', botErr((req, b, p) => dataMod().toLeads(p.id, { only: Array.isArray(b.only) ? b.only : null, pending: !!b.pending, type: b.type || null, by: actorOf(req) })));
 r.post('/api/data/:id/notebook', botErr((req, b, p) => dataMod().toNotebook(p.id, actorOf(req))));
 r.get('/api/data/:id/csv', (req, res, p) => { try { const csv = dataMod().toCsv(p.id); res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="data-${p.id}.csv"` }); res.end(csv); } catch (e) { send(res, 404, { error: e.message }); } }, { stream: true });
+
+// Google search through Serper (the "full inquiry" search; DuckDuckGo stays the free default), and finding a lead's videos.
+r.get('/api/serper', () => require('./integrations/serper').status());
+r.get('/api/web/google', botErr(async (req) => { const s = require('./integrations/serper'); const t = String(req.query.type || 'search'); const q = String(req.query.q || ''); return t === 'videos' ? s.videos(q, { recent: req.query.recent || null }) : t === 'news' ? { news: await s.news(q) } : s.web(q, { recent: req.query.recent || null, num: Math.min(100, Number(req.query.n) || 10) }); }));
+// Video thumbnails from Google results, fetched by the engine (the app only shows its own images): pictures only, 2 MB max.
+const thumbCache = new Map();
+r.get('/api/web/image', async (req, res) => {
+  const u = String(req.query.url || '');
+  try {
+    let hit = thumbCache.get(u);
+    if (!hit) {
+      const g = await require('./integrations/safefetch').get(u, { keepBuffer: true, maxBytes: 2 * 1024 * 1024, timeout: 10000, headers: { accept: 'image/*' } });
+      if (g.status >= 400 || !/^image\//i.test(g.type)) return send(res, 404, {});
+      hit = { type: g.type.split(';')[0], buf: g.buffer }; thumbCache.set(u, hit); if (thumbCache.size > 300) thumbCache.delete(thumbCache.keys().next().value);
+    }
+    res.writeHead(200, { 'content-type': hit.type, 'cache-control': 'private, max-age=86400' }); res.end(hit.buf);
+  } catch { send(res, 404, {}); }
+}, { stream: true });
+r.post('/api/prospects/:id/videos/find', botErr((req, b, p) => require('./political/videofind').forLead(p.id, { actor: actorOf(req) })));
+r.patch('/api/prospects/:id/videos', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); const list = (pr.footageFound || []).map((v) => (v.url === b.url ? { ...v, off: !!b.off } : v)); ctx.store.update('prospects', p.id, { footageFound: list }); events.publish('prospects', { id: p.id }); return { footageFound: list }; });
+// Hands-off ads: for each lead, find their videos on Google (if nothing was uploaded) and make the whole package.
+r.post('/api/political/autoads', botErr((req, b) => require('./political/autoads').start({ ids: Array.isArray(b.ids) ? b.ids : [], names: Array.isArray(b.names) ? b.names : [], actor: actorOf(req) })));
+r.post('/api/data/:id/ads', botErr((req, b, p) => { const names = Array.isArray(b.only) ? b.only : []; if (!names.length) throw new HttpError(400, 'Tick the people to make ads for.'); dataMod().toLeads(p.id, { only: names, by: actorOf(req) }); return require('./political/autoads').start({ names, actor: actorOf(req) }); }));
 
 // Live web for everyone (free, no key): search, read a page, or search-and-read.
 r.get('/api/web/search', botErr((req) => require('./integrations/websearch').search(String(req.query.q || ''), Math.min(20, Number(req.query.n) || 8), { recent: req.query.recent || null })));
