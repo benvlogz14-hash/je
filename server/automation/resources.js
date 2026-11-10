@@ -74,26 +74,6 @@ async function sample() {
   return last;
 }
 
-/**
- * The free local AI (Ollama: Llama, and llama3.2-vision for Look through) runs in its own process at normal priority;
- * on a PC without a graphics card it can take every core for minutes per video. Once a minute, any Ollama process is
- * turned down to below-normal priority (like Euclidean's own renders and Whisper), so the PC stays usable.
- * Setting resources.lowerOllama = false leaves it alone.
- */
-const lowered = new Set(); let lastOllama = 0;
-function lowerOllama() {
-  if (process.platform !== 'win32' || ctx.setting('resources.lowerOllama', true) === false || Date.now() - lastOllama < 60000) return;
-  lastOllama = Date.now();
-  require('child_process').execFile('tasklist', ['/FO', 'CSV', '/NH'], { windowsHide: true, timeout: 10000 }, (err, out) => {
-    if (err) return;
-    for (const line of String(out).split(/\r?\n/)) {
-      const m = /^"(ollama[^"]*\.exe)","(\d+)"/i.exec(line); if (!m) continue;
-      const pid = Number(m[2]); if (lowered.has(pid)) continue;
-      try { os.setPriority(pid, os.constants.priority.PRIORITY_BELOW_NORMAL); lowered.add(pid); } catch { /* not ours to change */ }
-    }
-  });
-}
-
 /** Decide whether a heavy job may start right now. */
 function heavyGate() {
   if (!last) return { ok: true };
@@ -101,8 +81,7 @@ function heavyGate() {
   // at most 12% of this PC's RAM (about 1 GB on an 8 GB PC), and never less than 500 MB.
   const reserve = Math.max(500, Math.min(ctx.setting('resources.reserveRamMb', 1000), Math.round((last.ramTotalMb || 8000) * 0.12)));
   if (last.ramFreeMb < reserve) return { ok: false, reason: `Waiting for memory: ${last.ramFreeMb} MB free, needs ${reserve} MB. Close some apps or browser tabs.` };
-  // At 100% on the CPU slider, renders never wait for the CPU (you asked for all of it).
-  const cpuMax = Number(ctx.setting('resources.cpuShare', 0)) >= 100 || require('../video/ffmpeg').awayNow() ? 101 : ctx.setting('resources.pauseHeavyWhenCpuAbove', 85);
+  const cpuMax = ctx.setting('resources.pauseHeavyWhenCpuAbove', 85);
   if (last.cpu > cpuMax) return { ok: false, reason: `Waiting: CPU at ${last.cpu}%` };
   if (last.premiereOpen && ctx.setting('resources.pauseHeavyWhenPremiereOpen', true)) return { ok: false, reason: 'Waiting: Premiere Pro is open' };
   if (last.disk && last.disk.freeGb < 5) return { ok: false, reason: `Waiting: only ${last.disk.freeGb} GB disk free` };
@@ -110,7 +89,7 @@ function heavyGate() {
 }
 
 function interval() { return ctx.setting('resources.mode', 'full') === 'lite' ? 30000 : 4000; }
-function schedule() { clearTimeout(timer); timer = setTimeout(async () => { try { await sample(); } catch { /* sampling never crashes the engine */ } try { lowerOllama(); } catch { /* fine */ } schedule(); }, interval()); }
+function schedule() { clearTimeout(timer); timer = setTimeout(async () => { try { await sample(); } catch { /* sampling never crashes the engine */ } schedule(); }, interval()); }
 function start() { sample().catch(() => {}); schedule(); }
 
 const modeListeners = new Set();

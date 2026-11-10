@@ -322,7 +322,7 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
   const duration = asset.info?.duration || 0;
   const words = transcript?.words || [];
   // The editor's tips (box by the upload area): sent to the AI, and used to nudge the scores when no AI picks.
-  const tips = [String(prod.aiTips || '').trim().slice(0, 1000), asset.notes ? `For this video: ${String(asset.notes).trim().slice(0, 500)}` : ''].filter(Boolean).join('\n'); // the client's tips + this video's own notes
+  const tips = [String(prod.aiTips || '').trim(), asset.notes ? `For this video: ${String(asset.notes).trim()}` : ''].filter(Boolean).join('\n').slice(0, 1500); // the client's tips + this video's own notes
   // Story windows on whole sentences, scored on what the footage shows and sounds like
   // (voiceover, drone and strong shots, cuts, energy, a hook in the first line). Then an AI picks
   // the best and writes the titles and hooks; without one, the scores decide.

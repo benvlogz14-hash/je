@@ -144,17 +144,15 @@ function Logs() {
       ${(data || []).map((e) => html`<tr><td class="faint tnum" style="white-space:nowrap">${dateTime(e.at)}</td><td>${actorName(e.actor)}</td><td><span class=${'led ' + (e.level === 'error' ? 'err' : e.level === 'warn' ? 'warn' : '')} style="display:inline-block;margin-right:6px" /><span class="mono">${e.action}</span></td><td class="muted mono selectable" style="font-size:11px;max-width:520px;overflow-wrap:anywhere">${JSON.stringify(e.detail)}</td></tr>`)}</tbody></table></div></div></div>`;
 }
 
-/** The CPU slider: how much of the processor video work may use. Only speed changes, never the videos themselves
- *  (same quality, same clips). Automatic = every core but 2 on a 6+ core PC; 100% = every core, and renders never wait
- *  for the CPU. Saved with Save limits (resources.cpuShare). */
+/** The CPU slider: how much of the processor video work may use. 100% (the default) = exactly as before, no cap. Lower
+ *  = the PC stays smoother while clips render more slowly. Only speed changes: same settings, same videos.
+ *  Saved with Save limits (resources.cpuShare). */
 function CpuShare({ r, setR, cores }) {
-  const v = Number(r.cpuShare) || 0;
-  const shown = v || (cores >= 6 ? Math.round(((cores - 2) / cores) * 100) : 100);
-  const used = v >= 100 ? cores : v ? Math.max(1, Math.round(cores * v / 100)) : (cores >= 6 ? cores - 2 : cores);
+  const v = Number(r.cpuShare) || 100;
+  const used = v >= 100 ? cores : Math.max(1, Math.round(cores * v / 100));
   return html`<div class="col" style="gap:6px">
-    <div class="row" style="gap:8px;align-items:baseline"><b class="grow">CPU for video work · ${v ? `${v}%` : `Automatic (${shown}%)`}</b><span class="faint" style="font-size:var(--fs-xs)">${used} of ${cores} cores</span>${v ? html`<button type="button" class="btn ghost sm" onClick=${() => setR({ ...r, cpuShare: 0 })}>Automatic</button>` : null}</div>
-    <input class="range" type="range" min="25" max="100" step="5" value=${shown} onInput=${(e) => setR({ ...r, cpuShare: Number(e.target.value) })} aria-label="CPU for video work" />
-    <label class="row" style="gap:8px;font-size:var(--fs-sm)"><${Toggle} on=${r.fullWhenAway !== false} label="Full speed when I'm away" onChange=${(on) => setR({ ...r, fullWhenAway: on })} /><span>Full speed when I'm away (no mouse or keyboard for 2 minutes), back to this setting when I'm back</span></label>
-    <span class="faint" style="font-size:var(--fs-xs)">Higher = clips finish faster; lower = the PC stays smooth for other work. Only the speed changes: the videos come out exactly the same.${v >= 100 ? ' At 100% renders also stop waiting when the CPU is busy.' : ''} Press Save limits.</span>
+    <div class="row" style="gap:8px;align-items:baseline"><b class="grow">CPU for video work · ${v >= 100 ? '100% (as before)' : `${v}%`}</b><span class="faint" style="font-size:var(--fs-xs)">${used} of ${cores} cores</span></div>
+    <input class="range" type="range" min="25" max="100" step="5" value=${v} onInput=${(e) => setR({ ...r, cpuShare: Number(e.target.value) })} aria-label="CPU for video work" />
+    <span class="faint" style="font-size:var(--fs-xs)">100% = everything runs exactly as before. Lower = the PC stays smoother while clips take longer. Only the speed changes: the videos come out exactly the same. Press Save limits.</span>
   </div>`;
 }
