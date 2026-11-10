@@ -113,6 +113,7 @@ function Resources() {
     </div>
     ${data?.gate && !data.gate.ok ? html`<div class="notice gold"><${Icon} name="clock" size=${16} />${data.gate.reason}</div>` : null}
     <div class="panel pad col" style="gap:14px"><div class="row"><h3 class="grow">Limits</h3>${dirty ? html`<${Button} kind="primary" size="sm" onClick=${() => act(() => api.patch('/api/settings', { resources: r }), { ok: 'Limits saved' })}>Save limits</${Button}>` : null}</div>
+      <${CpuShare} r=${r} setR=${setR} cores=${now.cores} />
       <div class="form-grid">
         <${Field} label=${`Keep free for editing · ${(r.reserveRamMb / 1024).toFixed(1)} GB`} hint="Renders wait if free RAM drops below this, so Premiere and Astra always have room." id="rs-ram"><input id="rs-ram" class="range" type="range" min="0" max=${Math.max(2048, now.ramTotalMb - 1024)} step="256" value=${r.reserveRamMb} onInput=${(e) => setR({ ...r, reserveRamMb: Number(e.target.value) })} /></${Field}>
         <${Field} label=${`Pause renders above CPU · ${r.pauseHeavyWhenCpuAbove}%`} id="rs-cpu"><input id="rs-cpu" class="range" type="range" min="40" max="100" value=${r.pauseHeavyWhenCpuAbove} onInput=${(e) => setR({ ...r, pauseHeavyWhenCpuAbove: Number(e.target.value) })} /></${Field}>
@@ -141,4 +142,18 @@ function Logs() {
       <${Seg} value=${level} onChange=${setLevel} options=${[{ value: '', label: 'All' }, { value: 'warn', label: 'Warnings' }, { value: 'error', label: 'Errors' }]} /></div>
     <div class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Detail</th></tr></thead><tbody>
       ${(data || []).map((e) => html`<tr><td class="faint tnum" style="white-space:nowrap">${dateTime(e.at)}</td><td>${actorName(e.actor)}</td><td><span class=${'led ' + (e.level === 'error' ? 'err' : e.level === 'warn' ? 'warn' : '')} style="display:inline-block;margin-right:6px" /><span class="mono">${e.action}</span></td><td class="muted mono selectable" style="font-size:11px;max-width:520px;overflow-wrap:anywhere">${JSON.stringify(e.detail)}</td></tr>`)}</tbody></table></div></div></div>`;
+}
+
+/** The CPU slider: how much of the processor video work may use. Only speed changes, never the videos themselves
+ *  (same quality, same clips). Automatic = every core but 2 on a 6+ core PC; 100% = every core, and renders never wait
+ *  for the CPU. Saved with Save limits (resources.cpuShare). */
+function CpuShare({ r, setR, cores }) {
+  const v = Number(r.cpuShare) || 0;
+  const shown = v || (cores >= 6 ? Math.round(((cores - 2) / cores) * 100) : 100);
+  const used = v >= 100 ? cores : v ? Math.max(1, Math.round(cores * v / 100)) : (cores >= 6 ? cores - 2 : cores);
+  return html`<div class="col" style="gap:6px">
+    <div class="row" style="gap:8px;align-items:baseline"><b class="grow">CPU for video work · ${v ? `${v}%` : `Automatic (${shown}%)`}</b><span class="faint" style="font-size:var(--fs-xs)">${used} of ${cores} cores</span>${v ? html`<button type="button" class="btn ghost sm" onClick=${() => setR({ ...r, cpuShare: 0 })}>Automatic</button>` : null}</div>
+    <input class="range" type="range" min="25" max="100" step="5" value=${shown} onInput=${(e) => setR({ ...r, cpuShare: Number(e.target.value) })} aria-label="CPU for video work" />
+    <span class="faint" style="font-size:var(--fs-xs)">Higher = clips finish faster; lower = the PC stays smooth for other work. Only the speed changes: the videos come out exactly the same.${v >= 100 ? ' At 100% renders also stop waiting when the CPU is busy.' : ''} Press Save limits.</span>
+  </div>`;
 }
