@@ -154,6 +154,7 @@ function CpuShare({ r, setR, cores }) {
   return html`<div class="col" style="gap:6px">
     <div class="row" style="gap:8px;align-items:baseline"><b class="grow">CPU for video work · ${v ? `${v}%` : `Automatic (${shown}%)`}</b><span class="faint" style="font-size:var(--fs-xs)">${used} of ${cores} cores</span>${v ? html`<button type="button" class="btn ghost sm" onClick=${() => setR({ ...r, cpuShare: 0 })}>Automatic</button>` : null}</div>
     <input class="range" type="range" min="25" max="100" step="5" value=${shown} onInput=${(e) => setR({ ...r, cpuShare: Number(e.target.value) })} aria-label="CPU for video work" />
+    <label class="row" style="gap:8px;font-size:var(--fs-sm)"><${Toggle} on=${r.fullWhenAway !== false} label="Full speed when I'm away" onChange=${(on) => setR({ ...r, fullWhenAway: on })} /><span>Full speed when I'm away (no mouse or keyboard for 2 minutes), back to this setting when I'm back</span></label>
     <span class="faint" style="font-size:var(--fs-xs)">Higher = clips finish faster; lower = the PC stays smooth for other work. Only the speed changes: the videos come out exactly the same.${v >= 100 ? ' At 100% renders also stop waiting when the CPU is busy.' : ''} Press Save limits.</span>
   </div>`;
 }

@@ -5,7 +5,7 @@
  * closed. Lite mode swaps the full window for a small one (or none) to free
  * memory for Premiere and Astra.
  */
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog, safeStorage, Notification, ipcMain, nativeTheme, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog, safeStorage, Notification, ipcMain, nativeTheme, powerSaveBlocker, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -98,6 +98,7 @@ app.whenReady().then(async () => {
         openExternal: (u) => shell.openExternal(u),
         openPath: (p) => shell.openPath(p),
         revealFile: (p) => shell.showItemInFolder(p),
+        idleSeconds: () => { try { return powerMonitor.getSystemIdleTime(); } catch { return 0; } }, // how long since the last mouse/keyboard input on this PC
         focusWindow: () => { if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } },
         relaunch: () => { quitting = true; app.relaunch(); app.quit(); },
         pickFolder: async (o = {}) => { const res = await dialog.showOpenDialog(win || undefined, { title: o.title || 'Choose a folder', defaultPath: o.defaultPath, properties: ['openDirectory', 'createDirectory'] }); return res.canceled ? null : res.filePaths[0]; },

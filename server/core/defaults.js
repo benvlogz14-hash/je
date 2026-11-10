@@ -107,6 +107,7 @@ module.exports = {
     mode: 'full',             // 'full' | 'lite' | 'background'
     maxConcurrentRenders: 1,
     maxConcurrentLight: 4,
+    fullWhenAway: true,       // full speed while nobody uses the PC (2 minutes without mouse/keyboard)
     cpuShare: 0,              // the CPU slider (System → Limits): 0 = automatic (all cores but 2 on 6+ core PCs), else 25-100 %
     renderThreads: 0,         // 0 = let FFmpeg decide
     renderPriority: 'below_normal',

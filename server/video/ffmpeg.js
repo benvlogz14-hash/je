@@ -154,6 +154,18 @@ function encoderArgs(enc, crf) {
   }
 }
 
+/** FFmpeg threads for video work (0 = no cap). The CPU slider (100 = every core); while nobody has touched the PC for
+ *  2 minutes it runs at full speed (resources.fullWhenAway), and new work goes back to the slider once you're back.
+ *  Speed only: the output is the same. An explicit renderThreads setting wins. */
+function threadCount() {
+  const cores = os.cpus().length;
+  const share = awayNow() ? 100 : Number(ctx.setting('resources.cpuShare', 0)) || 0;
+  return Number(ctx.setting('resources.renderThreads', 0)) || (share >= 100 ? 0 : share ? Math.max(1, Math.round(cores * share / 100)) : (cores >= 6 ? cores - 2 : 0));
+}
+
+/** Nobody at the PC: no mouse or keyboard for 2 minutes (desktop app only). */
+function awayNow() { try { return ctx.setting('resources.fullWhenAway', true) !== false && typeof ctx.idleSeconds === 'function' && ctx.idleSeconds() >= 120; } catch { return false; } }
+
 function priorityValue() {
   const p = ctx.setting('resources.renderPriority', 'below_normal');
   const P = os.constants.priority;
@@ -164,9 +176,7 @@ function priorityValue() {
 function ffmpegWithProgress(args, { totalSec, onProgress, cwd, signal }) {
   // Threads: the setting, else all cores but 2 on a 6+ core PC (so the PC stays usable while it renders). Given to the
   // filters and to the encoder (just before the output file); a global -threads before the inputs only capped decoding.
-  const cores = os.cpus().length;
-  const share = Number(ctx.setting('resources.cpuShare', 0)) || 0; // the CPU slider: 100 = every core, no cap
-  const threads = Number(ctx.setting('resources.renderThreads', 0)) || (share >= 100 ? 0 : share ? Math.max(1, Math.round(cores * share / 100)) : (cores >= 6 ? cores - 2 : 0));
+  const threads = threadCount();
   let a = [...args];
   if (threads && a.length && !a.includes('-threads')) a = [...a.slice(0, -1), '-threads', String(threads), a[a.length - 1]];
   const full = ['-hide_banner', '-y', '-nostats', '-progress', 'pipe:1', ...(threads ? ['-filter_threads', String(threads), '-filter_complex_threads', String(threads)] : []), ...a];
@@ -206,4 +216,4 @@ async function speechWindows(file) {
   return { silences: starts.map((s, i) => [s, ends[i] ?? s]) };
 }
 
-module.exports = { bin, ytdlpBin, detect, probe, extractAudio, extractWav, thumbnail, filmstrip, waveform, pickEncoder, encoderArgs, ffmpegWithProgress, qualityCheck, speechWindows, priorityValue };
+module.exports = { awayNow, threadCount, bin, ytdlpBin, detect, probe, extractAudio, extractWav, thumbnail, filmstrip, waveform, pickEncoder, encoderArgs, ffmpegWithProgress, qualityCheck, speechWindows, priorityValue };

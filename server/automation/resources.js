@@ -102,7 +102,7 @@ function heavyGate() {
   const reserve = Math.max(500, Math.min(ctx.setting('resources.reserveRamMb', 1000), Math.round((last.ramTotalMb || 8000) * 0.12)));
   if (last.ramFreeMb < reserve) return { ok: false, reason: `Waiting for memory: ${last.ramFreeMb} MB free, needs ${reserve} MB. Close some apps or browser tabs.` };
   // At 100% on the CPU slider, renders never wait for the CPU (you asked for all of it).
-  const cpuMax = Number(ctx.setting('resources.cpuShare', 0)) >= 100 ? 101 : ctx.setting('resources.pauseHeavyWhenCpuAbove', 85);
+  const cpuMax = Number(ctx.setting('resources.cpuShare', 0)) >= 100 || require('../video/ffmpeg').awayNow() ? 101 : ctx.setting('resources.pauseHeavyWhenCpuAbove', 85);
   if (last.cpu > cpuMax) return { ok: false, reason: `Waiting: CPU at ${last.cpu}%` };
   if (last.premiereOpen && ctx.setting('resources.pauseHeavyWhenPremiereOpen', true)) return { ok: false, reason: 'Waiting: Premiere Pro is open' };
   if (last.disk && last.disk.freeGb < 5) return { ok: false, reason: `Waiting: only ${last.disk.freeGb} GB disk free` };
