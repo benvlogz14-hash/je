@@ -327,6 +327,122 @@ const TOOLS = [
       return { text: `Titles:\n${titles}\n\nDescription:\n${r.description || ''}\n\nTags: ${(r.tags || []).join(', ')}\nHashtags: ${(r.hashtags || []).join(' ')}` };
     },
   },
+  // ---------------------------------------------------------------- email (drafts only; a person sends)
+  {
+    name: 'email_inbox', kinds: ['email'], args: '{"query": "words to look for (optional)", "days": 14, "unread": false, "sent": false}',
+    about: "The outreach mailbox: recent emails (newest first) with who, when, subject and the first lines; auto-replies and bounces are marked. sent: true lists what we sent instead. Search by name, address or words.",
+    async run(a) {
+      const list = require('../automation/mailbox').inbox({ query: a.query || '', days: a.days || 14, unread: !!a.unread, direction: a.sent ? 'out' : 'in', limit: 20 });
+      if (!list.length) return { text: `No ${a.sent ? 'sent ' : ''}emails${a.query ? ` matching "${a.query}"` : ''} in the last ${a.days || 14} days.${a.sent ? '' : ' (email_check looks for new mail now.)'}` };
+      return { text: list.map((m) => `- [${m.id}] ${m.when} · ${m.direction === 'in' ? 'from' : 'to'} ${m.name}${m.email ? ` <${m.email}>` : ''}${m.auto ? ' (auto-reply)' : ''} · "${m.subject}" · ${m.preview}${m.attachments.length ? ` · attached: ${m.attachments.join(', ')}` : ''}`).join('\n') + '\n\n(email_read with an [id] shows the whole thread.)' };
+    },
+  },
+  {
+    name: 'email_read', kinds: ['email'], args: '{"id": "a message id from email_inbox"}',
+    about: 'Read a whole email thread (every message both ways, in order).',
+    async run(a) {
+      const t = require('../automation/mailbox').thread(String(a.id || ''));
+      return { text: `Thread with ${t.contact?.name || '?'}${t.contact?.emails?.length ? ` <${t.contact.emails[0]}>` : ''}${t.contact?.optedOut ? ' (OPTED OUT: never email again)' : ''}\n\n${t.messages.map((m) => `[${m.id}] ${m.when} · ${m.direction === 'in' ? 'THEM' : 'US'} · ${m.status}${m.subject ? ` · ${m.subject}` : ''}\n${m.body}${m.attachments.length ? `\n(attached: ${m.attachments.join(', ')})` : ''}`).join('\n\n---\n\n')}` };
+    },
+  },
+  {
+    name: 'email_check', kinds: ['email'], args: '{}',
+    about: 'Check the mailbox for new email right now.',
+    async run() { const r = await require('../automation/mailbox').check(); return { text: r.connected ? `${r.newMessages} new email${r.newMessages === 1 ? '' : 's'}.` : r.message }; },
+  },
+  {
+    name: 'email_draft', kinds: ['email'], args: '{"to": "email address or a contact/lead name", "subject": "...", "body": "the email", "reply_to": "message id to answer in its thread (optional)", "attach": "a document id or title to attach (optional)"}',
+    about: 'Write an email draft. It waits in Approvals for a person; it is NEVER sent from here. Political first emails go to campaign or press addresses, not .gov ones. House style: short, personal, one clear ask, no em dashes.',
+    async run(a, t) {
+      const r = require('../automation/mailbox').draft({ to: a.to, subject: a.subject, body: a.body, replyTo: a.reply_to || a.replyTo || null, attach: a.attach || null, by: `bot:${t.bot.name}` });
+      return { text: `Draft to ${r.to}${r.email ? ` <${r.email}>` : ''} is waiting in Approvals (not sent).${r.attached ? ` Attached: ${r.attached}.` : ''}` };
+    },
+  },
+  {
+    name: 'attach_document', kinds: ['email', 'docs'], args: '{"document": "document id or title", "to": "who the waiting draft is to (or message_id)", "message_id": "optional", "format": "pdf|docx"}',
+    about: 'Attach a finished document (PDF or Word) to an email draft that is waiting in Approvals. Nothing is sent.',
+    async run(a, t) {
+      const mb = require('../automation/mailbox');
+      const r = require('../docs').attach(mb.resolveDoc(a.document), { messageId: a.message_id || a.messageId || null, to: a.to || '', format: a.format || 'pdf', by: `bot:${t.bot.name}` });
+      return { text: `Attached ${r.attached} to the draft (still waiting in Approvals).` };
+    },
+  },
+  // ---------------------------------------------------------------- documents and call lists
+  {
+    name: 'make_document', kinds: ['docs'], args: '{"kind": "playbook|plan|brief|proposal|report|custom", "title": "...", "about": "who or what it is for", "instructions": "what the founders asked for, in their words", "lead": "a lead on our board (optional)", "client": "a client (optional)", "research": false}',
+    about: "Write a finished document as a designed PDF and a Word file (client playbooks with filming diagrams and phone wireframes, platform and campaign plans, meeting briefs, proposals, reports), from the Data tab, the notebook and the lead/client on file (research: true also searches the web). Takes a few minutes in the background; it shows on the Data tab under Documents.",
+    async run(a, t) {
+      const lead = a.lead ? ctx.store.all('prospects').find((p) => String(p.name || '').toLowerCase().includes(String(a.lead).toLowerCase())) : null;
+      const client = a.client ? ctx.store.all('clients').find((c) => String(c.name || '').toLowerCase().includes(String(a.client).toLowerCase())) : null;
+      const d = require('../docs/write').start({ kind: a.kind || 'custom', title: a.title || '', about: a.about || lead?.name || client?.name || '', instructions: a.instructions || t.question, prospectId: lead?.id || null, clientId: client?.id || null, research: a.research === true || a.research === 'true' }, `bot:${t.bot.name}`);
+      const done = await require('../docs').waitFor(d.id, 150000);
+      return { text: done.status === 'ready' ? `Done: "${done.title}" (${done.pages || '?'} pages), PDF and Word. Document id ${done.id}. It's on the Data tab under Documents; attach it to a draft with attach_document.` : done.status === 'failed' ? `It didn't finish: ${done.error}` : `Writing "${done.title}" (document id ${done.id}): ${done.note || 'in progress'}. It keeps going in the background; check with list_documents.` };
+    },
+  },
+  {
+    name: 'revise_document', kinds: ['docs'], args: '{"document": "document id or title", "note": "what to change, in the founders\' words"}',
+    about: 'Change a finished document from a note ("make the filming guide one page with diagrams"); the old version is kept.',
+    async run(a, t) {
+      const id = require('../automation/mailbox').resolveDoc(a.document);
+      require('../docs/write').revise(id, a.note || t.question, `bot:${t.bot.name}`);
+      const done = await require('../docs').waitFor(id, 150000);
+      return { text: done.status === 'ready' ? `Revised "${done.title}" (${done.pages || '?'} pages). The old version is kept.` : `Revising "${done.title}": ${done.note || done.error || 'in progress'}.` };
+    },
+  },
+  {
+    name: 'list_documents', kinds: ['docs'], args: '{"query": "optional words"}',
+    about: 'The documents made so far (playbooks, plans, briefs, call sheets, contact books) with their status and id.',
+    async run(a) { const l = require('../docs').list({ q: a.query || '', limit: 25 }); return { text: l.length ? l.map((d) => `- [${d.id}] ${d.title} · ${d.kind} · ${d.status}${d.pages ? ` · ${d.pages} pages` : ''}${d.note ? ` · ${d.note}` : ''}`).join('\n') : 'No documents yet.' }; },
+  },
+  {
+    name: 'build_call_list', kinds: ['leads', 'docs'], args: '{"request": "who you want, in the founders\' words, e.g. two for Ben and two for Ryan, freshly re-elected NY Assembly members", "include_previous": false}',
+    about: "Build a checked call list: picks from our leads and the Data tab's winners lists, leaves out everyone already called, emailed or pitched, checks each person's district/Albany phones, office email and an accomplishment hook on their official pages (with the link), and writes a call script, voicemail and email draft for each. Saved as a call sheet (PDF + Word) and in the Data tab. Nothing is sent.",
+    async run(a, t) {
+      const C = require('../outreach/calllist');
+      const l = C.start({ request: a.request || t.question, includePrevious: !!(a.include_previous || a.includePrevious) }, `bot:${t.bot.name}`);
+      const t0 = Date.now(); let cur = l;
+      while (Date.now() - t0 < 170000) { await new Promise((r) => setTimeout(r, 2000)); cur = C.get(l.id); if (!cur || ['done', 'failed'].includes(cur.status)) break; }
+      if (!cur) return { text: 'The call list was removed.' };
+      if (cur.status === 'failed') return { text: `The call list stopped: ${cur.error}` };
+      if (cur.status !== 'done') return { text: `Still checking (${cur.note}). It keeps going in the background; the call sheet lands on the Data tab under Documents.` };
+      const picked = cur.items.filter((x) => x.picked);
+      return { text: `Call list "${cur.title}" (document ${cur.documentId}):\n${picked.map((x) => `- ${x.who}: ${x.name} (${x.office}) · ${(x.verified?.phones || []).map((p) => `${p.label} ${p.num}`).join(', ') || x.phone || 'no phone found'} · hook: ${x.hook ? `${x.hook.slice(0, 160)}${x.hookSource ? ` (${x.hookSource})` : ''}` : 'none found'}`).join('\n')}${cur.items.some((x) => x.state2 === 'dropped') ? `\nDropped at the check: ${cur.items.filter((x) => x.state2 === 'dropped').map((x) => `${x.name} (${x.dropWhy})`).join('; ')}` : ''}\nLeft out: ${Object.entries(cur.left || {}).map(([k, v]) => `${v} ${k}`).join(', ') || 'none'}.` };
+    },
+  },
+  {
+    name: 'contact_book', kinds: ['leads', 'email'], args: '{"days": 14, "make_document": false}',
+    about: 'Everyone we reached out to lately: what was sent and when, who replied (real replies vs auto-replies), bounces, and the next step for each. make_document: true also saves it as a PDF + Word contact book.',
+    async run(a, t) {
+      const C = require('../outreach/calllist'); const b = C.contactBook({ days: a.days || 14 });
+      if (!b.people.length) return { text: `No outreach in the last ${a.days || 14} days.` };
+      let doc = ''; if (a.make_document || a.makeDocument) { const d = C.contactBookDoc({ days: a.days || 14, by: `bot:${t.bot.name}` }); doc = `\nSaved as a document (${d.id}).`; }
+      return { text: `${b.responded} responded, ${b.waiting} waiting:\n${b.people.map((p) => `- ${p.name}${p.office ? ` (${p.office})` : ''}: ${p.sent}${p.response ? ` · ${p.response}` : ''}${p.bounced ? ' · BOUNCED' : ''} · next: ${p.next}`).join('\n')}${doc}` };
+    },
+  },
+  // ---------------------------------------------------------------- scheduled tasks
+  {
+    name: 'schedule_task', kinds: ['schedule'], args: '{"action": "add|list|pause|resume|remove|autorun_on|autorun_off", "task": "what to do each time, in full", "every": "minutes|hours|day|weekday|week|times", "minutes": 30, "hours": 2, "at": "08:00", "times": ["08:00","12:30"], "day": 1, "id": "task id for pause/resume/remove"}',
+    about: 'Your own scheduled tasks (data scrapes, briefs, news checks...): add one to run on its own every N minutes or hours, every day / weekday / week at a time, or at several set times each day; list, pause, resume or remove them; autorun_off pauses all of them (you keep chatting), autorun_on starts them again.',
+    async run(a, t) {
+      const B = require('./index'); const bot = ctx.store.get('bots', t.bot.id); let rs = bot.routines || [];
+      const act = String(a.action || 'list').toLowerCase();
+      const show = (list) => list.map((r) => `- [${r.id}] ${r.on ? '' : '(paused) '}${B.describe(r)}: ${r.task}${r.on && B.autoRunOn(bot) ? ` · next ${new Date(B.nextRun(r) || Date.now()).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : ''}`).join('\n') || '(none)';
+      if (act === 'autorun_on' || act === 'autorun_off') { B.update(bot.id, { schedulesOn: act === 'autorun_on' }); return { text: `Auto-run is ${act === 'autorun_on' ? 'on: scheduled tasks run on their own again' : 'off: scheduled tasks wait (you can still chat with me)'}.` }; }
+      if (act === 'add') {
+        if (!String(a.task || '').trim()) return { text: 'What should the task do each time?' };
+        const next = B.cleanRoutines([...rs, { task: a.task, every: a.every || 'day', minutes: a.minutes, hours: a.hours, at: a.at, times: a.times, day: a.day, days: a.days, on: true, by: t.bot.name }]);
+        B.update(bot.id, { routines: next }); const r = next[next.length - 1];
+        return { text: `Scheduled: ${B.describe(r)}, "${r.task}".${B.autoRunOn(bot) ? ` First run ${new Date(B.nextRun(r) || Date.now()).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.` : ' Auto-run is off, so it waits until it is turned on.'}` };
+      }
+      if (['pause', 'resume', 'remove'].includes(act)) {
+        const k = rs.findIndex((r) => r.id === a.id || (a.task && r.task.toLowerCase().includes(String(a.task).toLowerCase())));
+        if (k < 0) return { text: `No task like that. Your tasks:\n${show(rs)}` };
+        rs = act === 'remove' ? rs.filter((_, i) => i !== k) : rs.map((r, i) => (i === k ? { ...r, on: act === 'resume' } : r));
+        B.update(bot.id, { routines: rs }); return { text: `${act === 'remove' ? 'Removed' : act === 'pause' ? 'Paused' : 'Resumed'}.\n${show(B.get(bot.id)?.routines || rs)}` };
+      }
+      return { text: `Auto-run: ${B.autoRunOn(bot) ? 'on' : 'off'}.\n${show(rs)}` };
+    },
+  },
   // ---------------------------------------------------------------- the app itself (Euclidean's own commands)
   {
     name: 'euclidean', kinds: ['app'], args: '{"command": "one of the commands below, with its words"}',
@@ -345,7 +461,7 @@ const TOOLS = [
 /** The tools this bot has switched on (and that can work here). */
 function forBot(bot) {
   const on = bot.tools || {};
-  const kinds = new Set(Object.entries({ web: on.web !== false, notebook: on.notebook !== false, app: on.app !== false, team: on.team !== false, leads: !!on.leads, clients: !!on.clients, browser: bot.computer === 'browser' || bot.computer === 'vm', vm: bot.computer === 'vm' }).filter(([, v]) => v).map(([k]) => k));
+  const kinds = new Set(Object.entries({ web: on.web !== false, notebook: on.notebook !== false, app: on.app !== false, team: on.team !== false, leads: !!on.leads, clients: !!on.clients, email: on.email !== false, docs: on.docs !== false, schedule: on.schedule !== false, browser: bot.computer === 'browser' || bot.computer === 'vm', vm: bot.computer === 'vm' }).filter(([, v]) => v).map(([k]) => k));
   return TOOLS.filter((t) => t.kinds.some((k) => kinds.has(k)) && (!t.available || t.available() || (t.name === 'browser_open')));
 }
 

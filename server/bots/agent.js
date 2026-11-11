@@ -44,7 +44,7 @@ function systemFor(bot, list, { depth = 0, compact = false } = {}) {
   return [
     `You are ${bot.name}, a bot on the team at Euclidean Media, a short-form video agency for creators and political campaigns (founders Ryan Rosario and Ben Gingold).`,
     bot.role ? `Your job: ${bot.role}` : '',
-    bot.instructions ? `How the founders want you to work:\n${compact ? compactInstructions(bot.instructions) : bot.instructions}` : '',
+    bot.instructions ? `How the founders want you to work:\n${(compact ? compactInstructions(bot.instructions) : bot.instructions).replace('Nothing you do sends, posts or schedules. Messages are drafts for Ben.', 'Nothing you do sends or posts. Messages are drafts for Ben. You can read the mailbox, write email drafts, make documents and call lists, and schedule your own tasks (see TOOLS).')}` : '',
     `Today is ${today}.`,
     depth ? 'Another bot on the team handed you this task. Do it and answer it directly.' : '',
     '',
@@ -54,6 +54,8 @@ function systemFor(bot, list, { depth = 0, compact = false } = {}) {
     '',
     'TOOLS:',
     ...list.map((t) => (compact ? `- ${signature(t)}: ${firstSentence(t.about)}${t.needsOk && t.needsOk(bot) ? ' (asks the person first)' : ''}` : `- ${t.name} ${t.args}: ${t.about}${t.needsOk && t.needsOk(bot) ? ' (the person is asked first)' : ''}`)),
+    '',
+    'LIVE INTERNET: you have it. research, web_search and news search the live web with DuckDuckGo: free and unlimited, so use them for anything current (news, what someone said, results, prices, who holds an office). google_search costs a little: use it when the person says Google or a deep/full search, or when DuckDuckGo found nothing useful. Never say you lack real-time access or that your knowledge has a cutoff: search instead.',
     '',
     'RULES:',
     '- Facts about the world come ONLY from tool results in this conversation; put the link next to what you use. If you could not find something, say so plainly. Never make up numbers, names, emails, quotes or links.',
@@ -76,8 +78,50 @@ function parse(text) {
   if (tool && tool !== 'answer' && tool !== 'final') return { say: String(j.say || j.thought || j.note || '').slice(0, 240), tool: String(tool), args: typeof args === 'object' ? args : { query: String(args) } };
   if (answer != null) return { answer: typeof answer === 'string' ? answer : JSON.stringify(answer, null, 2) };
   if (tool === 'answer') return { answer: String(args.text || args.answer || '') };
-  return { answer: s };
+  return { answer: readable(j) };
 }
+/** A JSON reply that isn't a tool call or an answer ({"abilities": [...]}) shown as plain text, never raw JSON. */
+function readable(j) {
+  const words = (k) => String(k).replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase());
+  const val = (v) => (Array.isArray(v) ? v.map((x) => (typeof x === 'object' ? JSON.stringify(x) : String(x).replace(/_/g, ' '))).join(', ') : v && typeof v === 'object' ? Object.entries(v).map(([k, x]) => `${words(k)}: ${val(x)}`).join('; ') : String(v));
+  const keys = Object.keys(j);
+  if (keys.length === 1 && typeof j[keys[0]] === 'string') return j[keys[0]];
+  return keys.map((k) => `${words(k)}: ${val(j[k])}`).join('\n');
+}
+
+// ------------------------------------------------------------------ live web first
+/** Questions about the world right now: the bot searches DuckDuckGo before it answers. */
+function needsWeb(q) {
+  const t = String(q || '').toLowerCase();
+  if (t.split(/\s+/).length < 3) return false;
+  if (/\b(our|my) (leads?|clients?|list|data|drafts?|inbox|emails?|schedule|calendar|notebook)\b|data tab|call list|playbook|this app|euclidean|approvals?\b|\b(draft|write|make|build|schedule|remind)\b/.test(t)) return false;
+  return /\b(today|tonight|yesterday|this (week|morning|month|year|weekend)|last (night|week|month)|latest|recent(ly)?|currently|right now|breaking|news|update[sd]?|announce[ds]?|said|says|statement|poll(s|ing)?|won|wins|winner|elect(ed|ion)|results?|price|weather|score|who is|who's|who are|what happened|what is happening|when (is|was|did)|look (it )?up|search|google|find out|20(2[4-9]|3\d))\b/.test(t);
+}
+const wantsGoogle = (q) => /\bgoogle\b|deep(er)? (search|dive|research|inquiry)|full (inquiry|search|research)|thorough(ly)? (search|research)/i.test(String(q || ''));
+const recentOf = (q) => (/\b(today|tonight|yesterday|last night|this morning|breaking|just now)\b/i.test(q) ? 'day' : /\b(this week|latest|recent(ly)?|news|days ago|said|says|announced)\b/i.test(q) ? 'week' : null);
+const NO_WEB = /real[- ]time|training data|knowledge cut-?off|cut-?off date|don'?t have (access|the ability)|do not have (access|the ability)|can(no|')t (browse|access the internet|search the web)|as of my last update|not able to browse|up-to-date information|check reputable news/i;
+
+// ------------------------------------------------------------------ "what can you do?"
+const ABILITIES = /\b(what (can|do) you (do|have)|your (abilities|tools|skills|capabilities)|abilities|capabilities|what tools|do you have (access|internet|the internet|duckduckgo|google|serper|a computer|email)|can you (search|browse|google|use the internet|access the internet|see the web)|duckduckgo|serper)\b/i;
+function abilitiesAnswer(bot, list) {
+  const has = (n) => list.some((t) => t.name === n);
+  let google = false; try { google = require('../integrations/serper').ready(); } catch { /* not set up */ }
+  const lines = [];
+  if (has('research')) lines.push(`Live internet, free and unlimited: I search DuckDuckGo (its web results and its Instant Answers) and read the pages, so ask me about anything current, like today's news or what someone said yesterday.${has('google_search') ? (google ? ' For deeper digging I can also search Google (through your Serper key; it costs about a tenth of a cent a search, so I use it when you ask for Google or a deep search, or when DuckDuckGo comes up empty).' : ' Google search is ready too once a Serper key is added in Settings → Connections → Google search.') : ''} No API key is needed for DuckDuckGo.`);
+  if (has('browser_open')) lines.push('My own web browser: I can open sites, scroll, click and type (I ask you before clicking or typing). You can take it over yourself from my computer screen to log in to sites; I stay logged in after that.');
+  if (has('computer_run')) lines.push('My own computer (a safe virtual machine): I can run commands, write and read files there (I ask first unless you let me run on my own).');
+  if (has('email_inbox')) lines.push('Email: I can read and search the inbox, read whole threads, check for new mail and write drafts (with documents attached). Drafts wait in Approvals; I never send.');
+  if (has('make_document')) lines.push('Documents: playbooks, platform plans, meeting briefs, proposals and reports as a designed PDF and a Word file, and I can revise them from your notes.');
+  if (has('build_call_list')) lines.push('Call lists: who to call by what you want (for example two for Ben and two for Ryan), leaving out anyone already called or emailed, with phones, emails and a hook checked on their official pages, plus scripts, voicemails and email drafts. Also the contact book of everyone we reached.');
+  if (has('data_search')) lines.push('The Data tab: I search and read your lists, research packs, PDFs and master prompts, and save what I find there.');
+  if (has('lead_lookup') || has('propose_leads')) lines.push('Leads: look people up on the board, propose new ones, find their public videos, start the ad machine and draft outreach.');
+  if (has('client_overview')) lines.push("Clients: each client's file, clips, posts and title ideas.");
+  if (has('notebook_recall')) lines.push("The notebook: I remember what we've learned and add to it.");
+  if (has('ask_hal') || has('ask_claude') || has('ask_bot')) lines.push('The team: I can ask HAL, Claude and the other bots.');
+  if (has('schedule_task')) lines.push(`Scheduled tasks: tell me "every weekday at 8, ..." or "every 2 hours, ..." and I'll do it on my own at those times.${bot.schedulesOn === false ? ' (Auto-run is off for me right now, so they wait until you turn it on.)' : ''}`);
+  return `Here is what I can do:\n\n${lines.map((l) => `- ${l}`).join('\n')}\n\nNothing is ever sent, posted or bought without you.`;
+}
+
 
 const roleOf = () => (ctx.setting('ai.roles.bots') ? 'bots' : 'research');
 /** Is the local AI the one that will answer (so the prompt should be the short one)? */
@@ -166,6 +210,18 @@ async function drive(runId) {
       afterRun(bot.id);
       return ctx.store.get(RUNS, runId);
     }
+    // "What can you do?" / "do you have DuckDuckGo?": answered from its real tools, instantly and correctly.
+    if (!(run.steps || []).length && ABILITIES.test(run.question) && String(run.question).split(/\s+/).length <= 25) {
+      const answer = abilitiesAnswer(bot, list);
+      save(run, { status: 'done', answer, endedAt: now(), note: null, typing: null });
+      ctx.store.insert('botMessages', { botId: bot.id, role: 'bot', text: answer, runId: run.id, at: now(), by: 'Euclidean' });
+      events.publish('bots', { botId: bot.id, runId: run.id });
+      afterRun(bot.id);
+      return ctx.store.get(RUNS, runId);
+    }
+    // Anything about the world right now: search first (DuckDuckGo, or Google when asked), so the answer is live.
+    if (!(run.steps || []).length && list.some((t) => t.name === 'research') && needsWeb(run.question)) await webStep(bot, run, list, run.question);
+    let webRetry = false;
     for (;;) {
       run = ctx.store.get(RUNS, runId);
       if (run.cancel) { save(run, { status: 'stopped', endedAt: now(), note: 'Stopped' }); break; }
@@ -194,6 +250,10 @@ async function drive(runId) {
       if (run.cancel) continue;
       const step = parse(r.text);
       if (!run.provider) save(run, { provider: r.provider, model: r.model });
+      // Said it can't see the live web without having looked: search, then answer again (once).
+      if (step.answer != null && !last && !webRetry && NO_WEB.test(String(step.answer)) && list.some((t) => t.name === 'research') && !(run.steps || []).some((x) => /research|web_search|news|google_search/.test(x.tool || ''))) {
+        webRetry = true; await webStep(bot, run, list, run.question); continue;
+      }
       if (step.answer != null || last) {
         const answer = String(step.answer ?? r.text).trim() || 'I could not come up with an answer.';
         save(run, { status: 'done', answer, endedAt: now(), note: null, typing: null });
@@ -222,6 +282,18 @@ async function drive(runId) {
   const end = ctx.store.get(RUNS, runId);
   if (end && end.status !== 'waiting') afterRun(bot.id);
   return end;
+}
+/** One search step the bot didn't have to think of: DuckDuckGo (free) unless Google was asked for; recent when it's news. */
+async function webStep(bot, run, list, question) {
+  let google = false; try { google = wantsGoogle(question) && require('../integrations/serper').ready(); } catch { /* no key */ }
+  const args = { question: String(question).slice(0, 300), ...(recentOf(question) ? { recent: recentOf(question) } : {}), ...(google ? { full: true } : {}) };
+  const s = { id: `s${(run.steps || []).length + 1}`, say: google ? 'Searching Google' : 'Searching the live web (DuckDuckGo)', tool: 'research', args, at: now(), auto: true };
+  save(run, { steps: [...(run.steps || []), { ...s, running: true }], note: s.say });
+  let res; try { res = await useTool(bot, run, s, list); } catch (e) { res = { text: `The search didn't work: ${e.message}`, failed: true }; }
+  // Nothing recent: try again without the date limit.
+  if (args.recent && /^No web results/.test(String(res.text))) { try { res = await useTool(bot, run, { ...s, args: { ...args, recent: undefined } }, list); } catch { /* keep the first */ } }
+  const cur = ctx.store.get(RUNS, run.id);
+  save(cur, { steps: cur.steps.map((x) => (x.id === s.id ? { ...x, running: false, result: String(res.text).slice(0, 4000), forModel: `${String(res.text).slice(0, 7000)}\n\n(Answer from these results, with the links. If they don't cover it, say what you found and offer to dig deeper${google ? '' : ' with Google'}.)`, links: res.links?.slice(0, 8) || null, failed: !!res.failed } : x)) });
 }
 /** The next queued message for this bot, if any (setImmediate: the finished run is fully saved first). */
 function afterRun(botId) { setImmediate(() => { try { require('./index').next(botId); } catch { /* none */ } }); }
@@ -252,4 +324,4 @@ async function runInline(bot, task, { depth = 1, parent = null } = {}) {
   return 'No answer.';
 }
 
-module.exports = { compactInstructions, partialOf, SMALL_TALK, drive, runInline, parse, systemFor, messagesFor, brainLabel, RUNS };
+module.exports = { needsWeb, wantsGoogle, readable, abilitiesAnswer, ABILITIES, compactInstructions, partialOf, SMALL_TALK, drive, runInline, parse, systemFor, messagesFor, brainLabel, RUNS };

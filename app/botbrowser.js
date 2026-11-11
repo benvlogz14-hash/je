@@ -160,9 +160,68 @@ function show(botId) {
   return { ok: true, url };
 }
 
+// ---------------------------------------------------------------- the founders at the controls
+/**
+ * Live control from the Bots page: the bot's own (offscreen) browser as a picture a few times a second, and the
+ * person's clicks, scrolls, typing and keys sent straight into it. Logging in to a site here keeps the login in the
+ * bot's own session. The same safety guard checks every request, so it still can't reach this PC or the home network.
+ */
+async function screen(botId) {
+  let w = wins[botId];
+  if (!w || w.isDestroyed()) { w = win(botId); try { await w.loadURL('https://duckduckgo.com/'); } catch { /* shows what loaded */ } }
+  const wc = w.webContents;
+  wc.setFrameRate(12); clearTimeout(w._slow); w._slow = setTimeout(() => { if (!w.isDestroyed()) wc.setFrameRate(4); }, 8000);
+  const img = await wc.capturePage();
+  const [cw, ch] = w.getContentSize();
+  const jpg = img && !img.isEmpty() ? img.resize({ width: Math.min(1280, cw) }).toJPEG(72) : null;
+  return { jpg, url: wc.getURL(), title: wc.getTitle(), width: cw, height: ch, loading: wc.isLoading(), canBack: wc.navigationHistory ? wc.navigationHistory.canGoBack() : wc.canGoBack(), canForward: wc.navigationHistory ? wc.navigationHistory.canGoForward() : wc.canGoForward() };
+}
+const KEYS = new Set(['Enter', 'Return', 'Backspace', 'Tab', 'Escape', 'Delete', 'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PageUp', 'PageDown', 'Space']);
+/** One action from the person: { type: click|dblclick|move|scroll|text|key|back|forward|reload|go, fx, fy (0..1), dy, text, key, url, shift, ctrl } */
+async function control(botId, a = {}) {
+  const w = win(botId); const wc = w.webContents;
+  const [cw, ch] = w.getContentSize();
+  const x = Math.round(Math.max(0, Math.min(1, Number(a.fx) || 0)) * cw); const y = Math.round(Math.max(0, Math.min(1, Number(a.fy) || 0)) * ch);
+  const mods = [a.shift ? 'shift' : null, a.ctrl ? 'control' : null, a.meta ? 'meta' : null].filter(Boolean);
+  switch (a.type) {
+    case 'click': case 'dblclick': {
+      const n = a.type === 'dblclick' ? 2 : 1;
+      wc.sendInputEvent({ type: 'mouseMove', x, y });
+      for (let i = 1; i <= n; i++) { wc.sendInputEvent({ type: 'mouseDown', x, y, button: a.button === 'right' ? 'right' : 'left', clickCount: i, modifiers: mods }); wc.sendInputEvent({ type: 'mouseUp', x, y, button: a.button === 'right' ? 'right' : 'left', clickCount: i, modifiers: mods }); }
+      break;
+    }
+    case 'move': wc.sendInputEvent({ type: 'mouseMove', x, y }); break;
+    case 'scroll': wc.sendInputEvent({ type: 'mouseWheel', x: x || Math.round(cw / 2), y: y || Math.round(ch / 2), deltaX: -(Number(a.dx) || 0), deltaY: -(Number(a.dy) || 0), canScroll: true }); break;
+    case 'text': if (a.text) await wc.insertText(String(a.text).slice(0, 5000)); break;
+    case 'key': {
+      let key = String(a.key || ''); if (key === 'Enter') key = 'Return'; if (key === ' ') key = 'Space';
+      if (key.length === 1 && mods.length) { wc.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: mods }); wc.sendInputEvent({ type: 'keyUp', keyCode: key, modifiers: mods }); break; }
+      if (!KEYS.has(key) && !/^Arrow/.test(key)) break;
+      key = key.replace(/^Arrow/, '');
+      wc.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: mods });
+      if (key === 'Return') wc.sendInputEvent({ type: 'char', keyCode: '\r' });
+      wc.sendInputEvent({ type: 'keyUp', keyCode: key, modifiers: mods });
+      break;
+    }
+    case 'back': if (wc.navigationHistory?.canGoBack() ?? wc.canGoBack()) (wc.navigationHistory || wc).goBack(); break;
+    case 'forward': if (wc.navigationHistory?.canGoForward() ?? wc.canGoForward()) (wc.navigationHistory || wc).goForward(); break;
+    case 'reload': wc.reload(); break;
+    case 'go': {
+      let u = String(a.url || '').trim(); if (!u) break;
+      if (!/^https?:\/\//i.test(u)) u = /^([\w-]+(\.[\w-]+)+|localhost)(:\d+)?(\/|$)/.test(u) ? `https://${u}` : `https://duckduckgo.com/?q=${encodeURIComponent(u)}`;
+      const ok = await guarded(u); if (!ok.ok) throw new Error(ok.reason || 'That address is blocked for bots.');
+      wc.loadURL(u).catch(() => { /* the screen shows what happened */ });
+      break;
+    }
+    default: break;
+  }
+  await sleep(a.type === 'go' || a.type === 'back' || a.type === 'forward' || a.type === 'reload' ? 700 : 120);
+  return { ok: true };
+}
+
 function close(botId) { for (const m of [wins, shown]) { const w = m[botId]; if (w && !w.isDestroyed()) w.destroy(); delete m[botId]; } }
 function closeAll() { for (const id of new Set([...Object.keys(wins), ...Object.keys(shown)])) close(id); }
 async function clearData(botId) { close(botId); await sessionFor(botId).clearStorageData(); return { ok: true }; }
 function setGuard(fn) { guard = fn; }
 
-module.exports = { open, read, click, type, scroll, show, close, closeAll, clearData, setGuard };
+module.exports = { screen, control, open, read, click, type, scroll, show, close, closeAll, clearData, setGuard };

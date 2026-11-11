@@ -1632,6 +1632,9 @@ const botErr = (fn) => (...a) => { try { const r = fn(...a); return r && r.then 
 r.get('/api/bots', () => ({ bots: bots().list().map((b) => bots().summary(b)), brains: Object.fromEntries(bots().BRAINS.map((k) => [k, { label: require('./bots/agent').brainLabel(k), ready: k === 'auto' ? ai.anyConnected() : ai.connected(k) }])), desktop: !!ctx.botBrowser, web: { searxng: !!ctx.setting('ai.searxngUrl', ''), localNetwork: ctx.setting('web.localNetwork', false) === true } }));
 r.post('/api/bots', botErr((req, b) => bots().create(b, actorOf(req))), { roles: OWNER });
 // A bot from a pasted master prompt or a template (New bot → From a master prompt).
+// Bots' scheduled tasks and the auto-run switch (per bot, and all bots at once).
+r.get('/api/bots/schedules', () => { const B = require('./bots'); return { autoRun: ctx.setting('bots.autoRun', true) !== false, bots: ctx.store.all('bots').map((b) => ({ id: b.id, name: b.name, autoRun: b.schedulesOn !== false, tasks: (b.routines || []).map((r) => ({ ...r, when: B.describe(r), next: r.on && B.autoRunOn(b) ? B.nextRun(r) : null })) })) }; });
+r.post('/api/bots/schedules/autorun', (req, b) => { ctx.store.settings.bots = { ...(ctx.store.settings.bots || {}), autoRun: b.on !== false }; ctx.store.touch(); audit.log(actorOf(req), 'bots.autorun', { on: b.on !== false }); events.publish('bots', {}); return { autoRun: b.on !== false }; });
 r.get('/api/bots/templates', () => Object.entries(bots().TEMPLATES).map(([k, t]) => ({ id: k, name: t.name, emoji: t.emoji, color: t.color, role: t.role, kind: t.kind })));
 r.get('/api/bots/shot', (req, res) => {
   const f = path.resolve(String(req.query.file || '')); const base = path.join(paths.root, 'bots');
@@ -1653,6 +1656,27 @@ r.post('/api/bots/computer/install', () => queue.enqueue('bots.computer.install'
 r.post('/api/bots/:id/computer/stop', botErr((req, b, p) => require('./bots/computer').stop(p.id)));
 r.post('/api/bots/:id/computer/reset', botErr((req, b, p) => require('./bots/computer').reset(p.id, { wipe: !!b.wipe })), { roles: OWNER });
 r.post('/api/bots/:id/computer/folder', (req, b, p) => { const d = require('./bots/computer').workDir(p.id); if (ctx.openPath) ctx.openPath(d); return { folder: d }; });
+// The founders at the controls: the bot's own browser live, and their clicks/typing/keys sent into it (logins stay
+// in the bot's session). And a terminal into the bot's own computer (VM): the person's commands run without a card.
+r.get('/api/bots/:id/screen', async (req, b, p) => {
+  if (!ctx.botBrowser?.screen) throw new HttpError(400, "Taking over a bot's browser works in the Euclidean desktop app.");
+  must(ctx.store.get('bots', p.id), 'That bot is gone');
+  const s = await ctx.botBrowser.screen(p.id);
+  return { img: s.jpg ? `data:image/jpeg;base64,${s.jpg.toString('base64')}` : null, url: s.url, title: s.title, width: s.width, height: s.height, loading: s.loading, canBack: s.canBack, canForward: s.canForward };
+});
+r.post('/api/bots/:id/screen', async (req, b, p) => {
+  if (!ctx.botBrowser?.control) throw new HttpError(400, "Taking over a bot's browser works in the Euclidean desktop app.");
+  const bot = must(ctx.store.get('bots', p.id), 'That bot is gone');
+  try { await ctx.botBrowser.control(p.id, b || {}); } catch (e) { throw new HttpError(400, e.message); }
+  if (b?.type === 'go') audit.log(actorOf(req), 'bot.browser.taken_over', { bot: bot.name, url: String(b.url || '').slice(0, 200) });
+  return { ok: true };
+}, { roles: OWNER });
+r.post('/api/bots/:id/computer/run', async (req, b, p) => {
+  const bot = must(ctx.store.get('bots', p.id), 'That bot is gone');
+  const cmd = String(b.command || '').trim(); if (!cmd) throw new HttpError(400, 'Type a command.');
+  audit.log(actorOf(req), 'bot.computer.person_ran', { bot: bot.name, command: cmd.slice(0, 200) });
+  try { return await require('./bots/computer').exec(p.id, cmd, { timeout: 5 * 60000 }); } catch (e) { throw new HttpError(400, e.message); }
+}, { roles: OWNER });
 r.post('/api/bots/:id/browser/show', (req, b, p) => { if (!ctx.botBrowser) throw new HttpError(400, 'This works in the Euclidean desktop app.'); return ctx.botBrowser.show(p.id); });
 r.post('/api/bots/:id/browser/clear', async (req, b, p) => { if (!ctx.botBrowser) throw new HttpError(400, 'This works in the Euclidean desktop app.'); return ctx.botBrowser.clearData(p.id); }, { roles: OWNER });
 // The Data tab (server/data/index.js): lists, sheets, packs and pages read into tables and people.
@@ -1665,6 +1689,52 @@ r.post('/api/data', botErr(async (req, b) => {
   if (!files.length) throw new HttpError(400, 'Drop a file, paste some text, or give a link.');
   return { added: files.slice(0, 20).map((f) => dataMod().add({ name: String(f.name || 'Data'), text: String(f.text || ''), source: f.name ? 'upload' : 'paste', by: actorOf(req) })) };
 }));
+// Documents (server/docs): playbooks, plans, briefs, call sheets and lists as PDF + Word, written by the AI, a bot,
+// Claude or the call-list builder. Attaching one to an email draft never sends it (the draft still waits for approval).
+const docsMod = () => require('./docs');
+r.get('/api/docs', (req) => ({ docs: docsMod().list({ q: req.query.q || '' }), kinds: Object.entries(require('./docs/write').KINDS).map(([id, k]) => ({ id, label: k.label, look: k.look, sections: k.sections.map((s) => s.title) })) }));
+r.post('/api/docs', botErr((req, b) => {
+  if (b.spec) return docsMod().make({ spec: b.spec, kind: b.kind || 'custom', about: b.about || '', prospectId: b.prospectId || null, clientId: b.clientId || null, by: actorOf(req) });
+  const w = b.write || b;
+  if (!w.title && !w.about && !w.instructions) throw new HttpError(400, 'Say what the document is (a title or what it is about).');
+  return require('./docs/write').start({ kind: w.kind, title: w.title, about: w.about, instructions: w.instructions, material: w.material, prospectId: w.prospectId, clientId: w.clientId, datasetIds: Array.isArray(w.datasetIds) ? w.datasetIds : [], research: w.research || false, fullSearch: !!w.fullSearch, look: w.look, purpose: w.purpose, date: w.date }, actorOf(req));
+}));
+r.get('/api/docs/:id', (req, b, p) => must(docsMod().full(p.id), 'That document is gone'));
+r.patch('/api/docs/:id', botErr((req, b, p) => docsMod().edit(p.id, b, actorOf(req))));
+r.del('/api/docs/:id', (req, b, p) => docsMod().remove(p.id, actorOf(req)));
+r.post('/api/docs/:id/revise', botErr((req, b, p) => require('./docs/write').revise(p.id, b.note, actorOf(req))));
+r.post('/api/docs/:id/resume', botErr((req, b, p) => require('./docs/write').resume(p.id, actorOf(req))));
+r.post('/api/docs/:id/attach', botErr((req, b, p) => docsMod().attach(p.id, { messageId: b.messageId || null, to: b.to || '', format: b.format || 'pdf', by: actorOf(req) })));
+r.get('/api/docs/:id/file/:fmt', (req, res, p) => {
+  const f = docsMod().fileOf(p.id, p.fmt); if (!f) return send(res, 404, { error: 'Not made yet' });
+  if (req.query.reveal && ctx.revealFile) { ctx.revealFile(f); return send(res, 200, { ok: true }); }
+  return serveFile(req, res, f, { download: req.query.download ? path.basename(f) : null });
+}, { stream: true });
+// The mailbox (server/automation/mailbox.js) for the bots and Claude's connector: read, search, check, draft.
+// Drafts always wait in Approvals; nothing here sends.
+const mbox = () => require('./automation/mailbox');
+r.get('/api/email/inbox', (req) => ({ messages: mbox().inbox({ query: req.query.q || '', days: Number(req.query.days) || 14, unread: req.query.unread === '1', direction: req.query.sent === '1' ? 'out' : req.query.all === '1' ? 'all' : 'in', limit: Number(req.query.limit) || 25 }) }));
+r.get('/api/email/thread/:id', botErr((req, b, p) => mbox().thread(p.id)));
+r.post('/api/email/check', botErr(() => mbox().check()));
+r.post('/api/email/draft', botErr((req, b) => mbox().draft({ to: b.to, subject: b.subject, body: b.body, replyTo: b.replyTo || b.reply_to || null, attach: b.attach || null, by: actorOf(req), note: b.note || '' })));
+// Call lists (server/outreach/calllist.js): who to call, picked by what the founders say, every number checked.
+const callMod = () => require('./outreach/calllist');
+r.get('/api/calllists', () => ({ lists: callMod().list() }));
+r.post('/api/calllists', botErr((req, b) => callMod().start(b, actorOf(req))));
+r.get('/api/calllists/:id', (req, b, p) => must(callMod().get(p.id), 'That call list is gone'));
+r.post('/api/calllists/:id/resume', botErr((req, b, p) => callMod().resume(p.id, actorOf(req))));
+r.del('/api/calllists/:id', (req, b, p) => callMod().remove(p.id, actorOf(req)));
+r.get('/api/contact-book', botErr((req) => callMod().contactBook({ days: Number(req.query.days) || 14 })));
+r.post('/api/contact-book', botErr((req, b) => callMod().contactBookDoc({ days: Number(b.days) || 14, by: actorOf(req) })));
+// PDFs, Word files and big sheets come as a normal file upload (multipart), read in code.
+r.post('/api/data/upload', async (req, res) => {
+  const dir = path.join(paths.root, 'data', 'uploads'); fs.mkdirSync(dir, { recursive: true });
+  let got; try { got = await receiveUpload(req, dir, { maxBytes: 60 * 1024 ** 2 }); } catch (e) { return send(res, 400, { error: e.message }); }
+  const added = []; const failed = [];
+  for (const f of got.files.slice(0, 20)) { try { added.push(dataMod().addFile(f.path, { name: f.name || path.basename(f.path), by: actorOf(req) })); } catch (e) { failed.push({ name: f.name, error: e.message }); } finally { try { fs.unlinkSync(f.path); } catch { /* kept */ } } }
+  if (!added.length && failed.length) return send(res, 400, { error: failed.map((x) => x.error).join(' ') });
+  return send(res, 200, { added, failed });
+}, { stream: true, raw: true });
 r.get('/api/data/:id', (req, b, p) => { const d = must(dataMod().full(p.id), 'That data is gone'); const { text, ...rest } = d; return { ...rest, textLength: (text || '').length, preview: (text || '').slice(0, 20000) }; });
 r.patch('/api/data/:id', (req, b, p) => dataMod().rename(p.id, b.name));
 r.del('/api/data/:id', (req, b, p) => dataMod().remove(p.id, actorOf(req)));

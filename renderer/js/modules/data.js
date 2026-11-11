@@ -1,20 +1,23 @@
 // The Data tab: drop in any list, sheet, research pack, master prompt or link; Euclidean reads it into tables and
 // people, and one click adds them to the leads board or the notebook. Bots read from it and save their work to it.
-import { html, useState, useEffect, useRef, useApi, navigate, Button, Seg, Empty, act, toast, confirmDialog } from '../lib/ui.js';
+import { html, useState, useEffect, useRef, useApi, navigate, Button, Seg, Toggle, Empty, act, toast, confirmDialog } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 
 const KIND = { people: 'People', tables: 'Tables', table: 'Table', prompt: 'Master prompt', text: 'Text' };
 const MAX = 3.5 * 1024 * 1024;
 
+// PDFs and Word files go up as files (read in the engine); text files are read here.
+const BINARY = /\.(pdf|docx)$/i;
 async function readFiles(list) {
-  const out = [];
+  const out = []; const up = [];
   for (const f of list) {
+    if (BINARY.test(f.name)) { if (f.size > 60 * 1024 * 1024) toast(`${f.name} is over 60 MB.`, { kind: 'warn' }); else up.push(f); continue; }
     if (f.size > MAX) { toast(`${f.name} is over 3.5 MB. Split it or save it as plain text.`, { kind: 'warn' }); continue; }
-    if (/\.(pdf|docx?|xlsx?|pptx?|zip|png|jpe?g|mp4|mov)$/i.test(f.name)) { toast(`${f.name}: save it as CSV, text or Markdown first (or paste its text).`, { kind: 'warn' }); continue; }
+    if (/\.(doc|xlsx?|pptx?|zip|png|jpe?g|mp4|mov)$/i.test(f.name)) { toast(`${f.name}: save it as PDF, Word (.docx), CSV or text first (or paste its text).`, { kind: 'warn' }); continue; }
     out.push({ name: f.name, text: await f.text() });
   }
-  return out;
+  return { files: out, up };
 }
 
 export function DataTab() {
@@ -25,16 +28,27 @@ export function DataTab() {
   const [paste, setPaste] = useState(''); const [pasteName, setPasteName] = useState(''); const [url, setUrl] = useState('');
   const [drag, setDrag] = useState(false); const fileIn = useRef(null);
   const [q, setQ] = useState(''); const [hits, setHits] = useState(null);
+  const [view, setView] = useState('data');
   const cur = list.find((d) => d.id === sel) || list[0];
   const send = async (body, ok) => { setAdding(true); try { const r = await api.post('/api/data', body); toast(ok, { kind: 'success' }); reload(); const first = r.added?.[0] || r; if (first?.id) setSel(first.id); return true; } catch (e) { toast(e.message, { kind: 'error' }); return false; } finally { setAdding(false); } };
-  const addFiles = async (fl) => { const files = await readFiles([...fl]); if (files.length) await send({ files }, `Read ${files.length} file${files.length === 1 ? '' : 's'}`); };
+  const addFiles = async (fl) => {
+    const { files, up } = await readFiles([...fl]);
+    if (up.length) {
+      setAdding(true);
+      try { const r = await api.upload('/api/data/upload', up); for (const f of r.failed || []) toast(`${f.name}: ${f.error}`, { kind: 'warn' }); if (r.added?.length) { toast(`Read ${r.added.length} file${r.added.length === 1 ? '' : 's'}${r.added.reduce((n, d) => n + (d.counts?.people || 0), 0) ? `: ${r.added.reduce((n, d) => n + (d.counts?.people || 0), 0)} people` : ''}`, { kind: 'success' }); reload(); setSel(r.added[0].id); } }
+      catch (e) { toast(e.message, { kind: 'error' }); } finally { setAdding(false); }
+    }
+    if (files.length) await send({ files }, `Read ${files.length} file${files.length === 1 ? '' : 's'}`);
+  };
   const doSearch = async () => { if (!q.trim()) { setHits(null); return; } try { setHits(await api.get(`/api/data/search?q=${encodeURIComponent(q)}`)); } catch (e) { toast(e.message, { kind: 'error' }); } };
   return html`<div class="page">
-    <div class="page-head"><div class="grow"><h1>Data</h1><div class="sub">Every list, sheet, research pack and page you give Euclidean, read into people and tables. Add them to your leads or the notebook in one click. The bots read from here and save their work here.</div></div></div>
+    <div class="page-head"><div class="grow"><h1>Data</h1><div class="sub">Every list, sheet, research pack and page you give Euclidean, read into people and tables. Add them to your leads or the notebook in one click. The bots read from here and save their work here, with the documents and call lists they make.</div></div>
+      <${Seg} value=${view} onChange=${setView} options=${[{ value: 'data', label: 'Data' }, { value: 'docs', label: 'Documents' }, { value: 'calls', label: 'Call lists' }]} /></div>
+    ${view === 'docs' ? html`<${Documents} />` : view === 'calls' ? html`<${CallLists} onDoc=${() => setView('docs')} />` : html`<div>
     <div class=${'panel pad data-drop' + (drag ? ' on' : '')} onDragOver=${(e) => { e.preventDefault(); setDrag(true); }} onDragLeave=${() => setDrag(false)} onDrop=${(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}>
       <div class="row wrap" style="gap:10px;align-items:center">
-        <${Icon} name="upload" size=${20} /><div class="grow"><b>Drop files here</b> <span class="faint" style="font-size:var(--fs-sm)">CSV, TSV, Markdown, text, JSON or a saved web page (master prompts, winners lists, call sheets, research packs).</span></div>
-        <input type="file" multiple ref=${fileIn} style="display:none" accept=".csv,.tsv,.md,.txt,.json,.html,.htm" onChange=${(e) => { addFiles(e.target.files); e.target.value = ''; }} />
+        <${Icon} name="upload" size=${20} /><div class="grow"><b>Drop files here</b> <span class="faint" style="font-size:var(--fs-sm)">PDF, Word, CSV, TSV, Markdown, text, JSON or a saved web page (GrokBot exports, master prompts, winners lists, call sheets, research packs).</span></div>
+        <input type="file" multiple ref=${fileIn} style="display:none" accept=".pdf,.docx,.csv,.tsv,.md,.txt,.json,.html,.htm" onChange=${(e) => { addFiles(e.target.files); e.target.value = ''; }} />
         <${Button} kind="primary" icon="upload" busy=${adding} onClick=${() => fileIn.current.click()}>Add files</${Button}>
       </div>
       <div class="row wrap" style="gap:8px;margin-top:10px">
@@ -56,7 +70,108 @@ export function DataTab() {
         ${d.imported ? html`<span class="badge moss" title="Added to leads">✓</span>` : null}</button>`)}</div>
       ${cur ? html`<${Dataset} key=${cur.id} id=${cur.id} onGone=${() => { setSel(null); reload(); }} />` : null}
     </div>` : null}
+    </div>`}
   </div>`;
+}
+
+// ------------------------------------------------------------------ documents (PDF + Word)
+const DOC_KINDS = [{ value: 'playbook', label: 'Social video playbook' }, { value: 'plan', label: 'Platform and campaign plan' }, { value: 'brief', label: 'Meeting brief' }, { value: 'proposal', label: 'Proposal' }, { value: 'report', label: 'Report' }, { value: 'custom', label: 'Anything else' }];
+const docUrl = (id, fmt, q = '') => api.url(`/api/docs/${id}/file/${fmt}${q}`);
+function Documents() {
+  const { data, reload } = useApi('/api/docs', ['docs', 'jobs']);
+  const { data: leads } = useApi('/api/prospects?type=political&limit=500', []);
+  const docs = data?.docs || [];
+  const [f, setF] = useState({ kind: 'playbook', title: '', about: '', instructions: '', research: false, prospectId: '' });
+  const [busy, setBusy] = useState(false); const [rev, setRev] = useState({}); const [att, setAtt] = useState({});
+  const desktop = !!window.euclidean;
+  const make = async () => { setBusy(true); try { await api.post('/api/docs', { ...f, prospectId: f.prospectId || null }); toast('Writing it in the background. It shows below when it is ready.', { kind: 'success' }); setF({ ...f, title: '', instructions: '' }); reload(); } catch (e) { toast(e.message, { kind: 'error' }); } setBusy(false); };
+  const plist = Array.isArray(leads) ? leads : leads?.prospects || leads?.items || [];
+  return html`<div class="col" style="gap:12px">
+    <div class="panel pad col" style="gap:8px">
+      <b>Make a document</b>
+      <div class="faint" style="font-size:var(--fs-sm)">A designed PDF and a Word file you can edit, written from the Data tab, the notebook and the lead on file. Facts only from those; anything Euclidean adds is tagged PROPOSED. The bots can do this too ("Juno, make JD a playbook").</div>
+      <div class="row wrap" style="gap:8px">
+        <select class="input" style="width:auto" value=${f.kind} onChange=${(e) => setF({ ...f, kind: e.target.value })}>${DOC_KINDS.map((k) => html`<option value=${k.value}>${k.label}</option>`)}</select>
+        <input class="input grow" placeholder="Who or what it's for (e.g. Dr. JD Howard)" value=${f.about} onInput=${(e) => setF({ ...f, about: e.target.value })} />
+        <select class="input" style="width:auto;max-width:220px" value=${f.prospectId} onChange=${(e) => setF({ ...f, prospectId: e.target.value })}><option value="">No lead</option>${plist.slice(0, 400).map((p) => html`<option value=${p.id}>${p.name}</option>`)}</select>
+      </div>
+      <input class="input" placeholder="Title (optional)" value=${f.title} onInput=${(e) => setF({ ...f, title: e.target.value })} />
+      <textarea class="input" style="height:70px;font-family:inherit" placeholder="What you want in it, in your words (e.g. her four priorities from Tuesday, a one-page filming guide with diagrams, the weekly flow)" value=${f.instructions} onInput=${(e) => setF({ ...f, instructions: e.target.value })} />
+      <div class="row" style="gap:10px"><label class="row" style="gap:8px;cursor:pointer"><${Toggle} on=${f.research} onChange=${(v) => setF({ ...f, research: v })} label="Also research it on the web" /><span style="font-size:var(--fs-sm)">Also research it on the web</span></label><span class="grow" /><${Button} kind="primary" icon="edit" busy=${busy} disabled=${!f.about && !f.title && !f.instructions} onClick=${make}>Write it</${Button}></div>
+    </div>
+    ${!docs.length ? html`<${Empty} icon="layers" title="No documents yet">Write one above, or ask a bot.</${Empty}>` : html`<div class="col" style="gap:8px" data-animate>${docs.map((d) => html`<div class="panel pad col" style="gap:6px">
+      <div class="row wrap" style="gap:8px;align-items:center"><b class="grow ellipsis">${d.title}</b>
+        <span class=${'badge ' + (d.status === 'ready' ? 'moss' : d.status === 'failed' ? 'coral' : 'gold')}>${d.status === 'ready' ? `${d.pages || '?'} pages` : d.status === 'failed' ? 'Stopped' : d.status === 'rendering' ? 'Drawing' : 'Writing'}</span>
+        <span class="faint" style="font-size:var(--fs-xs)">${d.kind} · ${String(d.updatedAt || d.createdAt).slice(0, 16).replace('T', ' ')}${String(d.by).startsWith('bot:') ? ` · by ${String(d.by).slice(4)}` : ''}</span></div>
+      ${d.status !== 'ready' && d.status !== 'failed' ? html`<div class="faint" style="font-size:var(--fs-sm)"><span class="spinner" style="width:12px;height:12px" /> ${d.note || 'Working'}…</div>` : null}
+      ${d.status === 'failed' ? html`<div class="notice coral" style="font-size:var(--fs-sm)">${d.error || d.note}</div>` : null}
+      <div class="row wrap" style="gap:6px">
+        ${d.files?.pdf ? html`<a class="btn sm soft" href=${docUrl(d.id, 'pdf')} target="_blank" rel="noopener">Open PDF</a><a class="btn sm ghost" href=${docUrl(d.id, 'pdf', '?download=1')}>Download PDF</a>` : null}
+        ${d.files?.docx ? html`<a class="btn sm ghost" href=${docUrl(d.id, 'docx', '?download=1')}>Word file</a>` : null}
+        ${desktop && (d.files?.pdf || d.files?.docx) ? html`<${Button} size="sm" kind="ghost" icon="folder" onClick=${() => api.get(`/api/docs/${d.id}/file/${d.files.pdf ? 'pdf' : 'docx'}?reveal=1`).catch((e) => toast(e.message, { kind: 'error' }))}>Show in folder</${Button}>` : null}
+        ${d.status === 'failed' || (d.status !== 'ready' && !d.jobId) ? html`<${Button} size="sm" kind="soft" icon="refresh" onClick=${() => act(() => api.post(`/api/docs/${d.id}/resume`, {}), { ok: 'Carrying on' }).then(reload)}>Carry on</${Button}>` : null}
+        <span class="grow" /><${Button} size="sm" kind="ghost" icon="trash" title="Delete" onClick=${async () => { if (await confirmDialog({ title: 'Delete this document?', text: d.title, confirm: 'Delete' })) act(() => api.del(`/api/docs/${d.id}`)).then(reload); }} />
+      </div>
+      ${d.status === 'ready' ? html`<div class="row wrap" style="gap:6px">
+        <input class="input grow" placeholder="Change something (e.g. make the filming guide one page with diagrams)" value=${rev[d.id] || ''} onInput=${(e) => setRev({ ...rev, [d.id]: e.target.value })} />
+        <${Button} size="sm" kind="soft" disabled=${!rev[d.id]} onClick=${() => act(() => api.post(`/api/docs/${d.id}/revise`, { note: rev[d.id] }), { ok: 'Revising (the old version is kept)' }).then(() => { setRev({ ...rev, [d.id]: '' }); reload(); })}>Revise</${Button}>
+        <input class="input" style="width:200px" placeholder="Attach to the draft to… (name)" value=${att[d.id] || ''} onInput=${(e) => setAtt({ ...att, [d.id]: e.target.value })} />
+        <${Button} size="sm" kind="ghost" icon="paperclip" disabled=${!att[d.id]} onClick=${() => act(() => api.post(`/api/docs/${d.id}/attach`, { to: att[d.id] }), { ok: 'Attached to the waiting draft (not sent)' }).then(() => setAtt({ ...att, [d.id]: '' }))}>Attach</${Button}>
+      </div>` : null}
+    </div>`)}</div>`}
+  </div>`;
+}
+
+// ------------------------------------------------------------------ call lists
+function CallLists({ onDoc }) {
+  const { data, reload } = useApi('/api/calllists', ['calllists', 'jobs']);
+  const lists = data?.lists || [];
+  const [req, setReq] = useState(''); const [prev, setPrev] = useState(false); const [busy, setBusy] = useState(false); const [open, setOpen] = useState(null);
+  const start = async () => { setBusy(true); try { await api.post('/api/calllists', { request: req, includePrevious: prev }); toast('Building it: picking, then checking each person on their official pages.', { kind: 'success' }); setReq(''); reload(); } catch (e) { toast(e.message, { kind: 'error' }); } setBusy(false); };
+  const book = () => act(() => api.post('/api/contact-book', { days: 14 }), { ok: 'Making the contact book (Documents)' }).then(() => onDoc && onDoc());
+  return html`<div class="col" style="gap:12px">
+    <div class="panel pad col" style="gap:8px">
+      <b>Build a call list</b>
+      <div class="faint" style="font-size:var(--fs-sm)">Say who you want. Euclidean picks from your leads and the winners lists here, leaves out everyone already called, emailed or pitched, checks each person's district and Albany phones, office email and an accomplishment on their official pages (with the link), and writes the call script, voicemail and email draft. Nothing is sent.</div>
+      <textarea class="input" style="height:64px;font-family:inherit" placeholder="e.g. two for Ben and two for Ryan, freshly re-elected NY Assembly members, nobody we've pitched" value=${req} onInput=${(e) => setReq(e.target.value)} />
+      <div class="row wrap" style="gap:10px"><label class="row" style="gap:8px;cursor:pointer"><${Toggle} on=${prev} onChange=${setPrev} label="People on earlier call lists can be picked again" /><span style="font-size:var(--fs-sm)">People on earlier call lists can be picked again</span></label><span class="grow" />
+        <${Button} kind="ghost" icon="book" onClick=${book}>Contact book (last 14 days)</${Button}><${Button} kind="primary" icon="phone" busy=${busy} disabled=${!req.trim()} onClick=${start}>Build it</${Button}></div>
+    </div>
+    ${!lists.length ? html`<${Empty} icon="phone" title="No call lists yet">Build one above, or ask Corbin.</${Empty}>` : lists.map((l) => html`<div class="panel pad col" style="gap:6px">
+      <div class="row wrap" style="gap:8px;align-items:center"><b class="grow ellipsis">${l.title}</b>
+        <span class=${'badge ' + (l.status === 'done' ? 'moss' : l.status === 'failed' ? 'coral' : 'gold')}>${l.status === 'done' ? `${l.count} people` : l.status === 'failed' ? 'Stopped' : 'Checking'}</span>
+        <span class="faint" style="font-size:var(--fs-xs)">${String(l.createdAt).slice(0, 16).replace('T', ' ')}</span></div>
+      ${l.request ? html`<div class="faint" style="font-size:var(--fs-sm)">"${l.request}"</div>` : null}
+      ${l.status === 'working' ? html`<div class="faint" style="font-size:var(--fs-sm)"><span class="spinner" style="width:12px;height:12px" /> ${l.note || 'Working'}…</div>` : null}
+      ${l.status === 'failed' ? html`<div class="notice coral" style="font-size:var(--fs-sm)">${l.error}</div>` : null}
+      <div class="row wrap" style="gap:6px">
+        ${l.documentId ? html`<a class="btn sm soft" href=${docUrl(l.documentId, 'pdf')} target="_blank" rel="noopener">Open the call sheet</a><a class="btn sm ghost" href=${docUrl(l.documentId, 'docx', '?download=1')}>Word file</a>` : null}
+        ${l.status === 'done' ? html`<${Button} size="sm" kind="ghost" onClick=${() => setOpen(open === l.id ? null : l.id)}>${open === l.id ? 'Hide' : 'Show'} the people</${Button}>` : null}
+        ${l.status === 'failed' ? html`<${Button} size="sm" kind="soft" icon="refresh" onClick=${() => act(() => api.post(`/api/calllists/${l.id}/resume`, {}), { ok: 'Carrying on' }).then(reload)}>Carry on</${Button}>` : null}
+        <span class="grow" /><${Button} size="sm" kind="ghost" icon="trash" onClick=${() => act(() => api.del(`/api/calllists/${l.id}`)).then(reload)} />
+      </div>
+      ${open === l.id ? html`<${CallPeople} id=${l.id} />` : null}
+    </div>`)}
+  </div>`;
+}
+function CallPeople({ id }) {
+  const { data: l } = useApi(`/api/calllists/${id}`, ['calllists']);
+  if (!l) return html`<span class="spinner" />`;
+  return html`<div class="col" style="gap:8px">${l.items.filter((x) => x.picked).map((it) => html`<div class="panel pad col" style="gap:4px;background:var(--surface-2)">
+    <div class="row wrap" style="gap:8px"><b>${it.name}</b><span class="faint">${it.office}</span><span class="badge lav">${it.who}</span>${it.hookChecked ? html`<span class="badge moss" title="Checked on their official page">checked</span>` : null}</div>
+    <div style="font-size:var(--fs-sm)">${(it.verified?.phones || []).map((p) => `${p.label} ${p.num}`).join(' · ') || it.phone || 'No phone found'}</div>
+    ${it.hook ? html`<div class="faint selectable" style="font-size:var(--fs-sm)">${it.hook}${it.hookSource ? html` <a href=${it.hookSource} target="_blank" rel="noopener">source</a>` : null}</div>` : null}
+    ${it.drafts ? html`<details><summary class="faint" style="cursor:pointer;font-size:var(--fs-sm)">Script, voicemail and email</summary><div class="selectable" style="white-space:pre-wrap;font-size:var(--fs-sm)"><b>Call script</b>
+${it.drafts.script}
+
+<b>Voicemail</b>
+${it.drafts.voicemail}
+
+<b>Email</b> ${it.drafts.email.to ? `(to ${it.drafts.email.to})` : `(${it.drafts.email.note})`}
+Subject: ${it.drafts.email.subject}
+
+${it.drafts.email.body}</div></details>` : null}
+  </div>`)}${l.items.some((x) => x.state2 === 'dropped') ? html`<div class="faint" style="font-size:var(--fs-sm)">Dropped at the check: ${l.items.filter((x) => x.state2 === 'dropped').map((x) => `${x.name} (${x.dropWhy})`).join('; ')}</div>` : null}</div>`;
 }
 
 function Dataset({ id, onGone }) {

@@ -13,7 +13,7 @@ const TOOL = {
 };
 const COLORS = ['sky', 'coral', 'gold', 'lav', 'moss', 'teal', 'rose'];
 const KINDS = { master: 'Master', client: 'Client bot', scout: 'Scouting' };
-const EVERY = [{ value: 'day', label: 'Every day' }, { value: 'weekday', label: 'Weekdays' }, { value: 'week', label: 'Weekly' }, { value: 'hour', label: 'Every hour' }];
+const EVERY = [{ value: 'day', label: 'Every day' }, { value: 'weekday', label: 'Weekdays' }, { value: 'week', label: 'Weekly' }, { value: 'times', label: 'At set times each day' }, { value: 'hour', label: 'Every hour' }, { value: 'hours', label: 'Every few hours' }, { value: 'minutes', label: 'Every few minutes' }];
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const shotUrl = (f) => api.url(`/api/bots/shot?file=${encodeURIComponent(f)}`);
 const argLine = (s) => {
@@ -89,7 +89,7 @@ function Chat({ bot, brains, desktop, onEdit, side, onSide }) {
   return html`<div class="panel bots-chat">
     <div class="bots-head">
       <${Avatar} bot=${bot} size=${42} />
-      <div class="grow" style="min-width:0"><div class="row" style="gap:8px"><b style="font-size:var(--fs-lg)">${bot.name}</b>${KINDS[bot.kind] ? html`<span class="badge lav">${KINDS[bot.kind]}</span>` : null}${(bot.routines || []).some((r) => r.on) ? html`<span class="badge" title="Has scheduled tasks">⏰</span>` : null}
+      <div class="grow" style="min-width:0"><div class="row" style="gap:8px"><b style="font-size:var(--fs-lg)">${bot.name}</b>${KINDS[bot.kind] ? html`<span class="badge lav">${KINDS[bot.kind]}</span>` : null}${(bot.routines || []).some((r) => r.on) ? html`<button type="button" class=${'badge ' + (bot.schedulesOn === false ? '' : 'moss')} style="cursor:pointer;border:0" title=${bot.schedulesOn === false ? 'Auto-run is off: its scheduled tasks wait. Click to turn it on.' : 'Auto-run is on: its scheduled tasks run by themselves. Click to pause them (you can still chat).'} onClick=${() => act(() => api.patch(`/api/bots/${bot.id}`, { schedulesOn: bot.schedulesOn === false }), { ok: bot.schedulesOn === false ? 'Auto-run on' : 'Auto-run paused' }).then(reload)}>⏰ Auto-run ${bot.schedulesOn === false ? 'off' : 'on'}</button>` : null}
         <span class=${'badge ' + (brain?.ready ? 'moss' : 'coral')} title="Its brain">${brain?.label || bot.brain}${brain && !brain.ready ? ' · not connected' : ''}</span>
         <span class="badge" title="Its computer">${bot.computer === 'vm' ? 'Own computer (VM)' : bot.computer === 'browser' ? 'Own browser' : 'Web reader'}</span></div>
         <div class="faint ellipsis" style="font-size:var(--fs-sm)">${bot.role || 'No job yet. Press Settings to give it one.'}</div></div>
@@ -166,7 +166,81 @@ function Run({ run, bot, reload }) {
   </div>`;
 }
 
+/**
+ * Take over a bot's browser: its screen live (a few pictures a second) and your clicks, scrolling, typing and keys
+ * sent into it. Log the bot into sites here; it keeps the login in its own browser.
+ */
+function LiveScreen({ bot, onClose }) {
+  const [shot, setShot] = useState(null); const [err, setErr] = useState(''); const [url, setUrl] = useState('');
+  const box = useRef(null); const editing = useRef(false); const buf = useRef(''); const flushT = useRef(null);
+  const send = (a) => api.post(`/api/bots/${bot.id}/screen`, a).catch((e) => toast(e.message, { kind: 'error' }));
+  useEffect(() => {
+    let alive = true;
+    const loop = async () => {
+      while (alive) {
+        try { const s = await api.get(`/api/bots/${bot.id}/screen`); if (!alive) break; setShot(s); setErr(''); if (!editing.current) setUrl(s.url || ''); } catch (e) { setErr(e.message); await new Promise((r) => setTimeout(r, 1500)); }
+        await new Promise((r) => setTimeout(r, document.hidden ? 1500 : 350));
+      }
+    };
+    loop(); setTimeout(() => box.current?.focus(), 50);
+    return () => { alive = false; };
+  }, [bot.id]);
+  const at = (e) => { const r = e.currentTarget.getBoundingClientRect(); return { fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height }; };
+  const flush = () => { clearTimeout(flushT.current); flushT.current = null; const t = buf.current; buf.current = ''; if (t) send({ type: 'text', text: t }); };
+  const onKey = (e) => {
+    if (e.key === 'Escape') return; // closes the window
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === 'v') return; // paste comes through onPaste
+    e.preventDefault(); e.stopPropagation();
+    if (e.key.length === 1 && !mod) { buf.current += e.key; if (!flushT.current) flushT.current = setTimeout(flush, 90); return; }
+    flush();
+    send({ type: 'key', key: e.key, shift: e.shiftKey, ctrl: e.ctrlKey, meta: e.metaKey });
+  };
+  return html`<${Modal} wide title=${`${bot.emoji} ${bot.name}'s browser: you're at the controls`} icon="monitor" onClose=${onClose}
+    footer=${html`<span class="faint grow" style="font-size:var(--fs-xs)">Click, scroll and type right on the picture. Log in to sites here and ${bot.name} stays logged in. It still can't reach this PC or your home network.</span><${Button} kind="primary" onClick=${onClose}>Done</${Button}>`}>
+    <div class="row" style="gap:6px;margin-bottom:8px">
+      <${Button} size="sm" kind="ghost" icon="chevronLeft" title="Back" disabled=${!shot?.canBack} onClick=${() => send({ type: 'back' })} />
+      <${Button} size="sm" kind="ghost" icon="chevronRight" title="Forward" disabled=${!shot?.canForward} onClick=${() => send({ type: 'forward' })} />
+      <${Button} size="sm" kind="ghost" icon="refresh" title="Reload" onClick=${() => send({ type: 'reload' })} />
+      <input class="input grow" value=${url} placeholder="Type an address or what to search on DuckDuckGo" onFocus=${() => { editing.current = true; }} onBlur=${() => { editing.current = false; }}
+        onInput=${(e) => setUrl(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter') { e.preventDefault(); editing.current = false; e.target.blur(); send({ type: 'go', url }); box.current?.focus(); } }} />
+      ${shot?.loading ? html`<span class="spinner" style="width:14px;height:14px" />` : null}
+    </div>
+    ${err ? html`<div class="notice coral">${err}</div>` : null}
+    <div ref=${box} class="live-screen" tabindex="0" onKeyDown=${onKey}
+      onPaste=${(e) => { const t = e.clipboardData?.getData('text'); if (t) { e.preventDefault(); flush(); send({ type: 'text', text: t }); } }}>
+      ${shot?.img ? html`<img src=${shot.img} alt="The bot's screen" draggable="false"
+        onMouseDown=${(e) => { e.preventDefault(); box.current?.focus(); }}
+        onClick=${(e) => { flush(); send({ type: 'click', ...at(e), shift: e.shiftKey, ctrl: e.ctrlKey }); }}
+        onDblClick=${(e) => send({ type: 'dblclick', ...at(e) })}
+        onContextMenu=${(e) => { e.preventDefault(); send({ type: 'click', button: 'right', ...at(e) }); }}
+        onWheel=${(e) => { e.preventDefault(); send({ type: 'scroll', ...at(e), dy: e.deltaY, dx: e.deltaX }); }} />` : html`<div class="faint" style="padding:40px;text-align:center"><span class="spinner" /> Opening ${bot.name}'s browser…</div>`}
+    </div>
+    <div class="faint ellipsis" style="font-size:var(--fs-xs);margin-top:6px">${shot?.title || ''}</div>
+  </${Modal}>`;
+}
+
+/** Type commands into a bot's own computer (VM) yourself. */
+function Terminal({ bot }) {
+  const [cmd, setCmd] = useState(''); const [log, setLog] = useState([]); const [busy, setBusy] = useState(false); const end = useRef(null);
+  const runIt = async () => {
+    const c = cmd.trim(); if (!c || busy) return; setBusy(true); setCmd('');
+    try { const r = await api.post(`/api/bots/${bot.id}/computer/run`, { command: c }); setLog((l) => [...l.slice(-40), { c, out: r.output || '(no output)', code: r.code }]); }
+    catch (e) { setLog((l) => [...l.slice(-40), { c, out: e.message, code: 1 }]); }
+    setBusy(false); setTimeout(() => end.current?.scrollIntoView({ block: 'end' }), 30);
+  };
+  return html`<div class="col" style="gap:6px">
+    <div class="faint" style="font-size:var(--fs-xs)">Your own commands in ${bot.name}'s computer (they run at once, in /work).</div>
+    ${log.length ? html`<pre class="bot-term">${log.map((x) => html`<div><b>$ ${x.c}</b>
+${x.out}${x.code ? `
+(exit ${x.code})` : ''}</div>`)}<span ref=${end} /></pre>` : null}
+    <div class="row" style="gap:6px"><input class="input grow mono" value=${cmd} placeholder="ls -la   ·   python3 script.py   ·   curl -s https://..." onInput=${(e) => setCmd(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter') runIt(); }} />
+      <${Button} size="sm" kind="soft" busy=${busy} onClick=${runIt}>Run</${Button}></div>
+  </div>`;
+}
+
 function ComputerPanel({ bot, desktop }) {
+  const [live, setLive] = useState(false);
   const vm = bot.computer === 'vm';
   const { data: st, reload } = useApi(vm ? `/api/bots/${bot.id}/computer` : null, ['bots', 'jobs']);
   const { data: th } = useApi(`/api/bots/${bot.id}`, ['bots']);
@@ -177,9 +251,10 @@ function ComputerPanel({ bot, desktop }) {
     ${lastShot ? html`<a href=${shotUrl(lastShot.shot)} target="_blank" rel="noopener"><img class="bot-screen" src=${shotUrl(lastShot.shot)} alt="The bot's screen" /></a><div class="faint ellipsis" style="font-size:var(--fs-xs)">${argLine(lastShot)}</div>` : html`<div class="bot-screen empty faint">${vm || bot.computer === 'browser' ? 'Pages it opens show up here.' : 'This bot reads pages as text (no screen).'}</div>`}
     ${bot.computer === 'browser' ? html`
       <div class="faint" style="font-size:var(--fs-sm)">A walled-off browser just for ${bot.name}: it can't reach this PC or your home network, can't download files, and only clicks or types after you allow it.</div>
-      ${desktop ? html`<div class="row wrap" style="gap:6px"><${Button} size="sm" kind="soft" icon="external" onClick=${() => act(() => api.post(`/api/bots/${bot.id}/browser/show`, {}))}>Open it yourself</${Button}>
+      ${desktop ? html`<div class="row wrap" style="gap:6px"><${Button} size="sm" kind="primary" icon="pointer" onClick=${() => setLive(true)}>Take over its browser</${Button}><${Button} size="sm" kind="soft" icon="external" onClick=${() => act(() => api.post(`/api/bots/${bot.id}/browser/show`, {}))}>Open it in a window</${Button}>
         <${Button} size="sm" kind="ghost" onClick=${async () => { if (await confirmDialog({ title: 'Forget its logins?', text: `${bot.name}'s browser forgets every site it was logged into.`, confirm: 'Forget' })) act(() => api.post(`/api/bots/${bot.id}/browser/clear`, {}), { ok: 'Forgotten' }); }}>Forget its logins</${Button}></div>
-        <div class="faint" style="font-size:var(--fs-xs)">Open it yourself to log ${bot.name} into a site it should use. It keeps that login (only in its own browser).</div>`
+        <div class="faint" style="font-size:var(--fs-xs)">Take over to click around, type and log ${bot.name} into sites it should use. It keeps those logins (only in its own browser).</div>
+        ${live ? html`<${LiveScreen} bot=${bot} onClose=${() => setLive(false)} />` : null}`
       : html`<div class="notice gold" style="font-size:var(--fs-sm)">The browser works in the Euclidean desktop app. Here the bot reads pages as text.</div>`}` : null}
     ${vm ? html`
       ${!st ? html`<div class="faint"><span class="spinner" /> Checking…</div>` : st.ready ? html`
@@ -188,6 +263,7 @@ function ComputerPanel({ bot, desktop }) {
         <div class="row wrap" style="gap:6px"><${Button} size="sm" kind="soft" icon="folder" onClick=${() => act(() => api.post(`/api/bots/${bot.id}/computer/folder`, {}))}>Open its folder</${Button}>
           ${st.machine === 'running' ? html`<${Button} size="sm" kind="ghost" icon="pause" onClick=${() => act(() => api.post(`/api/bots/${bot.id}/computer/stop`, {}), { ok: 'Put to sleep' }).then(reload)}>Sleep</${Button}>` : null}
           <${Button} size="sm" kind="ghost" icon="refresh" title="Throw the machine away and start clean (its files stay)" onClick=${async () => { if (await confirmDialog({ title: 'Start its computer clean?', text: 'Programs it installed are removed. Its files in /work stay.', confirm: 'Start clean' })) act(() => api.post(`/api/bots/${bot.id}/computer/reset`, {}), { ok: 'Done' }).then(reload); }}>Start clean</${Button}></div>
+        <${Terminal} bot=${bot} />
         ${st.files?.length ? html`<div class="bot-files">${st.files.slice(0, 40).map((f) => html`<div class="ellipsis" style="font-size:var(--fs-xs)">${f.dir ? '📁' : '📄'} ${f.path}${f.size != null && !f.dir ? html` <span class="faint">${f.size < 1024 ? `${f.size} B` : `${Math.round(f.size / 1024)} KB`}</span>` : null}</div>`)}</div>` : html`<div class="faint" style="font-size:var(--fs-xs)">No files yet.</div>`}
       ` : html`
         <div class="notice gold" style="font-size:var(--fs-sm)">${st.message}</div>
@@ -205,11 +281,11 @@ function ComputerPanel({ bot, desktop }) {
 function BotSettings({ id, brains, desktop, onClose, onDeleted }) {
   const { data } = useApi(`/api/bots/${id}`, []);
   const [b, setB] = useState(null);
-  useEffect(() => { if (data?.bot && !b) setB({ ...data.bot, tools: { web: true, notebook: true, app: true, team: true, leads: false, clients: false, ...(data.bot.tools || {}) } }); }, [data]);
+  useEffect(() => { if (data?.bot && !b) setB({ ...data.bot, tools: { web: true, notebook: true, app: true, team: true, leads: false, clients: false, email: true, docs: true, schedule: true, ...(data.bot.tools || {}) } }); }, [data]);
   if (!b) return html`<${Drawer} title="Bot settings" onClose=${onClose}><div class="faint"><span class="spinner" /></div></${Drawer}>`;
   const set = (k, v) => setB({ ...b, [k]: v });
   const setTool = (k, v) => setB({ ...b, tools: { ...b.tools, [k]: v } });
-  const save = () => act(() => api.patch(`/api/bots/${id}`, { name: b.name, emoji: b.emoji, color: b.color, role: b.role, instructions: b.instructions, brain: b.brain, computer: b.computer, tools: b.tools, autoBrowse: b.autoBrowse, autoRun: b.autoRun, maxSteps: b.maxSteps, pinned: b.pinned, routines: b.routines || [] }), { ok: 'Saved' }).then((r) => { if (r) onClose(); });
+  const save = () => act(() => api.patch(`/api/bots/${id}`, { name: b.name, emoji: b.emoji, color: b.color, role: b.role, instructions: b.instructions, brain: b.brain, computer: b.computer, tools: b.tools, autoBrowse: b.autoBrowse, autoRun: b.autoRun, maxSteps: b.maxSteps, pinned: b.pinned, routines: b.routines || [], schedulesOn: b.schedulesOn !== false }), { ok: 'Saved' }).then((r) => { if (r) onClose(); });
   const del = async () => { if (await confirmDialog({ title: `Delete ${b.name}?`, text: 'Its chat and its computer are removed.', confirm: 'Delete' })) act(() => api.del(`/api/bots/${id}`), { ok: 'Deleted' }).then(onDeleted); };
   const sw = (on, fn, label, hint) => html`<div class="row" style="gap:10px;align-items:flex-start"><${Toggle} on=${on} onChange=${fn} label=${label} /><div><div>${label}</div>${hint ? html`<div class="faint" style="font-size:var(--fs-xs)">${hint}</div>` : null}</div></div>`;
   return html`<${Drawer} title=${`${b.emoji} ${b.name}`} sub="Bot settings" onClose=${onClose} actions=${html`<${Button} kind="primary" size="sm" onClick=${save}>Save</${Button}>`}>
@@ -231,13 +307,16 @@ function BotSettings({ id, brains, desktop, onClose, onDeleted }) {
         ${sw(b.tools.team, (v) => setTool('team', v), 'The other bots', 'Can hand part of a job to another bot.')}
         ${sw(!!b.tools.leads, (v) => setTool('leads', v), 'Leads and outreach', 'Checks the leads board, proposes new leads (they wait for your OK), starts outreach drafts.')}
         ${sw(!!b.tools.clients, (v) => setTool('clients', v), 'Clients', "Opens a client's file, clips and posts, and writes titles with the SEO lab.")}
+        ${sw(b.tools.email !== false, (v) => setTool('email', v), 'Email', 'Reads and searches the outreach mailbox and writes drafts (they wait in Approvals; it never sends).')}
+        ${sw(b.tools.docs !== false, (v) => setTool('docs', v), 'Documents and call lists', 'Makes playbooks, plans and briefs as PDF and Word, checked call sheets and the contact book.')}
+        ${sw(b.tools.schedule !== false, (v) => setTool('schedule', v), 'Schedules its own tasks', 'You can tell it "every weekday at 8, ..." in the chat.')}
       </div>
       <div class="col" style="gap:10px"><b>Asking first</b>
         ${sw(!b.autoBrowse, (v) => set('autoBrowse', !v), 'Ask before clicking or typing on websites', 'Recommended: it could otherwise fill in forms or post.')}
         ${b.computer === 'vm' ? sw(!b.autoRun, (v) => set('autoRun', !v), 'Ask before running commands in its computer', 'Its computer is walled off from your files, so turning this off is fairly safe.') : null}
         <div class="faint" style="font-size:var(--fs-xs)">Bots never send emails or messages, post, or change your records. They can write drafts for you.</div>
       </div>
-      <${Routines} list=${b.routines || []} onChange=${(v) => set('routines', v)} name=${b.name} />
+      <${Routines} list=${b.routines || []} onChange=${(v) => set('routines', v)} name=${b.name} autoRun=${b.schedulesOn !== false} onAuto=${(v) => set('schedulesOn', v)} />
       <${Field} label=${`Most steps per message: ${b.maxSteps || 12}`}><input type="range" min="3" max="30" value=${b.maxSteps || 12} onInput=${(e) => set('maxSteps', Number(e.target.value))} /></${Field}>
       ${sw(!!b.pinned, (v) => set('pinned', v), 'Pin to the top of the list')}
       <div class="row" style="gap:8px;margin-top:6px"><${Button} kind="primary" onClick=${save}>Save</${Button}><span class="grow" /><${Button} kind="ghost" icon="trash" onClick=${del}>Delete bot</${Button}></div>
@@ -245,20 +324,23 @@ function BotSettings({ id, brains, desktop, onClose, onDeleted }) {
   </${Drawer}>`;
 }
 
-function Routines({ list, onChange, name }) {
+function Routines({ list, onChange, name, autoRun = true, onAuto }) {
   const upd = (i, k, v) => onChange(list.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
-  return html`<div class="col" style="gap:8px"><b>Scheduled tasks</b>
-    <div class="faint" style="font-size:var(--fs-xs)">Like Grok's tasks: ${name} does these on its own while Euclidean is open, and the answer lands in its chat. They only research and draft.</div>
+  return html`<div class="col" style="gap:8px"><div class="row" style="gap:8px"><b class="grow">Scheduled tasks</b>${onAuto ? html`<span class="faint" style="font-size:var(--fs-sm)">Auto-run ${autoRun ? 'on' : 'off'}</span><${Toggle} on=${autoRun} onChange=${onAuto} label="Auto-run" />` : null}</div>
+    <div class="faint" style="font-size:var(--fs-xs)">${name} does these on its own while Euclidean is open (data scrapes, briefs, news checks), and the answer lands in its chat. Auto-run off pauses all of them; ${name} still answers you in chat. You can also just tell it: "every weekday at 8, ...".</div>
     ${list.map((r, i) => html`<div class="panel pad col" style="gap:6px;background:var(--surface-2)">
       <textarea class="input" style="height:58px;font-family:inherit" placeholder="What to do (e.g. Morning scout: 5 to 10 new CT winners with campaign emails)" value=${r.task} onInput=${(e) => upd(i, 'task', e.target.value)} />
       <div class="row wrap" style="gap:6px;align-items:center">
         <select class="input" style="width:auto" value=${r.every} onChange=${(e) => upd(i, 'every', e.target.value)}>${EVERY.map((o) => html`<option value=${o.value}>${o.label}</option>`)}</select>
         ${r.every === 'week' ? html`<select class="input" style="width:auto" value=${r.day ?? 1} onChange=${(e) => upd(i, 'day', Number(e.target.value))}>${DAYS.map((d, k) => html`<option value=${k}>${d}</option>`)}</select>` : null}
-        ${r.every === 'hour' ? html`<span class="faint">at minute</span><input class="input" style="width:70px" type="number" min="0" max="59" value=${Number(String(r.at || '08:00').split(':')[1])} onInput=${(e) => upd(i, 'at', `00:${String(Math.max(0, Math.min(59, Number(e.target.value) || 0))).padStart(2, '0')}`)} />`
+        ${r.every === 'minutes' ? html`<input class="input" style="width:76px" type="number" min="10" max="1440" value=${r.minutes || 60} onInput=${(e) => upd(i, 'minutes', Number(e.target.value) || 60)} /><span class="faint">minutes, starting</span><input class="input" style="width:110px" type="time" value=${r.at || '08:00'} onInput=${(e) => upd(i, 'at', e.target.value)} />`
+          : r.every === 'hours' ? html`<input class="input" style="width:64px" type="number" min="1" max="24" value=${r.hours || 2} onInput=${(e) => upd(i, 'hours', Number(e.target.value) || 2)} /><span class="faint">hours, starting</span><input class="input" style="width:110px" type="time" value=${r.at || '08:00'} onInput=${(e) => upd(i, 'at', e.target.value)} />`
+          : r.every === 'times' ? html`<span class="faint">at</span><input class="input" style="width:200px" placeholder="08:00, 12:30, 17:00" value=${(r.times || []).join(', ')} onChange=${(e) => upd(i, 'times', e.target.value.split(/[,\s]+/).filter((x) => /^\d{1,2}:\d{2}$/.test(x)))} />`
+          : r.every === 'hour' ? html`<span class="faint">at minute</span><input class="input" style="width:70px" type="number" min="0" max="59" value=${Number(String(r.at || '08:00').split(':')[1])} onInput=${(e) => upd(i, 'at', `00:${String(Math.max(0, Math.min(59, Number(e.target.value) || 0))).padStart(2, '0')}`)} />`
           : html`<span class="faint">at</span><input class="input" style="width:110px" type="time" value=${r.at || '08:00'} onInput=${(e) => upd(i, 'at', e.target.value)} />`}
         <span class="grow" /><${Toggle} on=${r.on !== false} onChange=${(v) => upd(i, 'on', v)} label="On" /><${Button} size="sm" kind="ghost" icon="trash" title="Remove" onClick=${() => onChange(list.filter((_, j) => j !== i))} />
       </div>${r.lastRun ? html`<div class="faint" style="font-size:var(--fs-xs)">Last ran ${new Date(r.lastRun).toLocaleString()}</div>` : null}</div>`)}
-    ${list.length < 10 ? html`<div><${Button} size="sm" kind="ghost" icon="plus" onClick=${() => onChange([...list, { task: '', every: 'weekday', at: '08:00', on: true }])}>Add a scheduled task</${Button}></div>` : null}
+    ${list.length < 20 ? html`<div><${Button} size="sm" kind="ghost" icon="plus" onClick=${() => onChange([...list, { task: '', every: 'weekday', at: '08:00', on: true }])}>Add a scheduled task</${Button}></div>` : null}
   </div>`;
 }
 

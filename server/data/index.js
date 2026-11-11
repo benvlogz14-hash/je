@@ -92,12 +92,15 @@ function peopleBlocks(text, source = '') {
     for (let k = 0; k < line.length; k++) {
       if (line[k] === '(') { if (depth === 0) open = k; depth++; } else if (line[k] === ')' && depth > 0) { depth--; if (depth === 0) { const c = line.slice(open + 1, k); if (/\d|District|County|House|Senate|Assembly|Council|Mayor|Supervisor|Legislat|Town|City|seat/i.test(c)) { at = open; inner = c; close = k; break; } } }
     }
+    if (at < 0 && /\)\s*(WON|LOST|\[Tier)/.test(line)) { // "Name (New Castle (Westchester)) WON": a result after the bracket marks it as the seat
+      depth = 0; for (let k = 0; k < line.length; k++) { if (line[k] === '(') { if (depth === 0) open = k; depth++; } else if (line[k] === ')' && depth > 0 && --depth === 0 && /^\s*(WON|LOST|\[Tier)/.test(line.slice(k + 1))) { at = open; inner = line.slice(open + 1, k); close = k; break; } }
+    }
     if (at < 0) continue;
     const rawName = line.slice(0, at).trim();
     const nick = (/\(([^)]+)\)/.exec(rawName) || [])[1] || '';
     const name = clean(rawName.replace(/\([^)]*\)/g, ' ')).replace(/\s+(WON|LOST)$/i, '');
     const words = name.split(' ');
-    if (words.length < 2 || words.length > 5 || name === name.toUpperCase() || !words.every((w) => /^([A-Z][\w.'’-]*|de|la|del|van|von|da|di|III|II|IV|Jr\.?|Sr\.?)$/.test(w))) continue;
+    if (words.length < 2 || words.length > 5 || name === name.toUpperCase() || !words.every((w) => /^(\p{Lu}[\p{L}\p{M}\d.'’-]*|de|la|del|van|von|da|di|III|II|IV|Jr\.?|Sr\.?)$/u.test(w))) continue;
     heads.push({ index: m.index, name, nick, office: clean(inner), tail: line.slice(close + 1) });
   }
   heads.forEach((m, i) => {
@@ -183,6 +186,26 @@ function add({ name, text, source = 'upload', by = 'user', note = '' }) {
   audit.log(by, 'data.added', { id: d.id, name: d.name, people: p.people.length, tables: p.tables.length });
   events.publish('data', { id: d.id });
   return d;
+}
+
+/** The text of any file: PDF and Word read in code, everything else as text. */
+function textOfFile(buf, name = '') {
+  const pdf = require('./pdf');
+  if (/\.pdf$/i.test(name) || buf.subarray(0, 5).toString('latin1') === '%PDF-') {
+    const r = pdf.readPdf(buf);
+    if (r.encrypted) throw new Error(`${name || 'That PDF'} is locked with a password. Save an unlocked copy first.`);
+    if (!r.text.trim()) throw new Error(`${name || 'That PDF'} has no text to read (it may be scanned pictures of pages).`);
+    return { text: pdf.markPeople(r.text), pages: r.pages, from: 'pdf' };
+  }
+  if (/\.docx$/i.test(name) || (buf[0] === 0x50 && buf[1] === 0x4b && /word\//.test(buf.subarray(0, 4000).toString('latin1')))) return { text: pdf.readDocx(buf).text, from: 'docx' };
+  if (/\.(doc|xls|ppt|zip|png|jpe?g|gif|mp4|mov|mp3)$/i.test(name)) throw new Error(`${name}: save it as PDF, Word (.docx), CSV or text first.`);
+  return { text: buf.toString('utf8').replace(/^\uFEFF/, ''), from: 'text' };
+}
+/** A file on disk (an upload, a bot's download) into the Data tab. */
+function addFile(file, { name = '', by = 'user', note = '' } = {}) {
+  const nm = name || require('path').basename(file);
+  const r = textOfFile(fs.readFileSync(file), nm);
+  return add({ name: nm.replace(/\.(pdf|docx|txt|md|csv|tsv|json|html?)$/i, ''), text: r.text, source: r.from === 'pdf' ? `PDF, ${r.pages} page${r.pages === 1 ? '' : 's'}` : r.from === 'docx' ? 'Word file' : 'upload', by, note });
 }
 
 /** A web page into the Data tab (read through the safe web reader). */
@@ -289,4 +312,4 @@ function seed() {
   ctx.store.setSettings({ _dataV1: true });
 }
 
-module.exports = { parse, mdTables, peopleBlocks, sectionsOf, list, full, add, addUrl, remove, rename, search, toLeads, toNotebook, toCsv, seed, COL };
+module.exports = { textOfFile, addFile, parse, mdTables, peopleBlocks, sectionsOf, list, full, add, addUrl, remove, rename, search, toLeads, toNotebook, toCsv, seed, COL };

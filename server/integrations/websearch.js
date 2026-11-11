@@ -155,8 +155,15 @@ const pageCache = new Map();
 /** Read one page: { url, title, description, date, text, links }. */
 async function read(url, { maxChars = 60000 } = {}) {
   const hit = pageCache.get(url); if (hit && Date.now() - hit.at < CACHE_MS) return hit.page;
-  const r = await safe.get(url, { timeout: 20000 });
+  const r = await safe.get(url, { timeout: 20000, keepBuffer: true, maxBytes: 12 * 1024 * 1024 });
   if (r.status >= 400) throw new Error(`The page answered ${r.status}${r.status === 403 || r.status === 429 ? ' (it blocks automated readers)' : ''}.`);
+  // PDFs and Word files (reports, finance filings, bills, a campaign's platform) are read in code too.
+  if (r.binary && r.buffer && (/pdf|wordprocessingml/i.test(r.type) || r.buffer.subarray(0, 5).toString('latin1') === '%PDF-')) {
+    const doc = require('../data').textOfFile(r.buffer, /pdf/i.test(r.type) || r.buffer.subarray(0, 5).toString('latin1') === '%PDF-' ? 'file.pdf' : 'file.docx');
+    const title = (/^#?\s*(.{4,120})$/m.exec(doc.text.trim()) || [])[1] || url;
+    const page = { url: r.url, title, description: doc.pages ? `PDF, ${doc.pages} pages` : 'Word file', date: '', text: doc.text.slice(0, maxChars), links: [...new Set(doc.text.match(/https?:\/\/[^\s)>\]]+/g) || [])].slice(0, 40).map((u) => ({ text: u, url: u })), truncated: doc.text.length > maxChars || r.truncated };
+    pageCache.set(url, { at: Date.now(), page }); return page;
+  }
   if (r.binary) throw new Error(`That link is a file (${r.type.split(';')[0] || 'not a web page'}), not a page I can read.`);
   let page;
   if (/json/i.test(r.type)) page = { title: url, description: '', date: '', text: r.text.slice(0, maxChars), links: [] };
@@ -203,7 +210,7 @@ async function research(question, { query, pages = 3, results: n = 8, recent = n
   let google = null;
   if (full) { const s = require('./serper'); if (!s.blocked()) { try { google = await s.web(q, { num: Math.max(10, n), recent }); } catch { google = null; } } }
   const [results, quick] = await Promise.all([google ? google.results.slice(0, n) : search(q, n, { recent }), recent || google ? null : instant(q)]);
-  const pick = results.filter((r) => !/\.(pdf|docx?|xlsx?|pptx?|zip|mp4|mp3)(\?|$)/i.test(r.url) && !/youtube\.com\/watch|tiktok\.com|instagram\.com|facebook\.com|x\.com\/|twitter\.com/i.test(r.url)).slice(0, pages);
+  const pick = results.filter((r) => !/\.(docx?|xlsx?|pptx?|zip|mp4|mp3)(\?|$)/i.test(r.url) && !/youtube\.com\/watch|tiktok\.com|instagram\.com|facebook\.com|x\.com\/|twitter\.com/i.test(r.url)).slice(0, pages);
   const failed = []; const read_ = [];
   await Promise.all(pick.map(async (r) => {
     try {

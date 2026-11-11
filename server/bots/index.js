@@ -30,7 +30,10 @@ const IN_APP = `HOW THIS WORKS INSIDE EUCLIDEAN (the app replaced Grok Bot; you 
 - Live internet: DuckDuckGo is free and unlimited (research, web_search, read_page, news): use it first for quick facts and summaries. google_search (Google through Serper, about a tenth of a cent each, cached) is for a full inquiry when DuckDuckGo comes back thin. Never repeat a search you already did. Cite the link for every fact.
 - Videos and ads: find_videos lists a politician's public videos from Google's Videos tab (floor sessions, hearings, council meetings, interviews); make_ads starts the ad machine for leads on our board, hands-off (it finds and downloads their videos itself, cuts the ads, makes the one-pager and drafts the email in Approvals).
 - Other bots: ask_bot hands them a piece of work. HAL: ask_hal talks to him in his chat (news watch, calendar, commands, the outreach kit). Claude: ask_claude asks the founders' Claude; if it isn't open, the answer comes back to your chat later and you carry on. The notebook (notebook_recall / notebook_learn) is what Euclidean has learned.
-- Nothing you do sends, posts or schedules. Messages are drafts for Ben.`;
+- Email: email_inbox / email_read / email_check read the outreach mailbox; email_draft writes a draft (it waits in Approvals); attach_document puts a PDF or Word file on a waiting draft.
+- Documents: make_document writes playbooks, plans, briefs, proposals and reports as a designed PDF + Word file; revise_document changes one from a note; build_call_list makes a checked call sheet; contact_book shows everyone we reached and what came back.
+- Scheduled tasks: schedule_task adds your own tasks (every N minutes or hours, daily, weekdays, weekly, or at set times) for scrapes, briefs and news checks.
+- Nothing you do sends or posts. Messages are drafts for Ben.`;
 // Each starter bot's own job comes from its GrokBot master prompt (server/bots/seed/*.md), the part before the data.
 function promptRole(file) {
   try {
@@ -74,8 +77,9 @@ function sanitize(b, cur = {}) {
   if (b.kind !== undefined) out.kind = ['master', 'client', 'scout', 'custom'].includes(b.kind) ? b.kind : 'custom';
   if (b.brain !== undefined) out.brain = BRAINS.includes(b.brain) ? b.brain : 'auto';
   if (b.computer !== undefined) out.computer = COMPUTERS.includes(b.computer) ? b.computer : 'browser';
-  if (b.tools !== undefined) out.tools = { web: b.tools.web !== false, notebook: b.tools.notebook !== false, app: b.tools.app !== false, team: b.tools.team !== false, leads: !!b.tools.leads, clients: !!b.tools.clients };
-  if (b.routines !== undefined) out.routines = (Array.isArray(b.routines) ? b.routines : []).filter((r) => r && String(r.task || '').trim()).slice(0, 10).map((r, i) => ({ id: String(r.id || `r${Date.now().toString(36)}${i}`).slice(0, 24), task: clean(r.task, 2000).trim(), every: ['hour', 'day', 'weekday', 'week'].includes(r.every) ? r.every : 'day', at: /^\d{1,2}:\d{2}$/.test(r.at || '') ? r.at : '08:00', day: Math.max(0, Math.min(6, Number(r.day) || 1)), on: r.on !== false, lastRun: r.lastRun || null }));
+  if (b.tools !== undefined) out.tools = { web: b.tools.web !== false, notebook: b.tools.notebook !== false, app: b.tools.app !== false, team: b.tools.team !== false, leads: !!b.tools.leads, clients: !!b.tools.clients, email: b.tools.email !== false, docs: b.tools.docs !== false, schedule: b.tools.schedule !== false };
+  if (b.routines !== undefined) out.routines = cleanRoutines(b.routines);
+  if (b.schedulesOn !== undefined) out.schedulesOn = b.schedulesOn !== false;
   if (b.autoBrowse !== undefined) out.autoBrowse = !!b.autoBrowse;
   if (b.autoRun !== undefined) out.autoRun = !!b.autoRun;
   if (b.maxSteps !== undefined) out.maxSteps = Math.max(3, Math.min(30, Number(b.maxSteps) || 12));
@@ -289,21 +293,67 @@ async function ask(nameOrId, text, actor = 'hal') {
  * yesterday in NY and CT". Checked every minute by the scheduler; a routine runs only while the app is open, never
  * twice for the same time, and skips while the bot is still busy.
  */
+/**
+ * Scheduled tasks: every N minutes / every N hours (from a start time), every day / weekday / week at a time, or at
+ * several set times each day (`times`). `on` per task; the bot's Auto-run switch (`schedulesOn`) and the all-bots
+ * switch (`bots.autoRun`) pause them all without touching the bot itself (you can still chat with it).
+ */
+const EVERY = ['minutes', 'hours', 'hour', 'day', 'weekday', 'week', 'times'];
+const HHMM = /^([01]?\d|2[0-3]):[0-5]\d$/;
+function cleanRoutines(list) {
+  return (Array.isArray(list) ? list : []).filter((r) => r && String(r.task || '').trim()).slice(0, 20).map((r, i) => {
+    const every = EVERY.includes(r.every) ? r.every : 'day';
+    return {
+      id: String(r.id || `r${Date.now().toString(36)}${i}`).slice(0, 24), task: clean(r.task, 2000).trim(), every,
+      at: HHMM.test(r.at || '') ? r.at : '08:00', day: Math.max(0, Math.min(6, Number(r.day ?? 1) || 0)),
+      ...(every === 'minutes' ? { minutes: Math.max(10, Math.min(1440, Math.round(Number(r.minutes) || 60))) } : {}),
+      ...(every === 'hours' ? { hours: Math.max(1, Math.min(24, Math.round(Number(r.hours) || 2))) } : {}),
+      ...(every === 'times' ? { times: [...new Set((Array.isArray(r.times) ? r.times : String(r.times || '').split(/[,\s]+/)).filter((x) => HHMM.test(x)))].sort().slice(0, 12) } : {}),
+      ...(Array.isArray(r.days) ? { days: r.days.map(Number).filter((d) => d >= 0 && d <= 6) } : {}),
+      on: r.on !== false, lastRun: r.lastRun || null, by: r.by ? clean(r.by, 60) : undefined,
+    };
+  });
+}
+/** When this task last should have run, at or before `at` (null = not due on this day). */
+function dueAt(r, at) {
+  const due = new Date(at); due.setSeconds(0, 0);
+  const [hh, mm] = String(r.at || '08:00').split(':').map(Number);
+  const dow = at.getDay();
+  if (Array.isArray(r.days) && r.days.length && !r.days.includes(dow)) return null;
+  if (r.every === 'minutes' || r.every === 'hours') {
+    const step = (r.every === 'minutes' ? r.minutes || 60 : (r.hours || 2) * 60) * 60000;
+    const start = new Date(at); start.setHours(hh, mm, 0, 0); if (start > at) start.setDate(start.getDate() - 1);
+    return new Date(start.getTime() + Math.floor((at - start) / step) * step);
+  }
+  if (r.every === 'times') { const ts = (r.times || []).map((t) => { const d = new Date(due); const [h, m] = t.split(':').map(Number); d.setHours(h, m); return d; }).filter((d) => d <= at); return ts.length ? ts[ts.length - 1] : null; }
+  if (r.every === 'hour') due.setMinutes(mm); else due.setHours(hh, mm);
+  if (due > at) return null;
+  if (r.every === 'weekday' && (dow === 0 || dow === 6)) return null;
+  if (r.every === 'week' && dow !== Number(r.day ?? 1)) return null;
+  return due;
+}
+/** The next time a task will run (for the page and the bots' own answers). */
+function nextRun(r, from = new Date()) {
+  for (let m = 1; m <= 8 * 24 * 60; m += m < 180 ? 1 : 15) { const t = new Date(from.getTime() + m * 60000); const d = dueAt(r, t); if (d && d > from && (!r.lastRun || d > new Date(r.lastRun))) return d.toISOString(); }
+  return null;
+}
+function describe(r) {
+  const D = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const days = Array.isArray(r.days) && r.days.length ? ` on ${r.days.map((d) => D[d]).join(', ')}` : '';
+  return r.every === 'minutes' ? `every ${r.minutes} minutes${days}` : r.every === 'hours' ? `every ${r.hours} hours from ${r.at}${days}` : r.every === 'times' ? `each day at ${(r.times || []).join(', ')}${days}` : r.every === 'hour' ? `every hour at :${String(r.at).split(':')[1]}` : r.every === 'weekday' ? `weekdays at ${r.at}` : r.every === 'week' ? `${D[r.day ?? 1]}s at ${r.at}` : `every day at ${r.at}${days}`;
+}
+const autoRunOn = (b) => b.schedulesOn !== false && ctx.setting('bots.autoRun', true) !== false;
+
 function routinesTick(at = new Date()) {
   for (const b of ctx.store.all('bots')) {
-    const rs = b.routines || []; if (!rs.length) continue;
+    const rs = b.routines || []; if (!rs.length || !autoRunOn(b)) continue;
     let changed = false;
     const next = rs.map((r) => {
       if (!r.on || !r.task) return r;
-      const [hh, mm] = String(r.at || '08:00').split(':').map(Number);
-      const due = new Date(at); due.setSeconds(0, 0);
-      if (r.every === 'hour') due.setMinutes(mm); else due.setHours(hh, mm);
-      if (due > at) return r;
-      const dow = at.getDay();
-      if (r.every === 'weekday' && (dow === 0 || dow === 6)) return r;
-      if (r.every === 'week' && dow !== Number(r.day ?? 1)) return r;
+      const due = dueAt(r, at); if (!due) return r;
       if (r.lastRun && new Date(r.lastRun) >= due) return r;
-      if (at - due > (r.every === 'hour' ? 50 : 180) * 60000) return r; // missed while closed: wait for the next one
+      const slack = r.every === 'minutes' ? Math.min(r.minutes || 60, 30) : r.every === 'hours' || r.every === 'hour' ? 50 : r.every === 'times' ? 60 : 180;
+      if (at - due > slack * 60000) return r; // missed while closed: wait for the next one
       if (ctx.store.find(agent.RUNS, (x) => x.botId === b.id && ['working', 'waiting'].includes(x.status))) return r;
       try { send(b.id, `(Scheduled task) ${r.task}`, 'routine'); } catch { return r; }
       changed = true; return { ...r, lastRun: at.toISOString() };
@@ -312,4 +362,4 @@ function routinesTick(at = new Date()) {
   }
 }
 
-module.exports = { next, unqueue, queued, deliver, routinesTick, TEMPLATES, HOUSE, list, findBot, get, summary, create, update, remove, thread, send, decide, stop, clear, start, ask, BRAINS, COMPUTERS, STARTERS };
+module.exports = { cleanRoutines, dueAt, nextRun, describe, autoRunOn, next, unqueue, queued, deliver, routinesTick, TEMPLATES, HOUSE, list, findBot, get, summary, create, update, remove, thread, send, decide, stop, clear, start, ask, BRAINS, COMPUTERS, STARTERS };

@@ -971,6 +971,12 @@ queue.register('video.reverse', {
 queue.register('setup.ollama', { title: () => 'Turn on Ollama', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setup(h) });
 queue.register('setup.vision', { title: () => 'Download free video vision (Llama vision)', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/ollama').setupVision(h) });
 // The bots' own computer (server/bots/computer.js): build its Linux image once, or install Docker Desktop on Windows.
+// Documents (server/docs): write with the AI, revise from a note, or just draw a finished spec to PDF + Word.
+queue.register('docs.write', { title: () => 'Write a document', maxAttempts: 2, run: (job, h) => require('../docs/write').runWrite(job, h) });
+queue.register('docs.revise', { title: () => 'Revise a document', maxAttempts: 2, run: (job, h) => require('../docs/write').runRevise(job, h) });
+queue.register('docs.render', { title: () => 'Make a document', maxAttempts: 2, run: async (job, h) => { const d = await require('../docs').render(job.payload.id, h); return { id: d.id, pages: d.pages, files: d.files }; } });
+// Call lists (server/outreach/calllist.js): pick by what the founders want, check every number and hook on official pages.
+queue.register('calllist.build', { title: () => 'Build a call list', maxAttempts: 2, run: (job, h) => require('../outreach/calllist').runBuild(job, h) });
 queue.register('bots.computer.setup', { title: () => "Set up the bots' computer", maxAttempts: 1, run: (job, h) => require('../bots/computer').setup(h) });
 queue.register('bots.computer.install', { title: () => 'Install Docker Desktop', maxAttempts: 1, run: (job, h) => require('../bots/computer').installDocker(h) });
 queue.register('setup.ffmpeg', { title: () => 'Install FFmpeg and yt-dlp', maxAttempts: 1, vital: true, run: (job, h) => require('../setup/production').installFfmpeg(h) });

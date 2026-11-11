@@ -17,7 +17,7 @@ const OUTWARD = [
   /\/outreach\/[^/]+\/start$/, /\/autopilot-now$/, /\/hal\/confirm$/, /\/grokbots\/task$/, /\/mailbox\/send$/, /\/(un|re)schedule$/,
   /\/premiere$/, /^\/api\/(secrets|users|restore|mode|settings|command)$/, /^\/api\/agent\/command$/, /\/system\/restart$/,
   /\/credentials$/, /\/youtube\/connect$/, /\/phone\/(un)?link$/, /\/voice\/(clone|callbacks)$/, /\/agentnet\/agents\/[^/]+\/(key|token|login)$/,
-  /\/agentnet\/approvals\/[^/]+\/decide$/, /\/agentnet\/pause$/, /\/bots\/computer\/install$/,
+  /\/agentnet\/approvals\/[^/]+\/decide$/, /\/agentnet\/pause$/, /\/bots\/computer\/install$/, /\/bots\/[^/]+\/screen$/, /\/bots\/[^/]+\/computer\/run$/,
 ];
 function kindOf(method, pattern) {
   if (method === 'GET') return 'read';
