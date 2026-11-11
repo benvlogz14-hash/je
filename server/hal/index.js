@@ -280,7 +280,7 @@ function notebook(low, text, actor) {
     const hrs = /\bweek\b/.test(low) ? 168 : 24; const g = memory.digest(hrs);
     return { text: g ? `In the last ${hrs === 24 ? 'day' : 'week'}, ${g.count} new note${g.count === 1 ? '' : 's'}:\n${g.text}` : 'Nothing new in my notebook yet. It fills as scouts, leads, replies, ads and clip decisions happen.' };
   }
-  m = /\bwhat (?:do|else do) you (?:know|remember|have)(?: (?:about|on))?\s+(.{2,}?)\??$/.exec(low) || /\b(?:show|open) (?:me )?your (?:notebook|memory|notes)(?: (?:on|about) (.+))?/.exec(low);
+  m = /\bwhat (?:do|else do) you (?:know|remember|have)(?: (?:about|on))?\s+(.{2,}?)\??$/.exec(low) || /\bwhat(?:'s| is) in your (?:notebook|memory|notes)(?: (?:about|on|for))?\s*(.*?)\??$/.exec(low) || /\b(?:show|open) (?:me )?your (?:notebook|memory|notes)(?: (?:on|about) (.+))?/.exec(low);
   if (m) {
     const q = (m[1] || '').replace(/^(?:the|our)\s+/, '').trim(); const p = q ? nameIn(q) : null;
     const notes = q ? memory.recall(q, { limit: 12, about: p?.name || q }) : memory.list({ limit: 12 });
@@ -314,6 +314,7 @@ function arcade(low) {
 /** One message from Ryan or Ben. Returns { text, by?, confirm?, navigate?, card?, draft? }. */
 /** "ask Scout to find ...", "have the Builder make ...": hand the job to a bot on the Bots page and bring its answer back. */
 async function toBot(low, t, actor) {
+  if (String(actor || '').startsWith('bot:')) return null; // a bot asked HAL: no handing it on to another bot (no loops)
   const m = /^(?:can you |please )?(?:ask|tell|have|get|send)\s+(?:the\s+)?(.+?)\s+(?:bot\s+)?(?:to\s+|for\s+|about\s+|:\s*)([\s\S]{4,})$/i.exec(t.replace(/^\s*(?:hey\s+)?hal[,\s]+/i, ''));
   if (!m) return null;
   let bots; try { bots = require('../bots'); } catch { return null; }

@@ -29,7 +29,7 @@ const IN_APP = `HOW THIS WORKS INSIDE EUCLIDEAN (the app replaced Grok Bot; you 
 - The leads board: lead_lookup before researching anyone; propose_leads to add confirmed people (they wait for a founder's OK); draft_outreach runs the outreach guide for a lead (drafts only).
 - Live internet: DuckDuckGo is free and unlimited (research, web_search, read_page, news): use it first for quick facts and summaries. google_search (Google through Serper, about a tenth of a cent each, cached) is for a full inquiry when DuckDuckGo comes back thin. Never repeat a search you already did. Cite the link for every fact.
 - Videos and ads: find_videos lists a politician's public videos from Google's Videos tab (floor sessions, hearings, council meetings, interviews); make_ads starts the ad machine for leads on our board, hands-off (it finds and downloads their videos itself, cuts the ads, makes the one-pager and drafts the email in Approvals).
-- Other bots: ask_bot hands them a piece of work. The notebook (notebook_recall / notebook_learn) is what Euclidean has learned.
+- Other bots: ask_bot hands them a piece of work. HAL: ask_hal talks to him in his chat (news watch, calendar, commands, the outreach kit). Claude: ask_claude asks the founders' Claude; if it isn't open, the answer comes back to your chat later and you carry on. The notebook (notebook_recall / notebook_learn) is what Euclidean has learned.
 - Nothing you do sends, posts or schedules. Messages are drafts for Ben.`;
 // Each starter bot's own job comes from its GrokBot master prompt (server/bots/seed/*.md), the part before the data.
 function promptRole(file) {
@@ -174,13 +174,24 @@ function thread(botId, limit = 120) {
 }
 
 /** The person writes to a bot: the message goes in the thread and the bot starts working on it. */
-function send(botId, text, actor = 'user') {
+/**
+ * Someone answered a bot's question (Claude through the inbox): their answer shows in the bot's chat, and when the bot
+ * isn't busy it picks the job back up with that answer. Returns the run, or null when it only left the message.
+ */
+function deliver(botId, question, answer, from = 'Claude') {
+  const bot = get(botId); if (!bot) return null;
+  const busy = ctx.store.find(agent.RUNS, (r) => r.botId === botId && ['working', 'waiting'].includes(r.status));
+  if (busy) { ctx.store.insert('botMessages', { botId, role: 'claude', from, text: String(answer).slice(0, 8000), at: now() }); events.publish('bots', { botId }); return null; }
+  return send(botId, `${from} answered your question "${String(question).slice(0, 400)}":\n${String(answer).slice(0, 6000)}\n\nCarry on with the job that needed this, then answer.`, 'claude', { role: 'claude', shown: String(answer).slice(0, 8000), from });
+}
+
+function send(botId, text, actor = 'user', { role = 'you', shown = null, from = null } = {}) {
   const bot = get(botId); if (!bot) throw new Error('No such bot.');
   const t = String(text || '').trim(); if (!t) throw new Error('Write something first.');
   const busy = ctx.store.find(agent.RUNS, (r) => r.botId === botId && ['working', 'waiting'].includes(r.status));
   if (busy) throw new Error(`${bot.name} is still working on your last message. Wait for it, or press Stop.`);
   const run = ctx.store.insert(agent.RUNS, { botId, question: t.slice(0, 8000), status: 'working', steps: [], by: actor, startedAt: now() });
-  ctx.store.insert('botMessages', { botId, role: 'you', text: t.slice(0, 8000), runId: run.id, at: now(), by: actor });
+  ctx.store.insert('botMessages', { botId, role, text: (shown ?? t).slice(0, 8000), runId: run.id, at: now(), by: actor, ...(from ? { from } : {}) });
   audit.log(actor, 'bot.asked', { botId, bot: bot.name, text: t.slice(0, 120) });
   prune(botId);
   setImmediate(() => agent.drive(run.id).catch(() => {}));
@@ -271,4 +282,4 @@ function routinesTick(at = new Date()) {
   }
 }
 
-module.exports = { routinesTick, TEMPLATES, HOUSE, list, findBot, get, summary, create, update, remove, thread, send, decide, stop, clear, start, ask, BRAINS, COMPUTERS, STARTERS };
+module.exports = { deliver, routinesTick, TEMPLATES, HOUSE, list, findBot, get, summary, create, update, remove, thread, send, decide, stop, clear, start, ask, BRAINS, COMPUTERS, STARTERS };

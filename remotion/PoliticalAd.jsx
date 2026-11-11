@@ -23,7 +23,7 @@ const FALLBACK = {
 };
 const schemeOf = (look, bg) => look.sections[SEC[bg] || 'a'] || look.sections.a;
 const MOTION = {
-  snappy: { enter: { damping: 15, stiffness: 120 }, word: { damping: 14, stiffness: 210 }, pop: { damping: 12, stiffness: 260 }, rot: 1 },
+  snappy: { enter: { damping: 11, stiffness: 130 }, word: { damping: 10, stiffness: 220 }, pop: { damping: 8, stiffness: 260 }, rot: 1 }, // springy: overshoots and settles (Ryan: more bounce)
   smooth: { enter: { damping: 20, stiffness: 110 }, word: { damping: 20, stiffness: 150 }, pop: { damping: 18, stiffness: 200 }, rot: 0.5 },
   calm: { enter: { damping: 28, stiffness: 80 }, word: { damping: 28, stiffness: 100 }, pop: { damping: 26, stiffness: 140 }, rot: 0 },
 };
@@ -415,6 +415,88 @@ function Badge({ L, look, fps }) {
   );
 }
 
+// ------------------------------------------------------------------ story graphics (Nov 9: more graphics, more bounce)
+
+/** Simple icon glyphs drawn in code (100x100). */
+function Glyph({ k, c }) {
+  const g = {
+    health: <path d="M50 82 L18 50 Q8 38 18 26 Q30 14 44 24 L50 30 L56 24 Q70 14 82 26 Q92 38 82 50 Z" fill={c} />,
+    school: <g fill={c}><path d="M50 30 Q38 18 26 28 Q12 42 22 64 Q32 86 50 78 Q68 86 78 64 Q88 42 74 28 Q62 18 50 30 Z" /><path d="M50 30 Q52 18 62 12" stroke={c} strokeWidth="5" fill="none" /></g>,
+    house: <g fill={c}><path d="M14 50 L50 18 L86 50 L78 50 L78 84 L22 84 L22 50 Z" /><rect x="42" y="60" width="16" height="24" fill="#fff" /></g>,
+    money: <g><circle cx="50" cy="50" r="34" fill={c} /><text x="50" y="66" textAnchor="middle" fontSize="46" fontFamily="Arial Black, Arial" fill="#fff">$</text></g>,
+    work: <g fill={c}><rect x="14" y="34" width="72" height="48" rx="6" /><path d="M36 34 V24 H64 V34" stroke={c} strokeWidth="7" fill="none" /><rect x="14" y="52" width="72" height="5" fill="#fff" /></g>,
+    shield: <path d="M50 12 L84 24 Q84 66 50 88 Q16 66 16 24 Z" fill={c} />,
+    leaf: <g><path d="M20 80 Q20 24 82 18 Q84 74 28 80 Z" fill={c} /><path d="M24 76 L64 36" stroke="#fff" strokeWidth="4" /></g>,
+    bus: <g fill={c}><rect x="20" y="16" width="60" height="58" rx="10" /><rect x="28" y="26" width="44" height="22" fill="#fff" /><circle cx="32" cy="80" r="7" /><circle cx="68" cy="80" r="7" /></g>,
+    scales: <g stroke={c} strokeWidth="6" fill="none"><path d="M50 16 V82 M28 82 H72 M18 30 H82" /><path d="M18 30 L8 56 H28 Z M82 30 L72 56 H92 Z" fill={c} /></g>,
+    people: <g fill={c}><circle cx="34" cy="34" r="12" /><circle cx="66" cy="34" r="12" /><path d="M12 80 Q14 52 34 52 Q54 52 56 80 Z" /><path d="M44 80 Q46 52 66 52 Q86 52 88 80 Z" /></g>,
+    science: <g stroke={c} strokeWidth="7" fill="none" strokeLinecap="round"><path d="M34 14 Q66 32 34 50 Q2 68 34 86" /><path d="M66 14 Q34 32 66 50 Q98 68 66 86" /><path d="M38 26 H62 M38 74 H62 M44 50 H56" /></g>,
+    star: <path d="M50 10 L61 38 L91 39 L67 58 L76 88 L50 70 L24 88 L33 58 L9 39 L39 38 Z" fill={c} />,
+    capitol: <g fill={c}><rect x="47.5" y="14" width="5" height="9" /><path d="M30 46 Q30 24 50 23 Q70 24 70 46 Z" /><rect x="26" y="46" width="48" height="5" />{[30, 38, 46, 54, 62, 70].map((x) => <rect key={x} x={x - 2} y="53" width="4" height="18" />)}<rect x="22" y="72" width="56" height="5" /><rect x="18" y="78" width="64" height="6" /></g>,
+  }[k];
+  return <svg viewBox="0 0 100 100" width="100%" height="100%">{g || null}</svg>;
+}
+
+/** Icon stickers on the card's corners for what the line is about: pop in with a bounce, then bob. */
+function Icons({ icons, L, look, fps, seg }) {
+  const frame = useCurrentFrame();
+  const d = Math.round(L.badge * (L.v ? 1.05 : 0.9));
+  const spots = [{ x: L.card.x + L.card.w - d * 0.7, y: L.card.y - d * 0.45 }, { x: L.card.x - d * 0.25, y: L.card.y - d * 0.4 }];
+  const ring = [look.sections.c?.bg || look.accent, look.sections.b?.bg || look.accent];
+  return <>{icons.slice(0, 2).map((k, i) => {
+    const s = sp(frame, fps, Math.round((0.35 + i * 0.25) * fps), { damping: 7, stiffness: 190, mass: 0.7 });
+    const bob = Math.sin((frame / fps) * 2.4 + i * 1.7) * d * 0.05;
+    const col = ring[i % 2] === '#ffffff' ? look.dark : ring[i % 2];
+    return (
+      <div key={k} style={{ position: 'absolute', left: spots[i].x, top: spots[i].y + bob, width: d, height: d, transform: `scale(${s}) rotate(${interpolate(s, [0, 1], [-40, i ? 8 : -8])}deg)`, borderRadius: '50%', background: '#fff', boxShadow: `0 ${d * 0.06}px 0 ${look.dark}`, border: `${Math.max(4, d * 0.06)}px solid ${col}`, padding: d * 0.18, boxSizing: 'border-box' }}>
+        <Glyph k={k} c={col} />
+      </div>
+    );
+  })}</>;
+}
+
+/** The line's graphic, under the footage card (or above the captions on full-screen looks): a credential card, a stat
+ *  badge, a quote's attribution, or a callout of their own words. Springs in with an overshoot. */
+function Tag({ tag, L, look, fps, seg }) {
+  const frame = useCurrentFrame();
+  const s = sp(frame, fps, Math.round(0.45 * fps), { damping: 8, stiffness: 180, mass: 0.8 });
+  const S = schemeOf(look, seg.bg); const v = L.v; const u = v ? 1.4 : 0.9;
+  const full = look.layout === 'full';
+  const plateBelow = seg.plate && !L.plate.inside && look.plate !== 'none';
+  const top = full ? Math.round(L.card.h * (v ? 0.66 : 0.6)) : L.card.y + L.card.h + (v ? 26 : 10) + (plateBelow ? Math.round(L.plate.size * (v ? 2.2 : 1.9)) : 0);
+  const left = full ? (v ? 64 : 90) : L.card.x + (v ? 30 : 40);
+  const wrap = { position: 'absolute', left, top, transformOrigin: '0% 50%', transform: `rotate(${interpolate(s, [0, 1], [-10, look.card.tilt ? -2 : 0])}deg) scale(${s})` };
+  const dark = look.dark; const light = look.light; const key = S.key; const keyText = S.keyText;
+  if (tag.kind === 'credential') return (
+    <div style={{ ...wrap, display: 'flex', alignItems: 'center', gap: 18 * u, background: light, borderRadius: 14, padding: `${12 * u}px ${26 * u}px ${12 * u}px ${12 * u}px`, boxShadow: `0 ${8 * u}px 0 ${dark}` }}>
+      <div style={{ width: 70 * u, height: 70 * u, borderRadius: '50%', background: key, padding: 12 * u, boxSizing: 'border-box' }}><Glyph k="school" c={keyText} /></div>
+      <div>
+        <div style={{ fontFamily: look.fonts.head, fontSize: 46 * u, lineHeight: 1, color: dark, textTransform: 'uppercase' }}>{tag.title}</div>
+        {tag.sub ? <div style={{ fontFamily: look.fonts.body, fontSize: 24 * u, color: look.sections.c?.bg || look.accent, textTransform: 'uppercase', marginTop: 4 }}>{tag.sub}</div> : null}
+      </div>
+    </div>
+  );
+  if (tag.kind === 'stat') return (
+    <div style={{ ...wrap, background: dark, border: `${5 * u}px solid ${light}`, borderRadius: 12, padding: `${8 * u}px ${28 * u}px ${10 * u}px`, textAlign: 'center', boxShadow: `0 ${8 * u}px 0 rgba(0,0,0,0.25)` }}>
+      {tag.label ? <div style={{ fontFamily: look.fonts.body, fontSize: 24 * u, color: look.accent, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{tag.label}</div> : null}
+      <div style={{ fontFamily: look.fonts.head, fontSize: 96 * u, lineHeight: 1, color: light }}>{tag.value}</div>
+    </div>
+  );
+  if (tag.kind === 'quote') return (
+    <div style={{ ...wrap, background: light, color: dark, fontFamily: look.fonts.body, fontWeight: 800, fontSize: 28 * u, textTransform: 'uppercase', letterSpacing: '0.03em', padding: `${10 * u}px ${24 * u}px`, borderRadius: 8, boxShadow: `0 ${6 * u}px 0 ${dark}` }}>— {tag.by}</div>
+  );
+  return (
+    <div style={{ ...wrap, background: key, color: keyText, fontFamily: look.fonts.head, fontSize: 40 * u, textTransform: 'uppercase', padding: `${4 * u}px ${20 * u}px`, borderRadius: 6, boxShadow: `0 ${6 * u}px 0 ${dark}` }}>{tag.text}</div>
+  );
+}
+
+/** A thin bar growing along the bottom through the ad (like the reference ads). */
+function Progress({ look, fps, total, until }) {
+  const frame = useCurrentFrame(); const { width: W, height: H } = useVideoConfig();
+  if (frame / fps >= until) return null;
+  return <div style={{ position: 'absolute', left: 0, bottom: 0, height: Math.round(H * 0.006), width: W * clamp(frame / fps / until, 0, 1), background: look.accent }} />;
+}
+
 function Ticker({ text, look, fps, until }) {
   const frame = useCurrentFrame(); const { width: W, height: H } = useVideoConfig();
   if (frame / fps >= until) return null;
@@ -511,10 +593,16 @@ function EndCard({ e, look, fps, L }) {
     <AbsoluteFill>{Array.from({ length: 7 }).map((_, i) => { const s = sp(frame, fps, 2 + i * 2, { damping: 20, stiffness: 140 }); return <div key={i} style={{ position: 'absolute', left: 0, top: i * (H * 0.035), width: W * s, height: H * 0.035, background: i % 2 ? look.light : look.accent }} />; })}</AbsoluteFill>
   );
   const nameColor = A.text;
+  const pd = Math.round(Math.min(W, H) * (L.v ? 0.44 : 0.34)); const ps = sp(frame, fps, 1, { damping: 8, stiffness: 150 });
   return (
     <AbsoluteFill>
       {deco}
       <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: big * 0.08, paddingTop: look.end === 'stripes' ? H * 0.12 : 0 }}>
+        {e.portrait ? (
+          <div style={{ width: pd, height: pd, borderRadius: '50%', border: `${Math.round(pd * 0.07)}px solid ${B.bg === A.bg ? look.accent : B.bg}`, overflow: 'hidden', transform: `scale(${ps})`, boxShadow: `0 ${pd * 0.04}px 0 ${look.dark}`, marginBottom: big * 0.1, background: look.dark }}>
+            <OffthreadVideo src={e.portrait.src} muted startFrom={Math.round((e.portrait.from || 0) * fps)} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${Math.round((e.portrait.fx ?? 0.5) * 100)}% 30%`, filter: GRADE[look.grade] || 'none' }} />
+          </div>
+        ) : null}
         {e.cta ? <div style={{ fontFamily: look.fonts.head, fontSize: big * 0.42, color: A.keyText, background: A.key, padding: `0 ${big * 0.12}px`, borderRadius: look.card.radius ? 12 : 0, transform: `rotate(${-2 * M.rot}deg) scale(${at(0)})`, textTransform: up ? 'uppercase' : 'none' }}>{e.cta}</div> : null}
         <div style={{ fontFamily: look.fonts.head, fontSize: nameSize, color: nameColor, textTransform: up ? 'uppercase' : 'none', lineHeight: 0.98, textAlign: 'center', maxWidth: W * 0.9, transform: `translateY(${(1 - at(1)) * 80}px)`, opacity: clamp(at(1) * 1.5, 0, 1) }}>
           {look.end === 'split' ? <Outlined stroke={look.dark} width={10} color={nameColor}>{e.name}</Outlined> : e.name}
@@ -552,6 +640,8 @@ export const PoliticalAd = ({ spec }) => {
           </Card>
           {seg.pill && look.pill !== 'none' ? <Pill text={seg.pill} L={L} look={look} fps={fps} seg={seg} right={!L.v || !!seg.plate} /> : null}
           {seg.badge && look.badge ? <Badge L={L} look={look} fps={fps} /> : null}
+          {seg.icons?.length && seg.card?.kind === 'video' && look.layout !== 'full' && (i === 0 || segs[i - 1].icons?.join() !== seg.icons.join() || segs[i - 1].card?.kind !== 'video') ? <Icons icons={seg.icons} L={L} look={look} fps={fps} seg={seg} /> : null}
+          {seg.tag ? <Tag tag={seg.tag} L={L} look={look} fps={fps} seg={seg} /> : null}
         </Sequence>
       ))}
       {!capsInCard && now && !now.noCaptions ? <Captions words={spec.words} L={L} look={look} fps={fps} seg={now} offset={0} /> : null}
@@ -561,6 +651,7 @@ export const PoliticalAd = ({ spec }) => {
         </Sequence>
       ) : null)}
       {now ? <Headline seg={now} L={L} look={look} fps={fps} /> : null}
+      {!look.ticker ? <Progress look={look} fps={fps} total={spec.total} until={spec.end ? spec.end.at : spec.total} /> : null}
       {look.ticker && spec.ticker ? <Ticker text={spec.ticker} look={look} fps={fps} until={spec.end ? spec.end.at : spec.total} /> : null}
       <FlairOver segs={segs} look={look} L={L} fps={fps} spec={spec} />
       {spec.end ? (

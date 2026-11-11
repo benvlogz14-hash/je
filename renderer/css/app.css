@@ -653,6 +653,11 @@ h4 { font-weight: 750; letter-spacing: -0.01em; }
 .hal-ctx { font-size: var(--fs-xs); padding: 6px 12px; color: var(--ink-2); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hal-list { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .hal-notes > * { flex-shrink: 0; }
+.hal-msg.hal.claude .hal-bubble { background: #c98a0b; color: #ffffff; border: 1px solid #a8730a; text-shadow: 0 1px 1px rgba(0,0,0,0.25); font-weight: 500; } /* Claude: yellow with white text */
+.hal-msg.hal.claude .hal-bubble a { color: #fff7d6; }
+.hal-who { font-size: var(--fs-xs); color: var(--ink-2); margin: 0 4px 2px; font-weight: 600; }
+.hal-who.you { text-align: right; }
+html[data-night] .hal-msg.hal.claude .hal-bubble { background: #b57b06; color: #ffffff; border-color: #e0a526; }
 .hal-notes .hal-msg { width: 100%; }
 .hal-empty { margin: auto; text-align: center; color: var(--ink-2); font-size: var(--fs-sm); display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 10px 18px; }
 .hal-msg { display: flex; flex-direction: column; gap: 4px; max-width: 92%; }
@@ -865,6 +870,10 @@ button.bot-av { cursor: pointer; }
 @media (max-width: 1150px) { .bots-grid, .bots-grid.no-side { grid-template-columns: 210px minmax(0, 1fr); } .bots-side { display: none; } }
 @media (max-width: 760px) { .bots-grid, .bots-grid.no-side { grid-template-columns: 1fr; height: auto; } .bots-list { flex-direction: row; overflow-x: auto; } .bot-row { width: auto; flex: none; } .bots-chat { height: 70vh; } }
 @media (max-width: 760px) { .bots-head { flex-wrap: wrap; } .bots-head .badge { display: none; } .bot-run { max-width: 100%; } .bot-msg .bubble { max-width: 92%; } }
+
+.bot-msg.claude .bubble { background: var(--gold-soft); border: 1px solid var(--gold-line); }
+.hal-msg.bot { opacity: .92; }
+.hal-msg.bot .hal-who::before { content: '🤖 '; }
 
 /* ---------------------------------------------------------------- Data (/data) */
 .data-drop { border: 1.5px dashed var(--line-strong); transition: background var(--t-fast), border-color var(--t-fast); }

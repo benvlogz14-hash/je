@@ -133,14 +133,29 @@ r.get('/api/hal/status', async () => {
 r.post('/api/hal/brain', (req, b) => { const brain = b.brain === 'grok' ? 'grok' : 'local'; ctx.store.setSettings({ hal: { brain } }); return { brain }; });
 r.post('/api/hal/chat', async (req, b) => {
   const text = String(b.text || '').trim().slice(0, 4000); if (!text) throw new HttpError(400, 'Say something first.');
+  const claude = require('./hal/claude');
+  const fromClaude = String(req.headers['x-euclidean-via'] || '').startsWith('claude');
+  // "@claude ..." in HAL's panel goes to Claude (its reply lands in this chat), not to HAL.
+  const q = !fromClaude && claude.forClaude(text);
+  if (q) {
+    const r = await claude.ask(q, actorOf(req));
+    if (!r.text) return { text: '', id: r.posted, claude: true };
+    const m = ctx.store.insert('halMessages', { who: 'hal', text: r.text, by: 'HAL' }); events.publish('hal', { id: m.id });
+    return { text: r.text, id: m.id, claude: 'queued' };
+  }
   const history = ctx.store.all('halMessages').slice(-10);
-  ctx.store.insert('halMessages', { who: 'you', text, by: actorOf(req), context: b.context || null });
+  ctx.store.insert('halMessages', fromClaude ? { who: 'claude', text, by: 'Claude (the Claude app)' } : { who: 'you', text, by: actorOf(req), context: b.context || null });
+  claude.learnFromChat(text, fromClaude ? 'Claude' : (actorOf(req)[0] || 'R').toUpperCase() + actorOf(req).slice(1)).catch(() => {}); // HAL keeps what's worth keeping
   const res = await require('./hal').handle(text, { history, context: b.context || {}, actor: actorOf(req) });
   const saved = ctx.store.insert('halMessages', { who: 'hal', text: res.text || '', by: res.by || null, draft: res.draft || null, gmail: res.gmail || null, confirm: res.confirm || null, navigate: res.navigate || null });
   const all = ctx.store.all('halMessages'); for (const m of all.slice(0, Math.max(0, all.length - HAL_KEEP))) ctx.store.remove('halMessages', m.id);
   events.publish('hal', { id: saved.id });
   return { ...res, id: saved.id };
 });
+// Claude's inbox in HAL's chat: Ryan's "@claude ..." messages not answered yet, and the recent chat (for the Claude app).
+r.get('/api/hal/claude-inbox', () => require('./hal/claude').inbox());
+// Claude answers in HAL's chat: { text, replyTo }. Shown as Claude; HAL's notebook keeps what's worth keeping.
+r.post('/api/hal/claude-reply', (req, b) => require('./hal/claude').reply(b.text, b.replyTo || null, b.asked || null));
 r.post('/api/hal/confirm', async (req, b) => {
   const res = await require('./hal').confirm(String(b.id || ''), actorOf(req));
   // the button is used up: the message no longer offers it
@@ -436,7 +451,7 @@ r.get('/api/assets/:id/detail', (req, b, p) => {
   const clips = ctx.store.all('clips', (c) => c.assetId === a.id).map((c) => ({ id: c.id, title: c.title, status: c.status, start: c.start, end: c.end, keep: c.keep || null, currentVersion: c.currentVersion, versions: (c.versions || []).map((v) => ({ duration: v.duration })) }));
   const done = (t) => jobs.some((j) => j.type === t && j.status === 'done');
   const steps = [['Import', a.status !== 'importing' && !!a.info], ['Speech to text', !!a.transcript || done('transcribe')], ['Look through it', !!a.vision || done('analyze')], ['Find clips', clips.length > 0 || done('discover')], ['Make the shorts', clips.some((c) => !['draft', 'rendering', 'queued'].includes(c.status))]].map(([label, ok]) => ({ label, ok }));
-  return { asset: { id: a.id, name: a.name, status: a.status, error: a.error || null, info: a.info, source: a.source, createdAt: a.createdAt, thumb: !!a.thumb }, steps, jobs, clips };
+  return { asset: { id: a.id, name: a.name, status: a.status, error: a.error || null, info: a.info, source: a.source, createdAt: a.createdAt, thumb: !!a.thumb, styleMix: a.styleMix || null, notes: a.notes || null }, steps, jobs, clips };
 });
 // Stop everything running for a footage file (optionally delete it).
 r.post('/api/assets/:id/cancel', (req, b, p) => {
@@ -449,6 +464,24 @@ r.post('/api/assets/:id/cancel', (req, b, p) => {
 });
 r.post('/api/clients/:id/broll', (req, b, p) => { const c = must(ctx.store.get('clients', p.id)); const count = (a) => ctx.store.all('clips', (x) => x.assetId === a.id && x.kind === 'broll').length; const a = ctx.store.all('assets', (x) => x.clientId === c.id && ['ready', 'waiting'].includes(x.status) && x.info?.hasVideo !== false).sort((x, y) => count(x) - count(y) || String(y.createdAt).localeCompare(String(x.createdAt)))[0]; if (!a) throw new HttpError(400, `${c.name} has no finished footage yet. Upload a video first.`); return require('./automation/pipeline').createBrollClip(a); });
 r.post('/api/assets/:id/broll', (req, b, p) => { const a = must(ctx.store.get('assets', p.id)); if (!a.info?.hasVideo) throw new HttpError(400, 'This file has no picture to make a B-roll edit from.'); return require('./automation/pipeline').createBrollClip(a); });
+// This video's own plan: { styleMix: { documentary: 2, story: 1 }, notes } (empty mix = the client's). Used when its clips are made.
+function planOf(b) {
+  const styles = require('./video/styles').PRESETS; const out = {};
+  if (b.styleMix !== undefined) { const m = Object.fromEntries(Object.entries(b.styleMix || {}).map(([k, v]) => [k, Math.max(0, Math.min(10, Math.round(Number(v) || 0)))]).filter(([k, v]) => v > 0 && (styles[k] || k === 'custom'))); out.styleMix = Object.keys(m).length ? m : null; }
+  if (b.notes !== undefined) out.notes = String(b.notes || '').trim().slice(0, 2000) || null;
+  return out;
+}
+r.post('/api/assets/:id/plan', (req, b, p) => { must(ctx.store.get('assets', p.id)); const a = ctx.store.update('assets', p.id, planOf(b)); events.publish('assets', a); return a; });
+// The footage inbox (server/automation/inbox.js): a Google Drive / Dropbox / OneDrive folder; videos dropped into a
+// client's folder from the phone are imported to Production. GET = status; POST { folder, on, moveDone } (owner).
+r.get('/api/inbox', () => require('./automation/inbox').status());
+r.post('/api/inbox', (req, b) => {
+  const set = {}; if (b.folder !== undefined) { const f = String(b.folder || '').trim(); if (f) { try { fs.mkdirSync(f, { recursive: true }); } catch { throw new HttpError(400, `Euclidean can't make or use ${f}. Choose another folder.`); } } set.folder = f; }
+  if (b.on !== undefined) set.on = !!b.on; if (b.moveDone !== undefined) set.moveDone = !!b.moveDone;
+  ctx.store.setSettings({ inbox: set }); const ib = require('./automation/inbox'); ib.ensureFolders(); return ib.status();
+}, { roles: OWNER });
+// Look through the inbox now (instead of within the minute).
+r.post('/api/inbox/scan', async () => require('./automation/inbox').scan({ force: true }));
 r.post('/api/assets/:id/process', (req, b, p) => {
   const a = must(ctx.store.get('assets', p.id));
   // Still importing/transcribing/analysing: mark it started, so clips are made the moment it's ready.
@@ -457,6 +490,8 @@ r.post('/api/assets/:id/process', (req, b, p) => {
   if (!a.info || a.status === 'importing') { ctx.store.update('assets', a.id, { error: null }); return queue.enqueue('ingest.file', { assetId: a.id, autoProcess: true }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `ingest:${a.id}:${Date.now()}`, priority: 6 }); }
   if (a.info && !a.info.hasVideo) throw new HttpError(400, 'This is an audio-only file, so there is no picture to make shorts from. Upload the video file (.mp4) instead.');
   // "Make clips" (or More clips): from now on this footage doesn't wait; clip length, count and AI tips are read now.
+  // This video's own styles and notes can come along (the phone / the footage panel): saved on the footage first.
+  if (b.styleMix || b.notes != null) ctx.store.update('assets', a.id, planOf(b));
   ctx.store.update('assets', a.id, { error: null, started: true, exhausted: false, ...(a.status === 'waiting' ? { status: 'ready' } : {}) });
   if (!a.transcript && a.info?.hasAudio) return queue.enqueue('transcribe', { assetId: a.id, thenDiscover: true }, { clientId: a.clientId, actor: actorOf(req), dedupeKey: `transcribe:${a.id}` });
   // fresh: Re-clip footage → "best moments, made again" (the old clips' moments can be picked again; the old clips stay).
@@ -929,6 +964,19 @@ r.get('/api/political/looks/preview', async (req, res) => {
   catch (e) { return send(res, 503, { error: `Preview unavailable: ${String(e.message).slice(0, 160)}` }); }
 }, { stream: true });
 r.del('/api/political/looks/default', () => { ctx.store.setSettings({ political: { proLook: null } }); return { ok: true }; });
+// The ad's story (Ad machine → The story): { mode: 'auto' | 'topic' | 'brief', topicId, brief }. Saved on the lead; the
+// next Make the ads tells that story (only the lines are picked again when the same videos are ticked).
+r.post('/api/prospects/:id/story', (req, b, p) => {
+  const pr = must(ctx.store.get('prospects', p.id));
+  const mode = ['auto', 'topic', 'brief'].includes(b.mode) ? b.mode : 'auto';
+  let story = { mode: 'auto' };
+  if (mode === 'topic') { const t = (pr.pkg?.topics?.options || []).find((x) => x.id === b.topicId); if (!t) throw new HttpError(400, 'Find the 3 stories first, then pick one.'); story = { mode, topic: t }; }
+  if (mode === 'brief') { const brief = String(b.brief || '').trim().slice(0, 2000); if (brief.length < 8) throw new HttpError(400, 'Write a sentence or two about the story you want.'); story = { mode, brief }; }
+  ctx.store.update('prospects', pr.id, { story: { ...story, at: new Date().toISOString(), by: actorOf(req) } }); events.publish('prospects', { id: pr.id });
+  return { ok: true, story };
+});
+// Three story options from the candidate's own words (reads their footage first when needed). Job political.topics.
+r.post('/api/prospects/:id/topics', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); return queue.enqueue('political.topics', { prospectId: pr.id, name: pr.name }, { actor: actorOf(req), priority: 4, dedupeKey: `poltopics:${pr.id}` }); });
 r.post('/api/prospects/:id/look', (req, b, p) => {
   const pr = must(ctx.store.get('prospects', p.id));
   const looks = require('./political/looks');
@@ -1265,10 +1313,11 @@ function phoneUser(owner, create) {
 }
 r.get('/api/phone', async (req) => {
   const lanOn = !!ctx.setting('server.lan', false); const pub = String(ctx.setting('server.publicUrl', '') || '').replace(/\/$/, '');
-  const host = pub || (ctx.lanAddress ? `http://${ctx.lanAddress}:${ctx.port}` : null);
+  // Tailscale first (works at home and away), then this Wi-Fi's address. A public address set in Settings wins.
+  const host = pub || (ctx.tailscaleAddress ? `http://${ctx.tailscaleAddress}:${ctx.port}` : ctx.lanAddress ? `http://${ctx.lanAddress}:${ctx.port}` : null);
   const u = phoneUser(req.user, false);
   const url = host && u ? `${host}/?token=${u.token}` : null;
-  return { lanOn, lanActive: !!ctx.lanAddress, publicUrl: pub || null, host, url, qr: url ? await require('qrcode').toString(url, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }) : null, canRestart: !!ctx.relaunch };
+  return { lanOn, lanActive: !!ctx.lanAddress, tailscale: ctx.tailscaleAddress || null, publicUrl: pub || null, host, url, qr: url ? await require('qrcode').toString(url, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }) : null, canRestart: !!ctx.relaunch };
 }, { roles: OWNER });
 r.post('/api/phone/link', (req) => { const u = phoneUser(req.user, true); audit.log(actorOf(req), 'phone.linked', { userId: u.id }); return { ok: true }; }, { roles: OWNER });
 r.post('/api/phone/unlink', (req) => { const u = phoneUser(req.user, false); if (u) ctx.store.remove('users', u.id); audit.log(actorOf(req), 'phone.unlinked', {}); return { ok: true }; }, { roles: OWNER });
@@ -1433,6 +1482,30 @@ r.put('/api/projects/:id', (req, b, p) => {
   return ctx.store.update('projects', p.id, { ...(b.data ? { data: b.data } : {}), ...(b.name ? { name: String(b.name).slice(0, 120) } : {}) });
 });
 r.del('/api/projects/:id', (req, b, p) => ({ ok: ctx.store.remove('projects', p.id) }));
+// The compression engine (server/video/convert.js): the formats it can make.
+r.get('/api/convert/formats', () => require('./video/convert').formats());
+// Convert or compress a file already on this PC (a path, a footage id, a clip's latest render, or a Studio project's last export):
+// { path | assetId | clipId | projectId, format, quality: high|balanced|small, targetMB (e.g. 20), height, name, outDir, reveal }.
+r.post('/api/convert', (req, b) => {
+  let input = b.path ? path.resolve(String(b.path)) : null;
+  if (!input && b.assetId) input = must(ctx.store.get('assets', b.assetId), 'Footage not found').path;
+  if (!input && b.clipId) { const c = must(ctx.store.get('clips', b.clipId), 'Clip not found'); const v = c.versions?.[(c.currentVersion || c.versions.length) - 1]; input = v?.path || v?.file; }
+  if (!input && b.projectId) { const pr = must(ctx.store.get('projects', b.projectId), 'Project not found'); input = (pr.exports || []).slice(-1)[0]?.path; }
+  if (!input || !fs.existsSync(input)) throw new HttpError(400, 'Pick a video first (or export the Studio project once).');
+  return queue.enqueue('video.convert', convertPayload(input, b), { actor: actorOf(req), title: `${b.targetMB ? `Compress under ${b.targetMB} MB` : 'Convert'}: ${path.basename(input)}` });
+});
+// The same for a file sent from a browser or phone (multipart). Fields: format, quality, targetMB, height, name.
+r.post('/api/convert/upload', async (req) => {
+  const { files, fields } = await receiveUpload(req, paths.tmp('convert-in'), { maxBytes: 8 * 1024 ** 3 });
+  if (!files.length) throw new HttpError(400, 'No file arrived. Try again.');
+  return queue.enqueue('video.convert', { ...convertPayload(files[0].path, fields), upload: true }, { actor: actorOf(req) });
+}, { raw: true });
+// Download a finished conversion (the browser and phone).
+r.get('/api/convert/:jobId/file', (req, res, p) => { const j = ctx.store.get('jobs', p.jobId); const f = j?.type === 'video.convert' ? j.result?.path : null; if (!f || !fs.existsSync(f)) return send(res, 404, { error: 'Not ready yet' }); res.setHeader('Content-Disposition', `attachment; filename="${path.basename(f).replace(/"/g, '')}"`); return serveFile(req, res, f); }, { stream: true });
+function convertPayload(input, b) {
+  const fmts = require('./video/convert').FORMATS;
+  return { input, format: fmts[b.format] ? b.format : 'mp4', quality: ['high', 'balanced', 'small'].includes(b.quality) ? b.quality : 'balanced', targetMB: Math.max(0, Math.min(4000, Number(b.targetMB) || 0)), height: Number(b.height) || 0, fps: Number(b.fps) || 0, name: b.name ? String(b.name).slice(0, 120) : null, outDir: b.outDir ? path.resolve(String(b.outDir)) : null, reveal: !!b.reveal };
+}
 r.get('/api/projects/:id/export-defaults', (req, b, p) => {
   const pr = must(ctx.store.get('projects', p.id));
   const folder = ctx.setting('studio.exportFolder', '') || path.join(require('os').homedir(), 'Videos', 'Euclidean');
@@ -1449,7 +1522,8 @@ r.post('/api/projects/:id/export', (req, b, p) => {
   if (b.fileName) fileName = path.basename(String(b.fileName)).replace(/[<>:"/\\|?*]+/g, '').replace(/\.mp4$/i, '').trim().slice(0, 120) || null;
   // A clip fixed by hand in Studio teaches the clip machine how this editor cuts (server/video/taste.js learnEdit).
   if (pr.clipId && pr.origSegs) { try { const c = ctx.store.get('clips', pr.clipId); const a = c && ctx.store.get('assets', c.assetId); const words = a ? require('./jobs/handlers').loadTranscript(a)?.words : null; if (words) require('./video/taste').learnEdit({ project: pr, clip: c, words }); } catch { /* learning never blocks an export */ } }
-  return queue.enqueue('studio.export', { projectId: pr.id, outDir, fileName, reveal: b.reveal !== false }, { clientId: pr.clientId, actor: actorOf(req), title: `Export ${pr.name}` });
+  const fmts = require('./video/convert').FORMATS; const format = fmts[b.format] ? b.format : 'mp4';
+  return queue.enqueue('studio.export', { projectId: pr.id, outDir, fileName, reveal: b.reveal !== false, format, quality: ['high', 'balanced', 'small'].includes(b.quality) ? b.quality : 'high', targetMB: Math.max(0, Math.min(4000, Number(b.targetMB) || 0)), height: [0, 2160, 1440, 1080, 720, 540, 480, 360].includes(Number(b.height)) ? Number(b.height) : 0 }, { clientId: pr.clientId, actor: actorOf(req), title: `Export ${pr.name}` });
 });
 r.get('/api/projects/:id/velo', (req, res, p) => { const pr = must(ctx.store.get('projects', p.id)); const f = path.join(paths.tmp('velo'), `${pr.id}.velo`); fs.writeFileSync(f, JSON.stringify(pr.data, null, 1)); return serveFile(req, res, f, { download: `${pr.name.replace(/[^\w\- ]/g, '')}.velo` }); }, { stream: true });
 r.post('/api/projects/:id/open-velo', (req, b, p) => {

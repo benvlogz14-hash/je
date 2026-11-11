@@ -112,6 +112,36 @@ const usableBites = (ft, list) => (list || []).filter((b) => ft?.clips?.[b.clip]
 /** The pro ads' look for this lead: its own (picked or described on the lead), else the default in Package settings. */
 function lookFor(p) { const own = p?.pkg?.proLook; const all = S('proLook', null); return { look: own?.look || all?.look || null, notes: own?.notes || all?.notes || '' }; }
 
+/** What the story machine may put on screen as a graphic: the office and the researched facts (each one sourced). */
+function factsFor(p) { const pkg = p.pkg || {}; return [pkg.profile?.office, ...(pkg.facts || []).filter((f) => !String(f.topic).startsWith('opponent:')).slice(0, 25).map((f) => f.text)].filter(Boolean).join(' | ').slice(0, 3000); }
+const storyKey = (p) => JSON.stringify([p.story?.mode || 'auto', p.story?.topic?.id || null, p.story?.topic?.title || null, p.story?.brief || null]);
+function sameFootage(p, ft) {
+  const ticked = (p.footageUploads || []).filter((u) => !u.off).map((u) => u.file).sort().join('|');
+  const used = (ft?.clips || []).map((c) => c.file).filter((f) => (p.footageUploads || []).some((u) => u.file === f)).sort().join('|');
+  return !ticked || ticked === used;
+}
+
+/** Three story options from the candidate's own words (Ad machine → The story → Find 3 stories). Reads the footage first
+ *  when it hasn't been read yet. Saved as pkg.topics. */
+async function findTopics(prospectId, h) {
+  let p = ctx.store.get('prospects', prospectId); if (!p) throw Object.assign(new Error('Prospect not found'), { permanent: true });
+  if (!p.pkg) save(p.id, () => ({ status: 'working' }));
+  const f = path.join(dirFor(p), 'footage', 'sentences.json');
+  if (!fs.existsSync(f) || !sameFootage(p, ctx.store.get('prospects', prospectId).pkg?.footage)) {
+    h.progress(0.05, 'Reading their footage first');
+    p = ctx.store.get('prospects', prospectId);
+    await stepFootage(p, { progress: (x, t) => h.progress(0.05 + 0.8 * Math.max(0, Math.min(1, x)), t) });
+  }
+  if (!fs.existsSync(f)) throw Object.assign(new Error('No speech found in their footage yet. Upload videos of them talking, then try again.'), { permanent: true });
+  h.progress(0.9, 'Finding three stories in what they say');
+  p = ctx.store.get('prospects', prospectId);
+  const saved = JSON.parse(fs.readFileSync(f, 'utf8'));
+  const r = await require('./footage').topics({ name: p.name, office: shortOffice(p.pkg?.profile?.office || p.office || ''), sentences: saved.sentences, facts: factsFor(p) });
+  save(p.id, () => ({ topics: { at: now(), options: r.options, by: r.by } }));
+  events.publish('prospects', { id: p.id });
+  return { topics: r.options.length };
+}
+
 async function stepFootage(p, h) {
   if (!footageStyle(p)) return { skip: true, note: 'Only used for the ad styles made from their own footage' };
   const pkg = p.pkg; const pr = pkg.profile || {};
@@ -122,6 +152,15 @@ async function stepFootage(p, h) {
   if (!ai.connected('openai') && !require('../setup/whisper').status().ready) {
     try { await require('../setup/whisper').install({ progress: (f, t) => h.progress(0.1 + f * 0.1, `Installing free speech-to-text (one time): ${t || ''}`) }); } catch { /* the step explains what's missing */ }
   }
+  // The story the founders chose on the Ad machine (auto, one of 3 topics, or their own brief). When only the story
+  // changed and the same videos are ticked, the lines are picked again from the saved transcripts in seconds.
+  const story = p.story || { mode: 'auto' }; const facts = factsFor(p);
+  const ft0 = pkg.footage; const sameVids = ft0?.clips?.length && sameFootage(p, ft0);
+  if (sameVids && ft0.storyKey !== storyKey(p) && fs.existsSync(path.join(dirFor(p), 'footage', 'sentences.json'))) {
+    h.progress(0.3, 'Picking the lines for the new story');
+    const b = await require('./footage').repick({ dir: dirFor(p), name: p.name, office: shortOffice(pr.office || ''), story, facts, notes: (pkg.notes || []).filter((n) => n.target !== 'email').map((n) => n.text).join(' | '), shortSec: Number(S('shortSeconds', 20)) || 20, longSec: Number(S('videoSeconds', 60)) || 60, themes: pkg.brief?.themes || [], contrast: !!S('contrastAds', false) });
+    if (b && (b.short || []).length >= 2) { save(p.id, (cur) => ({ footage: { ...cur.footage, bites: { short: b.short, long: b.long }, tagline: b.tagline, agent: b.agent, story: b.story, storyKey: storyKey(p) } })); return { note: `Story: ${story.mode === 'topic' ? story.topic?.title : story.mode === 'brief' ? 'your brief' : 'picked automatically'} · ${b.short.length} + ${b.long.length} lines` }; }
+  }
   // No uploads: look them up on Google's Videos tab first (Serper, one cached search; skipped without a key or over budget).
   let google = [];
   if (!uploads.length) {
@@ -131,11 +170,12 @@ async function stepFootage(p, h) {
     google = (ctx.store.get('prospects', p.id)?.footageFound || []).filter((v) => !v.off);
   }
   const r = await require('./footage').prepare({
-    google, uploads, name: p.name, office: shortOffice(pr.office || ''), socials: pr.socials || [], sites: pr.sites || [], links, dir: dirFor(p), themes: pkg.brief?.themes || [],
+    story, facts, google,
+    uploads, name: p.name, office: shortOffice(pr.office || ''), socials: pr.socials || [], sites: pr.sites || [], links, dir: dirFor(p), themes: pkg.brief?.themes || [],
     shortSec: Number(S('shortSeconds', 20)) || 20, longSec: Number(S('videoSeconds', 60)) || 60, contrast: !!S('contrastAds', false),
     notes: (pkg.notes || []).filter((n) => n.target !== 'email').map((n) => n.text).join(' | '), want: Number(S('footageClips', 4)) || 4, onStep: (x) => h.progress(0.3, x),
   });
-  save(p.id, () => ({ footage: r }));
+  save(p.id, () => ({ footage: { ...r, storyKey: storyKey(p) } }));
   if ((r.bites.short || []).length < 2) {
     // Footage was uploaded but couldn't be used: stop and say why, instead of quietly making the old graphics-only ads.
     if (uploads.length) throw Object.assign(new Error(`Couldn't get usable lines from the uploaded footage (${r.clips.length} video${r.clips.length === 1 ? '' : 's'} read, ${(r.bites.short || []).length} usable line${(r.bites.short || []).length === 1 ? '' : 's'}). ${r.errors.slice(-2).join(' · ').slice(0, 400) || 'No clear speech was found.'}`), { permanent: true });
@@ -620,7 +660,7 @@ async function restyle(prospectId, { preset = null, prompt = '', actor = 'user' 
   // read, e.g. every transcript failing, used to be reused for good, so each new look made no ads at all).
   const ft = p.pkg?.footage; const ticked = (p.footageUploads || []).filter((u) => !u.off).map((u) => u.file).sort().join('|');
   const usedUploads = (ft?.clips || []).map((c) => c.file).filter((f) => (p.footageUploads || []).some((u) => u.file === f)).sort().join('|');
-  const fresh = (ft?.clips || []).length && usableBites(ft, ft.bites?.short).length >= 2 && (!ticked || ticked === usedUploads);
+  const fresh = (ft?.clips || []).length && usableBites(ft, ft.bites?.short).length >= 2 && (!ticked || ticked === usedUploads) && ft.storyKey === storyKey(p);
   if (!p.pkg?.creative || !fresh) return run(prospectId, { from: p.pkg?.creative ? 'footage' : 'research', actor }, h);
   const steps = ['video_v', 'video_h', ...(S('longVideo', true) ? ['video_hl'] : []), ...(S('socialVideo', true) ? ['video_s'] : []), 'sheet'];
   for (let i = 0; i < steps.length; i++) {
@@ -644,4 +684,4 @@ function restore(prospectId, n, actor = 'user') {
   return { restored: v.n };
 }
 
-module.exports = { vetEmail, revise, restyle, lookFor, restore, STEPS, VIDEOS, run, dirFor, fallbackCreative, vetStoryboard, material, attachmentsFor, DEFAULT_PLAN };
+module.exports = { findTopics, storyKey, vetEmail, revise, restyle, lookFor, restore, STEPS, VIDEOS, run, dirFor, fallbackCreative, vetStoryboard, material, attachmentsFor, DEFAULT_PLAN };

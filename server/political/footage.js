@@ -183,7 +183,14 @@ function heuristicPick(list, name, targetSec) {
 }
 
 /** Choose whole sentences for the short and long ads, plus short on-screen issue titles. */
-async function pickBites({ name, office, sentences: list, clips, shortSec, longSec, themes = [], contrast = false, notes = '' }) {
+async function pickBites({ name, office, sentences: list, clips, shortSec, longSec, themes = [], contrast = false, notes = '', story = null, facts = '' }) {
+  // The story machine (default since Nov 9): beats, a theme, graphics per line. story.mode 'off' keeps the old picker.
+  if (!story || story.mode !== 'off') {
+    const pack2 = (arr) => arr.map((x) => ({ id: x.id, clip: x.clip, s: x.s, e: x.e, text: x.text, label: null, words: x.words, role: x.role, gfx: x.gfx || null, icons: x.icons || [] }));
+    const sh = await pickStory({ name, office, sentences: list, story: story || {}, notes, facts });
+    const lg = await pickStory({ name, office, sentences: list, story: story || {}, notes, facts, long: true });
+    if (sh.picks.length >= 2) return { short: pack2(sh.picks), long: pack2(lg.picks.length >= 2 ? lg.picks : sh.picks), tagline: sh.tagline || `${name} is *fighting for you*`, agent: sh.agent, story: { mode: story?.mode || 'auto', title: story?.topic?.title || null, brief: story?.brief || null } };
+  }
   const byId = new Map(list.map((x) => [x.id, x]));
   const shortTarget = Math.max(8, shortSec - 6); const longTarget = Math.max(20, longSec - 7);
   let short = []; let long = []; let labels = {}; let tagline = ''; let agent = 'basic';
@@ -202,6 +209,157 @@ async function pickBites({ name, office, sentences: list, clips, shortSec, longS
   const trim = (arr, max) => { const out = []; let t = 0; for (const x of arr) { if (out.length && t + (x.e - x.s) > max) break; out.push(x); t += x.e - x.s; } return out; };
   const pack = (arr, max) => trim(arr, max).map((x) => ({ id: x.id, clip: x.clip, s: x.s, e: x.e, text: x.text, label: labels[x.id] || null, words: x.words }));
   return { short: pack(short, shortTarget + 4), long: pack(long, longTarget + 6), tagline: tagline || `${name} is *fighting for you*`, agent };
+}
+
+// ------------------------------------------------------------------ the story (Nov 9, Ryan: "more of a narrative")
+/**
+ * The ads tell a story in beats, like the reference ads (Larinda Hooks, Anna Kelles): a HOOK (what's at stake), WHO
+ * (who they are), PROOF (what they did or are fighting for), PLACE (their district and the people in it), STORY (a
+ * moment or image), RALLY (the closing line), then the end card. 5-7 lines, each 2-7 s, about 26 s of talk.
+ * story = { mode: 'auto' | 'topic' | 'brief', topic: { title, pitch, ids }, brief: 'what we want, in our words' }.
+ */
+const ROLES = ['hook', 'who', 'proof', 'place', 'story', 'rally'];
+const ICONS = [
+  ['health', /\b(health|hospital|medic|doctor|nurse|care\b|insulin|mental)/i], ['school', /\b(school|teach|student|educat|kids|college|universit|child ?care|pre-?k)/i],
+  ['house', /\b(hous|rent|tenant|home|afford|evict|landlord)/i], ['money', /\b(tax|wealth|rich|billion|million|budget|cost|price|wage|money|dollar|\$)/i],
+  ['work', /\b(job|work|union|labor|worker|employ|business|small business)/i], ['shield', /\b(safe|safety|police|crime|gun|violence|protect)/i],
+  ['leaf', /\b(climate|environment|clean|green|energy|water|air|park)/i], ['bus', /\b(transit|subway|bus|train|road|traffic|commute|bridge)/i],
+  ['scales', /\b(right|rights|justice|equal|vote|voting|democra|freedom|civil)/i], ['people', /\b(family|families|neighbo|community|communities|people|together)/i],
+  ['science', /\b(scien|research|data|phd|epidemiolog|study)/i], ['star', /\b(veteran|serve|served|military|honor|history|legacy)/i],
+  ['capitol', /\b(albany|capitol|assembly|senate|legislat|bill|law|passed|vote[sd]? for|hartford)/i],
+];
+const iconsFor = (text) => ICONS.filter(([, rx]) => rx.test(text)).map(([k]) => k).slice(0, 2);
+const STORY_SEC = { short: 26, long: 52 };
+
+/** A long sentence cut to its strongest whole clause (start and end on a comma or sentence break), so no cut ever
+ *  lands mid-phrase. Returns the sentence itself when it's short enough, else a trimmed copy, else null. */
+function clauseTrim(x, maxSec = 7.2) {
+  if (x.e - x.s <= maxSec) return x;
+  const w = x.words; const brk = (i) => i < 0 || i === w.length - 1 || /[.!?,;:]["”']?$/.test(w[i].w) || (i + 1 < w.length && w[i + 1].s - w[i].e > 0.35);
+  let best = null;
+  for (let i = 0; i < w.length; i++) {
+    if (!brk(i - 1)) continue;
+    for (let j = i + 3; j < w.length; j++) {
+      if (!brk(j)) continue; const d = w[j].e - w[i].s; if (d > maxSec) break; if (d < 2.2) continue;
+      const content = w.slice(i, j + 1).filter((y) => y.w.replace(/[^a-z]/gi, '').length > 3).length;
+      const dangling = /^(and|but|so|or|that|which|because|then|who|where|it|this)$/i.test(w[i].w.replace(/[^a-z]/gi, ''));
+      const score = content + d * 0.4 + (j === w.length - 1 ? 1.5 : 0) + (i === 0 ? 3 : 0) - (dangling ? 8 : 0);
+      if (!best || score > best.score) best = { i, j, score };
+    }
+  }
+  if (!best) return null;
+  const words = w.slice(best.i, best.j + 1);
+  return { ...x, s: words[0].s, e: words[words.length - 1].e, words, text: words.map((y) => y.w).join(' ').replace(/\s+([,.!?])/g, '$1'), trimmed: true };
+}
+
+/** Code-only story (no AI): one line per beat, found by what each line says, in story order. */
+function heuristicStory(list, { name, office, targetSec, focus = '' }) {
+  const first = String(name).split(/\s+/)[0]; const last = String(name).split(/\s+/).slice(-1)[0];
+  const fw = String(focus).toLowerCase().split(/[^a-z]+/).filter((y) => y.length > 3);
+  const on = (x) => fw.length ? fw.filter((y) => x.text.toLowerCase().includes(y)).length : 0;
+  const tests = {
+    hook: (x) => (/\b(most people|they'?re|they are|trying to|not for you|under attack|attack|enough|crisis|right now|wealthiest|corporat)\b/i.test(x.text) ? 4 : 0) + (/\b(they|never|fight)\b/i.test(x.text) ? 1 : 0) + (/!/.test(x.text) ? 1 : 0) - (/\bsaid\b/i.test(x.text) ? 3 : 0),
+    who: (x) => (new RegExp(`\\bI(?:'m| am) (?:${first}|${last})|\\bI represent|\\bI(?:'ve| have) (?:served|been)|\\bmy (?:name|district)`, 'i').test(x.text) ? 6 : 0) + (/\b(I|my)\b/.test(x.text) ? 1 : 0),
+    proof: (x) => (/\b(passed|wrote|bill|law|fought|delivered|secured|won|led|built|carried|introduced|funding)\b/i.test(x.text) ? 4 : 0) + (/\d/.test(x.text) ? 2 : 0),
+    place: (x) => (/\b(district|community|neighbo|our streets|our town|our city|county|borough|here in|home)\b/i.test(x.text) ? 4 : 0) + (office && String(office).split(/\W+/).some((y) => y.length > 4 && x.text.includes(y)) ? 2 : 0),
+    story: (x) => (/\b(walked|grew up|remember|when I|years ago|my (?:mother|father|grand)|history|story|said)\b/i.test(x.text) ? 4 : 0) + (/\b(right|privilege|dream|believe)\b/i.test(x.text) ? 1 : 0),
+    rally: (x) => (/\b(we will|we'll|never stop|keep fighting|won't|together|we can|let's)\b/i.test(x.text) ? 4 : 0) + (/\bfor (the \d+|[A-Z][a-z]+,)/.test(x.text) ? 3 : 0) + (/\b(will|never|every)\b/i.test(x.text) ? 1 : 0),
+  };
+  const pool = list.map((x) => clauseTrim(x)).filter((x) => x && !/\?$/.test(x.text) && x.shot?.usable !== false && x.e - x.s >= 1.6);
+  const used = new Set(); const out = []; let total = 0;
+  for (const role of ROLES) {
+    const cand = pool.filter((x) => !used.has(x.id)).map((x) => ({ x, sc: tests[role](x) + on(x) * 2 })).filter((y) => y.sc >= 2).sort((a, b) => b.sc - a.sc)[0];
+    if (!cand || total + (cand.x.e - cand.x.s) > targetSec + 3) continue;
+    used.add(cand.x.id); out.push({ ...cand.x, role }); total += cand.x.e - cand.x.s;
+  }
+  for (const x of pool) { if (total >= targetSec * 0.8) break; if (used.has(x.id) || total + (x.e - x.s) > targetSec + 2) continue; used.add(x.id); out.splice(Math.max(1, out.length - 1), 0, { ...x, role: 'proof' }); total += x.e - x.s; }
+  return out;
+}
+
+/** Graphics code can prove from the words alone: a quote's speaker ("As Dr. King said"), a credential ("I'm a public
+ *  health scientist", "a PhD in ..."), a number with the word before it ("Since 2021", "4,000 dollars"). */
+function codeGfx(x) {
+  const t = x.text;
+  let m = t.match(/\b[Aa]s ((?:Dr\.?|President|Senator|Rev\.?|Reverend) [A-Z][a-z]+(?: [A-Z][a-z.]+)*|[A-Z][a-z]+ [A-Z][a-z]+) (?:once )?(?:said|says|put it|wrote)/);
+  if (m) return { kind: 'quote', by: m[1] };
+  m = t.match(/\b(?:PhD|Ph\.D\.?|doctorate|master'?s degree|law degree)(?: in ([a-z ]{4,40}?))?(?=[,.!]|$| and )/i);
+  if (m) return { kind: 'credential', title: m[0].split(/\s+in\s+/i)[0].replace(/^ph\.?d\.?$/i, 'PhD'), sub: m[1] ? m[1].trim() : '' };
+  m = t.match(/\b(?:I am|I'm|as) an? ((?:[a-z]+ ){0,3}(?:scientist|teacher|nurse|doctor|lawyer|veteran|mother|mom|father|dad|organizer|engineer|firefighter|officer|social worker|small business owner|union member))\b/i);
+  if (m) return { kind: 'credential', title: m[1].replace(/\b\w/g, (c) => c.toUpperCase()), sub: '' };
+  m = t.match(/\b(since|in|over|about|more than|nearly|almost|saves?(?: \w+)?)?\s*(\$?\d{1,3}(?:,\d{3})+|\$?\d+(?:\.\d+)?)\s*(%|percent|million|billion|thousand|dollars|families|people|homes|jobs|years)?/i);
+  if (m && (m[1] || m[3])) return { kind: 'stat', value: m[2] + (m[3] === '%' || /percent/i.test(m[3] || '') ? '%' : ''), label: [m[1] && !/^(in|saves?.*)$/i.test(m[1]) ? m[1] : '', m[3] && !/%|percent/i.test(m[3]) ? m[3] : ''].filter(Boolean).join(' · ').toLowerCase() };
+  return null;
+}
+
+/** Graphics a line earns, each one grounded: words said in that line, the office, or the research text. */
+function groundGfx(g, x, facts) {
+  if (!g || typeof g !== 'object') return null;
+  const said = `${x.text} ${facts}`.toLowerCase(); const inLine = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((y) => y.length > 2).every((y) => said.includes(y));
+  const nums = (t) => (String(t).match(/\d[\d,.]*/g) || []).every((n) => said.includes(n.replace(/,$/, '')));
+  if (g.kind === 'stat' && g.value && nums(g.value) && inLine(g.label)) return { kind: 'stat', value: String(g.value).slice(0, 12), label: String(g.label || '').slice(0, 40) };
+  if (g.kind === 'credential' && g.title && inLine(g.title) && nums(g.title)) return { kind: 'credential', title: String(g.title).slice(0, 34), sub: inLine(g.sub) ? String(g.sub || '').slice(0, 44) : '' };
+  if (g.kind === 'quote' && g.by && x.text.toLowerCase().includes(String(g.by).toLowerCase().split(/\s+/).slice(-1)[0])) return { kind: 'quote', by: String(g.by).slice(0, 40) };
+  if (g.kind === 'callout' && g.text) { const t = String(g.text).replace(/[—–]/g, ' ').trim(); const run = t.toLowerCase().replace(/[^a-z0-9' ]/g, '').split(/\s+/).join(' '); if (run.split(' ').length <= 6 && x.text.toLowerCase().replace(/[^a-z0-9' ]/g, '').includes(run)) return { kind: 'callout', text: t.slice(0, 40) }; }
+  return null;
+}
+
+/** The story picker: the AI builds the beats from the sentences (in the founders' brief or chosen topic when given), and
+ *  every pick is checked; without an AI the beats are found in code. Returns bites with role, graphics and icons. */
+async function pickStory({ name, office, sentences: list, story = {}, notes = '', facts = '', long = false }) {
+  const target = long ? STORY_SEC.long : STORY_SEC.short;
+  const byId = new Map(list.map((x) => [x.id, x]));
+  const focus = story.mode === 'topic' ? `${story.topic?.title || ''}. ${story.topic?.pitch || ''}` : story.mode === 'brief' ? String(story.brief || '') : '';
+  let picks = []; let agent = 'built-in story'; let tagline = '';
+  if (ai.anyConnected() && list.length) {
+    const lines = list.filter((x) => x.shot?.usable !== false).slice(0, 400).map((x) => `#${x.id} [${(x.e - x.s).toFixed(1)}s${x.shot ? `, ${x.shot.kind}` : ''}] ${x.text}`).join('\n').slice(0, 26000);
+    try {
+      const r = await ai.ask({ role: 'writing', json: true, maxTokens: 2200,
+        system: `You are the story editor of a 30-second political ad cut from a candidate's own speeches. Build a NARRATIVE in beats, in this order: hook (what's at stake, a line that grabs), who (who they are), proof (what they did or fight for), place (their district / the people they serve), story (a moment, image or bit of history; optional), rally (the closing line that lands the theme). Use 5 to 7 lines in total, about ${target} seconds of talk; each line 2 to 7 seconds; one idea per line; every line serves ONE theme so the ad feels like one story. Use only whole sentences the candidate ${name} says themselves, never an interviewer's, never questions. You may never change words.
+For each line you may add ONE graphic, only from that line's own words or the FACTS given: {"kind":"credential","title":"...","sub":"..."} (who they are: a job, degree or title), {"kind":"stat","value":"2021","label":"Serving since"} (a number they said or in the facts), {"kind":"quote","by":"Dr. Martin Luther King Jr."} (only when the line quotes someone named in it), {"kind":"callout","text":"up to 6 words copied from the line"}. Graphics on most lines, but never invented.
+Return JSON {"theme":"the one idea, 3-6 words","lines":[{"id":12,"role":"hook","gfx":null}, ...],"tagline":"a short opening title in their spirit, 3-6 words, 1-2 words in *stars*"}`,
+        prompt: `CANDIDATE: ${name}${office ? `, ${office}` : ''}\nFACTS (usable for graphics): ${String(facts || '').slice(0, 1500) || 'none'}\n${focus ? `THE STORY THE FOUNDERS WANT: ${focus}\n` : 'Pick the strongest story the footage can tell.\n'}${notes ? `FOUNDER NOTES: ${notes}\n` : ''}\nSENTENCES\n${lines}` });
+      const j = r.json || {}; agent = `${r.provider}:${r.model} story`;
+      for (const l of [].concat(j.lines || [])) {
+        const x0 = byId.get(Number(l.id)); if (!x0 || picks.some((y) => y.id === x0.id) || /\?$/.test(x0.text)) continue;
+        const x = clauseTrim(x0); if (!x) continue;
+        picks.push({ ...x, role: ROLES.includes(l.role) ? l.role : 'proof', gfx: groundGfx(l.gfx, x, `${office} ${facts}`) });
+      }
+      tagline = String(j.tagline || '').replace(/[—–]/g, '-').replace(/\d+/g, '').slice(0, 60);
+    } catch { picks = []; }
+  }
+  if (picks.length < 3) { picks = heuristicStory(list, { name, office, targetSec: target, focus }); agent = 'built-in story'; }
+  // Keep it tight: drop lines past the target (never the hook or the rally).
+  let total = picks.reduce((a, x) => a + (x.e - x.s), 0);
+  while (total > target + 5 && picks.length > 4) { const k = picks.findIndex((x, i) => i > 0 && i < picks.length - 1 && x.role !== 'who'); if (k < 0) break; total -= picks[k].e - picks[k].s; picks.splice(k, 1); }
+  // Code adds what it can prove: the office as a credential on the WHO line when nothing else is there; a number said in a proof line as a stat.
+  for (const x of picks) {
+    if (!x.gfx) x.gfx = codeGfx(x);
+    x.icons = iconsFor(x.text);
+  }
+  return { picks, agent, tagline };
+}
+
+/** Three story options from what the candidate actually says (Ryan: "3 topic options"), each with the lines that carry it. */
+async function topics({ name, office, sentences: list, facts = '' }) {
+  const usable = list.filter((x) => x.shot?.usable !== false && !/\?$/.test(x.text));
+  if (ai.anyConnected() && usable.length) {
+    try {
+      const lines = usable.slice(0, 400).map((x) => `#${x.id} ${x.text}`).join('\n').slice(0, 22000);
+      const r = await ai.ask({ role: 'writing', json: true, maxTokens: 900, system: 'You find the three strongest, clearly different stories a 30-second political ad could tell from a candidate\'s own words. Only stories the sentences can actually carry (at least 4 sentences each).', prompt: `CANDIDATE: ${name}${office ? `, ${office}` : ''}\nFACTS: ${String(facts).slice(0, 800)}\nSENTENCES\n${lines}\n\nReturn JSON {"topics":[{"title":"3-6 words","pitch":"one sentence: the arc of the ad","ids":[sentence ids that carry it]}]} with exactly 3 topics.` });
+      const out = [].concat(r.json?.topics || []).map((t, i) => ({ id: `t${i + 1}`, title: String(t.title || '').slice(0, 60), pitch: String(t.pitch || '').slice(0, 220), ids: [].concat(t.ids || []).map(Number).filter((n) => usable.some((x) => x.id === n)).slice(0, 12) })).filter((t) => t.title && t.ids.length >= 3).slice(0, 3);
+      if (out.length >= 2) return { options: out, by: `${r.provider}:${r.model}` };
+    } catch { /* the code version below */ }
+  }
+  const THEMES = [['Health care for everyone', 'health'], ['Schools and our kids', 'school'], ['Homes people can afford', 'house'], ['Make the wealthy pay their share', 'money'], ['Good jobs, strong unions', 'work'], ['Safe streets', 'shield'], ['Clean air and water', 'leaf'], ['Getting around', 'bus'], ['Rights under attack', 'scales'], ['For our community', 'people'], ['Our history', 'star'], ['Results from Albany', 'capitol']];
+  const counts = THEMES.map(([title, k]) => ({ title, k, ids: usable.filter((x) => iconsFor(x.text).includes(k)).map((x) => x.id) })).filter((t) => t.ids.length >= 2).sort((a, b) => b.ids.length - a.ids.length).slice(0, 3);
+  return { options: counts.map((t, i) => ({ id: `t${i + 1}`, title: t.title, pitch: `${name} on ${t.title.toLowerCase()}: ${t.ids.length} lines in their footage.`, ids: t.ids.slice(0, 12) })), by: 'built-in' };
+}
+
+/** Pick again from the saved transcripts for a new story or brief, without reading the videos again. */
+async function repick({ dir, name, office, story, notes = '', facts = '', shortSec = 20, longSec = 60, themes = [], contrast = false }) {
+  const f = path.join(dir, 'footage', 'sentences.json'); if (!fs.existsSync(f)) return null;
+  const saved = JSON.parse(fs.readFileSync(f, 'utf8'));
+  return pickBites({ name, office, sentences: saved.sentences, clips: saved.clips, shortSec, longSec, themes, contrast, notes, story, facts });
 }
 
 /** Quiet stretches (no speech) inside each video, usable as muted B-roll. */
@@ -228,7 +386,7 @@ function visualBroll(clips) {
 }
 
 /** Everything the speech ads need, saved on prospect.pkg.footage. */
-async function prepare({ uploads = [], name, office, socials, sites, links, google = [], dir, themes, shortSec, longSec, contrast, notes, want = 4, onStep = () => {} }) {
+async function prepare({ uploads = [], name, office, socials, sites, links, google = [], dir, themes, shortSec, longSec, contrast, notes, want = 4, story = null, facts = '', onStep = () => {} }) {
   // Footage the founders uploaded comes first (all of it); then pasted links, and a web search only when nothing was uploaded.
   // Transcripts, stills and level maps are written here; with uploads only (nothing downloaded) it was never created,
   // so FFmpeg couldn't write the sound out and every upload failed ("exited with code 4294967294").
@@ -254,10 +412,12 @@ async function prepare({ uploads = [], name, office, socials, sites, links, goog
     catch { dl.clips[k].vision = null; }
   }
   for (const x of tr.sentences) { const sh = vision.shotAt(dl.clips[x.clip].vision, (x.s + x.e) / 2); if (sh) x.shot = sh; }
-  onStep('Picking the best lines');
-  const bites = await pickBites({ name, office, sentences: tr.sentences, clips: dl.clips, shortSec, longSec, themes, contrast, notes });
+  // Every sentence is kept on disk, so a new story, topic or brief re-picks in seconds without reading the videos again.
+  try { fs.writeFileSync(path.join(dir, 'footage', 'sentences.json'), JSON.stringify({ at: new Date().toISOString(), files: dl.clips.map((c) => c.file), clips: dl.clips.map(({ words, vision: v, ...c }) => c), sentences: tr.sentences })); } catch { /* re-reading the videos works too */ }
+  onStep('Picking the lines for the story');
+  const bites = await pickBites({ name, office, sentences: tr.sentences, clips: dl.clips, shortSec, longSec, themes, contrast, notes, story, facts });
   const clips = dl.clips.map(({ words, vision: v, ...c }) => ({ ...c, words: (words || []).length, shots: v?.shots?.length || 0, seen: v?.engine || null }));
-  return { clips, bites: { short: bites.short, long: bites.long }, tagline: bites.tagline, agent: bites.agent, broll: [...visualBroll(dl.clips), ...quietWindows(dl.clips)], found: found.list.length, errors: [...found.errors, ...dl.errors, ...tr.errors].slice(0, 12) };
+  return { clips, bites: { short: bites.short, long: bites.long }, tagline: bites.tagline, agent: bites.agent, story: bites.story || null, broll: [...visualBroll(dl.clips), ...quietWindows(dl.clips)], found: found.list.length, errors: [...found.errors, ...dl.errors, ...tr.errors].slice(0, 12) };
 }
 
 // ------------------------------------------------------------------ render
@@ -417,4 +577,4 @@ async function renderSpeechAd({ bites, footage, info, vertical, out, work, music
 }
 function assT(t) { t = Math.max(0, t); const h = Math.floor(t / 3600); const m = Math.floor((t % 3600) / 60); const s = Math.floor(t % 60); const cs = Math.floor((t * 100) % 100); return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`; }
 
-module.exports = { find, download, prepare, pickBites, sentences, punctuate, quietWindows, renderSpeechAd, FB_VIDEO, platformOf };
+module.exports = { topics, repick, pickStory, clauseTrim, iconsFor, groundGfx, find, download, prepare, pickBites, sentences, punctuate, quietWindows, renderSpeechAd, FB_VIDEO, platformOf };

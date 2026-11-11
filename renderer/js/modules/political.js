@@ -1,6 +1,6 @@
 // Political outreach: names or a scout query in, finished packages out
 // (cited brief, vertical + horizontal video, one-page sheet, email draft waiting in Approvals).
-import { html, useState, useEffect, useRef, useApi, navigate, Button, Drawer, Modal, Field, Tabs, Progress, Toggle, act, toast, confirmDialog, store } from '../lib/ui.js';
+import { html, useState, useEffect, useRef, useApi, navigate, Button, Seg, Drawer, Modal, Field, Tabs, Progress, Toggle, act, toast, confirmDialog, store } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { ago, providerLabel } from '../lib/format.js';
@@ -390,6 +390,37 @@ function FinishedGallery({ list, jobs, onOpen }) {
   </div>`;
 }
 
+/**
+ * 4 · The story (Nov 9, Ryan: "more of a narrative ... automate or choose manual 3 topic options or type the full prompt"):
+ * Auto (the machine finds the strongest story in their words), one of 3 stories found in their footage, or the founders'
+ * own brief. Saved on the lead (POST /api/prospects/:id/story); Make the ads tells that story.
+ */
+function StoryPicker({ p, jobs, reload }) {
+  const st = p.story || { mode: 'auto' };
+  const [mode, setMode] = useState(st.mode || 'auto'); const [brief, setBrief] = useState(st.brief || '');
+  const finding = (jobs || []).find((j) => j.type === 'political.topics' && j.payload?.prospectId === p.id);
+  const opts = p.pkg?.topics?.options || [];
+  const save = (body, ok) => act(() => api.post(`/api/prospects/${p.id}/story`, body), { ok, sound: 'tap' }).then(reload);
+  const pickMode = (m) => { setMode(m); if (m === 'auto') save({ mode: 'auto' }, 'The machine will pick the strongest story'); };
+  const find = () => act(() => api.post(`/api/prospects/${p.id}/topics`, {}), { ok: (p.footageUploads || []).length ? 'Finding 3 stories in their footage' : 'Reading their footage, then finding 3 stories' }).then(reload);
+  const now = st.mode === 'topic' ? `story: ${st.topic?.title}` : st.mode === 'brief' ? 'your brief' : 'picked automatically';
+  return html`<div class="col" style="gap:8px;margin-top:6px">
+    <b style="font-size:var(--fs-sm)">4 · The story <span class="faint" style="font-weight:400">now: ${now}</span></b>
+    <${Seg} value=${mode} onChange=${pickMode} options=${[{ value: 'auto', label: 'Auto' }, { value: 'topic', label: 'Pick 1 of 3' }, { value: 'brief', label: 'Write the brief' }]} />
+    ${mode === 'auto' ? html`<span class="faint" style="font-size:var(--fs-xs)">The machine builds the story from their best lines: a hook, who they are, what they did, their district, the rallying line, then the end card. About 30 seconds.</span>` : null}
+    ${mode === 'topic' ? html`<div class="col" style="gap:6px">
+      ${finding ? html`<div class="col" style="gap:3px"><${Progress} value=${finding.progress || 0} indeterminate=${!finding.progress} /><span class="faint" style="font-size:var(--fs-xs)">${finding.note || 'Waiting to start'}</span></div>`
+        : html`<div class="row" style="gap:8px;align-items:center"><${Button} size="sm" kind=${opts.length ? 'ghost' : 'primary'} icon="sparkle" onClick=${find}>${opts.length ? 'Find 3 new stories' : 'Find 3 stories in their footage'}</${Button}>${opts.length ? html`<span class="faint" style="font-size:var(--fs-xs)">Click one to use it.</span>` : null}</div>`}
+      ${opts.map((t) => { const on = st.mode === 'topic' && st.topic?.id === t.id && st.topic?.title === t.title; return html`<button type="button" class=${'panel pad' + (on ? ' on' : '')} style=${`text-align:left;cursor:pointer;border:2px solid ${on ? 'var(--accent, var(--sky))' : 'var(--line)'};display:flex;flex-direction:column;gap:2px`} onClick=${() => save({ mode: 'topic', topicId: t.id }, `Story: ${t.title}`)}>
+        <b>${on ? '✓ ' : ''}${t.title}</b><span class="faint" style="font-size:var(--fs-xs)">${t.pitch} · ${t.ids.length} lines carry it</span></button>`; })}
+    </div>` : null}
+    ${mode === 'brief' ? html`<div class="col" style="gap:6px">
+      <textarea class="input" rows="3" id="am-brief" placeholder=${'e.g. "Open on the fight over the corporate tax bill, show she\'s a scientist who wins for working families, end on Ithaca and the 125th. Punchy, under 30 seconds."'} value=${brief} onInput=${(e) => setBrief(e.target.value)} />
+      <div class="row" style="gap:8px"><${Button} size="sm" kind="primary" disabled=${brief.trim().length < 8} onClick=${() => save({ mode: 'brief', brief: brief.trim() }, 'Brief saved: Make the ads tells this story')}>${st.mode === 'brief' && st.brief === brief.trim() ? 'Saved' : 'Use this brief'}</${Button}><span class="faint" style="font-size:var(--fs-xs)">Their own words only: the brief picks and orders the lines, it never puts words in their mouth.</span></div>
+    </div>` : null}
+  </div>`;
+}
+
 /** The ad machine, up front on Politics: pick the candidate, drop their footage, pick or describe a style, make the ads. */
 export function AdMachine({ list, jobs, onOpen, reload }) {
   const { data: looks } = useApi('/api/political/looks');
@@ -452,6 +483,7 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
         <b style="font-size:var(--fs-sm)">3 · The style <span class="faint" style="font-weight:400">now: ${curLook}</span></b>
         <div style="max-height:420px;overflow:auto;padding-right:4px"><${LookPicker} presets=${looks?.presets || []} sel=${sel} onSel=${(id) => { setSel(id); if (id) setPrompt(''); }} /></div>
         <textarea class="input" rows="2" id="am-prompt" placeholder=${'Or describe it: "Zohran-style street vlog, orange and blue", "dark and cinematic, black and gold"'} value=${prompt} onInput=${(e) => { setPrompt(e.target.value); if (e.target.value.trim()) setSel(null); }} />
+        ${p ? html`<${StoryPicker} key=${p.id} p=${p} jobs=${jobs} reload=${reload} />` : null}
       </div>
     </div>
     <div class="row wrap" style="gap:10px;align-items:center">

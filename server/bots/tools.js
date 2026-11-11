@@ -154,6 +154,27 @@ const TOOLS = [
     },
   },
   {
+    name: 'ask_hal', kinds: ['team'], args: '{"message": "what to ask or tell HAL"}',
+    about: "Talk to HAL, Euclidean's own assistant, in his chat (the founders see it there): today's news from his watch, the calendar, the outreach guide's kit for a lead, the app's commands and status, what he has noted. Anything he'd do that needs a person comes back as a Confirm button for the founders.",
+    async run(a, t) {
+      const text = String(a.message || '').trim(); if (!text) return { text: 'Say something to HAL.' };
+      const history = ctx.store.all('halMessages').slice(-10);
+      const ev = require('../core/events');
+      const mine = ctx.store.insert('halMessages', { who: 'bot', bot: t.bot.name, botId: t.bot.id, text: text.slice(0, 4000), by: `Bot: ${t.bot.name}` }); ev.publish('hal', { id: mine.id });
+      const res = await require('../hal').handle(text, { history, context: {}, actor: `bot:${t.bot.name}` });
+      const saved = ctx.store.insert('halMessages', { who: 'hal', text: res.text || '', by: res.by || null, draft: res.draft || null, confirm: res.confirm || null, forBot: t.bot.name }); ev.publish('hal', { id: saved.id });
+      return { text: `HAL: ${res.text || '(no answer)'}${res.draft ? `\n\nHis draft:\n${typeof res.draft === 'string' ? res.draft : JSON.stringify(res.draft)}` : ''}${res.confirm ? '\n\n(HAL put a Confirm button in his panel: a founder has to press it.)' : ''}` };
+    },
+  },
+  {
+    name: 'ask_claude', kinds: ['team'], args: '{"question": "what you need from Claude"}',
+    about: "Ask Claude (the founders' Claude) something you can't settle yourself: a judgement call, a second opinion on a draft, help with code or a plan. It's answered at once when the founders' Claude login is open; otherwise it waits in Claude's inbox in HAL's chat, and when Claude answers, the answer comes back to your chat and you carry on. Don't wait: finish what you can and say you've asked Claude.",
+    async run(a, t) {
+      const r = await require('../hal/claude').askFromBot(t.bot, String(a.question || ''), { runId: t.run?.id || null });
+      return { text: r.answer ? `Claude: ${r.answer}` : "Sent to Claude's inbox (in HAL's chat). Claude's answer will come back to this chat and you'll pick the job up then. For now, answer with what you have and say you've asked Claude." };
+    },
+  },
+  {
     name: 'ask_bot', kinds: ['team'], args: '{"bot": "the other bot\'s name", "task": "what you want from them"}',
     about: 'Hand a piece of the work to another bot on the team and get its answer back.',
     async run(a, t) {

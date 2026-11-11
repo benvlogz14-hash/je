@@ -20,7 +20,14 @@ const { HttpError, id: makeId } = require('./core/util');
 const RENDERER = path.join(__dirname, '..', 'renderer');
 
 function lanAddress() {
-  for (const list of Object.values(os.networkInterfaces())) for (const i of list || []) if (i.family === 'IPv4' && !i.internal) return i.address;
+  for (const list of Object.values(os.networkInterfaces())) for (const i of list || []) if (i.family === 'IPv4' && !i.internal && !isTailscale(i.address)) return i.address;
+  return null;
+}
+/** Tailscale (free private network between your own devices) gives each one a 100.64-127.x.x address: the phone reaches
+ *  the PC on it from anywhere, at home or not, with nothing opened to the internet. */
+const isTailscale = (a) => { const m = /^100\.(\d+)\./.exec(a || ''); return !!m && Number(m[1]) >= 64 && Number(m[1]) <= 127; };
+function tailscaleAddress() {
+  for (const list of Object.values(os.networkInterfaces())) for (const i of list || []) if (i.family === 'IPv4' && isTailscale(i.address)) return i.address;
   return null;
 }
 
@@ -71,6 +78,7 @@ async function start(opts = {}) {
   const port = opts.port ?? ctx.setting('server.port', 4870);
   const lan = opts.lan ?? ctx.setting('server.lan', false);
   ctx.lanAddress = lan ? lanAddress() : null;
+  ctx.tailscaleAddress = lan ? tailscaleAddress() : null;
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');

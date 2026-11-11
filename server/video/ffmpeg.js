@@ -163,7 +163,12 @@ function priorityValue() {
 /** Run ffmpeg with -progress parsing. onProgress receives 0..1. */
 function ffmpegWithProgress(args, { totalSec, onProgress, cwd, signal }) {
   const threads = ctx.setting('resources.renderThreads', 0);
-  const full = ['-hide_banner', '-y', '-nostats', '-progress', 'pipe:1', ...(threads ? ['-threads', String(threads)] : []), ...args];
+  // The CPU slider (System → Limits): at 100% (the default) nothing is added and FFmpeg runs exactly as before. Below 100%
+  // the encoder and filters are capped to that share of the cores. Speed only: same settings, same video.
+  const share = Number(ctx.setting('resources.cpuShare', 100)) || 100;
+  const cap = !threads && share < 100 ? Math.max(1, Math.round(os.cpus().length * share / 100)) : 0;
+  const a = cap && args.length ? [...args.slice(0, -1), '-threads', String(cap), args[args.length - 1]] : args;
+  const full = ['-hide_banner', '-y', '-nostats', '-progress', 'pipe:1', ...(threads ? ['-threads', String(threads)] : []), ...(cap ? ['-filter_threads', String(cap), '-filter_complex_threads', String(cap)] : []), ...a];
   return run(bin('ffmpeg'), full, {
     cwd, signal, priority: priorityValue(), timeoutMs: 4 * 3600000,
     onLine: (l) => {

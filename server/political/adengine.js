@@ -242,12 +242,13 @@ function basePlan(bites, { broll, map, place = '', look = null }) {
   // The map goes on the line about the district or community (else the second line).
   const placeWords = String(place).toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 3);
   const local = (b) => /\b(district|community|neighbo|town|city|county|borough|state|street|home|here)/i.test(b.text) || placeWords.some((w) => b.text.toLowerCase().includes(w)) || (map?.number && new RegExp(`\\b${map.number}`).test(b.text));
-  const mapAt = !map ? -1 : (bites.findIndex((b, k) => k >= 1 && b.e - b.s >= 3.4 && local(b)) + 1 || bites.findIndex((b, k) => k >= 1 && b.e - b.s >= 3.4) + 1) - 1;
+  const placeBeat = bites.findIndex((b, k) => k >= 1 && b.role === 'place' && b.e - b.s >= 2.6);
+  const mapAt = !map ? -1 : placeBeat >= 0 ? placeBeat : (bites.findIndex((b, k) => k >= 1 && b.e - b.s >= 3.4 && local(b)) + 1 || bites.findIndex((b, k) => k >= 1 && b.e - b.s >= 3.4) + 1) - 1;
   return bites.map((b, k) => {
     const dur = b.e - b.s; const h = autoHeadline(b.words, whole);
     const head = b.words.slice(h.from, h.to).map((x) => x.w);
     const key = keyWordOf(head);
-    const p = { bite: k, headline: head.join(' '), keys: key >= 0 ? [head[key]] : [], bg: BG_CYCLE[k % BG_CYCLE.length] };
+    const p = { bite: k, headline: head.join(' '), keys: key >= 0 ? [head[key]] : [], bg: BG_CYCLE[k % BG_CYCLE.length], role: b.role || null, gfx: b.gfx || null, icons: b.icons || [] };
     if (k === mapAt) p.map = { at: Math.min(1.2, dur * 0.3), dur: Math.min(3.0, dur * 0.6) };
     else if (k >= 1 && dur >= 4.2 && brollUsed < broll.length) { p.cover = { broll: brollUsed++, at: dur * 0.42, dur: Math.min(2.8, dur * 0.36) }; }
     return p;
@@ -256,7 +257,7 @@ function basePlan(bites, { broll, map, place = '', look = null }) {
 
 async function aiPlan(bites, { name, office, place, broll, map, notes, prev, look }) {
   if (!ai.anyConnected()) return null;
-  const lines = bites.map((b, k) => `#${k} (${(b.e - b.s).toFixed(1)}s): ${b.text}`).join('\n');
+  const lines = bites.map((b, k) => `#${k}${b.role ? ` [${b.role}]` : ''} (${(b.e - b.s).toFixed(1)}s): ${b.text}`).join('\n');
   const shots = broll.map((x, i) => `B${i}: ${x.what || 'footage with nobody talking'} (${(x.e - x.s).toFixed(1)}s)`).join('\n') || 'none';
   const r = await ai.ask({
     role: 'writing', json: true, maxTokens: 2500,
@@ -266,7 +267,7 @@ async function aiPlan(bites, { name, office, place, broll, map, notes, prev, loo
 - bg: "navy", "yellow" or "red" (change colour when the topic or energy changes; start on navy; don't use the same colour 3 times in a row).
 - cover (optional): show a B-roll shot in the card for part of the line while the voice carries on: {"broll": <B number>, "at": seconds into the line (at least 1.2), "dur": 1.5 to 3 seconds}. Only use shots that fit what is being said. Never cover the first line.
 - map (optional, at most once, only when a district map exists, on a line about the district, their community or the people they serve): {"at": seconds, "dur": 2 to 3.2}.
-Design rules: fewer, bigger things on screen; motion shows meaning; every claim on screen must be the candidate's own words. Return JSON {"lines":[{"bite":0,"headline":"...","keys":["..."],"bg":"navy","cover":null,"map":null}, ...]}.`,
+The lines are story beats in order (hook, who, proof, place, story, rally): change colour on each new beat, put the map on the place beat, and keep the rally line's headline the theme in a few strong words. Design rules: fewer, bigger things on screen; motion shows meaning; every claim on screen must be the candidate's own words. Return JSON {"lines":[{"bite":0,"headline":"...","keys":["..."],"bg":"navy","cover":null,"map":null}, ...]}.`,
     prompt: `Candidate: ${name}${office ? `, ${office}` : ''}${place ? ` (${place})` : ''}
 The look of this ad: ${look ? `${look.name}${look.about ? ` (${look.about})` : ''}${look.layout === 'full' || look.head?.pos === 'bottom' ? '; keep headlines to 3-6 words' : ''}` : 'Bold blocks'}
 District map available: ${map ? `yes (${map.number ? `district ${map.number}, ` : ''}${map.stateName})` : 'no'}
@@ -344,9 +345,16 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
     const keyset = new Set((p.keys || []).map(norm));
     const head = { words: hw.map((w, i) => ({ w, key: keyset.has(norm(w)), t: at >= 0 ? Math.max(t, t + (b.words[at + i].s - cut.start) - 0.05) : t + 0.08 + i * 0.07 })) };
     const speaker = (from, to) => ({ kind: 'video', src: cut.url, from: from - t, fx: cut.fx ?? 0.5, fy: 0.3, pushAt: t, pushLen: cut.dur });
-    const base = { bg: p.bg || 'navy', head, tilt: tilts[k % tilts.length], label: b.label || null };
+    const base = { bg: p.bg || 'navy', head, tilt: tilts[k % tilts.length], label: b.label || null, icons: (p.icons || []).slice(0, 2), role: p.role || null };
     const parts = [];
-    const ins = p.map ? { kind: 'map', ...p.map } : p.cover && brollFiles[p.cover.broll] ? { kind: 'broll', ...p.cover } : null;
+    let ins = p.map ? { kind: 'map', ...p.map } : p.cover && brollFiles[p.cover.broll] ? { kind: 'broll', ...p.cover } : null;
+    // Cut-ins start and end in the gaps between words (never mid-word), like the reference ads.
+    if (ins) {
+      const gaps = b.words.slice(1).map((w, i) => ((b.words[i].e + w.s) / 2) - cut.start).filter((g) => g > 0.5 && g < cut.dur - 0.5);
+      const near = (x) => (gaps.length ? gaps.reduce((a, g) => (Math.abs(g - x) < Math.abs(a - x) ? g : a), gaps[0]) : x);
+      const a0 = near(ins.at); let e0 = near(ins.at + ins.dur); if (e0 - a0 < 1.2) e0 = Math.min(cut.dur, a0 + Math.max(1.2, ins.dur));
+      ins = { ...ins, at: a0, dur: e0 - a0 };
+    }
     if (ins && ins.at < cut.dur - 0.6) {
       const a = t + ins.at; let e = Math.min(t + cut.dur, a + ins.dur); if (t + cut.dur - e < 0.7) e = t + cut.dur;
       parts.push({ ...base, at: t, dur: a - t, card: speaker(t) });
@@ -361,12 +369,17 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
       if (e < t + cut.dur - 0.01) parts.push({ ...base, at: e, dur: t + cut.dur - e, card: speaker(e) });
     } else parts.push({ ...base, at: t, dur: cut.dur, card: speaker(t) });
     if (k === 0) { parts[0].enter = true; parts.forEach((x) => { if (x.card.kind === 'video' && x.card.src === cut.url) x.plate = true; }); }
-    if (k >= 2 && k % 2 === 0) parts.forEach((x) => { if (x.card.kind === 'video' && x.card.src === cut.url) x.badge = true; });
+    if (k >= 2 && k % 2 === 0 && !(p.icons || []).length) parts.forEach((x) => { if (x.card.kind === 'video' && x.card.src === cut.url) x.badge = true; });
+    // The line's graphic (credential, stat, quote, callout) on its first speaker part.
+    if (p.gfx) { const first = parts.find((x) => x.card.kind === 'video'); if (first) first.tag = p.gfx; }
     segs.push(...parts.filter((x) => x.dur > 0.02));
     t += cut.dur;
   });
   const endDur = 3.0;
-  const end = { at: t, dur: endDur, bg: 'navy', cta, name, sub: office || '', site: site || '', tag: tag || '' };
+  // The end card's portrait: the speaker from the WHO line (else the first), mid-line, in a ring.
+  const pk = Math.max(0, plan.findIndex((p) => p.role === 'who')); const pc = cuts[pk];
+  const portrait = pc ? { src: pc.url, from: Math.max(0, Math.min(pc.dur * 0.45, pc.dur - 3.2)), fx: pc.fx ?? 0.5 } : null; // the clip must last the whole end card
+  const end = { at: t, dur: endDur, bg: 'navy', cta, name, sub: office || '', site: site || '', tag: tag || '', portrait };
   return {
     w: W, h: H, fps: FPS, total: t + endDur, segs, words, voice, end, name, office: [office, place].filter(Boolean).join(', ').slice(0, 70),
     bug: map ? (map.number ? `${map.stateName} · District ${map.number}` : map.stateName) : String(office || '').slice(0, 30),

@@ -1,6 +1,7 @@
 // SEO lab: feed it your research files and your stats, and it writes titles, descriptions and tags that follow both.
 import { html, useState, useApi, Button, Seg, act, toast, confirmDialog } from '../lib/ui.js';
 import { api } from '../lib/api.js';
+import { CompressTool } from './compress.js';
 
 const PLATFORMS = [{ value: 'youtube', label: 'YouTube' }, { value: 'shorts', label: 'Shorts' }, { value: 'tiktok', label: 'TikTok' }, { value: 'instagram', label: 'Reels' }];
 const copy = (t) => { navigator.clipboard?.writeText(t); toast('Copied', { kind: 'ok' }); };
@@ -114,6 +115,7 @@ export function Seo() {
           ${checked ? html`<div class="row" style="gap:8px;font-size:var(--fs-sm)"><span class=${'badge ' + tone(checked.score)}>${checked.score}</span><span class="faint">${check.length} characters · ${checked.why.join(' · ') || 'nothing stands out'}</span></div>` : null}
         </div>
         <${Patterns} p=${data.patterns} stats=${data.stats} />
+        <${CompressTool} sub="Any video under 20 MB for uploading to SEO tools, or into another format (MP4, MOV, WebM, MTS, MKV, AVI, GIF, MP3...)." />
       </div>
       <div class="col" style="gap:12px">
         ${shown ? html`<${Result} key=${shown.id} run=${shown} clips=${clips} />` : null}

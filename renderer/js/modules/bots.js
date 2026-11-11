@@ -120,7 +120,8 @@ function examples(bot) {
 }
 
 function Message({ m, run, bot, reload }) {
-  if (m.role === 'you') return html`<div class="bot-msg you"><div class="bubble selectable">${m.text}</div></div>${run ? html`<${Run} run=${run} bot=${bot} reload=${reload} />` : null}`;
+  if (m.role === 'you') return html`<div class="bot-msg you"><div class="bubble selectable">${m.by === 'routine' ? html`<div class="faint" style="font-size:var(--fs-xs);margin-bottom:4px">Scheduled task</div>` : /^bot:|^hal$/.test(m.by || '') ? html`<div class="faint" style="font-size:var(--fs-xs);margin-bottom:4px">${m.by === 'hal' ? 'From HAL' : `From ${String(m.by).slice(4)}`}</div>` : m.by === 'claude' ? html`<div class="faint" style="font-size:var(--fs-xs);margin-bottom:4px">From Claude</div>` : null}${m.text}</div></div>${run ? html`<${Run} run=${run} bot=${bot} reload=${reload} />` : null}`;
+  if (m.role === 'claude') return html`<div class="bot-msg them claude"><div class="bubble selectable"><div class="faint" style="font-size:var(--fs-xs);margin-bottom:4px">${m.from || 'Claude'} answered ${bot.name}</div>${linkify(m.text)}</div></div>${run ? html`<${Run} run=${run} bot=${bot} reload=${reload} />` : null}`;
   return html`<div class=${'bot-msg them' + (m.role === 'error' ? ' err' : '')}><div class="bubble selectable">${m.role === 'bot' ? html`<div class="faint" style="font-size:var(--fs-xs);margin-bottom:4px">${bot.emoji} ${bot.name}${m.by ? ` · ${m.by === 'ollama' ? 'Llama' : m.by}` : ''}</div>` : null}${linkify(m.text)}</div></div>`;
 }
 

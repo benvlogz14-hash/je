@@ -147,6 +147,7 @@ function fromAudit(e) {
     if (a === 'message.sent' && !d.test) return add({ text: `Sent a ${d.channel || 'message'} to ${d.to || 'a contact'}.`, about: [d.to, nameOfClient(d.clientId)].filter(Boolean), kind: 'event', source: 'outbox', ttlDays: 365 });
     if (a === 'outreach.guide_drafted') return add({ text: `Drafted the outreach email for ${d.name} (${d.framing || 'standard'}${d.tier ? `, ${d.tier}` : ''})${d.queued ? ', waiting in Approvals' : ''}.`, about: [d.name], kind: 'event', source: 'outreach', ttlDays: 180 });
     if (a === 'post.published') return add({ text: `Posted a clip for ${nameOfClient(d.clientId) || 'a client'} on ${[].concat(d.platforms || []).join(', ') || 'social'}.`, about: [nameOfClient(d.clientId)], kind: 'event', source: 'publishing', ttlDays: 365 });
+    if (a === 'footage.inbox') return add({ text: `New footage from the Drive inbox: ${d.file} for ${d.to}.`, about: [d.to], kind: 'event', source: 'drive inbox', ttlDays: 120 });
     if (a === 'client.created') return add({ text: `New client: ${d.name}.`, about: [d.name], kind: 'event', source: 'clients' });
     if (a === 'hal.stage') return add({ text: `${d.prospect} moved to ${d.stage}.`, about: [d.prospect], kind: 'event', source: 'pipeline', ttlDays: 365 });
   } catch { /* a note is never worth breaking the app */ }
