@@ -871,6 +871,11 @@ button.bot-av { cursor: pointer; }
 @media (max-width: 760px) { .bots-grid, .bots-grid.no-side { grid-template-columns: 1fr; height: auto; } .bots-list { flex-direction: row; overflow-x: auto; } .bot-row { width: auto; flex: none; } .bots-chat { height: 70vh; } }
 @media (max-width: 760px) { .bots-head { flex-wrap: wrap; } .bots-head .badge { display: none; } .bot-run { max-width: 100%; } .bot-msg .bubble { max-width: 92%; } }
 
+.bot-msg.queued .bubble { opacity: .65; border: 1px dashed var(--line-strong); background: transparent; }
+.bot-msg .linklike { border: 0; background: none; color: inherit; cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
+.bot-msg.typing .bubble { background: var(--surface-2); }
+.bot-msg .caret { display: inline-block; width: 7px; height: 1em; margin-left: 2px; vertical-align: -2px; background: currentColor; opacity: .6; animation: bot-blink 1s steps(2) infinite; }
+@keyframes bot-blink { 50% { opacity: 0; } }
 .bot-msg.claude .bubble { background: var(--gold-soft); border: 1px solid var(--gold-line); }
 .hal-msg.bot { opacity: .92; }
 .hal-msg.bot .hal-who::before { content: '🤖 '; }

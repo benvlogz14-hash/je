@@ -55,7 +55,7 @@ export function Bots() {
           <${Avatar} bot=${b} />
           <div class="grow" style="min-width:0;text-align:left"><div class="row" style="gap:6px"><b class="ellipsis">${b.name}</b>${KINDS[b.kind] ? html`<span class="faint" style="font-size:var(--fs-xs)">${KINDS[b.kind]}</span>` : null}${b.pinned ? html`<${Icon} name="pin" size=${12} />` : null}</div>
             <div class="faint ellipsis" style="font-size:var(--fs-xs)">${b.busy ? (b.busy.status === 'waiting' ? '⏸ Waiting for your OK' : html`<span class="spinner" style="width:9px;height:9px" /> ${b.busy.note || 'Working'}`) : b.last ? `${b.last.role === 'you' ? 'You: ' : ''}${b.last.text}` : b.role}</div></div>
-          ${b.busy?.status === 'waiting' ? html`<span class="badge gold">1</span>` : null}
+          ${b.busy?.status === 'waiting' ? html`<span class="badge gold" title="Waiting for your OK">!</span>` : null}${b.queued ? html`<span class="badge" title="Messages waiting to go">${b.queued}</span>` : null}
         </button>`)}
         ${!bots.length && data ? html`<div class="faint pad">No bots yet.</div>` : null}
       </div>
@@ -76,12 +76,15 @@ function Chat({ bot, brains, desktop, onEdit, side, onSide }) {
   const active = Object.values(runs).find((r) => r.status === 'working' || r.status === 'waiting');
   useEffect(() => { const el = box.current; if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 260) end.current?.scrollIntoView({ block: 'end' }); }, [data]);
   useEffect(() => { setTimeout(() => end.current?.scrollIntoView({ block: 'end' }), 30); }, [bot.id]);
+  // The box empties the moment you press Enter; while the bot is busy, messages line up and go next, in order.
   const send = async () => {
-    const t = text.trim(); if (!t || sending) return;
-    setSending(true);
-    try { await api.post(`/api/bots/${bot.id}/send`, { text: t }); setText(''); reload(); setTimeout(() => end.current?.scrollIntoView({ block: 'end' }), 50); } catch (e) { toast(e.message, { kind: 'error' }); }
+    const t = text.trim(); if (!t) return;
+    setText(''); setSending(true);
+    try { await api.post(`/api/bots/${bot.id}/send`, { text: t }); reload(); setTimeout(() => end.current?.scrollIntoView({ block: 'end' }), 50); }
+    catch (e) { setText((cur) => (cur ? cur : t)); toast(e.message, { kind: 'error' }); }
     setSending(false);
   };
+  const waitingLine = msgs.filter((m) => m.queued).length;
   const brain = brains?.[bot.brain || 'auto'];
   return html`<div class="panel bots-chat">
     <div class="bots-head">
@@ -101,9 +104,11 @@ function Chat({ bot, brains, desktop, onEdit, side, onSide }) {
       <div ref=${end} />
     </div>
     <div class="bots-compose">
-      <textarea class="input grow" rows="2" placeholder=${`Message ${bot.name}…  (Enter to send, Shift+Enter for a new line)`} value=${text} onInput=${(e) => setText(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
-      ${active ? html`<${Button} kind="coral" icon="stop" onClick=${() => act(() => api.post(`/api/bots/runs/${active.id}/stop`, {})).then(reload)}>Stop</${Button}>`
-        : html`<${Button} kind="primary" icon="send" busy=${sending} disabled=${!text.trim()} onClick=${send}>Send</${Button}>`}
+      <textarea class="input grow" rows="2" placeholder=${active ? `Keep typing: messages line up and go to ${bot.name} next${waitingLine ? ` (${waitingLine} waiting)` : ''}` : `Message ${bot.name}…  (Enter to send, Shift+Enter for a new line)`} value=${text} onInput=${(e) => setText(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
+      <div class="col" style="gap:6px">
+        <${Button} kind="primary" icon="send" disabled=${!text.trim()} title=${active ? 'Goes next, after what it is working on' : ''} onClick=${send}>${active ? 'Queue' : 'Send'}</${Button}>
+        ${active ? html`<${Button} size="sm" kind="coral" icon="stop" onClick=${() => act(() => api.post(`/api/bots/runs/${active.id}/stop`, {})).then(reload)}>Stop</${Button}>` : null}
+      </div>
     </div>
   </div>`;
 }
@@ -120,6 +125,7 @@ function examples(bot) {
 }
 
 function Message({ m, run, bot, reload }) {
+  if (m.queued) return html`<div class="bot-msg you queued"><div class="bubble selectable"><div class="row" style="gap:6px;font-size:var(--fs-xs);margin-bottom:4px"><span class="faint grow">Waiting · goes next</span><button type="button" class="linklike" title="Take it out of the line" onClick=${() => act(() => api.del(`/api/bots/messages/${m.id}`)).then(reload)}>×</button></div>${m.role === 'claude' ? `${m.from || 'Claude'}: ${m.text}` : m.text}</div></div>`;
   if (m.role === 'you') return html`<div class="bot-msg you"><div class="bubble selectable">${m.by === 'routine' ? html`<div class="faint" style="font-size:var(--fs-xs);margin-bottom:4px">Scheduled task</div>` : /^bot:|^hal$/.test(m.by || '') ? html`<div class="faint" style="font-size:var(--fs-xs);margin-bottom:4px">${m.by === 'hal' ? 'From HAL' : `From ${String(m.by).slice(4)}`}</div>` : m.by === 'claude' ? html`<div class="faint" style="font-size:var(--fs-xs);margin-bottom:4px">From Claude</div>` : null}${m.text}</div></div>${run ? html`<${Run} run=${run} bot=${bot} reload=${reload} />` : null}`;
   if (m.role === 'claude') return html`<div class="bot-msg them claude"><div class="bubble selectable"><div class="faint" style="font-size:var(--fs-xs);margin-bottom:4px">${m.from || 'Claude'} answered ${bot.name}</div>${linkify(m.text)}</div></div>${run ? html`<${Run} run=${run} bot=${bot} reload=${reload} />` : null}`;
   return html`<div class=${'bot-msg them' + (m.role === 'error' ? ' err' : '')}><div class="bubble selectable">${m.role === 'bot' ? html`<div class="faint" style="font-size:var(--fs-xs);margin-bottom:4px">${bot.emoji} ${bot.name}${m.by ? ` · ${m.by === 'ollama' ? 'Llama' : m.by}` : ''}</div>` : null}${linkify(m.text)}</div></div>`;
@@ -154,7 +160,8 @@ function Run({ run, bot, reload }) {
         ${open === s.id && s.result ? html`<pre class="bot-result selectable">${s.result}</pre>` : null}
       </div>`;
     })}
-    ${working ? html`<div class="faint row" style="gap:6px;font-size:var(--fs-sm)"><span class="spinner" style="width:12px;height:12px" /> ${run.note || 'Working'}…</div>` : null}
+    ${working && run.typing ? html`<div class="bot-msg them typing"><div class="bubble selectable"><div class="faint" style="font-size:var(--fs-xs);margin-bottom:4px">${bot.emoji} ${bot.name} · writing…</div>${run.typing}<span class="caret" /></div></div>` : null}
+    ${working && !run.typing ? html`<div class="faint row" style="gap:6px;font-size:var(--fs-sm)"><span class="spinner" style="width:12px;height:12px" /> ${run.note || 'Thinking'}…</div>` : null}
     ${run.status === 'stopped' ? html`<div class="faint" style="font-size:var(--fs-sm)">${run.note || 'Stopped'}</div>` : null}
   </div>`;
 }

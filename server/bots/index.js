@@ -118,7 +118,7 @@ function get(id) { return ctx.store.get('bots', id); }
 function summary(b) {
   const last = ctx.store.all('botMessages', (m) => m.botId === b.id).slice(-1)[0] || null;
   const running = ctx.store.find(agent.RUNS, (r) => r.botId === b.id && ['working', 'waiting'].includes(r.status));
-  return { ...b, last: last ? { role: last.role, text: String(last.text).slice(0, 120), at: last.at } : null, busy: running ? { status: running.status, note: running.note, runId: running.id } : null };
+  return { ...b, last: last ? { role: last.role, text: String(last.text).slice(0, 120), at: last.at } : null, busy: running ? { status: running.status, note: running.note, runId: running.id } : null, queued: queued(b.id).length };
 }
 
 /**
@@ -167,7 +167,8 @@ function remove(id, actor = 'user') {
 
 /** The thread with its runs (steps) attached to the person's messages. */
 function thread(botId, limit = 120) {
-  const msgs = ctx.store.all('botMessages', (m) => m.botId === botId).slice(-limit);
+  // In the order things happened (a queued message moves to when it was actually sent), waiting ones at the end.
+  const msgs = ctx.store.all('botMessages', (m) => m.botId === botId).sort((a, b) => (a.queued ? 1 : 0) - (b.queued ? 1 : 0) || String(a.at).localeCompare(String(b.at))).slice(-limit);
   const runIds = new Set(msgs.map((m) => m.runId).filter(Boolean));
   const runs = Object.fromEntries(ctx.store.all(agent.RUNS, (r) => runIds.has(r.id)).map((r) => [r.id, { ...r, steps: (r.steps || []).map(({ forModel, ...s }) => s) }]));
   return { messages: msgs, runs };
@@ -181,21 +182,46 @@ function thread(botId, limit = 120) {
 function deliver(botId, question, answer, from = 'Claude') {
   const bot = get(botId); if (!bot) return null;
   const busy = ctx.store.find(agent.RUNS, (r) => r.botId === botId && ['working', 'waiting'].includes(r.status));
-  if (busy) { ctx.store.insert('botMessages', { botId, role: 'claude', from, text: String(answer).slice(0, 8000), at: now() }); events.publish('bots', { botId }); return null; }
   return send(botId, `${from} answered your question "${String(question).slice(0, 400)}":\n${String(answer).slice(0, 6000)}\n\nCarry on with the job that needed this, then answer.`, 'claude', { role: 'claude', shown: String(answer).slice(0, 8000), from });
 }
 
 function send(botId, text, actor = 'user', { role = 'you', shown = null, from = null } = {}) {
   const bot = get(botId); if (!bot) throw new Error('No such bot.');
   const t = String(text || '').trim(); if (!t) throw new Error('Write something first.');
+  // Busy (working, or waiting for an Allow card): the message waits in line and goes next, in the order sent.
   const busy = ctx.store.find(agent.RUNS, (r) => r.botId === botId && ['working', 'waiting'].includes(r.status));
-  if (busy) throw new Error(`${bot.name} is still working on your last message. Wait for it, or press Stop.`);
+  if (busy || queued(botId).length) {
+    const m = ctx.store.insert('botMessages', { botId, role, text: (shown ?? t).slice(0, 8000), question: t.slice(0, 8000), queued: true, at: now(), by: actor, ...(from ? { from } : {}) });
+    events.publish('bots', { botId });
+    if (!busy) setImmediate(() => next(botId));
+    return { queued: true, messageId: m.id, ahead: queued(botId).length - 1 };
+  }
   const run = ctx.store.insert(agent.RUNS, { botId, question: t.slice(0, 8000), status: 'working', steps: [], by: actor, startedAt: now() });
   ctx.store.insert('botMessages', { botId, role, text: (shown ?? t).slice(0, 8000), runId: run.id, at: now(), by: actor, ...(from ? { from } : {}) });
   audit.log(actor, 'bot.asked', { botId, bot: bot.name, text: t.slice(0, 120) });
   prune(botId);
   setImmediate(() => agent.drive(run.id).catch(() => {}));
   return run;
+}
+
+const queued = (botId) => ctx.store.all('botMessages', (m) => m.botId === botId && m.queued);
+/** Start the oldest queued message once the bot is free (called when a run ends, is stopped, or the app starts). */
+function next(botId) {
+  if (ctx.store.find(agent.RUNS, (r) => r.botId === botId && ['working', 'waiting'].includes(r.status))) return null;
+  const m = queued(botId)[0]; if (!m) return null;
+  const run = ctx.store.insert(agent.RUNS, { botId, question: m.question || m.text, status: 'working', steps: [], by: m.by, startedAt: now() });
+  ctx.store.update('botMessages', m.id, { queued: false, runId: run.id, at: now() });
+  audit.log(m.by || 'user', 'bot.asked', { botId, text: String(m.question || m.text).slice(0, 120), fromQueue: true });
+  events.publish('bots', { botId, runId: run.id });
+  setImmediate(() => agent.drive(run.id).catch(() => {}));
+  return run;
+}
+/** Take a message out of the line before it's sent. */
+function unqueue(messageId) {
+  const m = ctx.store.get('botMessages', messageId);
+  if (!m || !m.queued) throw new Error('That message already went to the bot.');
+  ctx.store.remove('botMessages', messageId); events.publish('bots', { botId: m.botId });
+  return { ok: true };
 }
 
 /** Allow or deny the step a run is waiting on. */
@@ -212,7 +238,7 @@ function decide(runId, allow, actor = 'user') {
 
 function stop(runId, actor = 'user') {
   const run = ctx.store.get(agent.RUNS, runId); if (!run) return { ok: true };
-  if (run.status === 'waiting') ctx.store.update(agent.RUNS, runId, { status: 'stopped', cancel: true, endedAt: now(), note: 'Stopped' });
+  if (run.status === 'waiting') { ctx.store.update(agent.RUNS, runId, { status: 'stopped', cancel: true, endedAt: now(), note: 'Stopped' }); setImmediate(() => next(run.botId)); }
   else ctx.store.update(agent.RUNS, runId, { cancel: true, note: 'Stopping…' });
   audit.log(actor, 'bot.stopped', { runId });
   events.publish('bots', { botId: run.botId, runId });
@@ -238,20 +264,24 @@ function start() {
   for (const r of ctx.store.all(agent.RUNS, (x) => x.status === 'working')) {
     ctx.store.update(agent.RUNS, r.id, { status: 'stopped', endedAt: now(), note: 'Euclidean was closed while this was running. Send it again.', steps: (r.steps || []).map((s) => ({ ...s, running: false })) });
   }
+  // Messages still in line when the app closed go out now.
+  setTimeout(() => { for (const b of ctx.store.all('bots')) { try { next(b.id); } catch { /* next bot */ } } }, 3000);
 }
 
 /** Ask a bot and wait for its answer (HAL and other parts of the app). Resolves the answer text. */
 async function ask(nameOrId, text, actor = 'hal') {
   const bot = findBot(nameOrId); if (!bot) throw new Error(`No bot called ${nameOrId}.`);
-  const run = send(bot.id, text, actor);
-  for (let i = 0; i < 600; i++) {
+  const sent = send(bot.id, text, actor);
+  let runId = sent.queued ? null : sent.id;
+  for (let i = 0; i < 900; i++) {
     await new Promise((r) => setTimeout(r, 1000));
-    const r = ctx.store.get(agent.RUNS, run.id);
+    if (!runId) { const m = ctx.store.get('botMessages', sent.messageId); if (!m) throw new Error('The message was taken out of the line.'); runId = m.runId || null; if (!runId) continue; }
+    const r = ctx.store.get(agent.RUNS, runId);
     if (!r || r.status === 'done') return { bot, answer: r?.answer || '', run: r };
     if (r.status === 'failed' || r.status === 'stopped') throw new Error(r.error || r.note || 'The bot stopped.');
     if (r.status === 'waiting') return { bot, answer: null, waiting: true, run: r };
   }
-  return { bot, answer: null, run };
+  return { bot, answer: null, run: runId ? ctx.store.get(agent.RUNS, runId) : null };
 }
 
 /**
@@ -282,4 +312,4 @@ function routinesTick(at = new Date()) {
   }
 }
 
-module.exports = { deliver, routinesTick, TEMPLATES, HOUSE, list, findBot, get, summary, create, update, remove, thread, send, decide, stop, clear, start, ask, BRAINS, COMPUTERS, STARTERS };
+module.exports = { next, unqueue, queued, deliver, routinesTick, TEMPLATES, HOUSE, list, findBot, get, summary, create, update, remove, thread, send, decide, stop, clear, start, ask, BRAINS, COMPUTERS, STARTERS };

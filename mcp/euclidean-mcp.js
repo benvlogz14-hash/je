@@ -162,10 +162,13 @@ const TOOLS = [
       const all = (await get('/api/bots')).bots; const k = String(bot).toLowerCase();
       const b = all.find((x) => x.id === bot || x.name.toLowerCase() === k) || all.find((x) => x.kind === k.replace(/\s*bot$/, '').replace('scouting', 'scout')) || all.find((x) => x.name.toLowerCase().startsWith(k));
       if (!b) throw new Error(`No bot called ${bot}. Bots: ${all.map((x) => x.name).join(', ')}`);
-      const run = await post(`/api/bots/${b.id}/send`, { text: message });
+      const sent = await post(`/api/bots/${b.id}/send`, { text: message });
+      let runId = sent.queued ? null : sent.id;
       for (let i = 0; i < 120; i++) {
         await new Promise((r) => setTimeout(r, 2000));
-        const t = await get(`/api/bots/${b.id}`); const r = t.runs?.[run.id];
+        const t = await get(`/api/bots/${b.id}`);
+        if (!runId) { runId = (t.messages || []).find((m) => m.id === sent.messageId)?.runId || null; if (!runId) continue; }
+        const r = t.runs?.[runId];
         if (!r) continue;
         const steps = (r.steps || []).filter((s) => s.tool).map((s) => `${s.tool} ${JSON.stringify(s.args || {}).slice(0, 160)}${s.waiting ? ' (WAITING FOR A PERSON)' : ''}`);
         if (r.status === 'done') return { bot: b.name, answer: r.answer, steps };

@@ -1643,6 +1643,7 @@ r.patch('/api/bots/:id', botErr((req, b, p) => bots().update(p.id, b, actorOf(re
 r.del('/api/bots/:id', (req, b, p) => bots().remove(p.id, actorOf(req)), { roles: OWNER });
 r.post('/api/bots/:id/send', botErr((req, b, p) => bots().send(p.id, b.text, actorOf(req))));
 r.del('/api/bots/:id/thread', (req, b, p) => bots().clear(p.id));
+r.del('/api/bots/messages/:id', botErr((req, b, p) => bots().unqueue(p.id)));
 r.post('/api/bots/runs/:id/decide', botErr((req, b, p) => bots().decide(p.id, b.allow === true, actorOf(req))));
 r.post('/api/bots/runs/:id/stop', (req, b, p) => bots().stop(p.id, actorOf(req)));
 // The bot's computer (Docker VM) and browser.
