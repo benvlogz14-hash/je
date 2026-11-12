@@ -110,6 +110,7 @@ function abilitiesAnswer(bot, list) {
   if (has('research')) lines.push(`Live internet, free and unlimited: I search DuckDuckGo (its web results and its Instant Answers) and read the pages, so ask me about anything current, like today's news or what someone said yesterday.${has('google_search') ? (google ? ' For deeper digging I can also search Google (through your Serper key; it costs about a tenth of a cent a search, so I use it when you ask for Google or a deep search, or when DuckDuckGo comes up empty).' : ' Google search is ready too once a Serper key is added in Settings → Connections → Google search.') : ''} No API key is needed for DuckDuckGo.`);
   if (has('browser_open')) lines.push('My own web browser: I can open sites, scroll, click and type (I ask you before clicking or typing). You can take it over yourself from my computer screen to log in to sites; I stay logged in after that.');
   if (has('computer_run')) lines.push('My own computer (a safe virtual machine): I can run commands, write and read files there (I ask first unless you let me run on my own).');
+  if (has('ask_grokbot')) { let b = null; try { b = require('../integrations/grokbots').budget(); } catch { /* none */ } lines.push(`Your GrokBot: for deep research my own tools can't settle, I can email the question to your GrokBot and carry on when it answers${b ? ` (${b.left} of this week's ${b.cap} GrokBot questions left)` : ''}. Say "ask GrokBot" to send one straight away.`); }
   if (has('email_inbox')) lines.push('Email: I can read and search the inbox, read whole threads, check for new mail and write drafts (with documents attached). Drafts wait in Approvals; I never send.');
   if (has('make_document')) lines.push('Documents: playbooks, platform plans, meeting briefs, proposals and reports as a designed PDF and a Word file, and I can revise them from your notes.');
   if (has('build_call_list')) lines.push('Call lists: who to call by what you want (for example two for Ben and two for Ryan), leaving out anyone already called or emailed, with phones, emails and a hook checked on their official pages, plus scripts, voicemails and email drafts. Also the contact book of everyone we reached.');
@@ -265,7 +266,7 @@ async function drive(runId) {
       const t = list.find((x) => x.name === s.tool);
       if (!t) { save(run, { steps: [...(run.steps || []), { ...s, result: `No tool called "${s.tool}".`, forModel: `There is no tool called "${s.tool}". Use one of: ${list.map((x) => x.name).join(', ')}, or answer.`, failed: true }] }); continue; }
       if ((run.steps || []).some((p) => sameStep(p, s) && !p.denied)) { save(run, { steps: [...(run.steps || []), { ...s, result: 'Already done (see above).', forModel: 'You already did exactly this; its result is above. Use it, try something different, or answer.', failed: true }] }); continue; }
-      const why = t.needsOk && t.needsOk(bot, s.args);
+      const why = t.needsOk && t.needsOk(bot, s.args, run);
       if (why) { save(run, { status: 'waiting', steps: [...(run.steps || []), { ...s, waiting: true, why }], note: `Waiting for your OK to ${why}` }); return run; }
       save(run, { steps: [...(run.steps || []), { ...s, running: true }], note: s.say || `Using ${s.tool}`, typing: null });
       let res; try { res = await useTool(bot, run, s, list); } catch (e) { res = { text: `That didn't work: ${e.message}`, failed: true }; }
@@ -317,7 +318,7 @@ async function runInline(bot, task, { depth = 1, parent = null } = {}) {
     let res;
     if (!t) res = { text: `There is no tool called "${step.tool}".` };
     else if (run.steps.some((p) => sameStep(p, step))) res = { text: 'You already did exactly this; use the result above or answer.' };
-    else if (t.needsOk && t.needsOk(bot, step.args)) res = { text: `That needs the person's OK, which handed-off work can't ask for. Do without it.` };
+    else if (t.needsOk && t.needsOk(bot, step.args, run)) res = { text: `That needs the person's OK, which handed-off work can't ask for. Do without it.` };
     else { try { res = await withTimeout(t.run(step.args || {}, { bot, question: task, depth, run }), STEP_TIMEOUT, step.tool); } catch (e) { res = { text: `That didn't work: ${e.message}` }; } }
     run.steps.push({ ...step, forModel: String(res.text).slice(0, 6000) });
   }

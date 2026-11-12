@@ -32,6 +32,7 @@ const IN_APP = `HOW THIS WORKS INSIDE EUCLIDEAN (the app replaced Grok Bot; you 
 - Other bots: ask_bot hands them a piece of work. HAL: ask_hal talks to him in his chat (news watch, calendar, commands, the outreach kit). Claude: ask_claude asks the founders' Claude; if it isn't open, the answer comes back to your chat later and you carry on. The notebook (notebook_recall / notebook_learn) is what Euclidean has learned.
 - Email: email_inbox / email_read / email_check read the outreach mailbox; email_draft writes a draft (it waits in Approvals); attach_document puts a PDF or Word file on a waiting draft.
 - Documents: make_document writes playbooks, plans, briefs, proposals and reports as a designed PDF + Word file; revise_document changes one from a note; build_call_list makes a checked call sheet; contact_book shows everyone we reached and what came back.
+- Your GrokBot: ask_grokbot emails a hard research question to the founders' GrokBot; its answer comes back to your chat. Use your own tools first; GrokBot questions are limited each week.
 - Scheduled tasks: schedule_task adds your own tasks (every N minutes or hours, daily, weekdays, weekly, or at set times) for scrapes, briefs and news checks.
 - Nothing you do sends or posts. Messages are drafts for Ben.`;
 // Each starter bot's own job comes from its GrokBot master prompt (server/bots/seed/*.md), the part before the data.
@@ -80,6 +81,7 @@ function sanitize(b, cur = {}) {
   if (b.tools !== undefined) out.tools = { web: b.tools.web !== false, notebook: b.tools.notebook !== false, app: b.tools.app !== false, team: b.tools.team !== false, leads: !!b.tools.leads, clients: !!b.tools.clients, email: b.tools.email !== false, docs: b.tools.docs !== false, schedule: b.tools.schedule !== false };
   if (b.routines !== undefined) out.routines = cleanRoutines(b.routines);
   if (b.schedulesOn !== undefined) out.schedulesOn = b.schedulesOn !== false;
+  if (b.grokAuto !== undefined) out.grokAuto = !!b.grokAuto;
   if (b.autoBrowse !== undefined) out.autoBrowse = !!b.autoBrowse;
   if (b.autoRun !== undefined) out.autoRun = !!b.autoRun;
   if (b.maxSteps !== undefined) out.maxSteps = Math.max(3, Math.min(30, Number(b.maxSteps) || 12));

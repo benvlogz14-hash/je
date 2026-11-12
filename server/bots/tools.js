@@ -327,6 +327,21 @@ const TOOLS = [
       return { text: `Titles:\n${titles}\n\nDescription:\n${r.description || ''}\n\nTags: ${(r.tags || []).join(', ')}\nHashtags: ${(r.hashtags || []).join(' ')}` };
     },
   },
+  // ---------------------------------------------------------------- your GrokBot, for the hard questions
+  {
+    name: 'ask_grokbot', kinds: ['web'], args: '{"question": "the deep research question, complete on its own", "found_so_far": "what you already found (optional, so it does not repeat it)", "grokbot": "which GrokBot (optional)"}',
+    about: "Hand a hard research question to the founders' GrokBot (by email; its answer comes back to this chat in a few minutes and you carry on then). Use your own tools first: only for deep research they could not settle, live X/Twitter questions, or when the person asks for GrokBot. Each one uses one of this week's limited GrokBot questions.",
+    available: () => { try { return require('../integrations/grokbots').ready(); } catch { return false; } },
+    needsOk: (bot, a, run) => (bot.grokAuto || /\bgrok/i.test(String(run?.question || '')) ? null : 'ask your GrokBot (uses one of this week\'s GrokBot questions)'),
+    async run(a, t) {
+      const G = require('../integrations/grokbots');
+      const q = String(a.question || '').trim(); if (!q) return { text: 'What should GrokBot research?' };
+      const task = `${q}${a.found_so_far ? `\n\nWhat we already found (don't repeat it, go deeper):\n${String(a.found_so_far).slice(0, 4000)}` : ''}\n\nPlease answer with the facts and a link for each one. If you can't confirm something, say so.\n(Asked by ${t.bot.name}, a bot in Euclidean Media's app, for Ben and Ryan.)`;
+      const r = await G.send({ bot: a.grokbot || null, task, title: q.slice(0, 80), actor: `bot:${t.bot.name}`, context: { botId: t.bot.id, runId: t.run?.id || null, question: q } });
+      const b = G.budget();
+      return { text: `Sent to ${r.bot} by email (${b.left} of this week's ${b.cap} GrokBot questions left). Its answer will come back to this chat, usually within minutes, and you'll carry on then. Now answer the person with what you have so far and say GrokBot is digging deeper.` };
+    },
+  },
   // ---------------------------------------------------------------- email (drafts only; a person sends)
   {
     name: 'email_inbox', kinds: ['email'], args: '{"query": "words to look for (optional)", "days": 14, "unread": false, "sent": false}',

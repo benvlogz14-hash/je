@@ -62,7 +62,7 @@ export function Bots() {
       ${cur ? html`<${Chat} key=${cur.id} bot=${cur} brains=${data?.brains} desktop=${data?.desktop} onEdit=${() => setEditing(cur.id)} side=${side} onSide=${toggleSide} />` : html`<div class="panel pad"><${Empty} icon="robot" title="Make your first bot">Press New bot.</${Empty}></div>`}
       ${cur && side ? html`<${ComputerPanel} key=${'c' + cur.id} bot=${cur} desktop=${data?.desktop} />` : null}
     </div>
-    <details class="panel pad" style="margin-top:14px"><summary><b>GrokBots by email</b> <span class="faint" style="font-size:var(--fs-xs)">the older way: email a task to a GrokBot and read its reply here</span></summary><div style="margin-top:10px"><${GrokBots} /></div></details>
+    <details class="panel pad" style="margin-top:14px"><summary><b>GrokBots by email</b> <span class="faint" style="font-size:var(--fs-xs)">your GrokBot as the bots' deep-research helper, with a weekly limit</span></summary><div style="margin-top:10px"><${GrokBots} /></div></details>
     ${making ? html`<${NewBot} start=${making} onClose=${() => made(null)} onMade=${made} />` : null}
     ${editing ? html`<${BotSettings} id=${editing} brains=${data?.brains} desktop=${data?.desktop} onClose=${() => { setEditing(null); reload(); }} onDeleted=${() => { setEditing(null); setSel(''); reload(); }} />` : null}
   </div>`;
@@ -285,7 +285,7 @@ function BotSettings({ id, brains, desktop, onClose, onDeleted }) {
   if (!b) return html`<${Drawer} title="Bot settings" onClose=${onClose}><div class="faint"><span class="spinner" /></div></${Drawer}>`;
   const set = (k, v) => setB({ ...b, [k]: v });
   const setTool = (k, v) => setB({ ...b, tools: { ...b.tools, [k]: v } });
-  const save = () => act(() => api.patch(`/api/bots/${id}`, { name: b.name, emoji: b.emoji, color: b.color, role: b.role, instructions: b.instructions, brain: b.brain, computer: b.computer, tools: b.tools, autoBrowse: b.autoBrowse, autoRun: b.autoRun, maxSteps: b.maxSteps, pinned: b.pinned, routines: b.routines || [], schedulesOn: b.schedulesOn !== false }), { ok: 'Saved' }).then((r) => { if (r) onClose(); });
+  const save = () => act(() => api.patch(`/api/bots/${id}`, { name: b.name, emoji: b.emoji, color: b.color, role: b.role, instructions: b.instructions, brain: b.brain, computer: b.computer, tools: b.tools, autoBrowse: b.autoBrowse, autoRun: b.autoRun, maxSteps: b.maxSteps, pinned: b.pinned, routines: b.routines || [], schedulesOn: b.schedulesOn !== false, grokAuto: !!b.grokAuto }), { ok: 'Saved' }).then((r) => { if (r) onClose(); });
   const del = async () => { if (await confirmDialog({ title: `Delete ${b.name}?`, text: 'Its chat and its computer are removed.', confirm: 'Delete' })) act(() => api.del(`/api/bots/${id}`), { ok: 'Deleted' }).then(onDeleted); };
   const sw = (on, fn, label, hint) => html`<div class="row" style="gap:10px;align-items:flex-start"><${Toggle} on=${on} onChange=${fn} label=${label} /><div><div>${label}</div>${hint ? html`<div class="faint" style="font-size:var(--fs-xs)">${hint}</div>` : null}</div></div>`;
   return html`<${Drawer} title=${`${b.emoji} ${b.name}`} sub="Bot settings" onClose=${onClose} actions=${html`<${Button} kind="primary" size="sm" onClick=${save}>Save</${Button}>`}>
@@ -313,6 +313,7 @@ function BotSettings({ id, brains, desktop, onClose, onDeleted }) {
       </div>
       <div class="col" style="gap:10px"><b>Asking first</b>
         ${sw(!b.autoBrowse, (v) => set('autoBrowse', !v), 'Ask before clicking or typing on websites', 'Recommended: it could otherwise fill in forms or post.')}
+        ${sw(!b.grokAuto, (v) => set('grokAuto', !v), 'Ask before using a GrokBot question', `GrokBot questions are limited each week. On: ${b.name} asks you first (unless you say "ask GrokBot"). Off: it decides when a question is hard enough.`)}
         ${b.computer === 'vm' ? sw(!b.autoRun, (v) => set('autoRun', !v), 'Ask before running commands in its computer', 'Its computer is walled off from your files, so turning this off is fairly safe.') : null}
         <div class="faint" style="font-size:var(--fs-xs)">Bots never send emails or messages, post, or change your records. They can write drafts for you.</div>
       </div>

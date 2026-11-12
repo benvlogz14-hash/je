@@ -601,8 +601,8 @@ r.del('/api/clips/:id', (req, b, p) => {
   return { ok: true };
 });
 // GrokBots by email: your bots, tasks sent to them and their answers.
-r.get('/api/grokbots', () => ({ bots: require('./integrations/grokbots').bots(), tasks: ctx.store.all('botTasks').slice(-50).reverse(), emailReady: require('./integrations/email').configured() }));
-r.put('/api/grokbots', (req, b) => { const list = (Array.isArray(b.bots) ? b.bots : []).map((x) => ({ name: String(x.name || '').slice(0, 40) || 'GrokBot', email: String(x.email || '').trim().slice(0, 120), role: String(x.role || '').slice(0, 80) })).filter((x) => /.+@.+\..+/.test(x.email)).slice(0, 12); ctx.store.setSettings({ grokbots: { list } }); return { bots: list }; }, { roles: OWNER });
+r.get('/api/grokbots', () => ({ bots: require('./integrations/grokbots').bots(), budget: require('./integrations/grokbots').budget(), tasks: ctx.store.all('botTasks').slice(-50).reverse(), emailReady: require('./integrations/email').configured() }));
+r.put('/api/grokbots', (req, b) => { const list = (Array.isArray(b.bots) ? b.bots : []).map((x) => ({ name: String(x.name || '').slice(0, 40) || 'GrokBot', email: String(x.email || '').trim().slice(0, 120), role: String(x.role || '').slice(0, 80) })).filter((x) => /.+@.+\..+/.test(x.email)).slice(0, 12); ctx.store.setSettings({ grokbots: { list, weeklyCap: b.weeklyCap != null ? Math.max(0, Math.min(500, Math.round(Number(b.weeklyCap) || 0))) : ctx.setting('grokbots.weeklyCap', 15) } }); return { bots: list, budget: require('./integrations/grokbots').budget() }; }, { roles: OWNER });
 r.post('/api/grokbots/task', (req, b) => require('./integrations/grokbots').send({ bot: b.bot, task: String(b.task || '').trim() || (() => { throw new HttpError(400, 'Write the task first.'); })(), title: b.title, actor: actorOf(req) }));
 r.del('/api/grokbots/task/:id', (req, b, p) => { ctx.store.remove('botTasks', p.id); return { ok: true }; });
 // Music catalog: every track by mood, a preview, and a button to download more free music.

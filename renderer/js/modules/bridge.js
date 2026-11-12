@@ -58,9 +58,11 @@ export function Bridge() {
 export function GrokBots() {
   const { data, reload } = useApi('/api/grokbots', ['botTasks']);
   const [list, setList] = useState(null); const [bot, setBot] = useState(''); const [task, setTask] = useState(''); const [open, setOpen] = useState(null);
-  useEffect(() => { if (data && list == null) setList(data.bots.length ? data.bots : [{ name: 'Research bot', email: '', role: 'research' }]); }, [data]);
+  const [cap, setCap] = useState(null);
+  useEffect(() => { if (data && list == null) setList(data.bots.length ? data.bots : [{ name: 'Research bot', email: '', role: 'research' }]); if (data && cap == null) setCap(data.budget?.cap ?? 15); }, [data]);
   if (!data || !list) return null;
-  const saveBots = () => act(() => api.put('/api/grokbots', { bots: list }), { ok: 'GrokBots saved' }).then(reload);
+  const saveBots = () => act(() => api.put('/api/grokbots', { bots: list, weeklyCap: cap }), { ok: 'GrokBots saved' }).then(reload);
+  const bd = data.budget;
   const send = () => act(() => api.post('/api/grokbots/task', { bot: bot || data.bots[0]?.name, task }), { ok: 'Task emailed to your GrokBot. Its answer shows up here when it replies.' }).then(() => { setTask(''); reload(); });
   return html`<div class="panel pad col" style="gap:10px;margin-top:16px">
     <div class="row"><b>GrokBots (by email)</b><span class="faint" style="font-size:var(--fs-sm)">Hand bigger jobs to your GrokBots. Euclidean emails the task with a [JEV-…] tag, the bot replies, and the answer lands here. No API keys, nothing extra to install.</span></div>
@@ -70,6 +72,9 @@ export function GrokBots() {
       <input class="input grow" style="min-width:200px" placeholder="The GrokBot's email address" value=${b.email} onInput=${(e) => setList(list.map((x, j) => (j === i ? { ...x, email: e.target.value } : x)))} />
       <input class="input" style="width:160px" placeholder="What it's for" value=${b.role} onInput=${(e) => setList(list.map((x, j) => (j === i ? { ...x, role: e.target.value } : x)))} />
       <${Button} size="sm" kind="ghost" icon="x" title="Remove" onClick=${() => setList(list.filter((_, j) => j !== i))} /></div>`)}
+    <div class="row wrap" style="gap:8px;align-items:center"><span style="font-size:var(--fs-sm)">Your bots may ask GrokBot up to</span><input class="input" type="number" min="0" max="500" style="width:72px" value=${cap ?? 15} onInput=${(e) => setCap(Number(e.target.value) || 0)} /><span style="font-size:var(--fs-sm)">questions a week</span>
+      ${bd ? html`<span class=${'badge ' + (bd.left ? 'moss' : 'coral')}>${bd.usedByBots} used this week · ${bd.left} left · resets ${new Date(bd.resetsAt).toLocaleDateString('en-US', { weekday: 'long' })}</span>` : null}</div>
+    <div class="faint" style="font-size:var(--fs-xs)">Your bots think with the free Llama and only hand GrokBot the hard research, so your GrokBot plan's weekly limit lasts. Keep this number below that limit. Tasks you email yourself below don't count against it.</div>
     <div class="row" style="gap:6px"><${Button} size="sm" kind="ghost" icon="plus" onClick=${() => setList([...list, { name: `GrokBot ${list.length + 1}`, email: '', role: '' }])}>Add a GrokBot</${Button}><${Button} size="sm" kind="soft" onClick=${saveBots}>Save GrokBots</${Button}></div>
     ${data.bots.length ? html`<div class="col" style="gap:6px">
       <div class="row" style="gap:6px"><span class="label">Send a task to</span><select class="select" style="width:auto" value=${bot || data.bots[0].name} onChange=${(e) => setBot(e.target.value)}>${data.bots.map((b) => html`<option value=${b.name}>${b.name}${b.role ? ` (${b.role})` : ''}</option>`)}</select></div>

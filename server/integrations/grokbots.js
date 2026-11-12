@@ -16,12 +16,28 @@ const TAG = /\[JEV-([A-Za-z0-9_-]+)\]/i;
 const bots = () => (ctx.setting('grokbots.list', []) || []).filter((b) => b && b.email);
 const isBot = (addr) => bots().some((b) => b.email.toLowerCase() === String(addr || '').toLowerCase());
 
+/**
+ * The weekly allowance for questions Euclidean's own bots send (so they never use up the GrokBot plan's weekly
+ * limit). Founders pressing "Email the task" are counted too but never stopped. Weeks start Monday 00:00.
+ */
+function weekStart(at = new Date()) { const d = new Date(at); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; }
+function budget() {
+  const from = weekStart().toISOString();
+  const sent = ctx.store.all('botTasks').filter((t) => t.sentAt && t.sentAt >= from);
+  const byBots = sent.filter((t) => String(t.actor || '').startsWith('bot:')).length;
+  const cap = Math.max(0, Number(ctx.setting('grokbots.weeklyCap', 15)) || 0);
+  const next = weekStart(); next.setDate(next.getDate() + 7);
+  return { cap, usedByBots: byBots, usedTotal: sent.length, left: Math.max(0, cap - byBots), resetsAt: next.toISOString() };
+}
+const ready = () => bots().length > 0 && require('./email').configured();
+
 /** Send one task to a bot. Returns the task record. */
 async function send({ bot, task, title, actor = 'user', context = null }) {
   const email = require('./email');
   const b = bots().find((x) => x.name === bot || x.email === bot) || bots()[0];
   if (!b) throw new Error('Add a GrokBot first (its email address) on the AI apps page.');
   if (!email.configured()) throw new Error('Connect the outreach email account first (Settings → Connections → Email), so Euclidean can email your GrokBot.');
+  if (String(actor).startsWith('bot:') && budget().left <= 0) { const bd = budget(); throw new Error(`This week's GrokBot allowance for the bots is used up (${bd.usedByBots} of ${bd.cap}). It resets ${new Date(bd.resetsAt).toLocaleDateString('en-US', { weekday: 'long' })}; raise it on the Bots page under GrokBots by email.`); }
   const t = ctx.store.insert('botTasks', { bot: b.name, email: b.email, title: String(title || task).slice(0, 80), task: String(task).slice(0, 20000), context, status: 'sending', answer: null, sentAt: null, answeredAt: null, actor });
   const tag = `[JEV-${t.id.replace(/^[a-z]+_/i, '').slice(-10)}]`;
   try {
@@ -43,6 +59,8 @@ function receive(m) {
   ctx.store.update('botTasks', t.id, { status: 'answered', answer: body.slice(0, 50000), answeredAt: now() });
   audit.log('system', 'grokbot.answered', { bot: t.bot, taskId: t.id });
   events.publish('botTasks', { id: t.id });
+  // Asked by one of Euclidean's bots: the answer goes back into that bot's chat and it carries on with the job.
+  if (t.context?.botId) { try { require('../bots').deliver(t.context.botId, t.context.question || t.title, body, t.bot || 'GrokBot'); } catch { /* the answer is still on the task */ } }
   return true;
 }
 
@@ -55,4 +73,4 @@ function waitFor(taskId, timeoutMs = 30 * 60000) {
   });
 }
 
-module.exports = { bots, isBot, send, receive, waitFor, TAG };
+module.exports = { budget, ready, weekStart, bots, isBot, send, receive, waitFor, TAG };
