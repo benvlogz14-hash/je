@@ -166,8 +166,9 @@ function show(botId) {
  * person's clicks, scrolls, typing and keys sent straight into it. Logging in to a site here keeps the login in the
  * bot's own session. The same safety guard checks every request, so it still can't reach this PC or the home network.
  */
-async function screen(botId) {
+async function screen(botId, { peek = false } = {}) {
   let w = wins[botId];
+  if (peek && (!w || w.isDestroyed())) return { jpg: null, none: true }; // just watching: never open a browser for it
   if (!w || w.isDestroyed()) { w = win(botId); try { await w.loadURL('https://duckduckgo.com/'); } catch { /* shows what loaded */ } }
   const wc = w.webContents;
   wc.setFrameRate(12); clearTimeout(w._slow); w._slow = setTimeout(() => { if (!w.isDestroyed()) wc.setFrameRate(4); }, 8000);

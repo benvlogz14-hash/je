@@ -871,6 +871,9 @@ button.bot-av { cursor: pointer; }
 @media (max-width: 760px) { .bots-grid, .bots-grid.no-side { grid-template-columns: 1fr; height: auto; } .bots-list { flex-direction: row; overflow-x: auto; } .bot-row { width: auto; flex: none; } .bots-chat { height: 70vh; } }
 @media (max-width: 760px) { .bots-head { flex-wrap: wrap; } .bots-head .badge { display: none; } .bot-run { max-width: 100%; } .bot-msg .bubble { max-width: 92%; } }
 
+.live-peek { position: relative; cursor: pointer; }
+.live-peek .live-dot { position: absolute; top: 6px; left: 6px; z-index: 1; font-size: 11px; font-weight: 700; color: #fff; background: #e8456b; border-radius: 10px; padding: 1px 7px; animation: live-blink 1.6s ease-in-out infinite; }
+@keyframes live-blink { 50% { opacity: .55; } }
 .live-screen { position: relative; border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; background: #fff; outline: none; min-height: 200px; }
 .live-screen:focus { box-shadow: 0 0 0 3px var(--focus, rgba(122,77,255,.35)); }
 .live-screen img { display: block; width: 100%; height: auto; cursor: pointer; user-select: none; }

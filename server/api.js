@@ -1661,7 +1661,8 @@ r.post('/api/bots/:id/computer/folder', (req, b, p) => { const d = require('./bo
 r.get('/api/bots/:id/screen', async (req, b, p) => {
   if (!ctx.botBrowser?.screen) throw new HttpError(400, "Taking over a bot's browser works in the Euclidean desktop app.");
   must(ctx.store.get('bots', p.id), 'That bot is gone');
-  const s = await ctx.botBrowser.screen(p.id);
+  const s = await ctx.botBrowser.screen(p.id, { peek: req.query.peek === '1' });
+  if (s.none) return { img: null, none: true };
   return { img: s.jpg ? `data:image/jpeg;base64,${s.jpg.toString('base64')}` : null, url: s.url, title: s.title, width: s.width, height: s.height, loading: s.loading, canBack: s.canBack, canForward: s.canForward };
 });
 r.post('/api/bots/:id/screen', async (req, b, p) => {

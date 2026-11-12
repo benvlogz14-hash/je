@@ -239,6 +239,25 @@ ${x.out}${x.code ? `
   </div>`;
 }
 
+/** The bot's browser, live, while it works (a few pictures a second); click to take over. */
+function LivePeek({ bot, working, onTakeOver, fallback }) {
+  const [img, setImg] = useState(null); const [url, setUrl] = useState('');
+  useEffect(() => {
+    if (!working) return undefined;
+    let alive = true;
+    (async () => {
+      while (alive) {
+        try { const s = await api.get(`/api/bots/${bot.id}/screen?peek=1`); if (!alive) break; if (s.img) { setImg(s.img); setUrl(s.url || ''); } } catch { /* try again */ }
+        await new Promise((r) => setTimeout(r, document.hidden ? 2000 : 600));
+      }
+    })();
+    return () => { alive = false; };
+  }, [bot.id, working]);
+  if (!working || !img) return fallback;
+  return html`<div class="live-peek" title="Watching live. Click to take over." onClick=${onTakeOver}><span class="live-dot">● Live</span><img class="bot-screen" src=${img} alt="The bot's browser, live" /></div>
+    <div class="faint ellipsis" style="font-size:var(--fs-xs)">${url}</div>`;
+}
+
 function ComputerPanel({ bot, desktop }) {
   const [live, setLive] = useState(false);
   const vm = bot.computer === 'vm';
@@ -248,7 +267,8 @@ function ComputerPanel({ bot, desktop }) {
   const job = st?.setupJob;
   return html`<div class="panel pad bots-side col" style="gap:10px">
     <div class="row" style="gap:8px"><${Icon} name="monitor" size=${17} /><b class="grow">${vm ? `${bot.name}'s computer` : bot.computer === 'browser' ? `${bot.name}'s browser` : 'Web reader'}</b></div>
-    ${lastShot ? html`<a href=${shotUrl(lastShot.shot)} target="_blank" rel="noopener"><img class="bot-screen" src=${shotUrl(lastShot.shot)} alt="The bot's screen" /></a><div class="faint ellipsis" style="font-size:var(--fs-xs)">${argLine(lastShot)}</div>` : html`<div class="bot-screen empty faint">${vm || bot.computer === 'browser' ? 'Pages it opens show up here.' : 'This bot reads pages as text (no screen).'}</div>`}
+    <${LivePeek} bot=${bot} working=${desktop && bot.computer === 'browser' && bot.busy?.status === 'working'} onTakeOver=${() => setLive(true)}
+      fallback=${lastShot ? html`<a href=${shotUrl(lastShot.shot)} target="_blank" rel="noopener"><img class="bot-screen" src=${shotUrl(lastShot.shot)} alt="The bot's screen" /></a><div class="faint ellipsis" style="font-size:var(--fs-xs)">${argLine(lastShot)}</div>` : html`<div class="bot-screen empty faint">${vm || bot.computer === 'browser' ? 'Pages it opens show up here, live while it works.' : 'This bot reads pages as text (no screen).'}</div>`} />
     ${bot.computer === 'browser' ? html`
       <div class="faint" style="font-size:var(--fs-sm)">A walled-off browser just for ${bot.name}: it can't reach this PC or your home network, can't download files, and only clicks or types after you allow it.</div>
       ${desktop ? html`<div class="row wrap" style="gap:6px"><${Button} size="sm" kind="primary" icon="pointer" onClick=${() => setLive(true)}>Take over its browser</${Button}><${Button} size="sm" kind="soft" icon="external" onClick=${() => act(() => api.post(`/api/bots/${bot.id}/browser/show`, {}))}>Open it in a window</${Button}>
