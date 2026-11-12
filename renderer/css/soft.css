@@ -1,7 +1,7 @@
 /* Euclidean "soft" look (Nov 12, Ryan: "make the whole program look a little more like this, but still our own, and NOT
    take much more RAM or CPU"). Light theme only; Night (data-night) is untouched.
    From the reference: a warm off-white page, big rounded white cards with no hard borders, cards inside cards in soft
-   grey, black pill buttons for the main action, grey pill tracks with a white pill for the picked tab, and a
+   grey, grey pill tracks with a white pill for the picked tab, and a
    green-to-lime gradient for anything switched on (toggles, checks, progress, chosen chips). Our pastel badges, notices,
    section tones and rail stay ours.
    Cost: plain CSS only (colours, radii, two small shadows). No new fonts, images, scripts, blur or animations. */
@@ -47,11 +47,9 @@
 :root:not([data-night]) .kpi .v { font-weight: 650; letter-spacing: -0.03em; }
 :root:not([data-night]) h1 { letter-spacing: -0.03em; }
 
-/* ---- buttons: pills; the main action is black, approvals (moss) are the green gradient */
+/* ---- buttons: pills; main buttons keep their own mint green (Ryan: "I liked the buttons green"), approvals (moss) are the green gradient */
 :root:not([data-night]) .btn { border-color: transparent; }
 :root:not([data-night]) .btn:not(:is(.primary, .soft, .gold, .moss, .coral, .lav, .slate, .sky, .rose, .ghost)) { --b-bg: var(--surface); box-shadow: 0 0 0 1px var(--line-strong) inset; }
-:root:not([data-night]) .btn.primary { --b-bg: var(--black); --b-fg: #fff; --b-line: #000; color: #fff; box-shadow: 0 6px 16px -8px rgba(0, 0, 0, 0.5); }
-:root:not([data-night]) .btn.primary:not(:disabled):hover { background: #2a2a2a; }
 :root:not([data-night]) .btn.moss { --b-fg: #fff; --b-line: #1d9a47; background: var(--go); color: #fff; box-shadow: 0 6px 16px -8px rgba(31, 168, 79, 0.7); }
 :root:not([data-night]) .btn.moss:not(:disabled):hover { background: var(--go); filter: brightness(1.05); }
 :root:not([data-night]) .btn.ghost { box-shadow: none; }
