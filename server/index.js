@@ -155,6 +155,8 @@ async function start(opts = {}) {
   require('./automation/scheduler').start();
   messaging.startPollers();
   require('./agents/broker').start();
+  try { require('./bots').start(); } catch { /* bots are optional */ }
+  try { require('./data').seed(); } catch { /* the Data tab is optional */ }
   // One-time: the founders' split is now Ben 70 / Ryan 30 (only if it was still the old 50/50 default; editable on Finance).
   if (!ctx.store.settings._splitV1) { const f = ctx.setting('agency.founders', []); if (f.length === 2 && f.every((x) => x.ownershipPct === 50 && x.distributionPct === 50)) ctx.store.setSettings({ agency: { founders: f.map((x) => ({ ...x, ownershipPct: /ben/i.test(x.name) ? 70 : 30, distributionPct: /ben/i.test(x.name) ? 70 : 30 })) } }); ctx.store.settings._splitV1 = true; ctx.store.touch(); }
   // One-time switch to the lowest-cost AI order for installs made before it was the default.

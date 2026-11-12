@@ -104,6 +104,7 @@ function tick() {
   }
   try { require('../hal/watch').tick(); } catch { /* HAL's watch is best-effort */ }
   try { require('../hal/memory').sweep(); } catch { /* the notebook is best-effort */ }
+  try { require('../bots').routinesTick(); } catch { /* bot routines are best-effort */ }
   try { require('./inbox').tick(); } catch { /* the Drive inbox is best-effort */ }
   try { require('../outreach/autopilot').tick(); } catch (e) { audit.log('system', 'outreach.autopilot_error', { error: e.message }, 'error'); }
   const tz = ctx.setting('agency.timezone', 'America/New_York');

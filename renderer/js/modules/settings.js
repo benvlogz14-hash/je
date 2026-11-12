@@ -173,20 +173,6 @@ function ClaudeApp() {
   </${Section}>`;
 }
 
-// Web search: free DuckDuckGo for quick facts, Serper (serper.dev, Google results, about $1 per 1,000 searches) for full
-// look-ups, mainly Google's Videos tab for a candidate's footage. Every search is kept 14 days and capped per day.
-function WebSearch({ status, v, setV, saveKeys }) {
-  const { data: u, reload } = useApi('/api/search/usage', ['connections', 'settings']);
-  const [per, setPer] = useState(null);
-  const savePer = () => act(() => api.patch('/api/settings', { search: { serper: { perDay: Math.max(1, Math.min(5000, Number(per) || 100)) } } }), { ok: 'Daily limit saved' }).then(() => { setPer(null); reload(); });
-  return html`<${Section} title="Web search" sub="Quick facts use the free DuckDuckGo search. Full look-ups and finding a candidate's videos (Google's Videos tab: assembly and council sessions, hearings, campaign videos) use Serper when its key is here. The same search is never paid for twice (answers kept 14 days), and nothing is spent when a candidate's own videos were uploaded." action=${html`<span class=${'badge ' + (u?.connected ? 'moss' : '')}>${u?.connected ? 'Serper connected' : 'Free search only'}</span>`}>
-    <div class="form-grid"><${SecretInput} k="global.serper.apiKey" label="Serper API key (serper.dev → API key)" status=${status} value=${v} onChange=${setV} />
-      <${Field} label="Most Serper searches a day" id="ws-per"><div class="row"><input id="ws-per" class="input tnum" type="number" min="1" max="5000" value=${per ?? u?.perDay ?? 100} onInput=${(e) => setPer(e.target.value)} />${per != null ? html`<${Button} size="sm" kind="soft" onClick=${savePer}>Save</${Button}>` : null}</div></${Field}></div>
-    ${u ? html`<div class="faint" style="font-size:var(--fs-sm)">Today: ${u.today} of ${u.perDay} searches · ${u.total} in all (about $${(u.total / 1000).toFixed(2)} at $1 per 1,000).</div>` : null}
-    <div class="row"><${Button} kind="primary" onClick=${() => saveKeys(['global.serper.apiKey']).then(reload)}>Save</${Button}></div>
-  </${Section}>`;
-}
-
 function Connections() {
   const boot = useStore((s) => s.boot);
   const { data: st, reload } = useApi('/api/secrets/status', ['connections']);
@@ -223,12 +209,12 @@ function Connections() {
       <div class="form-grid"><${SecretInput} k="global.ayrshare.apiKey" label="Ayrshare API key" status=${status} value=${v} onChange=${setV} /></div>
       <div class="row"><${Button} kind="primary" onClick=${() => saveKeys(['global.ayrshare.apiKey'], 'ayrshare')}>Save & test</${Button}></div>
     </${Section}>
+    <${GoogleSearch} status=${status} v=${v} setV=${setV} saveKeys=${saveKeys} />
     <${Section} title="Political research data" sub="Free keys that make political packages more complete. Open States covers every state legislator; api.data.gov unlocks Congress.gov and FEC fundraising at full speed. Both are optional.">
       <div class="form-grid"><${SecretInput} k="global.political.openStatesKey" label="Open States API key (open.pluralpolicy.com)" status=${status} value=${v} onChange=${setV} /><${SecretInput} k="global.political.dataGovKey" label="api.data.gov key (api.data.gov/signup)" status=${status} value=${v} onChange=${setV} /><${SecretInput} k="global.removebg.apiKey" label="remove.bg key (photo cut-outs, optional)" status=${status} value=${v} onChange=${setV} /><${SecretInput} k="global.pexels.apiKey" label="Pexels key (more background photos, free, optional)" status=${status} value=${v} onChange=${setV} /></div>
       <div class="faint" style="font-size:var(--fs-xs)">No remove.bg key? Use the free cut-out tool instead: Agent Connections → setup checklist → Photo background removal → Install free tool.</div>
       <div class="row"><${Button} kind="primary" onClick=${() => saveKeys(['global.political.openStatesKey', 'global.political.dataGovKey', 'global.removebg.apiKey', 'global.pexels.apiKey'])}>Save</${Button}></div>
     </${Section}>
-    <${WebSearch} status=${status} v=${v} setV=${setV} saveKeys=${saveKeys} />
     <${Section} title="YouTube direct upload (Google)" sub="Optional. Create an OAuth client of type Desktop app in Google Cloud Console with the YouTube Data API enabled." action=${row('', st?.google)}>
       <div class="form-grid"><${SecretInput} k="global.google.clientId" label="OAuth client ID" type="text" status=${status} value=${v} onChange=${setV} /><${SecretInput} k="global.google.clientSecret" label="OAuth client secret" status=${status} value=${v} onChange=${setV} /></div>
       <div class="row"><${Button} kind="primary" onClick=${() => saveKeys(['global.google.clientId', 'global.google.clientSecret'])}>Save</${Button}><span class="faint" style="font-size:var(--fs-sm)">Then connect each client's channel from their Billing & accounts tab.</span></div>
@@ -367,5 +353,22 @@ function LocalAI({ st, test }) {
     <label class="row" style="gap:8px"><${Toggle} on=${o.enabled} onChange=${(x) => setO({ ...o, enabled: x })} label="Use Ollama" /><span>Use Ollama when it's running</span></label>
     <div class="faint" style="font-size:var(--fs-xs)">Set up once with the <b>Turn on Ollama</b> button in Agent Connections. It installs Ollama and downloads the model for you. Web research works without any key (free DuckDuckGo search, Wikipedia, public records, Jina Reader). Grok's built-in search is only used if you add an xAI key.</div>
     <div class="row"><${Button} kind="primary" onClick=${save}>Save & check</${Button}></div>
+  </${Section}>`;
+}
+
+/** Google search through Serper (serper.dev): the "full inquiry" search and the Videos tab the ad machine uses. */
+function GoogleSearch({ status, v, setV, saveKeys }) {
+  const { data: st, reload } = useApi('/api/serper', ['settings']);
+  const [cap, setCap] = useState(null);
+  const saveCap = () => act(() => api.patch('/api/settings', { serper: { monthlyCap: Math.max(10, Number(cap) || 2000) } }), { ok: 'Saved' }).then(() => { setCap(null); reload(); });
+  const cost = st ? `about $${Number(st.costThisMonth || 0).toFixed(2)}` : '';
+  return html`<${Section} title="Google search (Serper)" sub="Optional, about $1 per 1,000 searches. DuckDuckGo stays the free search for quick facts. Google is used for full inquiries and to find each politician's public videos (Google's Videos tab) for the ad machine. Every search is cached, so the same one is never paid for twice." action=${html`<span class=${'badge ' + (st?.connected ? 'moss' : '')}>${st?.connected ? 'Connected' : 'Not connected'}</span>`}>
+    <div class="form-grid"><${SecretInput} k="global.serper.apiKey" label="Serper API key (serper.dev → API Key)" status=${status} value=${v} onChange=${setV} /></div>
+    <div class="row wrap" style="gap:8px;align-items:center"><${Button} kind="primary" onClick=${() => saveKeys(['global.serper.apiKey'], 'serper').then(reload)}>Save & test</${Button}>
+      <a class="btn ghost sm" href="https://serper.dev" target="_blank" rel="noopener">Get a key at serper.dev</a></div>
+    ${st ? html`<div class="row wrap" style="gap:12px;align-items:center;font-size:var(--fs-sm)">
+      <span>This month: <b>${st.month}</b> of ${st.monthlyCap} searches (${cost})</span><span class="faint">Today: ${st.day} of ${st.dailyCap}</span><span class="faint">${st.cached} searches remembered</span>
+      <span class="grow" /><span class="faint">Monthly limit</span><input class="input" type="number" min="10" style="width:100px" value=${cap ?? st.monthlyCap} onInput=${(e) => setCap(e.target.value)} />${cap != null ? html`<${Button} size="sm" kind="soft" onClick=${saveCap}>Save</${Button}>` : null}</div>
+      ${st.blocked && st.connected ? html`<div class="notice gold" style="font-size:var(--fs-sm)">${st.blocked} Until then Euclidean uses the free DuckDuckGo search.</div>` : null}` : null}
   </${Section}>`;
 }

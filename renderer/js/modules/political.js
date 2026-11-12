@@ -476,6 +476,7 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
         </label>
         ${up ? html`<${Progress} value=${up.frac} />` : null}
         ${p ? html`<${FootageBank} p=${p} reload=${reload} />` : null}
+        ${p ? html`<${GoogleVideos} p=${p} reload=${reload} />` : null}
         ${made.length ? html`<b style="font-size:var(--fs-sm);margin-top:4px">Made recently</b><div class="row wrap" style="gap:8px">${made.map((x) => html`<button class="ghost" title=${`Show ${x.name}'s ads`} onClick=${() => setViewing(x.id)} style="padding:0;border:0;background:none;cursor:pointer;display:flex;flex-direction:column;gap:3px;align-items:center"><img src=${api.url(`/api/prospects/${x.id}/file/posterV?at=${encodeURIComponent(x.pkg?.steps?.video_v?.at || '')}`)} alt="" style="height:96px;border-radius:8px;border:1px solid var(--line)" onError=${(e) => { e.target.closest('button').style.display = 'none'; }} /><span class="faint ellipsis" style="font-size:10px;max-width:70px">${x.name.split(' ').slice(-1)[0]}</span></button>`)}</div>` : null}
       </div>
       <div class="col" style="gap:10px;min-width:0">
@@ -589,6 +590,7 @@ function FootageLinks({ p, pkg, run, busy, reload }) {
       </label>
       ${up ? html`<${Progress} value=${up.frac} />` : null}
       <${FootageBank} p=${p} reload=${reload} />
+      <${GoogleVideos} p=${p} reload=${reload} />
       ${(ft?.clips || []).filter((c) => c.url).length ? html`<ul style="padding-left:18px;font-size:var(--fs-sm)">${ft.clips.filter((c) => c.url).map((c) => html`<li><a href=${c.url} target="_blank" rel="noreferrer">${c.title || c.url}</a> <span class="faint">${c.platform}${c.uploader ? ` · ${c.uploader}` : ''}</span></li>`)}</ul>` : null}
       ${(ft?.bites?.short || []).length ? html`<div class="col" style="gap:4px;font-size:var(--fs-sm)"><b>Lines in the short ads</b>${ft.bites.short.map((b) => html`<div>${b.label ? html`<span class="badge lav">${b.label}</span> ` : null}"${b.text}"</div>`)}</div>` : null}
       ${ft?.errors?.length ? html`<div class="faint" style="font-size:var(--fs-xs)">${ft.errors.slice(-3).join(' · ')}</div>` : null}
@@ -598,3 +600,27 @@ function FootageLinks({ p, pkg, run, busy, reload }) {
     </div></details>`;
 }
 
+
+/**
+ * Their public videos from Google's Videos tab (Serper): Find, then switch any off. The ad machine downloads the ones
+ * left on when nothing was uploaded (and finds them itself if this was never pressed).
+ */
+function GoogleVideos({ p, reload }) {
+  const [busy, setBusy] = useState(false);
+  const found = p.footageFound || [];
+  const uploads = (p.footageUploads || []).filter((u) => !u.off).length;
+  const find = async () => { setBusy(true); try { const r = await api.post(`/api/prospects/${p.id}/videos/find`, {}); toast(r.error ? r.error : `${r.found.length} video${r.found.length === 1 ? '' : 's'} of ${p.name} found${r.cached ? ' (from memory, no new search)' : ''}`, { kind: r.error ? 'warn' : 'success' }); reload?.(); } catch (e) { toast(e.message, { kind: 'error' }); } setBusy(false); };
+  const flip = (v) => api.patch(`/api/prospects/${p.id}/videos`, { url: v.url, off: !v.off }).then(() => reload?.()).catch((e) => toast(e.message, { kind: 'error' }));
+  const mins = (d) => (d ? `${Math.floor(d / 60)}:${String(Math.round(d % 60)).padStart(2, '0')}` : '');
+  return html`<div class="col" style="gap:6px;margin-top:8px">
+    <div class="row wrap" style="gap:8px;align-items:center"><${Icon} name="search" size=${15} /><b style="font-size:var(--fs-sm)">Their videos on Google</b>
+      <span class="faint grow" style="font-size:var(--fs-xs)">${found.length ? `${found.filter((v) => !v.off).length} of ${found.length} used${uploads ? ' (uploads come first)' : ''}${p.footageFoundAt ? ` · found ${ago(p.footageFoundAt)}` : ''}` : 'Floor sessions, hearings, meetings and interviews from Google\'s Videos tab. The ad machine downloads the best ones.'}</span>
+      <${Button} size="sm" kind="soft" icon="search" busy=${busy} onClick=${find}>${found.length ? 'Find again' : 'Find their videos'}</${Button}></div>
+    ${p.footageFoundNote ? html`<div class="faint" style="font-size:var(--fs-xs)">${p.footageFoundNote}</div>` : null}
+    ${found.length ? html`<div class="gv-list">${found.map((v) => html`<label class=${'gv-item' + (v.off ? ' off' : '')} title=${v.why?.join(', ') || ''}>
+      <input type="checkbox" checked=${!v.off} onChange=${() => flip(v)} />
+      ${v.image ? html`<img src=${api.url(`/api/web/image?url=${encodeURIComponent(v.image)}`)} alt="" loading="lazy" onError=${(e) => { e.target.style.visibility = 'hidden'; }} />` : html`<div class="gv-noimg"><${Icon} name="film" size=${16} /></div>`}
+      <div class="grow" style="min-width:0"><div class="ellipsis" style="font-size:var(--fs-sm)"><a href=${v.url} target="_blank" rel="noopener">${v.title}</a></div>
+        <div class="faint ellipsis" style="font-size:var(--fs-xs)">${[v.channel || v.source, mins(v.duration), v.date, ...(v.why || [])].filter(Boolean).join(' · ')}</div></div></label>`)}</div>` : null}
+  </div>`;
+}

@@ -103,10 +103,13 @@ app.whenReady().then(async () => {
         pickFolder: async (o = {}) => { const res = await dialog.showOpenDialog(win || undefined, { title: o.title || 'Choose a folder', defaultPath: o.defaultPath, properties: ['openDirectory', 'createDirectory'] }); return res.canceled ? null : res.filePaths[0]; },
         pickFiles: async (o = {}) => { const res = await dialog.showOpenDialog(win || undefined, { properties: ['openFile', ...(o.multi !== false ? ['multiSelections'] : [])], filters: o.filters }); return res.canceled ? [] : res.filePaths; },
         bridge: require('./bridge'),
+        botBrowser: require('./botbrowser'),
         uiMemoryMb: () => { try { return Math.round(app.getAppMetrics().filter((m) => m.type !== 'Browser').reduce((t, m) => t + (m.memory?.workingSetSize || 0), 0) / 1024); } catch { return null; } },
       },
     });
     base = `http://127.0.0.1:${r.port}`; token = r.ownerToken;
+    // The bots' browser checks every address with the engine's own guard (never this PC or the home network).
+    require('./botbrowser').setGuard((u) => require('../server/integrations/safefetch').check(u));
   } catch (e) {
     dialog.showErrorBox('Euclidean could not start', `${e.message}\n\nIf another copy is running, close it first. If port 4870 is taken, change server.port in the settings file.`);
     app.exit(1); return;
@@ -134,6 +137,6 @@ app.whenReady().then(async () => {
 });
 
 app.on('second-instance', () => createWindow({ lite: false }));
-app.on('before-quit', () => { quitting = true; try { require('./bridge').closeAll(); } catch { /* none open */ } });
+app.on('before-quit', () => { quitting = true; try { require('./bridge').closeAll(); } catch { /* none open */ } try { require('./botbrowser').closeAll(); } catch { /* none open */ } });
 app.on('window-all-closed', () => { /* stay alive in the tray */ });
 app.on('will-quit', async (e) => { if (engine && !app.__stopped) { e.preventDefault(); app.__stopped = true; await engine.stop(); app.quit(); } });

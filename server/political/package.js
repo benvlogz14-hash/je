@@ -100,7 +100,7 @@ async function stepImages(p, h) {
 /** Real clips of them speaking (Facebook, YouTube, their sites) for the "their own speeches" ad style. */
 /** Ad styles built from the candidate's own footage: "speech" (their speeches with B-roll) and "pro" (motion graphics). */
 /** Footage uploaded (and ticked) or video links pasted on the lead. */
-const hasOwnFootage = (p) => (p?.footageUploads || []).some((u) => !u.off) || [].concat(p?.footageLinks || []).some((x) => /https?:\/\//.test(String(x)));
+const hasOwnFootage = (p) => (p?.footageUploads || []).some((u) => !u.off) || [].concat(p?.footageLinks || []).some((x) => /https?:\/\//.test(String(x))) || (p?.footageFound || []).some((v) => !v.off);
 /**
  * Ads made from the candidate's own footage: the pro and speech styles, any lead with a look picked, and any lead with
  * footage uploaded or linked (whatever the style setting says). These never fall back to the old graphics-only ad
@@ -161,8 +161,16 @@ async function stepFootage(p, h) {
     const b = await require('./footage').repick({ dir: dirFor(p), name: p.name, office: shortOffice(pr.office || ''), story, facts, notes: (pkg.notes || []).filter((n) => n.target !== 'email').map((n) => n.text).join(' | '), shortSec: Number(S('shortSeconds', 20)) || 20, longSec: Number(S('videoSeconds', 60)) || 60, themes: pkg.brief?.themes || [], contrast: !!S('contrastAds', false) });
     if (b && (b.short || []).length >= 2) { save(p.id, (cur) => ({ footage: { ...cur.footage, bites: { short: b.short, long: b.long }, tagline: b.tagline, agent: b.agent, story: b.story, storyKey: storyKey(p) } })); return { note: `Story: ${story.mode === 'topic' ? story.topic?.title : story.mode === 'brief' ? 'your brief' : 'picked automatically'} · ${b.short.length} + ${b.long.length} lines` }; }
   }
+  // No uploads: look them up on Google's Videos tab first (Serper, one cached search; skipped without a key or over budget).
+  let google = [];
+  if (!uploads.length) {
+    const vf = require('./videofind'); const serper = require('../integrations/serper');
+    const fresh = p.footageFoundAt && Date.now() - Date.parse(p.footageFoundAt) < 14 * 86400000;
+    if (!fresh && serper.ready() && !serper.blocked()) { h.progress(0.25, 'Finding their videos on Google'); try { await vf.forLead(p.id, { actor: 'package' }); } catch { /* the free searches still run */ } }
+    google = (ctx.store.get('prospects', p.id)?.footageFound || []).filter((v) => !v.off);
+  }
   const r = await require('./footage').prepare({
-    story, facts,
+    story, facts, google,
     uploads, name: p.name, office: shortOffice(pr.office || ''), socials: pr.socials || [], sites: pr.sites || [], links, dir: dirFor(p), themes: pkg.brief?.themes || [],
     shortSec: Number(S('shortSeconds', 20)) || 20, longSec: Number(S('videoSeconds', 60)) || 60, contrast: !!S('contrastAds', false),
     notes: (pkg.notes || []).filter((n) => n.target !== 'email').map((n) => n.text).join(' | '), want: Number(S('footageClips', 4)) || 4, onStep: (x) => h.progress(0.3, x),
@@ -171,7 +179,8 @@ async function stepFootage(p, h) {
   if ((r.bites.short || []).length < 2) {
     // Footage was uploaded but couldn't be used: stop and say why, instead of quietly making the old graphics-only ads.
     if (uploads.length) throw Object.assign(new Error(`Couldn't get usable lines from the uploaded footage (${r.clips.length} video${r.clips.length === 1 ? '' : 's'} read, ${(r.bites.short || []).length} usable line${(r.bites.short || []).length === 1 ? '' : 's'}). ${r.errors.slice(-2).join(' · ').slice(0, 400) || 'No clear speech was found.'}`), { permanent: true });
-    return { note: `No usable footage of them found online, so no ads yet: upload their videos in the Ad machine. ${r.errors.slice(-1)[0] || ''}`.trim() };
+    const gNote = ctx.store.get('prospects', p.id)?.footageFoundNote;
+    return { note: `No usable footage of them found online, so no ads yet: upload their videos in the Ad machine. ${gNote || r.errors.slice(-1)[0] || ''}`.trim() };
   }
   return { note: `${r.clips.length} video${r.clips.length === 1 ? '' : 's'} · ${r.bites.short.length} + ${r.bites.long.length} lines picked` };
 }
@@ -559,7 +568,9 @@ async function run(prospectId, { from = 'research', only = null, actor = 'system
       if (e.noFootage) { setStep(p.id, step, { status: 'skipped', note: e.message }); save(p.id, () => ({ noAds: e.message })); continue; }
       setStep(p.id, step, { status: 'failed', error: e.message });
       // With their own footage uploaded, the ads don't depend on web research: note it and carry on.
-      if (['research', 'images', 'opponent'].includes(step) && (p.footageUploads || []).some((u) => !u.off)) continue;
+      // The same when their videos can come from Google's Videos tab (found already, or Serper is set up to find them).
+      const googleCan = (p.footageFound || []).some((v) => !v.off) || (require('../integrations/serper').ready() && !require('../integrations/serper').blocked());
+      if (['research', 'images', 'opponent'].includes(step) && ((p.footageUploads || []).some((u) => !u.off) || googleCan)) continue;
       save(p.id, () => ({ status: 'failed', error: `${label}: ${e.message}` }));
       throw e;
     }

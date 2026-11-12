@@ -42,7 +42,8 @@ const SECRET_KEYS = new Set([
   'global.anthropic.apiKey', 'global.openai.apiKey', 'global.xai.apiKey',
   ...Object.values(twilio.K), ...Object.values(email.K),
   'global.ayrshare.apiKey', 'global.google.clientId', 'global.google.clientSecret',
-  ...Object.values(require('./political/sources').KEYS), require('./integrations/serper').KEY, require('./video/cutout').KEY, require('./political/images').PEXELS, require('./integrations/elevenlabs').KEY,
+  ...Object.values(require('./political/sources').KEYS), require('./video/cutout').KEY, require('./political/images').PEXELS, require('./integrations/elevenlabs').KEY,
+  require('./integrations/serper').KEY,
 ]);
 
 // ------------------------------------------------------------ bootstrap & settings
@@ -99,6 +100,7 @@ r.post('/api/connections/test/:name', async (req, b, p) => {
   if (n === 'email') return email.test();
   if (n === 'ayrshare') return publishing.ayrTest();
   if (n === 'elevenlabs') return require('./integrations/elevenlabs').test();
+  if (n === 'serper') return require('./integrations/serper').test();
   throw new HttpError(404, 'Unknown connection');
 }, { roles: OWNER });
 
@@ -599,8 +601,8 @@ r.del('/api/clips/:id', (req, b, p) => {
   return { ok: true };
 });
 // GrokBots by email: your bots, tasks sent to them and their answers.
-r.get('/api/grokbots', () => ({ bots: require('./integrations/grokbots').bots(), tasks: ctx.store.all('botTasks').slice(-50).reverse(), emailReady: require('./integrations/email').configured() }));
-r.put('/api/grokbots', (req, b) => { const list = (Array.isArray(b.bots) ? b.bots : []).map((x) => ({ name: String(x.name || '').slice(0, 40) || 'GrokBot', email: String(x.email || '').trim().slice(0, 120), role: String(x.role || '').slice(0, 80) })).filter((x) => /.+@.+\..+/.test(x.email)).slice(0, 12); ctx.store.setSettings({ grokbots: { list } }); return { bots: list }; }, { roles: OWNER });
+r.get('/api/grokbots', () => ({ bots: require('./integrations/grokbots').bots(), budget: require('./integrations/grokbots').budget(), tasks: ctx.store.all('botTasks').slice(-50).reverse(), emailReady: require('./integrations/email').configured() }));
+r.put('/api/grokbots', (req, b) => { const list = (Array.isArray(b.bots) ? b.bots : []).map((x) => ({ name: String(x.name || '').slice(0, 40) || 'GrokBot', email: String(x.email || '').trim().slice(0, 120), role: String(x.role || '').slice(0, 80) })).filter((x) => /.+@.+\..+/.test(x.email)).slice(0, 12); ctx.store.setSettings({ grokbots: { list, weeklyCap: b.weeklyCap != null ? Math.max(0, Math.min(500, Math.round(Number(b.weeklyCap) || 0))) : ctx.setting('grokbots.weeklyCap', 15) } }); return { bots: list, budget: require('./integrations/grokbots').budget() }; }, { roles: OWNER });
 r.post('/api/grokbots/task', (req, b) => require('./integrations/grokbots').send({ bot: b.bot, task: String(b.task || '').trim() || (() => { throw new HttpError(400, 'Write the task first.'); })(), title: b.title, actor: actorOf(req) }));
 r.del('/api/grokbots/task/:id', (req, b, p) => { ctx.store.remove('botTasks', p.id); return { ok: true }; });
 // Music catalog: every track by mood, a preview, and a button to download more free music.
@@ -1496,7 +1498,6 @@ r.put('/api/projects/:id', (req, b, p) => {
 });
 r.del('/api/projects/:id', (req, b, p) => ({ ok: ctx.store.remove('projects', p.id) }));
 // Serper (Google search, paid): searches used today / in total and the daily limit, for Settings → Connections → Web search.
-r.get('/api/search/usage', () => ({ connected: require('./integrations/serper').connected(), ...require('./integrations/serper').usage() }));
 // The compression engine (server/video/convert.js): the formats it can make.
 r.get('/api/convert/formats', () => require('./video/convert').formats());
 // Convert or compress a file already on this PC (a path, a footage id, a clip's latest render, or a Studio project's last export):
@@ -1650,6 +1651,151 @@ r.get('/api/media/thumb', async (req, res) => {
   if (!fs.existsSync(out)) return send(res, 404, {});
   return serveFile(req, res, out, { cache: true });
 }, { stream: true });
+
+// Bots (sidebar "Bots", server/bots/): Euclidean's own team of AI bots with live web, a browser and a VM each.
+const bots = () => require('./bots');
+const botErr = (fn) => (...a) => { try { const r = fn(...a); return r && r.then ? r.catch((e) => { throw e instanceof HttpError ? e : new HttpError(400, e.message); }) : r; } catch (e) { throw e instanceof HttpError ? e : new HttpError(400, e.message); } };
+r.get('/api/bots', () => ({ bots: bots().list().map((b) => bots().summary(b)), brains: Object.fromEntries(bots().BRAINS.map((k) => [k, { label: require('./bots/agent').brainLabel(k), ready: k === 'auto' ? ai.anyConnected() : ai.connected(k) }])), desktop: !!ctx.botBrowser, web: { searxng: !!ctx.setting('ai.searxngUrl', ''), localNetwork: ctx.setting('web.localNetwork', false) === true } }));
+r.post('/api/bots', botErr((req, b) => bots().create(b, actorOf(req))), { roles: OWNER });
+// A bot from a pasted master prompt or a template (New bot → From a master prompt).
+// Bots' scheduled tasks and the auto-run switch (per bot, and all bots at once).
+r.get('/api/bots/schedules', () => { const B = require('./bots'); return { autoRun: ctx.setting('bots.autoRun', true) !== false, bots: ctx.store.all('bots').map((b) => ({ id: b.id, name: b.name, autoRun: b.schedulesOn !== false, tasks: (b.routines || []).map((r) => ({ ...r, when: B.describe(r), next: r.on && B.autoRunOn(b) ? B.nextRun(r) : null })) })) }; });
+r.post('/api/bots/schedules/autorun', (req, b) => { ctx.store.settings.bots = { ...(ctx.store.settings.bots || {}), autoRun: b.on !== false }; ctx.store.touch(); audit.log(actorOf(req), 'bots.autorun', { on: b.on !== false }); events.publish('bots', {}); return { autoRun: b.on !== false }; });
+r.get('/api/bots/templates', () => Object.entries(bots().TEMPLATES).map(([k, t]) => ({ id: k, name: t.name, emoji: t.emoji, color: t.color, role: t.role, kind: t.kind })));
+r.get('/api/bots/shot', (req, res) => {
+  const f = path.resolve(String(req.query.file || '')); const base = path.join(paths.root, 'bots');
+  if (!f.startsWith(base + path.sep) || !/\.png$/i.test(f) || !fs.existsSync(f)) return send(res, 404, {});
+  return serveFile(req, res, f, { cache: true });
+}, { stream: true });
+r.get('/api/bots/:id', (req, b, p) => { const bot = must(bots().get(p.id), 'No such bot'); return { bot: bots().summary(bot), ...bots().thread(p.id) }; });
+r.patch('/api/bots/:id', botErr((req, b, p) => bots().update(p.id, b, actorOf(req))), { roles: OWNER });
+r.del('/api/bots/:id', (req, b, p) => bots().remove(p.id, actorOf(req)), { roles: OWNER });
+r.post('/api/bots/:id/send', botErr((req, b, p) => bots().send(p.id, b.text, actorOf(req))));
+r.del('/api/bots/:id/thread', (req, b, p) => bots().clear(p.id));
+r.del('/api/bots/messages/:id', botErr((req, b, p) => bots().unqueue(p.id)));
+r.post('/api/bots/runs/:id/decide', botErr((req, b, p) => bots().decide(p.id, b.allow === true, actorOf(req))));
+r.post('/api/bots/runs/:id/stop', (req, b, p) => bots().stop(p.id, actorOf(req)));
+// The bot's computer (Docker VM) and browser.
+r.get('/api/bots/:id/computer', async (req, b, p) => { must(bots().get(p.id), 'No such bot'); const c = require('./bots/computer'); const st = await c.status(p.id, { force: req.query.force === '1' }); return { ...st, files: st.ready ? c.listFiles(p.id).slice(0, 200) : [] }; });
+r.post('/api/bots/computer/setup', () => queue.enqueue('bots.computer.setup', {}, { title: "Set up the bots' computer", dedupeKey: 'bots.computer.setup' }), { roles: OWNER });
+r.post('/api/bots/computer/install', () => queue.enqueue('bots.computer.install', {}, { title: 'Install Docker Desktop', dedupeKey: 'bots.computer.install' }), { roles: OWNER });
+r.post('/api/bots/:id/computer/stop', botErr((req, b, p) => require('./bots/computer').stop(p.id)));
+r.post('/api/bots/:id/computer/reset', botErr((req, b, p) => require('./bots/computer').reset(p.id, { wipe: !!b.wipe })), { roles: OWNER });
+r.post('/api/bots/:id/computer/folder', (req, b, p) => { const d = require('./bots/computer').workDir(p.id); if (ctx.openPath) ctx.openPath(d); return { folder: d }; });
+// The founders at the controls: the bot's own browser live, and their clicks/typing/keys sent into it (logins stay
+// in the bot's session). And a terminal into the bot's own computer (VM): the person's commands run without a card.
+r.get('/api/bots/:id/screen', async (req, b, p) => {
+  if (!ctx.botBrowser?.screen) throw new HttpError(400, "Taking over a bot's browser works in the Euclidean desktop app.");
+  must(ctx.store.get('bots', p.id), 'That bot is gone');
+  const s = await ctx.botBrowser.screen(p.id, { peek: req.query.peek === '1' });
+  if (s.none) return { img: null, none: true };
+  return { img: s.jpg ? `data:image/jpeg;base64,${s.jpg.toString('base64')}` : null, url: s.url, title: s.title, width: s.width, height: s.height, loading: s.loading, canBack: s.canBack, canForward: s.canForward };
+});
+r.post('/api/bots/:id/screen', async (req, b, p) => {
+  if (!ctx.botBrowser?.control) throw new HttpError(400, "Taking over a bot's browser works in the Euclidean desktop app.");
+  const bot = must(ctx.store.get('bots', p.id), 'That bot is gone');
+  try { await ctx.botBrowser.control(p.id, b || {}); } catch (e) { throw new HttpError(400, e.message); }
+  if (b?.type === 'go') audit.log(actorOf(req), 'bot.browser.taken_over', { bot: bot.name, url: String(b.url || '').slice(0, 200) });
+  return { ok: true };
+}, { roles: OWNER });
+r.post('/api/bots/:id/computer/run', async (req, b, p) => {
+  const bot = must(ctx.store.get('bots', p.id), 'That bot is gone');
+  const cmd = String(b.command || '').trim(); if (!cmd) throw new HttpError(400, 'Type a command.');
+  audit.log(actorOf(req), 'bot.computer.person_ran', { bot: bot.name, command: cmd.slice(0, 200) });
+  try { return await require('./bots/computer').exec(p.id, cmd, { timeout: 5 * 60000 }); } catch (e) { throw new HttpError(400, e.message); }
+}, { roles: OWNER });
+r.post('/api/bots/:id/browser/show', (req, b, p) => { if (!ctx.botBrowser) throw new HttpError(400, 'This works in the Euclidean desktop app.'); return ctx.botBrowser.show(p.id); });
+r.post('/api/bots/:id/browser/clear', async (req, b, p) => { if (!ctx.botBrowser) throw new HttpError(400, 'This works in the Euclidean desktop app.'); return ctx.botBrowser.clearData(p.id); }, { roles: OWNER });
+// The Data tab (server/data/index.js): lists, sheets, packs and pages read into tables and people.
+const dataMod = () => require('./data');
+r.get('/api/data', () => ({ datasets: dataMod().list() }));
+r.get('/api/data/search', (req) => dataMod().search(String(req.query.q || ''), { id: req.query.id || null, limit: Math.min(50, Number(req.query.limit) || 20) }));
+r.post('/api/data', botErr(async (req, b) => {
+  if (b.url) return dataMod().addUrl(String(b.url), actorOf(req));
+  const files = Array.isArray(b.files) ? b.files : b.text ? [{ name: b.name || 'Pasted text', text: b.text }] : [];
+  if (!files.length) throw new HttpError(400, 'Drop a file, paste some text, or give a link.');
+  return { added: files.slice(0, 20).map((f) => dataMod().add({ name: String(f.name || 'Data'), text: String(f.text || ''), source: f.name ? 'upload' : 'paste', by: actorOf(req) })) };
+}));
+// Documents (server/docs): playbooks, plans, briefs, call sheets and lists as PDF + Word, written by the AI, a bot,
+// Claude or the call-list builder. Attaching one to an email draft never sends it (the draft still waits for approval).
+const docsMod = () => require('./docs');
+r.get('/api/docs', (req) => ({ docs: docsMod().list({ q: req.query.q || '' }), kinds: Object.entries(require('./docs/write').KINDS).map(([id, k]) => ({ id, label: k.label, look: k.look, sections: k.sections.map((s) => s.title) })) }));
+r.post('/api/docs', botErr((req, b) => {
+  if (b.spec) return docsMod().make({ spec: b.spec, kind: b.kind || 'custom', about: b.about || '', prospectId: b.prospectId || null, clientId: b.clientId || null, by: actorOf(req) });
+  const w = b.write || b;
+  if (!w.title && !w.about && !w.instructions) throw new HttpError(400, 'Say what the document is (a title or what it is about).');
+  return require('./docs/write').start({ kind: w.kind, title: w.title, about: w.about, instructions: w.instructions, material: w.material, prospectId: w.prospectId, clientId: w.clientId, datasetIds: Array.isArray(w.datasetIds) ? w.datasetIds : [], research: w.research || false, fullSearch: !!w.fullSearch, look: w.look, purpose: w.purpose, date: w.date }, actorOf(req));
+}));
+r.get('/api/docs/:id', (req, b, p) => must(docsMod().full(p.id), 'That document is gone'));
+r.patch('/api/docs/:id', botErr((req, b, p) => docsMod().edit(p.id, b, actorOf(req))));
+r.del('/api/docs/:id', (req, b, p) => docsMod().remove(p.id, actorOf(req)));
+r.post('/api/docs/:id/revise', botErr((req, b, p) => require('./docs/write').revise(p.id, b.note, actorOf(req))));
+r.post('/api/docs/:id/resume', botErr((req, b, p) => require('./docs/write').resume(p.id, actorOf(req))));
+r.post('/api/docs/:id/attach', botErr((req, b, p) => docsMod().attach(p.id, { messageId: b.messageId || null, to: b.to || '', format: b.format || 'pdf', by: actorOf(req) })));
+r.get('/api/docs/:id/file/:fmt', (req, res, p) => {
+  const f = docsMod().fileOf(p.id, p.fmt); if (!f) return send(res, 404, { error: 'Not made yet' });
+  if (req.query.reveal && ctx.revealFile) { ctx.revealFile(f); return send(res, 200, { ok: true }); }
+  return serveFile(req, res, f, { download: req.query.download ? path.basename(f) : null });
+}, { stream: true });
+// The mailbox (server/automation/mailbox.js) for the bots and Claude's connector: read, search, check, draft.
+// Drafts always wait in Approvals; nothing here sends.
+const mbox = () => require('./automation/mailbox');
+r.get('/api/email/inbox', (req) => ({ messages: mbox().inbox({ query: req.query.q || '', days: Number(req.query.days) || 14, unread: req.query.unread === '1', direction: req.query.sent === '1' ? 'out' : req.query.all === '1' ? 'all' : 'in', limit: Number(req.query.limit) || 25 }) }));
+r.get('/api/email/thread/:id', botErr((req, b, p) => mbox().thread(p.id)));
+r.post('/api/email/check', botErr(() => mbox().check()));
+r.post('/api/email/draft', botErr((req, b) => mbox().draft({ to: b.to, subject: b.subject, body: b.body, replyTo: b.replyTo || b.reply_to || null, attach: b.attach || null, by: actorOf(req), note: b.note || '' })));
+// Call lists (server/outreach/calllist.js): who to call, picked by what the founders say, every number checked.
+const callMod = () => require('./outreach/calllist');
+r.get('/api/calllists', () => ({ lists: callMod().list() }));
+r.post('/api/calllists', botErr((req, b) => callMod().start(b, actorOf(req))));
+r.get('/api/calllists/:id', (req, b, p) => must(callMod().get(p.id), 'That call list is gone'));
+r.post('/api/calllists/:id/resume', botErr((req, b, p) => callMod().resume(p.id, actorOf(req))));
+r.del('/api/calllists/:id', (req, b, p) => callMod().remove(p.id, actorOf(req)));
+r.get('/api/contact-book', botErr((req) => callMod().contactBook({ days: Number(req.query.days) || 14 })));
+r.post('/api/contact-book', botErr((req, b) => callMod().contactBookDoc({ days: Number(b.days) || 14, by: actorOf(req) })));
+// PDFs, Word files and big sheets come as a normal file upload (multipart), read in code.
+r.post('/api/data/upload', async (req, res) => {
+  const dir = path.join(paths.root, 'data', 'uploads'); fs.mkdirSync(dir, { recursive: true });
+  let got; try { got = await receiveUpload(req, dir, { maxBytes: 60 * 1024 ** 2 }); } catch (e) { return send(res, 400, { error: e.message }); }
+  const added = []; const failed = [];
+  for (const f of got.files.slice(0, 20)) { try { added.push(dataMod().addFile(f.path, { name: f.name || path.basename(f.path), by: actorOf(req) })); } catch (e) { failed.push({ name: f.name, error: e.message }); } finally { try { fs.unlinkSync(f.path); } catch { /* kept */ } } }
+  if (!added.length && failed.length) return send(res, 400, { error: failed.map((x) => x.error).join(' ') });
+  return send(res, 200, { added, failed });
+}, { stream: true, raw: true });
+r.get('/api/data/:id', (req, b, p) => { const d = must(dataMod().full(p.id), 'That data is gone'); const { text, ...rest } = d; return { ...rest, textLength: (text || '').length, preview: (text || '').slice(0, 20000) }; });
+r.patch('/api/data/:id', (req, b, p) => dataMod().rename(p.id, b.name));
+r.del('/api/data/:id', (req, b, p) => dataMod().remove(p.id, actorOf(req)));
+r.post('/api/data/:id/leads', botErr((req, b, p) => dataMod().toLeads(p.id, { only: Array.isArray(b.only) ? b.only : null, pending: !!b.pending, type: b.type || null, by: actorOf(req) })));
+r.post('/api/data/:id/notebook', botErr((req, b, p) => dataMod().toNotebook(p.id, actorOf(req))));
+r.get('/api/data/:id/csv', (req, res, p) => { try { const csv = dataMod().toCsv(p.id); res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="data-${p.id}.csv"` }); res.end(csv); } catch (e) { send(res, 404, { error: e.message }); } }, { stream: true });
+
+// Google search through Serper (the "full inquiry" search; DuckDuckGo stays the free default), and finding a lead's videos.
+r.get('/api/serper', () => require('./integrations/serper').status());
+r.get('/api/web/google', botErr(async (req) => { const s = require('./integrations/serper'); const t = String(req.query.type || 'search'); const q = String(req.query.q || ''); return t === 'videos' ? s.videos(q, { recent: req.query.recent || null }) : t === 'news' ? { news: await s.news(q) } : s.web(q, { recent: req.query.recent || null, num: Math.min(100, Number(req.query.n) || 10) }); }));
+// Video thumbnails from Google results, fetched by the engine (the app only shows its own images): pictures only, 2 MB max.
+const thumbCache = new Map();
+r.get('/api/web/image', async (req, res) => {
+  const u = String(req.query.url || '');
+  try {
+    let hit = thumbCache.get(u);
+    if (!hit) {
+      const g = await require('./integrations/safefetch').get(u, { keepBuffer: true, maxBytes: 2 * 1024 * 1024, timeout: 10000, headers: { accept: 'image/*' } });
+      if (g.status >= 400 || !/^image\//i.test(g.type)) return send(res, 404, {});
+      hit = { type: g.type.split(';')[0], buf: g.buffer }; thumbCache.set(u, hit); if (thumbCache.size > 300) thumbCache.delete(thumbCache.keys().next().value);
+    }
+    res.writeHead(200, { 'content-type': hit.type, 'cache-control': 'private, max-age=86400' }); res.end(hit.buf);
+  } catch { send(res, 404, {}); }
+}, { stream: true });
+r.post('/api/prospects/:id/videos/find', botErr((req, b, p) => require('./political/videofind').forLead(p.id, { actor: actorOf(req) })));
+r.patch('/api/prospects/:id/videos', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); const list = (pr.footageFound || []).map((v) => (v.url === b.url ? { ...v, off: !!b.off } : v)); ctx.store.update('prospects', p.id, { footageFound: list }); events.publish('prospects', { id: p.id }); return { footageFound: list }; });
+// Hands-off ads: for each lead, find their videos on Google (if nothing was uploaded) and make the whole package.
+r.post('/api/political/autoads', botErr((req, b) => require('./political/autoads').start({ ids: Array.isArray(b.ids) ? b.ids : [], names: Array.isArray(b.names) ? b.names : [], actor: actorOf(req) })));
+r.post('/api/data/:id/ads', botErr((req, b, p) => { const names = Array.isArray(b.only) ? b.only : []; if (!names.length) throw new HttpError(400, 'Tick the people to make ads for.'); dataMod().toLeads(p.id, { only: names, by: actorOf(req) }); return require('./political/autoads').start({ names, actor: actorOf(req) }); }));
+
+// Live web for everyone (free, no key): search, read a page, or search-and-read.
+r.get('/api/web/search', botErr((req) => require('./integrations/websearch').search(String(req.query.q || ''), Math.min(20, Number(req.query.n) || 8), { recent: req.query.recent || null })));
+r.get('/api/web/read', botErr((req) => require('./integrations/websearch').read(String(req.query.url || ''))));
+r.get('/api/web/research', botErr((req) => require('./integrations/websearch').research(String(req.query.q || ''), { pages: Math.min(5, Number(req.query.pages) || 3), recent: req.query.recent || null })));
 
 // Settings → Agent Connections and the Agent Conversations panel (peer-to-peer agent messaging).
 require('./agents/routes')(r);

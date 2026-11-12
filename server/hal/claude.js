@@ -27,7 +27,28 @@ function post(msg) {
 }
 
 /** The last few turns of HAL's chat, so Claude answers in context. */
-function recent(n = 8) { return ctx.store.all('halMessages').slice(-n).map((m) => `${m.who === 'hal' ? 'HAL' : m.who === 'claude' ? 'Claude' : 'Ryan'}: ${String(m.text || '').slice(0, 600)}`).join('\n'); }
+const who = (m) => (m.who === 'hal' ? 'HAL' : m.who === 'claude' ? 'Claude' : m.who === 'bot' ? `${m.bot || 'A bot'} (bot)` : 'Ryan');
+function recent(n = 8) { return ctx.store.all('halMessages').slice(-n).map((m) => `${who(m)}: ${String(m.text || '').slice(0, 600)}`).join('\n'); }
+
+/**
+ * One of Euclidean's bots asks Claude (its ask_claude tool). Same path as Ryan's "@claude": answered at once through
+ * the founders' Claude login when it's open, else it waits in Claude's inbox (hal_inbox) and the Claude app's answer
+ * (reply_in_hal) is handed back to that bot, which carries on. Returns { answer } or { queued, id }.
+ */
+async function askFromBot(bot, question, { runId = null } = {}) {
+  const q = String(question || '').trim().slice(0, 4000); if (!q) throw new Error('Ask Claude something.');
+  const msg = post({ who: 'bot', bot: bot.name, botId: bot.id, runId, text: q, toClaude: true, answered: false, by: `Bot: ${bot.name}` });
+  const bridge = require('../integrations/bridge');
+  if (bridge.available() && (ctx.store.settings._bridgeLoggedIn || {}).claude) {
+    try {
+      const r = await bridge.ask('claude', `You're Claude, helping ${bot.name}, one of the AI bots inside Euclidean (Ryan and Ben's video agency app). ${bot.role ? `Its job: ${bot.role}.` : ''} Answer it directly and briefly.\n\nRecent chat:\n${recent()}\n\n${bot.name} asks: ${q}`, { actor: `bot:${bot.name}`, quiet: true, record: true });
+      ctx.store.update('halMessages', msg.id, { answered: true });
+      post({ who: 'claude', text: r.text, by: 'Claude (your login)', forBot: bot.name });
+      return { answer: r.text };
+    } catch { /* waits in the inbox */ }
+  }
+  return { queued: true, id: msg.id };
+}
 
 /** Ryan (in HAL's panel) asks Claude. Returns HAL's reply for the panel. */
 async function ask(question, actor = 'ryan') {
@@ -50,18 +71,22 @@ async function ask(question, actor = 'ryan') {
 /** What waits for Claude: Ryan's @claude messages not answered yet, with the chat around them. */
 function inbox() {
   const all = ctx.store.all('halMessages');
-  const waiting = all.filter((m) => m.toClaude && !m.answered).map((m) => ({ id: m.id, at: m.createdAt, text: String(m.text || '').replace(/^@claude\s*/i, '') }));
-  return { waiting, chat: all.slice(-14).map((m) => ({ id: m.id, who: m.who === 'hal' ? 'HAL' : m.who === 'claude' ? 'Claude' : 'Ryan', text: String(m.text || '').slice(0, 1200), at: m.createdAt })) };
+  const waiting = all.filter((m) => m.toClaude && !m.answered).map((m) => ({ id: m.id, at: m.createdAt, from: m.who === 'bot' ? `${m.bot} (one of Euclidean's bots; your reply goes back to it and it carries on)` : 'Ryan', text: String(m.text || '').replace(/^@claude\s*/i, '') }));
+  return { waiting, chat: all.slice(-14).map((m) => ({ id: m.id, who: who(m), text: String(m.text || '').slice(0, 1200), at: m.createdAt })) };
 }
 
 /** Claude answers in HAL's chat (from the Claude app). replyTo: the inbox message id it answers (all waiting when omitted). */
 function reply(text, replyTo = null, asked = null) {
   const t = String(text || '').trim().slice(0, 8000); if (!t) throw Object.assign(new Error('Say something first.'), { status: 400 });
-  for (const m of ctx.store.all('halMessages', (x) => x.toClaude && !x.answered && (!replyTo || x.id === replyTo))) ctx.store.update('halMessages', m.id, { answered: true });
+  const answered = ctx.store.all('halMessages', (x) => x.toClaude && !x.answered && (!replyTo || x.id === replyTo));
+  for (const m of answered) ctx.store.update('halMessages', m.id, { answered: true });
+  // A bot's question: the answer goes back into that bot's chat and it carries on with the job.
+  for (const m of answered.filter((x) => x.botId)) { try { require('../bots').deliver(m.botId, m.text, t, 'Claude'); } catch { /* the bot is gone */ } }
   // The conversation in the Claude app, copied here so it can be read in Euclidean: what Ryan asked Claude there, then Claude's answer.
   const q = String(asked || '').trim().slice(0, 4000);
   if (q) { post({ who: 'you', text: q, by: 'Ryan (in the Claude app)', inClaudeApp: true }); learnFromChat(q, 'Ryan').catch(() => {}); }
-  const m = post({ who: 'claude', text: t, by: 'Claude (the Claude app)' });
+  const bots = [...new Set(answered.filter((x) => x.bot).map((x) => x.bot))];
+  const m = post({ who: 'claude', text: t, by: 'Claude (the Claude app)', ...(bots.length ? { forBot: bots.join(', ') } : {}) });
   learnFromChat(t, 'Claude').catch(() => {});
   return { id: m.id };
 }
@@ -92,4 +117,4 @@ async function learnFromChat(text, who = 'Ryan') {
   return out;
 }
 
-module.exports = { forClaude, ask, inbox, reply, learnFromChat, recent };
+module.exports = { forClaude, ask, askFromBot, inbox, reply, learnFromChat, recent };

@@ -107,13 +107,28 @@ const visionModel = () => ctx.setting('ai.ollama.visionModel', 'llama3.2-vision'
 const hasVisionModel = () => (ollamaState.models || []).some((m) => m === visionModel() || m.split(':')[0] === visionModel().split(':')[0]);
 
 /** Low-level provider call. messages: [{role:'user'|'assistant', content:string}] */
-async function callProvider(provider, { model, system, messages, json, maxTokens = 2000, temperature, search, images }) {
+async function callProvider(provider, { model, system, messages, json, maxTokens = 2000, temperature, search, images, onToken }) {
   if (provider === 'bridge') return { ...(await require('./bridge').complete({ system, prompt: (messages || []).map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n\n'), json })), inTok: 0, outTok: 0 };
   if (images?.length) messages = withImages(provider, messages, images);
   if (provider === 'ollama') {
     const msgs = [...(system ? [{ role: 'system', content: system + (json ? '\n\nRespond with a single valid JSON object only.' : '') }] : []), ...messages];
-    const r = await httpJson(`${ollamaBase()}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, timeoutMs: 600000,
-      body: JSON.stringify({ model: model || ollamaModel(), messages: msgs, stream: false, format: json ? 'json' : undefined, options: { num_ctx: Number(ctx.setting('ai.ollama.context', 16384)), num_predict: maxTokens, ...(temperature != null ? { temperature } : {}) } }) }, provider);
+    // keep_alive: the model stays loaded between messages (reloading it took seconds every time it had gone idle).
+    const req = { model: model || ollamaModel(), messages: msgs, format: json ? 'json' : undefined, keep_alive: ctx.setting('ai.ollama.keepAlive', '30m'), options: { num_ctx: Number(ctx.setting('ai.ollama.context', 16384)), num_predict: maxTokens, ...(temperature != null ? { temperature } : {}) } };
+    if (onToken) {
+      // Streamed: the words show up as Llama writes them (the bots' chats), instead of all at once at the end.
+      let res;
+      try { res = await fetch(`${ollamaBase()}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...req, stream: true }), signal: AbortSignal.timeout(600000) }); }
+      catch (e) { throw new AIError(`Ollama unreachable: ${e.message}`, { provider, retryable: true }); }
+      if (!res.ok) { const t = await res.text(); throw new AIError(`Ollama ${res.status}: ${t.slice(0, 200)}`, { provider, status: res.status, retryable: res.status >= 500 }); }
+      let text = ''; let buf = ''; let last = {}; const dec = new TextDecoder();
+      for await (const chunk of res.body) {
+        buf += dec.decode(chunk, { stream: true }); let i;
+        while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1); if (!line) continue; let j; try { j = JSON.parse(line); } catch { continue; } if (j.error) throw new AIError(`Ollama: ${j.error}`, { provider }); if (j.message?.content) { text += j.message.content; try { onToken(text); } catch { /* the listener's problem */ } } if (j.done) last = j; }
+      }
+      if (buf.trim()) { try { const j = JSON.parse(buf.trim()); if (j.message?.content) { text += j.message.content; onToken(text); } if (j.done) last = j; } catch { /* a cut-off last line */ } }
+      return { text, inTok: last.prompt_eval_count || 0, outTok: last.eval_count || 0, model: last.model || req.model };
+    }
+    const r = await httpJson(`${ollamaBase()}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, timeoutMs: 600000, body: JSON.stringify({ ...req, stream: false }) }, provider);
     return { text: r.message?.content || '', inTok: r.prompt_eval_count || 0, outTok: r.eval_count || 0, model: r.model || model };
   }
   const key = secrets.get(PROVIDERS[provider].keyName);
@@ -176,7 +191,7 @@ function clientContext(clientId) {
  * High-level agent call with role routing, budget checks and fallback.
  * @returns {{text, json, provider, model}}
  */
-async function ask({ role = 'operations', system, prompt, messages, json = false, clientId, jobId, maxTokens, search, images, provider: forceProvider }) {
+async function ask({ role = 'operations', system, prompt, messages, json = false, clientId, jobId, maxTokens, search, images, provider: forceProvider, onToken, firstProvider = false }) {
   const cfg = ctx.setting(`ai.roles.${role}`) || ctx.setting('ai.roles.operations');
   await pingOllama();
   // Local-first: "all" sends every task to Llama on this computer; "most" keeps only emails/ad writing on the paid
@@ -193,8 +208,12 @@ async function ask({ role = 'operations', system, prompt, messages, json = false
   // Looking at pictures: the local AI only when its vision model is downloaded.
   if (images?.length) chain = chain.filter((p) => (p !== 'ollama' || hasVisionModel()) && p !== 'bridge');
   // Free web search for providers without built-in search (everything except Grok): results go in as context.
-  if (search && !(chain.find((p) => connected(p) && !overBudget(p)) === 'xai')) {
-    try { const ws = await require('./websearch').forPrompt(prompt || (messages || []).slice(-1)[0]?.content || ''); if (ws) system = `${system || ''}\n\n${ws}`; } catch { /* search unavailable */ }
+  // The free local AI and your own AI account can't browse, so they get the pages' own words (search + read the
+  // best pages); paid APIs get the results plus the top page, to keep token costs down.
+  const first = chain.find((p) => connected(p) && !overBudget(p));
+  if (search && first !== 'xai') {
+    const deep = first === 'ollama' || first === 'bridge';
+    try { const ws = await require('./websearch').forPrompt(prompt || (messages || []).slice(-1)[0]?.content || '', { deep: true, pages: deep ? Number(ctx.setting('ai.web.readPages', 3)) : 1, recent: typeof search === 'string' ? search : null }); if (ws) system = `${system || ''}\n\n${ws}`; } catch { /* search unavailable */ }
   }
   const sys = [system, clientContext(clientId)].filter(Boolean).join('\n\n');
   const msgs = messages || [{ role: 'user', content: prompt }];
@@ -208,7 +227,7 @@ async function ask({ role = 'operations', system, prompt, messages, json = false
     try {
       let r; let attempt = 0;
       for (;;) {
-        try { r = await callProvider(provider, { model, system: sys, messages: msgs, json, maxTokens, search, images }); break; }
+        try { r = await callProvider(provider, { model, system: sys, messages: msgs, json, maxTokens, search, images, onToken }); break; }
         catch (e) { if (e.retryable && attempt++ < 2) { await new Promise((ok) => setTimeout(ok, 1500 * attempt)); continue; } throw e; }
       }
       recordUsage({ provider, model: r.model, role, clientId, jobId, inTok: r.inTok, outTok: r.outTok });
@@ -231,6 +250,17 @@ async function ask({ role = 'operations', system, prompt, messages, json = false
   const err = new AIError(chain.length ? `No agent could complete the ${role} task. ${errors.join(' · ')}` : 'No AI provider configured for this role');
   err.notConnected = errors.every((e) => /not connected/.test(e));
   throw err;
+}
+
+/** The provider that would answer this role first right now (the bots keep their prompt short for the local AI). */
+function firstFor(role = 'operations', forceProvider = null) {
+  if (forceProvider) return connected(forceProvider) ? forceProvider : null;
+  const cfg = ctx.setting(`ai.roles.${role}`) || ctx.setting('ai.roles.operations') || {};
+  const local = ctx.setting('ai.local', 'all');
+  let chain = [cfg.provider, ...(cfg.fallbacks || [])];
+  chain = local === 'all' || (local === 'most' && role !== 'writing') ? ['ollama', ...chain] : [...chain, 'ollama'];
+  const via = ctx.setting('ai.bridge.use', 'off'); if (via === 'first') chain = ['bridge', ...chain];
+  return chain.filter((p) => PROVIDERS[p]).find((p) => connected(p) && !overBudget(p)) || null;
 }
 
 function defaultModelFor(p) { return { anthropic: 'claude-sonnet-5-5', openai: 'gpt-5', xai: 'grok-4', ollama: 'llama3.2' }[p]; }
@@ -288,4 +318,4 @@ function agentStatus() {
 /** Can any connected AI look at pictures right now? */
 function canSee() { return ['anthropic', 'openai', 'xai'].some((p) => connected(p) && !overBudget(p)) || (ollamaState.ok && hasVisionModel()); }
 
-module.exports = { canSee, pingOllama, ollamaState, PROVIDERS, ask, test, transcribeOpenAI, connected, anyConnected, agentStatus, recordUsage, clientContext, AIError, monthSpend, callProvider, overBudget, defaultModelFor };
+module.exports = { firstFor, canSee, pingOllama, ollamaState, PROVIDERS, ask, test, transcribeOpenAI, connected, anyConnected, agentStatus, recordUsage, clientContext, AIError, monthSpend, callProvider, overBudget, defaultModelFor };

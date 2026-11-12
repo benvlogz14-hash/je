@@ -62,6 +62,7 @@ async function call(method, route, body, { via = 'claude', timeout = 60000 } = {
 }
 const get = (r) => call('GET', r);
 const post = (r, b = {}) => call('POST', r, b);
+const patch = (r, b = {}) => call('PATCH', r, b);
 
 // ------------------------------------------------------------------ tools
 const brief = (j) => ({ id: j.id, type: j.type, title: j.title, status: j.status, progress: Math.round((j.progress || 0) * 100) + '%', note: j.note || '', error: j.error || null, created: j.createdAt, finished: j.finishedAt || null });
@@ -111,7 +112,7 @@ const TOOLS = [
     run: async ({ limit = 30 }) => { const a = await get('/api/approvals?status=pending'); return (Array.isArray(a) ? a : a.items || []).slice(0, Number(limit) || 30).map((x) => ({ id: x.id, kind: x.kind, title: x.title, summary: x.summary, created: x.createdAt })); } },
 
   // ---------------------------------------------------------------- HAL's chat with Claude
-  { name: 'hal_inbox', description: "Messages Ryan left for you (Claude) in HAL's chat inside Euclidean (\"@claude ...\"), not answered yet, plus the recent chat between Ryan, HAL and Claude. Check it when Ryan says to check HAL's inbox, or at the start of a session.",
+  { name: 'hal_inbox', description: "Messages left for you (Claude) in HAL's chat inside Euclidean, not answered yet: Ryan's (\"@claude ...\") and questions from Euclidean's bots (from says which; answering one with reply_in_hal and its replyTo sends the answer back to that bot, which carries on with its job), plus the recent chat between Ryan, HAL and Claude. Check it when Ryan says to check HAL's inbox, or at the start of a session.",
     annotations: { readOnlyHint: true }, inputSchema: { type: 'object', properties: {} },
     run: async () => get('/api/hal/claude-inbox') },
   { name: 'reply_in_hal', description: "Post in HAL's chat inside Euclidean, as Claude (Ryan reads it in HAL's panel; HAL's notebook keeps what's worth keeping). Use it (1) to answer what Ryan left in hal_inbox (replyTo = that message's id), and (2) to keep HAL's chat a copy of this conversation: after each answer you give Ryan here about Euclidean, call it with your answer as text and Ryan's message as asked. To ask HAL something and get his answer, use talk_to_hal instead.",
@@ -152,6 +153,103 @@ const TOOLS = [
   { name: 'upload_file', description: "Send a file from this PC into Euclidean: a video for a client's footage (/api/clients/<id>/upload), a candidate's footage (/api/prospects/<id>/footage/upload), Quick cut (/api/clipper/upload), a best short (/api/winners/upload)... Use find_features with 'upload' to see them. file = the full path on this PC.",
     inputSchema: { type: 'object', properties: { file: { type: 'string' }, to: { type: 'string' }, fields: { type: 'object', description: 'Extra form fields some uploads take.' } }, required: ['file', 'to'] },
     run: async ({ file, to, fields }) => clip(await upload(file, route(to), fields || {})) },
+  // Bots (the Bots tab: Corbin the master bot, Juno the client bot, Scout, Data Bot and any added).
+  { name: 'list_bots', description: "Euclidean's bots (the team that replaced the GrokBots): each bot's name, kind (master, client, scout), job, brain, computer, whether it's busy or waiting for a person's OK, and its last message.",
+    inputSchema: { type: 'object', properties: {} },
+    run: async () => (await get('/api/bots')).bots.map((b) => ({ id: b.id, name: b.name, kind: b.kind || 'custom', job: b.role, brain: b.brain, computer: b.computer, busy: b.busy, last: b.last, scheduled: (b.routines || []).filter((r) => r.on).map((r) => `${r.every} ${r.at}: ${r.task}`) })) },
+  { name: 'ask_bot', description: "Give one of Euclidean's bots a job and wait for its answer (up to about 4 minutes): it searches the live web, reads pages, checks the Data tab, the leads board and the notebook, and can hand parts to other bots. Steps that act (adding leads, clicking on sites, running commands) wait for a person's OK on the Bots page; the result says so. bot = a name (Corbin, Juno, Scout, Data Bot) or master / client / scout.",
+    inputSchema: { type: 'object', properties: { bot: { type: 'string' }, message: { type: 'string' } }, required: ['bot', 'message'] },
+    run: async ({ bot, message }) => {
+      const all = (await get('/api/bots')).bots; const k = String(bot).toLowerCase();
+      const b = all.find((x) => x.id === bot || x.name.toLowerCase() === k) || all.find((x) => x.kind === k.replace(/\s*bot$/, '').replace('scouting', 'scout')) || all.find((x) => x.name.toLowerCase().startsWith(k));
+      if (!b) throw new Error(`No bot called ${bot}. Bots: ${all.map((x) => x.name).join(', ')}`);
+      const sent = await post(`/api/bots/${b.id}/send`, { text: message });
+      let runId = sent.queued ? null : sent.id;
+      for (let i = 0; i < 120; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const t = await get(`/api/bots/${b.id}`);
+        if (!runId) { runId = (t.messages || []).find((m) => m.id === sent.messageId)?.runId || null; if (!runId) continue; }
+        const r = t.runs?.[runId];
+        if (!r) continue;
+        const steps = (r.steps || []).filter((s) => s.tool).map((s) => `${s.tool} ${JSON.stringify(s.args || {}).slice(0, 160)}${s.waiting ? ' (WAITING FOR A PERSON)' : ''}`);
+        if (r.status === 'done') return { bot: b.name, answer: r.answer, steps };
+        if (r.status === 'waiting') return { bot: b.name, waiting: `It wants to ${(r.steps || []).find((s) => s.waiting)?.why || 'do something'}. A person allows or denies it on the Bots page (show_in_app /bots).`, steps };
+        if (r.status === 'failed' || r.status === 'stopped') return { bot: b.name, stopped: r.error || r.note, steps };
+      }
+      return { bot: b.name, note: 'Still working. Its answer will be in its chat on the Bots page.' };
+    } },
+  // Live internet through Euclidean (free DuckDuckGo search, safe page reading).
+  { name: 'web_research', description: 'Search the live web (free, through DuckDuckGo) and read the best pages: returns the results and the passages that answer the question, with links. recent: day, week, month or year.',
+    inputSchema: { type: 'object', properties: { question: { type: 'string' }, pages: { type: 'number' }, recent: { type: 'string' } }, required: ['question'] },
+    run: async ({ question, pages, recent }) => clip(await get(`/api/web/research?q=${encodeURIComponent(question)}&pages=${pages || 3}${recent ? `&recent=${encodeURIComponent(recent)}` : ''}`)) },
+  { name: 'web_read', description: 'Read one web page as clean text (title, date, text, links), through Euclidean\'s safe reader.',
+    inputSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
+    run: async ({ url }) => clip(await get(`/api/web/read?url=${encodeURIComponent(url)}`)) },
+  { name: 'google_search', description: "A real Google search through Euclidean's Serper key (about a tenth of a cent each, cached; Euclidean caps the monthly spend). type: web (default), news or videos. Use web_research (free DuckDuckGo) first for quick facts; use this for a full inquiry or to list every video of someone.",
+    inputSchema: { type: 'object', properties: { query: { type: 'string' }, type: { type: 'string', enum: ['web', 'news', 'videos'] }, recent: { type: 'string' } }, required: ['query'] },
+    run: async ({ query, type, recent }) => clip(await get(`/api/web/google?q=${encodeURIComponent(query)}&type=${type === 'videos' ? 'videos' : type === 'news' ? 'news' : 'search'}${recent ? `&recent=${encodeURIComponent(recent)}` : ''}`)) },
+  { name: 'find_videos', description: "Find a lead's public videos on Google's Videos tab (floor sessions, hearings, council meetings, interviews, campaign videos), only ones about them, ranked; saved on the lead for the ad machine. lead = their name or id on the leads board.",
+    inputSchema: { type: 'object', properties: { lead: { type: 'string' } }, required: ['lead'] },
+    run: async ({ lead }) => { const all = await get(`/api/prospects?q=${encodeURIComponent(lead)}`); const list = Array.isArray(all) ? all : all.prospects || all.items || []; const p = list.find((x) => x.id === lead) || list.find((x) => String(x.name).toLowerCase() === String(lead).toLowerCase()) || list.find((x) => String(x.name).toLowerCase().includes(String(lead).toLowerCase().trim())); if (!p) throw new Error(`${lead} is not on the leads board.`); const r = await post(`/api/prospects/${p.id}/videos/find`); return { lead: p.name, found: r.found.map((v) => ({ title: v.title, url: v.url, channel: v.channel || v.source, minutes: v.duration ? Math.round(v.duration / 60) : null, date: v.date, why: v.why })), cached: r.cached, error: r.error }; } },
+  { name: 'make_ads_hands_off', description: "Start the ad machine for leads on the board, hands-off: for each it finds their videos on Google (unless footage was uploaded), downloads the best, cuts the ads from their own words, makes the one-pager and drafts the email (Approvals; nothing is sent). Skips HOLD, lost and Ryan's people; 25 at a time. Check progress with candidate_runs.",
+    inputSchema: { type: 'object', properties: { names: { type: 'array', items: { type: 'string' } } }, required: ['names'] },
+    run: async ({ names }) => post('/api/political/autoads', { names }) },
+  // The Data tab.
+  { name: 'data_list', description: "Everything in Euclidean's Data tab: the team's lists, winners lists, call sheets, research packs, master prompts and pages, each with how many people and tables it has.",
+    inputSchema: { type: 'object', properties: {} }, run: async () => (await get('/api/data')).datasets },
+  { name: 'data_search', description: 'Search the Data tab for people, rows and passages (a name, an office, a word).',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+    run: async ({ query }) => clip(await get(`/api/data/search?q=${encodeURIComponent(query)}`)) },
+  { name: 'data_add', description: "Add something to the Data tab: text you have (a list, a markdown or CSV table, notes; give it a name) or a web page (url). Euclidean reads it into people and tables. Adding those people to the leads board is a separate step a person takes in the app (or use_feature POST /api/data/<id>/leads).",
+    inputSchema: { type: 'object', properties: { name: { type: 'string' }, text: { type: 'string' }, url: { type: 'string' } } },
+    run: async ({ name, text, url }) => post('/api/data', url ? { url } : { files: [{ name: name || 'From Claude', text: text || '' }] }) },
+  // ---- the outreach mailbox (drafts only: a person approves and sends)
+  { name: 'email_inbox', description: "Euclidean's outreach mailbox: recent emails (newest first) with who, when, subject and the first lines; auto-replies are marked. query searches names, addresses and words; sent=true lists what we sent; unread=true only unread threads.",
+    inputSchema: { type: 'object', properties: { query: { type: 'string' }, days: { type: 'number' }, unread: { type: 'boolean' }, sent: { type: 'boolean' }, limit: { type: 'number' } } },
+    run: async ({ query, days, unread, sent, limit }) => get(`/api/email/inbox?q=${encodeURIComponent(query || '')}&days=${days || 14}${unread ? '&unread=1' : ''}${sent ? '&sent=1' : ''}&limit=${limit || 25}`) },
+  { name: 'email_read', description: 'A whole email thread by a message id (from email_inbox): every message both ways, in order, and whether they opted out.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] }, run: async ({ id }) => get(`/api/email/thread/${encodeURIComponent(id)}`) },
+  { name: 'email_check', description: 'Check the outreach mailbox for new email right now.', inputSchema: { type: 'object', properties: {} }, run: async () => post('/api/email/check', {}) },
+  { name: 'email_draft', description: 'Write an email draft from Euclidean\'s outreach mailbox. It waits in Approvals for a person to approve and send; it is never sent from here. to = an address or a contact/lead name; reply_to = a message id to answer in its thread; attach = a document id or title (PDF). House style: personal, one clear ask, no em dashes; political first emails go to campaign/press addresses, not .gov.',
+    inputSchema: { type: 'object', properties: { to: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' }, reply_to: { type: 'string' }, attach: { type: 'string' } }, required: ['body'] },
+    run: async (a) => post('/api/email/draft', a) },
+  // ---- documents and call lists
+  { name: 'documents', description: 'The documents Euclidean made (playbooks, platform plans, meeting briefs, call sheets, contact books) with status, pages and files. Give id to get one in full (its spec: sections and blocks).',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' }, id: { type: 'string' } } },
+    run: async ({ query, id }) => (id ? get(`/api/docs/${encodeURIComponent(id)}`) : get(`/api/docs?q=${encodeURIComponent(query || '')}`)) },
+  { name: 'make_document', description: "Make a designed PDF + Word document in Euclidean. Either let Euclidean's writer do it (kind playbook|plan|brief|proposal|report|custom, title, about, instructions, research: true to search the web) or pass a finished spec you wrote: {title, subtitle, kicker, chips, look: designed|plain, sections: [{title, kicker, blocks}]} where blocks are text {text}, bullets {items}, cards {items:[{label,title,text,tag}]}, stats {items:[{value,label}]}, table {columns, rows}, callout {title,text,tone}, steps {items}, phone {title, layout: talking|walk|stat|grid|pov|reply, labels:{top,middle,side}, text, beats:[{time,text}], facts}, tips {items:[{icon: eye|window|mic|propped|takes|silence|share|weekly|light|quiet|frame|edit|approve|idea, title, text}]}, beats, quote, checklist, email {subject, body}, person {...}, sources {items:[{text,url}]}. Facts only from real sources; tag what Euclidean adds PROPOSED.",
+    inputSchema: { type: 'object', properties: { kind: { type: 'string' }, title: { type: 'string' }, about: { type: 'string' }, instructions: { type: 'string' }, research: { type: 'boolean' }, spec: { type: 'object' } } },
+    run: async (a) => post('/api/docs', a.spec ? { spec: a.spec, kind: a.kind || 'custom', about: a.about || '' } : a) },
+  { name: 'revise_document', description: 'Change a finished document from a note in the founders\' words ("make the filming guide one page with diagrams"). The old version is kept.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, note: { type: 'string' } }, required: ['id', 'note'] },
+    run: async ({ id, note }) => post(`/api/docs/${encodeURIComponent(id)}/revise`, { note }) },
+  { name: 'attach_document', description: 'Attach a finished document (pdf or docx) to an email draft waiting in Approvals (by message_id, or who it is to). Nothing is sent.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, message_id: { type: 'string' }, to: { type: 'string' }, format: { type: 'string' } }, required: ['id'] },
+    run: async ({ id, message_id, to, format }) => post(`/api/docs/${encodeURIComponent(id)}/attach`, { messageId: message_id, to, format }) },
+  { name: 'build_call_list', description: "Build a checked call list in Euclidean from plain words (e.g. \"two for Ben and two for Ryan, freshly re-elected NY Assembly, nobody we've pitched\"): picks from the leads and the Data tab's winners lists, leaves out everyone already called/emailed/pitched, checks each person's district and Albany phones, office email and an accomplishment hook on their official pages, writes a call script, voicemail and email draft each, and saves a call sheet (PDF + Word). Runs in the background: check it with call_list.",
+    inputSchema: { type: 'object', properties: { request: { type: 'string' }, include_previous: { type: 'boolean' } }, required: ['request'] },
+    run: async ({ request, include_previous }) => post('/api/calllists', { request, includePrevious: !!include_previous }) },
+  { name: 'call_list', description: 'A call list by id (its picks, checked phones/emails/hooks with links, drafts and the document id), or the latest lists without an id.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } } }, run: async ({ id }) => (id ? get(`/api/calllists/${encodeURIComponent(id)}`) : get('/api/calllists')) },
+  { name: 'contact_book', description: 'Everyone Euclidean reached out to lately: what was sent and when, real replies vs auto-replies, bounces, next step each. make_document=true also saves a PDF + Word contact book.',
+    inputSchema: { type: 'object', properties: { days: { type: 'number' }, make_document: { type: 'boolean' } } },
+    run: async ({ days, make_document }) => (make_document ? post('/api/contact-book', { days: days || 14 }) : get(`/api/contact-book?days=${days || 14}`)) },
+  // ---- bots' scheduled tasks
+  { name: 'bot_schedule', description: "The bots' scheduled tasks (data scrapes, briefs, news checks): list them with their next run; add one to a bot (every: minutes|hours|day|weekday|week|times, with minutes / hours / at 'HH:MM' / times ['08:00','12:30'] / day 0-6); pause, resume or remove one by id; autorun_on / autorun_off for one bot, or for all bots when no bot is given (the bots keep working in chat; only their schedules pause).",
+    inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'add', 'pause', 'resume', 'remove', 'autorun_on', 'autorun_off'] }, bot: { type: 'string' }, task: { type: 'string' }, every: { type: 'string' }, minutes: { type: 'number' }, hours: { type: 'number' }, at: { type: 'string' }, times: { type: 'array', items: { type: 'string' } }, day: { type: 'number' }, id: { type: 'string' } } },
+    run: async (a) => {
+      const all = await get('/api/bots/schedules'); const act = a.action || 'list';
+      if (act === 'list') return all;
+      if (!a.bot && (act === 'autorun_on' || act === 'autorun_off')) return post('/api/bots/schedules/autorun', { on: act === 'autorun_on' });
+      const b = all.bots.find((x) => x.id === a.bot || x.name.toLowerCase() === String(a.bot || '').toLowerCase());
+      if (!b) throw new Error(`Which bot? ${all.bots.map((x) => x.name).join(', ')}`);
+      if (act === 'autorun_on' || act === 'autorun_off') return patch(`/api/bots/${b.id}`, { schedulesOn: act === 'autorun_on' });
+      let tasks = b.tasks.map(({ when, next, ...r }) => r);
+      if (act === 'add') tasks.push({ task: a.task, every: a.every || 'day', minutes: a.minutes, hours: a.hours, at: a.at, times: a.times, day: a.day, on: true, by: 'Claude' });
+      else { const k = tasks.findIndex((r) => r.id === a.id); if (k < 0) throw new Error('No task with that id (list first).'); tasks = act === 'remove' ? tasks.filter((_, i) => i !== k) : tasks.map((r, i) => (i === k ? { ...r, on: act === 'resume' } : r)); }
+      await patch(`/api/bots/${b.id}`, { routines: tasks });
+      return (await get('/api/bots/schedules')).bots.find((x) => x.id === b.id);
+    } },
 ];
 
 /** /api/... with the leading slash; full URLs are cut back to their path. */
@@ -181,7 +279,7 @@ async function upload(file, to, fields) {
   return data;
 }
 
-const INSTRUCTIONS = `You control the Euclidean app running on this PC (Euclidean Media's video agency program: clients, footage, clips, Studio, Quick cut, political ads and outreach, messages, approvals, finance, HAL). The quick tools (status, list_jobs, list_candidates, make_ads...) cover common checks. For anything else: find_features with a few words, then look (read), use_feature (do it inside the app), upload_file, or talk_to_hal (you appear as Claude in HAL's chat; hal_inbox has what Ryan left for you there, answer with reply_in_hal). Keep HAL's chat a copy of this conversation: after every answer you give Ryan here that involves Euclidean or HAL, call reply_in_hal with your answer (text) and his message (asked), so the founders can read it in Euclidean. show_in_app opens the page so the person can watch. The notebook (notebook_recall / notebook_learn) is what Euclidean and HAL have learned: read it before acting on a person or client, and add what you learn (true and sourced) so the app keeps getting smarter. Anything that sends, approves, posts, calls or deletes is send_or_publish: say exactly what will happen, wait for the person's yes in chat, then call it with their words. Political emails are sent by a person: draft them, never approve them on your own. When unsure what a feature expects, read the matching GET first.`;
+const INSTRUCTIONS = `You control the Euclidean app running on this PC (Euclidean Media's video agency program: clients, footage, clips, Studio, Quick cut, political ads and outreach, messages, approvals, finance, HAL). The quick tools (status, list_jobs, list_candidates, make_ads...) cover common checks. Euclidean's own bots (list_bots, ask_bot: Corbin the master bot, Juno the client bot, Scout, Data Bot) do research and drafting inside the app; web_research and web_read give free live internet (google_search for a full Google inquiry, which costs a little); find_videos and make_ads_hands_off find a politician's public videos and make their ads without anyone uploading footage; data_list, data_search and data_add work with the Data tab (the team's lists and research, PDFs included); email_inbox, email_read, email_check and email_draft work with the outreach mailbox (drafts wait in Approvals); make_document / revise_document / attach_document make designed PDF + Word documents (playbooks, plans, briefs) and put them on drafts; build_call_list, call_list and contact_book make checked call sheets and show who we reached; bot_schedule sets the bots' scheduled tasks and their auto-run switch. For anything else: find_features with a few words, then look (read), use_feature (do it inside the app), upload_file, or talk_to_hal (you appear as Claude in HAL's chat; hal_inbox has what Ryan left for you there, answer with reply_in_hal). Keep HAL's chat a copy of this conversation: after every answer you give Ryan here that involves Euclidean or HAL, call reply_in_hal with your answer (text) and his message (asked), so the founders can read it in Euclidean. show_in_app opens the page so the person can watch. The notebook (notebook_recall / notebook_learn) is what Euclidean and HAL have learned: read it before acting on a person or client, and add what you learn (true and sourced) so the app keeps getting smarter. Anything that sends, approves, posts, calls or deletes is send_or_publish: say exactly what will happen, wait for the person's yes in chat, then call it with their words. Political emails are sent by a person: draft them, never approve them on your own. When unsure what a feature expects, read the matching GET first.`;
 
 // ------------------------------------------------------------------ the protocol (JSON-RPC 2.0 over stdio, one message per line)
 const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\n');

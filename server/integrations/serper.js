@@ -1,66 +1,107 @@
 'use strict';
 /**
- * Serper (serper.dev): Google results through a paid key, about $1 per 1,000 searches (Nov 10, Ryan). DuckDuckGo stays the
- * free search for quick facts (websearch.search); Serper is for full inquiries and, mainly, Google's Videos tab, which
- * finds a candidate's public footage best: assembly and council sessions, hearings, campaign and news videos.
+ * Google results through Serper (serper.dev): the "full inquiry" search. DuckDuckGo (websearch.js) stays the free
+ * default for quick facts and summaries; Serper is used when a job needs Google's own results, above all the Videos tab,
+ * which lists a politician's public footage (floor sessions, hearings, council meetings, interviews, campaign videos).
  *
- * Never wasteful: every query's answer is kept 14 days (the same search is never paid for twice), at most
- * `search.serper.perDay` searches a day (default 100), and callers ask once per candidate. Spend shows in Settings.
+ * About $1 per 1,000 searches, so every call is streamlined:
+ *  - results are cached on disk (<data>/serper/cache.json): the same search is never paid for twice within its time
+ *    (videos and web 14 days, news 6 hours);
+ *  - a monthly and a daily cap (`serper.monthlyCap`, default 2,000 ≈ $2; `serper.dailyCap`, default 300); over a cap, or
+ *    with no key, callers fall back to DuckDuckGo instead of failing;
+ *  - each paid search is counted (`settings._serper`) and recorded in AI usage (provider 'serper', `serper.costPer1000`).
+ * Key: Settings → Connections → Google search (Serper) (`global.serper.apiKey`).
  */
+const fs = require('fs');
+const path = require('path');
 const ctx = require('../core/ctx');
+const paths = require('../core/paths');
 const secrets = require('../core/secrets');
+const safe = require('./safefetch');
 
 const KEY = 'global.serper.apiKey';
-const DAY = 86400000;
-const S = (k, d) => ctx.setting(`search.serper.${k}`, d);
+const TYPES = { search: 14, videos: 14, news: 0.25, images: 14, places: 30, scholar: 30 }; // days cached
+const base = () => process.env.EUCLIDEAN_SERPER_URL || 'https://google.serper.dev';
 
-function connected() { return !!secrets.get(KEY); }
+const ready = () => secrets.has(KEY) || !!process.env.EUCLIDEAN_SERPER_KEY;
+const keyOf = () => process.env.EUCLIDEAN_SERPER_KEY || secrets.get(KEY);
 
-function usage() {
-  const today = new Date().toISOString().slice(0, 10);
-  const u = ctx.store.settings._serperUsage || {};
-  return { today: u.day === today ? u.n || 0 : 0, total: u.total || 0, perDay: Number(S('perDay', 100)) || 100 };
+// ------------------------------------------------------------------ cache (on disk, survives restarts)
+let cache = null; let dirty = false;
+const cacheFile = () => { const d = path.join(paths.root, 'serper'); fs.mkdirSync(d, { recursive: true }); return path.join(d, 'cache.json'); };
+function loadCache() { if (cache) return cache; try { cache = JSON.parse(fs.readFileSync(cacheFile(), 'utf8')); } catch { cache = {}; } return cache; }
+function saveCache() {
+  if (!dirty) return; dirty = false;
+  const c = loadCache(); const keys = Object.keys(c);
+  if (keys.length > 3000) keys.sort((a, b) => c[a].at - c[b].at).slice(0, keys.length - 3000).forEach((k) => delete c[k]);
+  try { fs.writeFileSync(cacheFile(), JSON.stringify(c)); } catch { /* next time */ }
 }
+setInterval(saveCache, 30000).unref?.();
+
+// ------------------------------------------------------------------ budget
+const month = () => new Date().toISOString().slice(0, 7);
+const day = () => new Date().toISOString().slice(0, 10);
+function counts() { const s = ctx.store?.settings?._serper || {}; return { month: s.month === month() ? s.monthCount || 0 : 0, day: s.day === day() ? s.dayCount || 0 : 0 }; }
+function caps() { return { month: Number(ctx.setting?.('serper.monthlyCap', 2000)) || 2000, day: Number(ctx.setting?.('serper.dailyCap', 300)) || 300 }; }
 function count() {
-  const today = new Date().toISOString().slice(0, 10);
-  const u = ctx.store.settings._serperUsage || {};
-  ctx.store.settings._serperUsage = { day: today, n: (u.day === today ? u.n || 0 : 0) + 1, total: (u.total || 0) + 1 };
-  ctx.store.touch();
+  const c = counts();
+  ctx.store.setSettings({ _serper: { month: month(), monthCount: c.month + 1, day: day(), dayCount: c.day + 1 } });
+  try { require('./ai').recordUsage({ provider: 'serper', model: 'google', role: 'search', inTok: 0, outTok: 0, costUsd: Number(ctx.setting('serper.costPer1000', 1)) / 1000, kind: 'search' }); } catch { /* usage is best-effort */ }
+}
+/** Why Serper can't be used right now, or null. */
+function blocked() {
+  if (!ready()) return 'No Serper key yet (Settings → Connections → Google search).';
+  const c = counts(); const cap = caps();
+  if (c.month >= cap.month) return `This month's Google search limit (${cap.month}) is used up. Raise it in Settings → Connections → Google search.`;
+  if (c.day >= cap.day) return `Today's Google search limit (${cap.day}) is used up.`;
+  return null;
 }
 
-/** One Serper call (kind: 'videos' | 'search' | 'news'), cached by its exact question for 14 days. */
-async function ask(kind, q, { num = 20, gl = 'us' } = {}) {
-  const key = secrets.get(KEY);
-  if (!key) throw Object.assign(new Error('Serper isn\'t connected. Add the key in Settings → Connections → Web search.'), { notConnected: true });
-  const ck = `${kind}|${gl}|${num}|${String(q).trim().toLowerCase()}`;
-  const cache = ctx.store.settings._serperCache || {};
-  if (cache[ck] && Date.now() - cache[ck].at < 14 * DAY) return cache[ck].data;
-  const u = usage();
-  if (u.today >= u.perDay) throw new Error(`Today's ${u.perDay} Serper searches are used up (Settings → Connections → Web search sets the limit). Free search is used until tomorrow.`);
-  const res = await fetch(`https://google.serper.dev/${kind}`, { method: 'POST', headers: { 'X-API-KEY': key, 'content-type': 'application/json' }, body: JSON.stringify({ q, num, gl }), signal: AbortSignal.timeout(20000) });
-  if (res.status === 401 || res.status === 403) throw new Error('Serper turned the key down. Check it in Settings → Connections → Web search.');
-  if (!res.ok) throw new Error(`Serper answered ${res.status}`);
-  const data = await res.json();
+/**
+ * One Google search. type: search | videos | news | images | places | scholar. opts: num (10-100), gl, hl, tbs
+ * (e.g. 'qdr:w' for the past week), page. Returns Serper's JSON plus `cached: true` when it came from the cache.
+ */
+async function query(type, q, { num = 10, gl = 'us', hl = 'en', tbs = null, page = 1 } = {}) {
+  if (!TYPES[type]) throw new Error(`Unknown Google search type ${type}.`);
+  q = String(q || '').replace(/\s+/g, ' ').trim().slice(0, 400); if (!q) throw new Error('Nothing to search for.');
+  const body = { q, num: Math.max(10, Math.min(100, num)), gl, hl, ...(tbs ? { tbs } : {}), ...(page > 1 ? { page } : {}) };
+  const ck = `${type}|${JSON.stringify(body).toLowerCase()}`;
+  const c = loadCache()[ck];
+  if (c && Date.now() - c.at < TYPES[type] * 86400000) return { ...c.data, cached: true };
+  const why = blocked(); if (why) throw Object.assign(new Error(why), { serperBlocked: true });
+  const r = await safe.get(`${base()}/${type}`, { method: 'POST', body: JSON.stringify(body), headers: { 'x-api-key': keyOf(), 'content-type': 'application/json', accept: 'application/json' }, timeout: 20000 });
+  if (r.status === 401 || r.status === 403) throw Object.assign(new Error('Serper turned the key down. Check it in Settings → Connections → Google search.'), { serperBlocked: true });
+  if (r.status === 429) throw Object.assign(new Error('Serper says too many searches right now, or the credits ran out (serper.dev → Billing).'), { serperBlocked: true });
+  if (r.status >= 400) throw new Error(`Google search failed (${r.status}).`);
+  let data; try { data = JSON.parse(r.text); } catch { throw new Error('Google search sent back something unreadable.'); }
   count();
-  const next = { ...cache, [ck]: { at: Date.now(), data } };
-  const keys = Object.keys(next); if (keys.length > 500) for (const k of keys.sort((a, b) => next[a].at - next[b].at).slice(0, keys.length - 500)) delete next[k];
-  ctx.store.settings._serperCache = next; ctx.store.touch();
+  loadCache()[ck] = { at: Date.now(), data }; dirty = true; saveCache();
   return data;
 }
 
-/** "12:34" / "1:02:03" → seconds. */
-function seconds(d) { const p = String(d || '').split(':').map(Number); if (!p.length || p.some(isNaN)) return 0; return p.reduce((a, b) => a * 60 + b, 0); }
-
-/** Google's Videos tab: [{ url, title, snippet, source, channel, duration (s), date }]. */
-async function videos(q, opts = {}) {
-  const d = await ask('videos', q, { num: 20, ...opts });
-  return (d.videos || []).map((v) => ({ url: v.link, title: v.title || '', snippet: v.snippet || '', source: v.source || '', channel: v.channel || '', duration: seconds(v.duration), date: v.date || '' })).filter((v) => /^https?:\/\//.test(v.url));
+/** Web results in the same shape as DuckDuckGo's: [{ title, url, snippet, date }], plus the answer box / knowledge panel. */
+async function web(q, { num = 10, recent = null } = {}) {
+  const tbs = { day: 'qdr:d', week: 'qdr:w', month: 'qdr:m', year: 'qdr:y' }[recent] || null;
+  const d = await query('search', q, { num, tbs });
+  const results = (d.organic || []).map((x) => ({ title: x.title, url: x.link, snippet: x.snippet || '', date: x.date || '' }));
+  const box = d.answerBox ? { text: d.answerBox.answer || d.answerBox.snippet || '', url: d.answerBox.link || '', title: d.answerBox.title || '' } : null;
+  const kg = d.knowledgeGraph ? { title: d.knowledgeGraph.title, type: d.knowledgeGraph.type, text: d.knowledgeGraph.description || '', url: d.knowledgeGraph.descriptionLink || d.knowledgeGraph.website || '', facts: d.knowledgeGraph.attributes || {} } : null;
+  return { results, box, kg, cached: !!d.cached };
 }
 
-/** Full web results: [{ title, url, snippet }]. */
-async function search(q, opts = {}) {
-  const d = await ask('search', q, { num: 10, ...opts });
-  return (d.organic || []).map((r) => ({ title: r.title || '', url: r.link, snippet: r.snippet || '' })).filter((r) => /^https?:\/\//.test(r.url));
+/** Google's Videos tab: [{ title, url, snippet, source, channel, duration (s), date, image }]. */
+async function videos(q, { num = 20, recent = null } = {}) {
+  const tbs = { day: 'qdr:d', week: 'qdr:w', month: 'qdr:m', year: 'qdr:y' }[recent] || null;
+  const d = await query('videos', q, { num, tbs });
+  const secs = (s) => { const p = String(s || '').split(':').map(Number); return p.some(isNaN) ? 0 : p.reduce((t, v) => t * 60 + v, 0); };
+  return { cached: !!d.cached, videos: (d.videos || []).map((v) => ({ title: v.title || '', url: v.link || '', snippet: v.snippet || '', source: v.source || '', channel: v.channel || '', duration: secs(v.duration), date: v.date || '', image: v.imageUrl || '' })).filter((v) => /^https?:/.test(v.url)) };
 }
 
-module.exports = { KEY, connected, usage, ask, videos, search, seconds };
+async function news(q, { num = 10 } = {}) { const d = await query('news', q, { num }); return (d.news || []).map((x) => ({ title: x.title, url: x.link, snippet: x.snippet || '', source: x.source || '', date: x.date || '' })); }
+
+function status() { const c = counts(); const cap = caps(); return { connected: ready(), month: c.month, day: c.day, monthlyCap: cap.month, dailyCap: cap.day, cached: Object.keys(loadCache()).length, costThisMonth: Math.round(c.month * Number(ctx.setting?.('serper.costPer1000', 1)) / 10) / 100, blocked: blocked() }; }
+
+/** Check a key with one real (cheap) search. */
+async function test() { if (!ready()) return { ok: false, error: 'Paste your Serper key first.' }; try { const d = await query('search', 'Euclidean Media', { num: 10 }); return { ok: true, results: (d.organic || []).length }; } catch (e) { return { ok: false, error: e.message }; } }
+
+module.exports = { KEY, ready, blocked, query, web, videos, news, status, test };
