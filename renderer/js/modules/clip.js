@@ -4,6 +4,7 @@ import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { FONT_GROUPS, weightOf } from '../lib/fonts.js';
 import { dateTime, dur, providerLabel, actorName } from '../lib/format.js';
+import { YouTubePost } from './ytpost.js';
 
 export function ClipPlayer({ clip, version }) {
   const v = version || clip.currentVersion;
@@ -44,6 +45,7 @@ export function ClipDetail({ clip, reload, compact }) {
   const [f, setF] = useState(pick(clip));
   useEffect(() => setF(pick(clip)), [clip.id, JSON.stringify(pick(clip))]); // only when the saved values change, not on render progress
   const [feedback, setFeedback] = useState('');
+  const [yt, setYt] = useState(false);
   const dirty = JSON.stringify(f) !== JSON.stringify(pick(clip));
   const version = clip.versions?.[v - 1];
   const decide = (decision, note) => act(() => api.post(`/api/clips/${clip.id}/decide`, { decision, note }), { ok: decision === 'approve' ? 'Approved' : decision === 'reject' ? 'Rejected' : 'Sent back for changes', sound: decision === 'approve' ? 'success' : 'tap' }).then(reload);
@@ -73,8 +75,9 @@ export function ClipDetail({ clip, reload, compact }) {
         <div class="row"><input class="input" id="clip-feedback" placeholder='Request changes in plain words, e.g. "start at the joke, smaller captions"' value=${feedback} onInput=${(e) => setFeedback(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && feedback.trim()) { decide('changes', feedback); setFeedback(''); } }} />
           <${Button} kind="gold" icon="wand" disabled=${!feedback.trim()} onClick=${() => { decide('changes', feedback); setFeedback(''); }}>Revise</${Button}></div>
         <div class="faint" style="font-size:var(--fs-xs)">The analysis agent turns feedback into an edit, re-renders, and saves lasting preferences to the client's memory.</div></div>` : null}
-      ${clip.status === 'approved' ? html`<div class="row"><${Button} kind="soft" icon="calendar" onClick=${() => act(() => api.post('/api/command', { text: `/publish ${clip.ref}` }), { ok: 'Scheduled' }).then(reload)}>Schedule in next slot</${Button}></div>` : null}
-      ${clip.post ? html`<div class="notice teal"><${Icon} name="calendar" size=${16} /><div>${clip.post.status === 'published' ? `Published ${dateTime(clip.post.publishedAt)} via ${clip.post.mode}` : `Scheduled for ${dateTime(clip.post.scheduledAt)}`} on ${clip.post.platforms.join(', ')}${clip.post.note ? html`<div class="faint">${clip.post.note}</div>` : null}</div></div>` : null}
+      ${['approved', 'scheduled'].includes(clip.status) ? html`<div class="row wrap"><${Button} kind="primary" icon="calendar" onClick=${() => setYt(true)}>${clip.post ? 'YouTube: time, title, thumbnail' : 'Schedule on YouTube'}</${Button}>${clip.status === 'approved' && !clip.post ? html`<${Button} kind="soft" icon="calendar" onClick=${() => act(() => api.post('/api/command', { text: `/publish ${clip.ref}` }), { ok: 'Scheduled' }).then(reload)}>Schedule in next slot</${Button}>` : null}</div>` : null}
+      ${clip.post ? html`<div class=${'notice ' + (clip.post.status === 'held' ? 'gold' : 'teal')}><${Icon} name=${clip.post.status === 'held' ? 'pause' : 'calendar'} size=${16} /><div>${clip.post.status === 'published' ? `Published ${dateTime(clip.post.publishedAt)} via ${clip.post.mode}` : clip.post.status === 'held' ? `On hold (set for ${dateTime(clip.post.scheduledAt)}): nothing uploads until the hold is off` : `Scheduled for ${dateTime(clip.post.scheduledAt)}`} on ${clip.post.platforms.join(', ')}${clip.post.yt?.title ? html`<div class="faint">YouTube title: ${clip.post.yt.title}</div>` : null}${clip.post.note && clip.post.status !== 'held' ? html`<div class="faint">${clip.post.note}</div>` : null}</div></div>` : null}
+      ${yt ? html`<${YouTubePost} clipId=${clip.id} onClose=${() => { setYt(false); reload(); }} />` : null}
 
       ${(clip.trials || []).length ? html`<div class="panel pad col" style="gap:8px"><div class="row"><b class="grow">Trial openings</b><span class="faint" style="font-size:var(--fs-xs)">Different first 2 seconds to test as Instagram trial reels</span></div>
         ${clip.trials.map((t, i) => html`<div class="row" style="gap:10px"><div class="grow"><b>${t.name}</b> <span class="muted">"${t.hook}"</span><div class="faint" style="font-size:var(--fs-xs)">${t.test}</div></div><${Button} size="sm" kind="lav" icon="film" onClick=${() => act(() => api.post(`/api/clips/${clip.id}/trial`, { i }), { ok: 'Rendering this opening as a new version' }).then(reload)}>Try this opening</${Button}></div>`)}</div>` : null}

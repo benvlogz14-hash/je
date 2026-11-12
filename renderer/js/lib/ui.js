@@ -222,7 +222,7 @@ export function Loading({ rows = 4 }) {
 
 const STATUS = {
   queued: ['slate', 'Queued'], rendering: ['teal', 'Rendering'], review: ['gold', 'In review'], client_review: ['lav', 'Client review'], revising: ['teal', 'Revising'],
-  approved: ['moss', 'Approved'], scheduled: ['moss', 'Scheduled'], published: ['slate', 'Published'], rejected: ['coral', 'Rejected'], candidate: ['slate', 'Candidate'],
+  approved: ['moss', 'Approved'], scheduled: ['moss', 'Scheduled'], held: ['gold', 'On hold'], published: ['slate', 'Published'], rejected: ['coral', 'Rejected'], candidate: ['slate', 'Candidate'],
   running: ['teal', 'Running'], done: ['moss', 'Done'], failed: ['coral', 'Failed'], canceled: ['', 'Canceled'], waiting_agent: ['lav', 'Waiting for agent'], publishing: ['teal', 'Publishing'],
   pending_approval: ['gold', 'Needs approval'], sent: ['moss', 'Sent'], received: ['', 'Received'], discarded: ['', 'Discarded'],
   active: ['moss', 'Active'], lead: ['slate', 'Lead'], proposal: ['gold', 'Proposal'], paused: ['', 'Paused'], churned: ['coral', 'Churned'],

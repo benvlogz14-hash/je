@@ -3,10 +3,11 @@ import { html, useState, useApi, navigate, Button, Modal, Field, StatusBadge, ac
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { dateTime, PLATFORM_LABEL } from '../lib/format.js';
+import { YouTubePost, HoldBanner } from './ytpost.js';
 
 export function Calendar() {
   const [offset, setOffset] = useState(0);
-  const { data: posts } = useApi('/api/posts?status=scheduled,published,publishing', ['posts', 'clips']);
+  const { data: posts } = useApi('/api/posts?status=scheduled,held,published,publishing', ['posts', 'clips']);
   const [open, setOpen] = useState(null);
   // Calls and meetings HAL put on the calendar ("add a call with Judy Griffin Thursday at 2"), in the same grid.
   const { data: ops, reload: reOps } = useApi('/api/hal/calendar', ['hal']);
@@ -22,12 +23,13 @@ export function Calendar() {
   return html`<div class="page">
     <div class="page-head"><div class="grow"><h1>Publishing</h1><div class="sub">${weekPosts.length} posts this week · ${weekPosts.filter((p) => p.status === 'published').length} published</div></div>
       <${Button} kind="ghost" size="sm" icon="chevronLeft" title="Previous week" onClick=${() => setOffset(offset - 1)} /><${Button} kind="ghost" size="sm" onClick=${() => setOffset(0)}>This week</${Button}><${Button} kind="ghost" size="sm" icon="chevronRight" title="Next week" onClick=${() => setOffset(offset + 1)} /></div>
-    ${posts && !posts.length && !(ops || []).length ? html`<div class="panel"><${Empty} icon="calendar" title="Nothing scheduled yet">Approved clips drop into each client's posting slots automatically.</${Empty}></div>` : html`
+    <div style="margin-bottom:14px"><${HoldBanner} /></div>
+    ${posts && !posts.length && !(ops || []).length ? html`<div class="panel"><${Empty} icon="calendar" title="Nothing scheduled yet">Approved clips drop into each client's posting slots automatically. Click a post to set its YouTube channel, time, title, description and thumbnail.</${Empty}></div>` : html`
     <div class="table-wrap"><div class="cal">
       <div class="cal-h" style="border-left:0" />${days.map((d) => html`<div class=${'cal-h' + (d.toDateString() === todayStr ? ' today' : '')}>${d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</div>`)}
-      ${hours.map((h) => html`<div class="cal-t">${h % 12 || 12}${h < 12 ? 'a' : 'p'}</div>${days.map((d) => html`<div class="cal-c">${inCell(d, h).map((p) => { const [bg, fg] = hashColor(p.client); return html`<div class="cal-post" style=${{ background: `var(${bg})`, color: `var(${fg})`, borderLeftColor: p.status === 'published' ? 'var(--ink-3)' : `var(${fg})` }} onClick=${() => setOpen(p)} title=${p.title}><div class="ellipsis" style="font-weight:600">${p.title}</div><div class="ellipsis" style="opacity:0.8">${new Date(p.scheduledAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} · ${p.client}</div></div>`; })}${opsIn(d, h).map((e) => html`<div class="cal-post" style=${{ background: '#141414', color: '#f1f1f1', borderLeftColor: '#ff2a1a' }} onClick=${() => dropOp(e)} title=${`${e.title} (from HAL). Click to remove.`}><div class="ellipsis" style="font-weight:600">${e.title}</div><div class="ellipsis" style="opacity:0.8">${e.time || 'no time set'} · HAL</div></div>`)}</div>`)}`)}
+      ${hours.map((h) => html`<div class="cal-t">${h % 12 || 12}${h < 12 ? 'a' : 'p'}</div>${days.map((d) => html`<div class="cal-c">${inCell(d, h).map((p) => { const [bg, fg] = hashColor(p.client); return html`<div class="cal-post" style=${{ background: `var(${bg})`, color: `var(${fg})`, borderLeftColor: p.status === 'published' ? 'var(--ink-3)' : p.status === 'held' ? 'var(--gold)' : `var(${fg})`, borderLeftStyle: p.status === 'held' ? 'dashed' : 'solid' }} onClick=${() => setOpen(p)} title=${p.title}><div class="ellipsis" style="font-weight:600">${p.title}</div><div class="ellipsis" style="opacity:0.8">${new Date(p.scheduledAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} · ${p.client}</div></div>`; })}${opsIn(d, h).map((e) => html`<div class="cal-post" style=${{ background: '#141414', color: '#f1f1f1', borderLeftColor: '#ff2a1a' }} onClick=${() => dropOp(e)} title=${`${e.title} (from HAL). Click to remove.`}><div class="ellipsis" style="font-weight:600">${e.title}</div><div class="ellipsis" style="opacity:0.8">${e.time || 'no time set'} · HAL</div></div>`)}</div>`)}`)}
     </div></div>`}
-    ${open ? html`<${PostModal} p=${open} onClose=${() => setOpen(null)} />` : null}
+    ${open ? (open.clipId && open.status !== 'published' ? html`<${YouTubePost} clipId=${open.clipId} onClose=${() => setOpen(null)} />` : html`<${PostModal} p=${open} onClose=${() => setOpen(null)} />`) : null}
   </div>`;
 }
 

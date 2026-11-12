@@ -42,4 +42,12 @@ async function forPrompt(text) {
   return `WEB SEARCH RESULTS (searched just now for "${q}"; use them, and only trust what they actually say):\n${r.map((x, i) => `${i + 1}. ${x.title} — ${x.url}\n   ${x.snippet}`).join('\n')}`;
 }
 
-module.exports = { search, forPrompt };
+/** A full inquiry: Google through Serper when its key is in (paid, cached), else the free search. Quick facts keep
+ *  using search() (DuckDuckGo, free). */
+async function deep(q, n = 10) {
+  const serper = require('./serper');
+  if (serper.connected()) { try { return (await serper.search(q)).slice(0, n); } catch { /* the free search below */ } }
+  return search(q, n);
+}
+
+module.exports = { search, deep, forPrompt };

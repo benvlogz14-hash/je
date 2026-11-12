@@ -102,6 +102,7 @@ module.exports = {
   publishing: {
     provider: 'manual', // 'manual' | 'ayrshare'
     youtubeDirect: false,
+    hold: true, // the safety hold (Nov 12, Ryan: "we don't want anything sending out to Stringer yet"): nothing uploads while on
   },
   resources: {
     mode: 'full',             // 'full' | 'lite' | 'background'

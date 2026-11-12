@@ -18,6 +18,7 @@ const OUTWARD = [
   /\/premiere$/, /^\/api\/(secrets|users|restore|mode|settings|command)$/, /^\/api\/agent\/command$/, /\/system\/restart$/,
   /\/credentials$/, /\/youtube\/connect$/, /\/phone\/(un)?link$/, /\/voice\/(clone|callbacks)$/, /\/agentnet\/agents\/[^/]+\/(key|token|login)$/,
   /\/agentnet\/approvals\/[^/]+\/decide$/, /\/agentnet\/pause$/,
+  /\/publishing\/hold$/, /\/posts\/[^/]+\/publish-now$/, /\/send-to-approved$/,
 ];
 function kindOf(method, pattern) {
   if (method === 'GET') return 'read';

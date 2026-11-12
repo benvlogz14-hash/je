@@ -291,7 +291,7 @@ function upcomingSlots(client, days = 3) {
 function scheduleClip(clipId) {
   const clip = ctx.store.get('clips', clipId); const client = ctx.store.get('clients', clip.clientId);
   if (clip.postId) return ctx.store.get('posts', clip.postId);
-  const taken = new Set(ctx.store.all('posts', (p) => p.clientId === client.id && ['scheduled', 'publishing', 'published'].includes(p.status)).map((p) => p.scheduledAt));
+  const taken = new Set(ctx.store.all('posts', (p) => p.clientId === client.id && ['scheduled', 'held', 'publishing', 'published'].includes(p.status)).map((p) => p.scheduledAt));
   const slot = upcomingSlots(client, 21).find((s) => !taken.has(s));
   if (!slot) { audit.log('system', 'schedule.no_slot', { clipId, clientId: client.id }, 'warn'); return null; }
   const v = (clip.versions || [])[clip.currentVersion - 1];
@@ -307,7 +307,7 @@ function scheduleClip(clipId) {
 }
 
 function unschedule(postId, actor = 'user') {
-  const post = ctx.store.get('posts', postId); if (!post || post.status !== 'scheduled') throw new Error('Only scheduled posts can be pulled');
+  const post = ctx.store.get('posts', postId); if (!post || !['scheduled', 'held'].includes(post.status)) throw new Error('Only scheduled posts can be pulled');
   const job = ctx.store.find('jobs', (j) => j.dedupeKey === `publish:${postId}` && j.status === 'queued');
   if (job) queue.cancel(job.id, actor);
   ctx.store.update('posts', postId, { status: 'canceled' });

@@ -319,6 +319,7 @@ function Editor({ id }) {
   // ---- importing (bin button, drag from the desktop onto the bin, the timeline or anywhere in the editor)
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [sending, setSending] = useState(false);
   useEvent('studio.exported', (x) => { if (x.projectId === id) toast(`Saved to ${x.path}${x.warnings?.length ? ` · ${x.warnings.join(' · ')}` : ''}`, { kind: 'ok', title: 'Export finished', ms: 9000 }); }, [id]);
   const acceptImported = (r) => {
     const added = Array.isArray(r) ? r : r?.media || [];
@@ -730,6 +731,7 @@ function Editor({ id }) {
       <${Button} kind="ghost" size="sm" icon="link" disabled=${linkBusy} onClick=${askLink} title="Paste a YouTube link and its audio goes on the timeline at the playhead (or just press Ctrl+V on the timeline)">${linkBusy ? 'Getting audio...' : 'YouTube link'}</${Button}>
       <${Button} kind="ghost" size="sm" icon="external" onClick=${() => act(() => api.post(`/api/projects/${id}/open-velo`), { ok: 'Opening in Velo', sound: 'open' })}>Open in Velo</${Button}>
       <${Button} kind="ghost" size="sm" onClick=${() => save()}>Save</${Button}>
+      <${Button} kind="moss" size="sm" icon="check" onClick=${() => { savingFor.current = save(true); setSending(true); }} title="Export this edit and send it to Approved: it becomes the clip's newest version, approved and on the schedule (no uploading to YouTube by hand)">Send to Approved</${Button}>
       <${Button} kind="primary" size="sm" icon="upload" onClick=${exportNow}>Export</${Button}>
     </div>
     <div style="display:grid;grid-template-columns:260px minmax(0, 1fr) 300px;grid-template-rows:minmax(0, 1fr);min-height:0;overflow:hidden">
@@ -742,6 +744,7 @@ function Editor({ id }) {
     <${CaptionsBar} seq=${seq} media=${media} sel=${sel} setSel=${setSel} edit=${edit} findClip=${findClip} nextId=${nextId} />
     <${Timeline} snapBack=${closeGapsOn} onSnapBack=${toggleSnapBack} seq=${seq} media=${media} t=${t} setT=${setT} sel=${sel} setSel=${setSel} tool=${tool} snap=${snap} zoom=${zoom} setZoom=${setZoom} duration=${duration} edit=${edit} findClip=${findClip} linked=${linked} onAdd=${addMedia} nextId=${nextId} onDropFiles=${dropFilesOnTrack} onBroll=${addBroll} onClipMenu=${clipMenu} onEditTitle=${(cid) => setTitleEdit({ clipId: cid })} /></div>
     ${exporting ? html`<${ExportDialog} id=${id} saving=${savingFor.current} onClose=${() => setExporting(false)} />` : null}
+    ${sending ? html`<${SendApproved} id=${id} proj=${proj} saving=${savingFor.current} onClose=${() => setSending(false)} />` : null}
     ${musicOpen ? html`<${MusicLibrary} onClose=${() => setMusicOpen(false)} onAdd=${addMusic} />` : null}
     ${titleEdit ? html`<${TitleDesigner} seq=${seq} clip=${titleEdit.clipId ? findClip(seq, titleEdit.clipId)?.c : null} count=${titleEdit.ids?.length || 1} onClose=${() => setTitleEdit(null)} onSave=${saveTitle} />` : null}
   </div>`;
@@ -982,6 +985,20 @@ function AIPanel({ aiEdit, aiUndo, projectId, selected }) {
 }
 
 // ------------------------------------------------------------ export: choose where the video is saved
+// Studio → Send to Approved: export, then the clip's newest version (or a new clip for the client), approved and scheduled.
+function SendApproved({ id, proj, saving, onClose }) {
+  const needClient = !proj.clipId && !proj.clientId;
+  const { data: clients } = useApi(needClient ? '/api/clients' : null, []);
+  const [clientId, setClientId] = useState('');
+  const go = () => act(async () => { await saving; return api.post(`/api/projects/${id}/send-to-approved`, needClient ? { clientId } : {}); }, { ok: 'Exporting, then it goes to Approved. Progress is in the status bar.' }).then(onClose);
+  return html`<${Modal} title="Send to Approved" icon="check" onClose=${onClose} footer=${html`<${Button} kind="ghost" onClick=${onClose}>Cancel</${Button}><${Button} kind="moss" icon="check" disabled=${needClient && !clientId} onClick=${go}>Send to Approved</${Button}>`}>
+    <div class="col" style="gap:12px">
+      <div>This edit is exported at full quality, then ${proj.clipId ? 'it becomes the clip\'s newest version' : 'it becomes a new clip'}, <b>approved</b> and put in the next posting slot. Set its YouTube time, title, description and thumbnail on the Publishing page or the clip.</div>
+      ${needClient ? html`<${Field} label="Which client is it for?" id="sa-client"><select id="sa-client" class="select" value=${clientId} onChange=${(e) => setClientId(e.target.value)}><option value="">Pick a client…</option>${(clients || []).filter((c) => c.status !== 'archived').map((c) => html`<option value=${c.id}>${c.name}</option>`)}</select></${Field}>` : null}
+      <div class="faint" style="font-size:var(--fs-sm)">While publishing is on hold (Publishing page), nothing uploads: it waits there until you switch the hold off.</div>
+    </div></${Modal}>`;
+}
+
 function ExportDialog({ id, saving, onClose }) {
   const [d, setD] = useState(null);
   const [reveal, setReveal] = useState(true);

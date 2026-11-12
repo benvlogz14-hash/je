@@ -663,7 +663,15 @@ queue.register('studio.export', {
     events.publish('notify', { title: 'Export finished', body: path.basename(out) });
     events.publish('studio.exported', { projectId: proj.id, path: out, warnings: r.warnings });
     if (job.payload.reveal !== false && ctx.revealFile) ctx.revealFile(out);
-    return { path: out, warnings: r.warnings, mb: r.converted?.mb ?? Math.round(fs.statSync(out).size / 10485.76) / 100 };
+    // Studio → Send to Approved: the edit becomes the clip's newest version, approved and on the schedule.
+    let sent = null;
+    if (job.payload.toApproved) {
+      h.progress(0.97, 'Sending to Approved');
+      const c = await require('../automation/youtube-posts').fromStudio(ctx.store.get('projects', proj.id), out, job.createdBy || 'user');
+      sent = { clipId: c.id, title: c.title, postId: c.postId || null };
+      events.publish('notify', { title: 'Sent to Approved', body: `${c.title}: approved${c.postId ? ' and on the schedule' : ''}.`, route: '/calendar' });
+    }
+    return { path: out, warnings: r.warnings, mb: r.converted?.mb ?? Math.round(fs.statSync(out).size / 10485.76) / 100, sent };
   },
 });
 
@@ -736,6 +744,8 @@ queue.register('publish.post', {
     if (clip.status !== 'scheduled' && clip.status !== 'approved') throw permanent(`Clip is ${clip.status}; only approved content is published`);
     const v = clip.versions[(post.version || clip.currentVersion) - 1];
     if (!v || !fs.existsSync(v.path)) throw permanent('Rendered video file is missing');
+    // The safety hold (publishing.hold, on by default): nothing is uploaded while it's on; the post waits as "held".
+    if (require('../automation/youtube-posts').holdIfOn(post)) return { held: true };
     ctx.store.update('posts', post.id, { status: 'publishing' }); events.publish('posts', { id: post.id });
     h.progress(0.2, 'Uploading');
     try {

@@ -43,7 +43,7 @@ async function ytdlpList(target, n) {
 }
 
 /** Public videos of the candidate, best first. */
-async function find({ name, socials = [], sites = [], links = [] }, onStep = () => {}) {
+async function find({ name, office = '', paid = true, socials = [], sites = [], links = [] }, onStep = () => {}) {
   const list = []; const errors = [];
   const last = String(name).trim().split(/\s+/).slice(-1)[0].toLowerCase();
   const add = (url, platform, title = '', how = '', duration = 0) => {
@@ -53,6 +53,22 @@ async function find({ name, socials = [], sites = [], links = [] }, onStep = () 
     list.push({ url, platform, title, how, duration });
   };
   for (const l of links) add(l, platformOf(l), '', 'pasted');
+
+  // Google's Videos tab through Serper (when its key is in): the candidate's name, exactly, finds their floor speeches,
+  // council and committee meetings, hearings, campaign and news videos. One search per candidate (cached 14 days); a
+  // second with the office only when the first finds under 4 of them. Long sessions go last (only the first 10 minutes
+  // are downloaded, and they may not be speaking yet).
+  const serper = require('../integrations/serper');
+  if (paid && serper.connected()) { // never spent when their own videos were uploaded
+    onStep('Searching Google Videos');
+    const mine = (v) => `${v.title} ${v.snippet} ${v.channel}`.toLowerCase().includes(last);
+    const take = (vs) => { let n = 0; for (const v of vs) if (mine(v)) { add(v.url, platformOf(v.url) || v.source || 'Web', v.title, 'google videos', v.duration); n++; } return n; };
+    try {
+      let n = take(await serper.videos(`"${String(name).trim()}"`));
+      if (n < 4 && office) n += take(await serper.videos(`"${String(name).trim()}" ${String(office).replace(/[,()]/g, ' ').trim()}`.slice(0, 120)));
+      onStep(`Google Videos: ${n} video${n === 1 ? '' : 's'} of ${name}`);
+    } catch (e) { errors.push(`Google Videos: ${shortErr(e)}`); }
+  }
 
   onStep('Looking for public Facebook videos');
   for (const q of [`"${name}" facebook video`, `"${name}" site:facebook.com videos`, `"${name}" facebook reel speech`]) {
@@ -78,8 +94,8 @@ async function find({ name, socials = [], sites = [], links = [] }, onStep = () 
     try { for (const v of await ytdlpList(q, 8)) if (String(v.title).toLowerCase().includes(last)) add(v.url, 'YouTube', v.title, 'search', v.duration); }
     catch (e) { errors.push(`YouTube search: ${shortErr(e)}`); break; }
   }
-  const rank = { pasted: 0, 'their site': 1, 'their channel': 2, search: 3 };
-  const prefer = (x) => (x.platform === 'Facebook' ? -0.5 : 0) + (/speech|rally|remarks|floor|town hall|announce/i.test(x.title) ? -0.3 : 0);
+  const rank = { pasted: 0, 'their site': 1, 'their channel': 2, 'google videos': 2.5, search: 3 };
+  const prefer = (x) => (x.platform === 'Facebook' ? -0.5 : 0) + (/speech|rally|remarks|floor|town hall|announce|hearing|session|council|committee/i.test(x.title) ? -0.3 : 0) + (x.duration > 40 * 60 ? 1.5 : 0);
   list.sort((a, b) => rank[a.how] + prefer(a) - (rank[b.how] + prefer(b)));
   return { list, errors };
 }
@@ -395,7 +411,7 @@ async function prepare({ uploads = [], name, office, socials, sites, links, dir,
   let found = { list: [], errors: [] }; let dl = { clips: [], errors: [] };
   const need = up.length ? Math.max(0, Math.min(want, links.length)) : want;
   if (need) {
-    found = await find({ name, socials: up.length ? [] : socials, sites: up.length ? [] : sites, links }, onStep);
+    found = await find({ name, office, paid: !up.length, socials: up.length ? [] : socials, sites: up.length ? [] : sites, links }, onStep);
     if (found.list.length) dl = await download(found.list, path.join(dir, 'footage'), { want: need, name, onStep });
   }
   dl = { clips: [...up, ...dl.clips], errors: dl.errors };

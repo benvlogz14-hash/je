@@ -42,7 +42,7 @@ const SECRET_KEYS = new Set([
   'global.anthropic.apiKey', 'global.openai.apiKey', 'global.xai.apiKey',
   ...Object.values(twilio.K), ...Object.values(email.K),
   'global.ayrshare.apiKey', 'global.google.clientId', 'global.google.clientSecret',
-  ...Object.values(require('./political/sources').KEYS), require('./video/cutout').KEY, require('./political/images').PEXELS, require('./integrations/elevenlabs').KEY,
+  ...Object.values(require('./political/sources').KEYS), require('./integrations/serper').KEY, require('./video/cutout').KEY, require('./political/images').PEXELS, require('./integrations/elevenlabs').KEY,
 ]);
 
 // ------------------------------------------------------------ bootstrap & settings
@@ -693,6 +693,21 @@ r.post('/api/posts/:id/reschedule', (req, b, p) => {
   events.publish('posts', { id: post.id });
   return ctx.store.get('posts', post.id);
 });
+// YouTube posts from inside Euclidean (server/automation/youtube-posts.js): the safety hold, each post's channel, time,
+// title, description, tags, privacy and thumbnail, and Studio → Send to Approved.
+r.get('/api/publishing/hold', () => { const Y = require('./automation/youtube-posts'); return { hold: Y.onHold(), environment: ctx.setting('environment', 'test'), held: ctx.store.all('posts', (x) => x.status === 'held').length, channels: Y.channels() }; });
+r.post('/api/publishing/hold', (req, b) => require('./automation/youtube-posts').setHold(b.on !== false, actorOf(req)), { roles: OWNER });
+r.get('/api/youtube/channels', () => require('./automation/youtube-posts').channels());
+r.post('/api/clips/:id/youtube', async (req, b, p) => { try { return await require('./automation/youtube-posts').save(p.id, b, actorOf(req)); } catch (e) { throw new HttpError(e.status || 400, e.message); } });
+r.get('/api/clips/:id/frame', async (req, res, p) => { try { return serveFile(req, res, await require('./automation/youtube-posts').frame(p.id, Number(req.query.at) || 0), { cache: true }); } catch (e) { return send(res, e.status || 400, { error: e.message }); } }, { stream: true });
+r.post('/api/clips/:id/youtube/thumb', async (req, b, p) => {
+  const clip = must(ctx.store.get('clips', p.id));
+  const { files } = await receiveUpload(req, paths.clientDir(clip.clientId, 'thumbnails'), { maxBytes: 2 * 1024 ** 2 });
+  const f = files.find((x) => /\.(jpe?g|png)$/i.test(x.path)); if (!f) throw new HttpError(400, 'Pick a JPG or PNG image under 2 MB.');
+  return require('./automation/youtube-posts').save(p.id, { thumbFile: f.path }, actorOf(req));
+}, { raw: true });
+r.get('/api/posts/:id/thumb', (req, res, p) => { const post = must(ctx.store.get('posts', p.id)); if (!post.yt?.thumb || !fs.existsSync(post.yt.thumb)) return send(res, 404, { error: 'No thumbnail' }); return serveFile(req, res, post.yt.thumb); }, { stream: true });
+r.post('/api/posts/:id/publish-now', (req, b, p) => { try { return require('./automation/youtube-posts').publishNow(p.id, actorOf(req)); } catch (e) { throw new HttpError(e.status || 400, e.message); } }, { roles: OWNER });
 r.get('/api/posts/:id/package', (req, res, p) => { const post = must(ctx.store.get('posts', p.id)); if (post.packagePath && ctx.revealFile) ctx.revealFile(post.packagePath); return send(res, 200, { path: post.packagePath || null }); }, { stream: true });
 
 // ------------------------------------------------------------ jobs / queue
@@ -1480,6 +1495,8 @@ r.put('/api/projects/:id', (req, b, p) => {
   return ctx.store.update('projects', p.id, { ...(b.data ? { data: b.data } : {}), ...(b.name ? { name: String(b.name).slice(0, 120) } : {}) });
 });
 r.del('/api/projects/:id', (req, b, p) => ({ ok: ctx.store.remove('projects', p.id) }));
+// Serper (Google search, paid): searches used today / in total and the daily limit, for Settings → Connections → Web search.
+r.get('/api/search/usage', () => ({ connected: require('./integrations/serper').connected(), ...require('./integrations/serper').usage() }));
 // The compression engine (server/video/convert.js): the formats it can make.
 r.get('/api/convert/formats', () => require('./video/convert').formats());
 // Convert or compress a file already on this PC (a path, a footage id, a clip's latest render, or a Studio project's last export):
@@ -1522,6 +1539,16 @@ r.post('/api/projects/:id/export', (req, b, p) => {
   if (pr.clipId && pr.origSegs) { try { const c = ctx.store.get('clips', pr.clipId); const a = c && ctx.store.get('assets', c.assetId); const words = a ? require('./jobs/handlers').loadTranscript(a)?.words : null; if (words) require('./video/taste').learnEdit({ project: pr, clip: c, words }); } catch { /* learning never blocks an export */ } }
   const fmts = require('./video/convert').FORMATS; const format = fmts[b.format] ? b.format : 'mp4';
   return queue.enqueue('studio.export', { projectId: pr.id, outDir, fileName, reveal: b.reveal !== false, format, quality: ['high', 'balanced', 'small'].includes(b.quality) ? b.quality : 'high', targetMB: Math.max(0, Math.min(4000, Number(b.targetMB) || 0)), height: [0, 2160, 1440, 1080, 720, 540, 480, 360].includes(Number(b.height)) ? Number(b.height) : 0 }, { clientId: pr.clientId, actor: actorOf(req), title: `Export ${pr.name}` });
+});
+// Studio → Send to Approved: export the edit, then make it the clip's newest version (or a new clip), approved and on the
+// schedule (held while publishing is on hold), so nothing has to be uploaded to YouTube by hand.
+r.post('/api/projects/:id/send-to-approved', (req, b, p) => {
+  let pr = must(ctx.store.get('projects', p.id));
+  if (!pr.clipId && !pr.clientId && b.clientId) { must(ctx.store.get('clients', b.clientId)); pr = ctx.store.update('projects', pr.id, { clientId: b.clientId }); }
+  if (!pr.clipId && !pr.clientId) throw new HttpError(400, 'Pick which client this video is for.');
+  if (pr.clipId && pr.origSegs) { try { const c = ctx.store.get('clips', pr.clipId); const a = c && ctx.store.get('assets', c.assetId); const words = a ? require('./jobs/handlers').loadTranscript(a)?.words : null; if (words) require('./video/taste').learnEdit({ project: pr, clip: c, words }); } catch { /* learning never blocks */ } }
+  const clientId = pr.clientId || ctx.store.get('clips', pr.clipId)?.clientId;
+  return queue.enqueue('studio.export', { projectId: pr.id, outDir: paths.clientDir(clientId, 'studio'), fileName: null, reveal: false, format: 'mp4', quality: 'high', targetMB: 0, height: 0, toApproved: true }, { clientId, actor: actorOf(req), title: `Send to Approved: ${pr.name}` });
 });
 r.get('/api/projects/:id/velo', (req, res, p) => { const pr = must(ctx.store.get('projects', p.id)); const f = path.join(paths.tmp('velo'), `${pr.id}.velo`); fs.writeFileSync(f, JSON.stringify(pr.data, null, 1)); return serveFile(req, res, f, { download: `${pr.name.replace(/[^\w\- ]/g, '')}.velo` }); }, { stream: true });
 r.post('/api/projects/:id/open-velo', (req, b, p) => {

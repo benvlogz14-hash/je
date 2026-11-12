@@ -182,13 +182,19 @@ async function ytApi(clientId, pathQ) {
 }
 
 async function ytUpload({ client, post, videoPath }) {
-  const token = await ytAccessToken(client.id);
+  // The channel picked for this post (post.yt.channelClientId: Stringer's or any client whose YouTube is connected).
+  const yt = post.yt || {};
+  const chan = (yt.channelClientId && ctx.store.get('clients', yt.channelClientId)) || client;
+  const token = await ytAccessToken(chan.id);
+  const tags = (yt.tags && yt.tags.length ? yt.tags : (post.hashtags || []).map((h) => h.replace(/^#/, ''))).slice(0, 30);
   const meta = {
-    snippet: { title: post.title.slice(0, 100), description: captionFor('youtube', post), tags: (post.hashtags || []).map((h) => h.replace(/^#/, '')).slice(0, 15), categoryId: client.type === 'political' ? '25' : '22' },
+    snippet: { title: String(yt.title || post.title || 'Untitled').slice(0, 100), description: yt.description != null && yt.description !== '' ? yt.description : captionFor('youtube', post), tags, categoryId: client.type === 'political' ? '25' : '22' },
     status: { privacyStatus: 'private', selfDeclaredMadeForKids: false },
   };
+  // Public: uploaded private with a publish time, so it goes live exactly then. Unlisted / private: uploaded as that.
   const when = post.scheduledAt && new Date(post.scheduledAt) > new Date(Date.now() + 15 * 60000);
-  if (when) meta.status.publishAt = new Date(post.scheduledAt).toISOString(); else meta.status.privacyStatus = 'public';
+  if (yt.privacy === 'unlisted' || yt.privacy === 'private') meta.status.privacyStatus = yt.privacy;
+  else if (when) meta.status.publishAt = new Date(post.scheduledAt).toISOString(); else meta.status.privacyStatus = 'public';
   const size = fs.statSync(videoPath).size;
   const init = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
     method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json; charset=UTF-8', 'x-upload-content-type': 'video/mp4', 'x-upload-content-length': String(size) }, body: JSON.stringify(meta),
@@ -198,7 +204,17 @@ async function ytUpload({ client, post, videoPath }) {
   const up = await fetch(loc, { method: 'PUT', headers: { 'content-type': 'video/mp4', 'content-length': String(size) }, body: fs.createReadStream(videoPath), duplex: 'half', signal: AbortSignal.timeout(1800000) });
   const j = await up.json().catch(() => ({}));
   if (!up.ok) throw new Error(`YouTube upload: ${j.error?.message || up.status}`);
-  return { ok: true, mode: 'youtube', results: { youtube: { status: when ? 'scheduled' : 'published', id: j.id, url: `https://youtube.com/shorts/${j.id}` } } };
+  const out = { status: meta.status.publishAt ? 'scheduled' : meta.status.privacyStatus === 'public' ? 'published' : meta.status.privacyStatus, id: j.id, url: `https://youtube.com/shorts/${j.id}`, channel: chan.name };
+  // The thumbnail (a frame or an uploaded image). A thumbnail problem never fails the upload: the video is already up.
+  // (YouTube needs a verified channel for custom thumbnails, and Shorts may show a frame from the video instead.)
+  if (yt.thumb && fs.existsSync(yt.thumb)) {
+    try {
+      const img = fs.readFileSync(yt.thumb);
+      const t = await fetch(`https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${encodeURIComponent(j.id)}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': /\.png$/i.test(yt.thumb) ? 'image/png' : 'image/jpeg', 'content-length': String(img.length) }, body: img });
+      if (!t.ok) { const tj = await t.json().catch(() => ({})); out.thumbError = tj.error?.message || `YouTube answered ${t.status}`; } else out.thumb = true;
+    } catch (e) { out.thumbError = e.message; }
+  }
+  return { ok: true, mode: 'youtube', results: { youtube: out } };
 }
 
 async function ytStats(clientId, videoIds) {
@@ -216,7 +232,10 @@ async function publish({ client, post, videoPath }) {
     return { ...r, note: 'Test environment: packaged locally, nothing was posted publicly.' };
   }
   const provider = ctx.setting('publishing.provider', 'manual');
-  const wantsYtDirect = ctx.setting('publishing.youtubeDirect', false) && post.platforms.includes('youtube') && secrets.has(`client.${client.id}.youtube.token`);
+  // YouTube straight from Euclidean: switched on for everything (publishing.youtubeDirect), or for a post whose channel was
+  // picked in its YouTube details (post.yt), when that channel is connected.
+  const ytChan = post.yt?.channelClientId || client.id;
+  const wantsYtDirect = (ctx.setting('publishing.youtubeDirect', false) || !!post.yt?.channelClientId) && post.platforms.includes('youtube') && secrets.has(`client.${ytChan}.youtube.token`);
   if (wantsYtDirect) {
     const r = await ytUpload({ client, post, videoPath });
     results.mode.push('youtube'); Object.assign(results.results, r.results);

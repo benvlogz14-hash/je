@@ -173,6 +173,20 @@ function ClaudeApp() {
   </${Section}>`;
 }
 
+// Web search: free DuckDuckGo for quick facts, Serper (serper.dev, Google results, about $1 per 1,000 searches) for full
+// look-ups, mainly Google's Videos tab for a candidate's footage. Every search is kept 14 days and capped per day.
+function WebSearch({ status, v, setV, saveKeys }) {
+  const { data: u, reload } = useApi('/api/search/usage', ['connections', 'settings']);
+  const [per, setPer] = useState(null);
+  const savePer = () => act(() => api.patch('/api/settings', { search: { serper: { perDay: Math.max(1, Math.min(5000, Number(per) || 100)) } } }), { ok: 'Daily limit saved' }).then(() => { setPer(null); reload(); });
+  return html`<${Section} title="Web search" sub="Quick facts use the free DuckDuckGo search. Full look-ups and finding a candidate's videos (Google's Videos tab: assembly and council sessions, hearings, campaign videos) use Serper when its key is here. The same search is never paid for twice (answers kept 14 days), and nothing is spent when a candidate's own videos were uploaded." action=${html`<span class=${'badge ' + (u?.connected ? 'moss' : '')}>${u?.connected ? 'Serper connected' : 'Free search only'}</span>`}>
+    <div class="form-grid"><${SecretInput} k="global.serper.apiKey" label="Serper API key (serper.dev → API key)" status=${status} value=${v} onChange=${setV} />
+      <${Field} label="Most Serper searches a day" id="ws-per"><div class="row"><input id="ws-per" class="input tnum" type="number" min="1" max="5000" value=${per ?? u?.perDay ?? 100} onInput=${(e) => setPer(e.target.value)} />${per != null ? html`<${Button} size="sm" kind="soft" onClick=${savePer}>Save</${Button}>` : null}</div></${Field}></div>
+    ${u ? html`<div class="faint" style="font-size:var(--fs-sm)">Today: ${u.today} of ${u.perDay} searches · ${u.total} in all (about $${(u.total / 1000).toFixed(2)} at $1 per 1,000).</div>` : null}
+    <div class="row"><${Button} kind="primary" onClick=${() => saveKeys(['global.serper.apiKey']).then(reload)}>Save</${Button}></div>
+  </${Section}>`;
+}
+
 function Connections() {
   const boot = useStore((s) => s.boot);
   const { data: st, reload } = useApi('/api/secrets/status', ['connections']);
@@ -214,6 +228,7 @@ function Connections() {
       <div class="faint" style="font-size:var(--fs-xs)">No remove.bg key? Use the free cut-out tool instead: Agent Connections → setup checklist → Photo background removal → Install free tool.</div>
       <div class="row"><${Button} kind="primary" onClick=${() => saveKeys(['global.political.openStatesKey', 'global.political.dataGovKey', 'global.removebg.apiKey', 'global.pexels.apiKey'])}>Save</${Button}></div>
     </${Section}>
+    <${WebSearch} status=${status} v=${v} setV=${setV} saveKeys=${saveKeys} />
     <${Section} title="YouTube direct upload (Google)" sub="Optional. Create an OAuth client of type Desktop app in Google Cloud Console with the YouTube Data API enabled." action=${row('', st?.google)}>
       <div class="form-grid"><${SecretInput} k="global.google.clientId" label="OAuth client ID" type="text" status=${status} value=${v} onChange=${setV} /><${SecretInput} k="global.google.clientSecret" label="OAuth client secret" status=${status} value=${v} onChange=${setV} /></div>
       <div class="row"><${Button} kind="primary" onClick=${() => saveKeys(['global.google.clientId', 'global.google.clientSecret'])}>Save</${Button}><span class="faint" style="font-size:var(--fs-sm)">Then connect each client's channel from their Billing & accounts tab.</span></div>
