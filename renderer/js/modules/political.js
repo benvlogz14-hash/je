@@ -325,6 +325,7 @@ function FinishedAds({ p, compact = false }) {
           <video key=${url(k, st)} src=${url(k, st)} poster=${f[poster] ? url(poster, st) : undefined} controls playsinline preload="metadata" style=${`width:100%;aspect-ratio:${k === 'v' || k === 's' ? '9/16' : '16/9'};border-radius:12px;background:#000;object-fit:contain`} />
           <b style="font-size:var(--fs-xs)">${label}</b>
           <span class="faint ellipsis" style="font-size:10px" title=${f[k]}>${name(f[k])}</span>
+          ${pkg.pro?.[k]?.qa ? html`<span style=${`font-size:10px;color:${pkg.pro[k].qa.ok ? 'var(--moss-ink, #2f7d4f)' : 'var(--coral-ink, #b4532a)'}`} title=${pkg.pro[k].qa.ok ? 'Loudness, peaks, black frames, dead air and cut points were measured after rendering.' : pkg.pro[k].qa.notes.join(' ')}>${pkg.pro[k].qa.ok ? `Checked: ${pkg.pro[k].qa.loudness != null ? `${pkg.pro[k].qa.loudness.toFixed(1)} LUFS, ` : ''}clean cuts, no black frames` : `Check: ${pkg.pro[k].qa.notes[0]}`}</span>` : null}
           <div class="row" style="gap:10px;font-size:var(--fs-xs)"><a href=${url(k, st, '&download=1')}>Download</a>${f[k + 'Mail'] ? html`<a href=${url(k + 'Mail', st, '&download=1')} title="A smaller 720p copy for attaching to an email">Email size</a>` : null}${desktop ? html`<a href="#" onClick=${(e) => { e.preventDefault(); reveal(k); }}>Show in folder</a>` : null}</div>
         </div>`; })}
     </div>
@@ -427,6 +428,7 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
   const [pid, setPid] = useState(() => list[0]?.id || '');
   const [newName, setNewName] = useState(''); const [newOffice, setNewOffice] = useState('');
   const [sel, setSel] = useState(null); const [prompt, setPrompt] = useState('');
+  const [dens, setDens] = useState(''); // how much graphics: '' = the style's own, full | light | minimal
   const [up, setUp] = useState(null); const [over, setOver] = useState(false);
   // Make ads | Finished: every finished ad as a card; click one to open it (`viewing`).
   const [tab, setTab] = useState('make'); const [viewing, setViewing] = useState(null);
@@ -439,7 +441,7 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
   const make = () => {
     if (!p) return;
     const t0 = Date.now();
-    const body = prompt.trim() ? { prompt: prompt.trim() } : sel ? { preset: sel } : null;
+    const body = prompt.trim() ? { prompt: prompt.trim(), ...(dens ? { density: dens } : {}) } : sel ? { preset: sel, ...(dens ? { density: dens } : {}) } : dens ? { density: dens } : null;
     const req = body ? api.post(`/api/prospects/${p.id}/look`, body) : api.post(`/api/prospects/${p.id}/package`, p.pkg?.creative ? { from: 'footage' } : {});
     // A run already open for this candidate comes back instead of a new one: say so rather than pretending to start.
     return act(() => req, { ok: (j) => (j?.createdAt && new Date(j.createdAt).getTime() < t0 - 3000 ? `Already working on ${p.name}'s ads (${j.status === 'queued' ? 'waiting to start' : `${Math.round((j.progress || 0) * 100)}%`}). See below.` : `Making ${p.name}'s ads. Progress shows below.`) }).then(() => { setPrompt(''); reload(); });
@@ -457,7 +459,7 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
   const curLook = p?.pkg?.proLook?.name || looks?.current?.name || 'Bold blocks';
   return html`<div class="panel pad col" style="gap:14px">
     <div class="row" style="gap:10px;align-items:center"><div class="avatar" style="background:var(--coral-soft, var(--sky-soft));color:var(--coral-ink, var(--sky-ink))"><${Icon} name="film" size=${16} /></div>
-      <div class="col grow" style="gap:2px"><h4>Ad machine</h4><span class="faint" style="font-size:var(--fs-xs)">Upload a candidate's footage. Their best lines, word for word, become motion-graphics ads in 9:16 and 16:9, in 15 styles or one you describe.</span></div></div>
+      <div class="col grow" style="gap:2px"><h4>Ad machine</h4><span class="faint" style="font-size:var(--fs-xs)">Upload a candidate's footage. Their best lines, word for word, become a story with an opening hook and a closing line, cut where they pause, with motion graphics and sound design, in 9:16 and 16:9. Ten main styles, more below them, or one you describe.</span></div></div>
     <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ value: 'make', label: 'Make ads' }, { value: 'styles', label: `Styles (${(looks?.presets || []).length || 15})` }, { value: 'finished', label: `Finished${nDone ? ` (${nDone})` : ''}` }]} />
     ${viewed ? html`<${Modal} wide title=${`${viewed.name}'s ads`} onClose=${() => setViewing(null)} footer=${html`<${Button} kind="ghost" onClick=${() => { setViewing(null); onOpen(viewed.id); }}>Open ${viewed.name.split(' ')[0]}'s lead</${Button}><${Button} kind="ghost" onClick=${() => { setPid(viewed.id); setViewing(null); setTab('make'); }}>Make them again</${Button}><${Button} kind="primary" onClick=${() => setViewing(null)}>Done</${Button}>`}><${FinishedAds} p=${viewed} /></${Modal}>` : null}
     ${tab === 'styles' ? html`<${StylesGallery} presets=${looks?.presets || []} sel=${sel} onUse=${(id) => { setSel(id); setPrompt(''); setTab('make'); toast(`${(looks?.presets || []).find((x) => x.id === id)?.name || 'Style'} picked. Pick the candidate and press Make the ads.`, { kind: 'ok' }); }} />`
@@ -482,6 +484,7 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
       <div class="col" style="gap:10px;min-width:0">
         <b style="font-size:var(--fs-sm)">3 · The style <span class="faint" style="font-weight:400">now: ${curLook}</span></b>
         <div style="max-height:420px;overflow:auto;padding-right:4px"><${LookPicker} presets=${looks?.presets || []} sel=${sel} onSel=${(id) => { setSel(id); if (id) setPrompt(''); }} /></div>
+        <div class="col" style="gap:4px"><b style="font-size:var(--fs-xs)">How much graphics</b><${Seg} value=${dens} onChange=${setDens} options=${[{ value: '', label: 'The style\'s own' }, ...(looks?.density || []).map((d) => ({ value: d.id, label: d.name }))]} /><span class="faint" style="font-size:10px">${dens === 'minimal' ? 'Captions, their name and proven facts only: the footage and their words carry it.' : dens === 'light' ? 'Headline, captions, name and proven facts. No stickers, icons, maps or extras.' : dens === 'full' ? 'Everything: headlines, icons, map, badges and the style\'s own moving extras.' : 'Each style decides (On location is captions only, the others use everything).'}</span></div>
         <textarea class="input" rows="2" id="am-prompt" placeholder=${'Or describe it: "Zohran-style street vlog, orange and blue", "dark and cinematic, black and gold"'} value=${prompt} onInput=${(e) => { setPrompt(e.target.value); if (e.target.value.trim()) setSel(null); }} />
         ${p ? html`<${StoryPicker} key=${p.id} p=${p} jobs=${jobs} reload=${reload} />` : null}
       </div>
@@ -520,7 +523,11 @@ function StylesGallery({ presets, sel, onUse }) {
 }
 
 /** Preset looks as real preview stills (drawn by the ad engine itself), click to pick. */
-function LookPicker({ presets, sel, onSel }) {
+function LookPicker({ presets: all, sel, onSel }) {
+  // The ten main styles first; the rest open under "More styles".
+  const [more, setMore] = useState(false);
+  const extra = (all || []).filter((x) => x.main === false); const openMore = more || extra.some((x) => x.id === sel);
+  const presets = openMore ? all : (all || []).filter((x) => x.main !== false);
   // Hover plays the style's sample ad (built in), so you see it move before picking.
   const hover = (e, id, on) => { const v = e.currentTarget.querySelector('video'); if (!v) return; if (on) { if (!v.src) v.src = lookVideo(id); v.play().then(() => { v.style.opacity = 1; }).catch(() => {}); } else { v.pause(); v.style.opacity = 0; } };
   return html`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:10px">${presets.map((x) => html`<button type="button" class=${'look-card' + (sel === x.id ? ' on' : '')} title=${x.about} onMouseEnter=${(e) => hover(e, x.id, true)} onMouseLeave=${(e) => hover(e, x.id, false)} onClick=${() => onSel(sel === x.id ? null : x.id)}
@@ -531,7 +538,7 @@ function LookPicker({ presets, sel, onSel }) {
       </div>
       <b style="font-size:var(--fs-xs)">${x.name}</b>
       <span class="faint" style="font-size:10px;line-height:1.3">${x.about}</span>
-    </button>`)}</div>`;
+    </button>`)}${extra.length && !openMore ? html`<button type="button" class="look-card" onClick=${() => setMore(true)} style="display:flex;align-items:center;justify-content:center;min-height:120px;padding:6px;border-radius:12px;cursor:pointer;background:var(--surface-2, var(--surface));border:2px dashed var(--line);font-size:var(--fs-xs)"><b>More styles (${extra.length})</b></button>` : null}</div>`;
 }
 const LOOK_EXAMPLES = 'Or describe the style you want, in your own words: "dark and cinematic, black and gold, slow and serious", "bright TikTok style with giant captions", "breaking-news look with a ticker, red and black", "like the Larinda ad but green and white"';
 

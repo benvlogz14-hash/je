@@ -24,6 +24,8 @@ const paths = require('../core/paths');
 const ai = require('../integrations/ai');
 const ff = require('../video/ffmpeg');
 const looks = require('./looks');
+const edit = require('./edit');
+const sfx = require('./sfx');
 
 const FPS = 30;
 const ROOT = path.join(__dirname, '..', '..');
@@ -330,6 +332,10 @@ async function faceX(c, start, end) {
 
 function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office, place, cta, site, tag, look }) {
   look = look || looks.preset('bold');
+  // How much is drawn (look.density): full = everything; light = headline, captions, name and proven facts only;
+  // minimal = captions, the name and small fact tags (the full-screen vertical look with almost no graphics).
+  const dens = look.density || 'full';
+  const mapT = (cut, src) => (cut.map ? cut.map(src) : src - cut.start);
   const W = vertical ? 1080 : 1920; const H = vertical ? 1920 : 1080;
   const segs = []; const words = []; const voice = [];
   const tilts = [-1.6, 1.3, -1.1, 1.5, -1.4, 1.0];
@@ -337,24 +343,25 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
   plan.forEach((p, k) => {
     const cut = cuts[k]; const b = bites[k];
     voice.push({ src: cut.url, at: t, dur: cut.dur });
-    const lineWords = b.words.map((w) => ({ w: w.w, s: t + (w.s - cut.start), e: t + (w.e - cut.start), b: k })).filter((w) => w.e > t && w.s < t + cut.dur);
+    const lineWords = b.words.map((w) => ({ w: w.w, s: t + mapT(cut, w.s), e: Math.min(t + cut.dur, t + Math.max(mapT(cut, w.e), mapT(cut, w.s) + 0.06)), b: k })).filter((w) => w.e > t && w.s < t + cut.dur);
     words.push(...lineWords);
     // Headline: the words at the times they're said.
     const hw = String(p.headline || '').split(/\s+/).filter(Boolean);
     const at = findRun(b.words, hw);
     const keyset = new Set((p.keys || []).map(norm));
-    const head = { words: hw.map((w, i) => ({ w, key: keyset.has(norm(w)), t: at >= 0 ? Math.max(t, t + (b.words[at + i].s - cut.start) - 0.05) : t + 0.08 + i * 0.07 })) };
-    const speaker = (from, to) => ({ kind: 'video', src: cut.url, from: from - t, fx: cut.fx ?? 0.5, fy: 0.3, pushAt: t, pushLen: cut.dur });
-    const base = { bg: p.bg || 'navy', head, tilt: tilts[k % tilts.length], label: b.label || null, icons: (p.icons || []).slice(0, 2), role: p.role || null };
+    const head = { words: hw.map((w, i) => ({ w, key: keyset.has(norm(w)), t: at >= 0 ? Math.max(t, t + mapT(cut, b.words[at + i].s) - 0.05) : t + 0.08 + i * 0.07 })) };
+    const speaker = (from, to) => ({ kind: 'video', src: cut.url, from: from - t, fx: cut.fx ?? 0.5, fy: 0.3, face: cut.face || null, pushAt: t, pushLen: cut.dur, jumps: (cut.jumps || []).map((j) => t + j) });
+    const base = { line: k, bg: p.bg || 'navy', head: dens === 'minimal' ? null : head, tilt: tilts[k % tilts.length], label: b.label || null, icons: dens === 'full' ? (p.icons || []).slice(0, 2) : [], role: p.role || null, hook: k === 0, rally: k === plan.length - 1 && plan.length > 1 };
     const parts = [];
     let ins = p.map ? { kind: 'map', ...p.map } : p.cover && brollFiles[p.cover.broll] ? { kind: 'broll', ...p.cover } : null;
     // Cut-ins start and end in the gaps between words (never mid-word), like the reference ads.
     if (ins) {
-      const gaps = b.words.slice(1).map((w, i) => ((b.words[i].e + w.s) / 2) - cut.start).filter((g) => g > 0.5 && g < cut.dur - 0.5);
+      const gaps = b.words.slice(1).map((w, i) => mapT(cut, (b.words[i].e + w.s) / 2)).filter((g) => g > 0.5 && g < cut.dur - 0.5);
       const near = (x) => (gaps.length ? gaps.reduce((a, g) => (Math.abs(g - x) < Math.abs(a - x) ? g : a), gaps[0]) : x);
       const a0 = near(ins.at); let e0 = near(ins.at + ins.dur); if (e0 - a0 < 1.2) e0 = Math.min(cut.dur, a0 + Math.max(1.2, ins.dur));
       ins = { ...ins, at: a0, dur: e0 - a0 };
     }
+    if (ins && ins.kind === 'map' && dens !== 'full') ins = null;
     if (ins && ins.at < cut.dur - 0.6) {
       const a = t + ins.at; let e = Math.min(t + cut.dur, a + ins.dur); if (t + cut.dur - e < 0.7) e = t + cut.dur;
       parts.push({ ...base, at: t, dur: a - t, card: speaker(t) });
@@ -364,24 +371,31 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
         parts.push({ ...base, at: a, dur: e - a, bg: base.bg === 'red' ? 'navy' : 'red', tilt: -base.tilt, card: { kind: 'map', state: map.state, district: map.district || null, label, sub: place || '' }, head: { words: hw2.map((w, i) => ({ w, key: /\d/.test(w) || (!map.number && i === hw2.length - 1), t: a + 0.05 + i * 0.12 })) } });
       } else {
         const bf = brollFiles[ins.broll];
-        parts.push({ ...base, at: a, dur: e - a, card: { kind: 'video', src: bf.url, from: 0, fx: 0.5, fy: 0.45 }, pill: place || null });
+        parts.push({ ...base, at: a, dur: e - a, card: { kind: 'video', src: bf.url, from: 0, fx: 0.5, fy: 0.45, broll: true }, pill: dens === 'full' || look.pill === 'title' ? place || null : null });
       }
       if (e < t + cut.dur - 0.01) parts.push({ ...base, at: e, dur: t + cut.dur - e, card: speaker(e) });
     } else parts.push({ ...base, at: t, dur: cut.dur, card: speaker(t) });
     if (k === 0) { parts[0].enter = true; parts.forEach((x) => { if (x.card.kind === 'video' && x.card.src === cut.url) x.plate = true; }); }
-    if (k >= 2 && k % 2 === 0 && !(p.icons || []).length) parts.forEach((x) => { if (x.card.kind === 'video' && x.card.src === cut.url) x.badge = true; });
+    if (dens === 'full' && k >= 2 && k % 2 === 0 && !(p.icons || []).length) parts.forEach((x) => { if (x.card.kind === 'video' && x.card.src === cut.url) x.badge = true; });
     // The line's graphic (credential, stat, quote, callout) on its first speaker part.
-    if (p.gfx) { const first = parts.find((x) => x.card.kind === 'video'); if (first) first.tag = p.gfx; }
+    if (p.gfx && (dens === 'full' || ['stat', 'credential', 'quote'].includes(p.gfx.kind))) { const first = parts.find((x) => x.card.kind === 'video'); if (first) first.tag = p.gfx; }
     segs.push(...parts.filter((x) => x.dur > 0.02));
     t += cut.dur;
   });
-  const endDur = 3.0;
+  // Icons show once per topic (not again on the next part of the same line).
+  segs.forEach((s, i) => { s.showIcons = !!(s.icons?.length && s.card?.kind === 'video' && (i === 0 || segs[i - 1].icons?.join() !== s.icons.join() || segs[i - 1].card?.kind !== 'video')); });
+  const endDur = 3.4;
+  // The outro hook: their closing line stays on the end card (their own words), over the name and the ask.
+  const last = plan[plan.length - 1]; const lastWords = String(last?.headline || '').split(/\s+/).filter(Boolean);
+  const lastLine = String(bites[plan.length - 1]?.text || '').trim(); const whole = lastLine.split(/\s+/).length <= 12 && /[.!]$/.test(lastLine);
+  const cap1 = (x) => (x ? x[0].toUpperCase() + x.slice(1) : x);
+  const outro = plan.length < 2 ? '' : whole ? lastLine : lastWords.length >= 2 && lastWords.length <= 10 ? cap1(lastWords.join(' ').replace(/[,;:]+$/, '')) : '';
   // The end card's portrait: the speaker from the WHO line (else the first), mid-line, in a ring.
   const pk = Math.max(0, plan.findIndex((p) => p.role === 'who')); const pc = cuts[pk];
   const portrait = pc ? { src: pc.url, from: Math.max(0, Math.min(pc.dur * 0.45, pc.dur - 3.2)), fx: pc.fx ?? 0.5 } : null; // the clip must last the whole end card
-  const end = { at: t, dur: endDur, bg: 'navy', cta, name, sub: office || '', site: site || '', tag: tag || '', portrait };
+  const end = { at: t, dur: endDur, bg: 'navy', cta, name, sub: office || '', site: site || '', tag: tag || '', portrait, line: outro };
   return {
-    w: W, h: H, fps: FPS, total: t + endDur, segs, words, voice, end, name, office: [office, place].filter(Boolean).join(', ').slice(0, 70),
+    w: W, h: H, fps: FPS, total: t + endDur, voiceEnd: t, segs, words, voice, end, name, office: [office, place].filter(Boolean).join(', ').slice(0, 70),
     bug: map ? (map.number ? `${map.stateName} · District ${map.number}` : map.stateName) : String(office || '').slice(0, 30),
     look, fonts: looks.fontFiles(look), ticker: [name, office, place, site].filter(Boolean).join('  •  '),
   };
@@ -398,7 +412,7 @@ function withBase(spec, base) {
  * Make one ad. bites = the picked lines ({clip, s, e, text, words}); footage = prospect.pkg.footage (clips, broll).
  * Returns { file, duration, spec, plan, agent }.
  */
-async function make({ bites, footage, vertical, out, work, music, name, office, place, state, cta = 'Vote', site = '', tag = '', notes = '', prev = null, look = null, onProgress = () => {} }) {
+async function make({ bites, footage, vertical, out, work, music, name, office, place, state, cta = 'Vote', site = '', tag = '', notes = '', prev = null, look = null, sound = 'full', onProgress = () => {} }) {
   if (!available()) throw new Error('The pro ad designer is still installing. Restart Euclidean once to finish the update.');
   fs.mkdirSync(work, { recursive: true });
   const clips = footage.clips;
@@ -410,14 +424,21 @@ async function make({ bites, footage, vertical, out, work, music, name, office, 
   let plan = basePlan(bites, { broll, map, place, look: lookN }); let agent = 'built-in';
   try { const j = await aiPlan(bites, { name, office, place, broll, map, notes, prev, look: lookN }); if (j) { plan = mergePlan(plan, j, bites, { broll, map }); agent = j.agent; } } catch { /* the built-in plan */ }
 
-  // Cut each line (with a hair of lead-in and tail) and each B-roll shot used.
-  const cuts = [];
+  // Cut each line where the voice itself goes quiet (never mid-word), close up long pauses, and bring every line to
+  // the same level. The speaker's face is found so the crop follows it and full-screen text stays off it.
+  const cuts = []; let cleanCuts = 0;
   for (let k = 0; k < bites.length; k++) {
     onProgress(0.05 + 0.2 * (k / bites.length), `Cutting line ${k + 1} of ${bites.length}`);
     const b = bites[k]; const c = clips[b.clip];
-    const start = Math.max(0, b.s - 0.12); const dur = Math.min(c.duration - start, b.e - b.s + 0.38);
-    const file = path.join(work, `line${k}.mp4`); await cutBite(c, start, dur, file);
-    cuts.push({ start, dur, url: `/m/line${k}.mp4`, fx: c.width / c.height > 1.1 ? await faceX(c, start, start + dur) : 0.5 });
+    const snap = await edit.snapLine(c.file, b, c.duration);
+    const m = edit.mapper(snap.keep);
+    const file = path.join(work, `line${k}.mp4`);
+    const dur = await edit.cutLine(c, snap.keep, file, { level: snap.level, fps: FPS, first: k === 0 });
+    cleanCuts += (snap.clean.in ? 1 : 0) + (snap.clean.out ? 1 : 0);
+    const mid = (snap.keep[0][0] + snap.keep[snap.keep.length - 1][1]) / 2;
+    const face = await edit.faceBox(c, [snap.keep[0][0] + 0.4, mid], work);
+    const fx = c.width / c.height > 1.1 ? (face?.x ?? await faceX(c, snap.keep[0][0], snap.keep[0][0] + dur)) : 0.5;
+    cuts.push({ start: snap.keep[0][0], dur, map: m.map, jumps: m.jumps, url: `/m/line${k}.mp4`, fx: fx ?? 0.5, face, tightened: snap.keep.length - 1 });
   }
   const brollFiles = {};
   for (const p of plan) if (p.cover && !brollFiles[p.cover.broll]) {
@@ -439,10 +460,15 @@ async function make({ bites, footage, vertical, out, work, music, name, office, 
       (progress) => onProgress(0.3 + 0.6 * progress, `Drawing the ad ${Math.round(progress * 100)}%`));
   } finally { srv.server.close(); }
 
-  // Music under the voice (ducked), faded out at the end.
-  onProgress(0.92, 'Adding the music');
-  await mixMusic(silent, music, out, spec.total);
-  return { file: out, duration: spec.total, spec, plan, agent };
+  // Sound: music under the voice (ducked, swelling on the end card), quiet interface sounds on the cuts and graphics,
+  // then the whole mix mastered to -14 LUFS. Then the finished file is measured.
+  onProgress(0.92, 'Mixing the sound');
+  const events = sfx.plan(spec, lookN.density === 'minimal' && sound === 'full' ? 'light' : sound);
+  await mixSound(silent, music, out, spec, events);
+  onProgress(0.97, 'Checking the finished ad');
+  let qa = null;
+  try { qa = await edit.qa(out, { total: spec.total, voiceEnd: spec.voiceEnd, cuts: { clean: cleanCuts, total: bites.length * 2 } }); } catch { /* the ad is still made */ }
+  return { file: out, duration: spec.total, spec, plan, agent, qa, sounds: events.length, tightened: cuts.reduce((a, c) => a + (c.tightened || 0), 0) };
 }
 
 /** A still of a look (for the style picker): a sample headline, captions, a stat card and a name plate. Cached by look. */
@@ -465,15 +491,24 @@ async function previewOne(look, { vertical = true } = {}) {
   return out;
 }
 
-async function mixMusic(input, music, out, total) {
-  const f = [];
-  const inputs = ['-i', input];
-  if (music && fs.existsSync(music)) {
-    inputs.push('-stream_loop', '-1', '-i', music);
-    f.push('[0:a]aresample=48000,aformat=channel_layouts=stereo,asplit=2[sv][sk]', `[1:a]aresample=48000,aformat=channel_layouts=stereo,volume=0.42,afade=t=out:st=${Math.max(0, total - 1.6).toFixed(2)}:d=1.6[mu]`,
-      '[mu][sk]sidechaincompress=threshold=0.02:ratio=10:attack=10:release=450:makeup=1[md]', '[sv][md]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[a]');
-  } else f.push('[0:a]anull[a]');
-  await ff.ffmpegWithProgress([...inputs, '-filter_complex', f.join(';'), '-map', '0:v', '-map', '[a]', '-t', total.toFixed(3), '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', out], { totalSec: total });
+/** Voice + music + interface sounds. The music sits about 16 dB under the voice while they talk (and ducks further on
+ *  each word), comes up on the end card and fades out; everything is then mastered together. */
+async function mixSound(input, music, out, spec, events = []) {
+  const total = spec.total; const vEnd = spec.voiceEnd ?? total - 3;
+  const inputs = ['-i', input]; const f = []; let n = 1; const mix = ['[sv]'];
+  const hasMusic = music && fs.existsSync(music);
+  f.push(`[0:a]aresample=48000,aformat=channel_layouts=stereo${hasMusic ? ',asplit=2[sv][sk]' : '[sv]'}`);
+  if (hasMusic) {
+    inputs.push('-stream_loop', '-1', '-i', music); n++;
+    const up = `if(lt(t,${vEnd.toFixed(2)}),0.26,min(0.8,0.26+0.54*(t-${vEnd.toFixed(2)})/0.5))`;
+    f.push(`[1:a]aresample=48000,aformat=channel_layouts=stereo,volume='${up}':eval=frame,afade=t=in:d=0.25,afade=t=out:st=${Math.max(0, total - 1.1).toFixed(2)}:d=1.1[mu]`,
+      '[mu][sk]sidechaincompress=threshold=0.03:ratio=6:attack=15:release=380:makeup=1[md]');
+    mix.push('[md]');
+  }
+  const fxArgs = sfx.mixArgs(events, n);
+  if (fxArgs) { inputs.push(...fxArgs.inputs); f.push(...fxArgs.filters); mix.push('[sfx]'); }
+  f.push(`${mix.join('')}amix=inputs=${mix.length}:duration=first:normalize=0,apad[pre]`);
+  await edit.master({ inputs, graph: f.join(';'), out, total });
 }
 
-module.exports = { available, make, previewStill, mapFor, districtOf, stateName, autoHeadline, basePlan, mergePlan, buildSpec, findRun, bundled };
+module.exports = { available, make, mixSound, previewStill, mapFor, districtOf, stateName, autoHeadline, basePlan, mergePlan, buildSpec, findRun, bundled };

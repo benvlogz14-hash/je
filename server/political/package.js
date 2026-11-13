@@ -425,8 +425,8 @@ async function stepVideo(p, h, kind) {
     const lk = lookFor(p);
     const notes = [lk.notes, ...(p.pkg.notes || []).filter((n) => n.target !== 'email').slice(-3).map((n) => n.text)].filter(Boolean).join(' | ');
     try {
-      const r = await eng.make({ bites: okBites, footage: ft, vertical: K.vertical, out, work, music, name: p.name, office: shortOffice(pr.office || ''), place: p.pkg.brief?.place || '', state: pr.state || '', cta: K.social ? 'Follow' : 'Vote', site: siteOf(p.pkg), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes, look: lk.look, prev: p.pkg.pro?.[kind]?.plan || null, onProgress: (f, t) => h.progress(f * 0.92, t) });
-      save(p.id, (pkg) => ({ pro: { ...(pkg.pro || {}), [kind]: { plan: r.plan, agent: r.agent, look: r.spec.look?.name || '', at: new Date().toISOString() } } }));
+      const r = await eng.make({ bites: okBites, footage: ft, vertical: K.vertical, out, work, music, name: p.name, office: shortOffice(pr.office || ''), place: p.pkg.brief?.place || '', state: pr.state || '', cta: K.social ? 'Follow' : 'Vote', site: siteOf(p.pkg), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes, look: lk.look, sound: S('adSound', 'full'), prev: p.pkg.pro?.[kind]?.plan || null, onProgress: (f, t) => h.progress(f * 0.92, t) });
+      save(p.id, (pkg) => ({ pro: { ...(pkg.pro || {}), [kind]: { plan: r.plan, agent: r.agent, look: r.spec.look?.name || '', density: r.spec.look?.density || 'full', qa: r.qa || null, sounds: r.sounds || 0, tightened: r.tightened || 0, at: new Date().toISOString() } } }));
       res = r;
     } catch (e) {
       audit.log('system', 'political.pro_ad_failed', { prospectId: p.id, kind, error: String(e.message).slice(0, 300) }, 'warn');
@@ -647,11 +647,14 @@ async function revise(prospectId, { note, target = 'all', actor = 'user' }, h) {
  * Remake the ads in another look: a preset ("cinematic") or one designed from a typed description. The earlier ads are
  * kept as a version. A lead with no package yet gets the whole package made in that look.
  */
-async function restyle(prospectId, { preset = null, prompt = '', actor = 'user' }, h) {
+async function restyle(prospectId, { preset = null, prompt = '', density = null, actor = 'user' }, h) {
   const looks = require('./looks');
   let p = ctx.store.get('prospects', prospectId); if (!p) throw Object.assign(new Error('Prospect not found'), { permanent: true });
   h.progress(0.01, prompt ? 'Designing the look from your description' : 'Setting the look');
-  const r = prompt ? await looks.fromPrompt(prompt, { current: p.pkg?.proLook?.look || null }) : { look: looks.preset(preset), notes: '', by: 'preset' };
+  // A style (preset or described), and/or how much graphics: 'full' | 'light' | 'minimal' on top of it (or of the look in use).
+  const cur = p.pkg?.proLook?.look || S('proLook', null)?.look || null;
+  const r = prompt ? await looks.fromPrompt(prompt, { current: p.pkg?.proLook?.look || null }) : preset ? { look: looks.preset(preset), notes: '', by: 'preset' } : { look: cur ? looks.normalize(cur, cur) : looks.preset('bold'), notes: p.pkg?.proLook?.notes || '', by: p.pkg?.proLook?.by || 'preset' };
+  if (density) r.look = looks.withDensity(r.look, density);
   if (p.pkg?.files?.v || p.pkg?.files?.h) snapshot(p, `Before the "${r.look.name}" look`);
   save(p.id, () => ({ proLook: { look: looks.strip(r.look), name: r.look.name, prompt: String(prompt || '').slice(0, 1500), preset, notes: r.notes, by: r.by, at: now() } }));
   audit.log(actor, 'political.restyled', { prospectId, look: r.look.name, by: r.by });

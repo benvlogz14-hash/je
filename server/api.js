@@ -959,11 +959,12 @@ r.get('/api/prospects/:id/runs', (req, b, p) => {
   return { jobs, waiting, steps: polPkg.STEPS.map(([key, label]) => ({ key, label })), pkgSteps: pr.pkg?.steps || {}, noAds: pr.pkg?.noAds || null, error: pr.pkg?.error || null };
 });
 // Looks for the pro ads: presets, a look designed from a typed description, per lead or as the default.
-r.get('/api/political/looks', () => ({ presets: require('./political/looks').list(), current: ctx.setting('political.proLook', null) }));
+r.get('/api/political/looks', () => { const looks = require('./political/looks'); return { presets: looks.list(), density: Object.entries(looks.DENSITY).map(([id, name]) => ({ id, name })), current: ctx.setting('political.proLook', null) }; });
 r.post('/api/political/looks/design', async (req, b) => {
   const looks = require('./political/looks');
   if (b.preset && !looks.PRESETS[b.preset]) throw new HttpError(400, 'Unknown look');
   const r = b.prompt ? await looks.fromPrompt(String(b.prompt)) : { look: looks.preset(b.preset || 'bold'), notes: '', by: 'preset' };
+  if (b.density) r.look = looks.withDensity(r.look, String(b.density));
   const out = { look: looks.strip(r.look), name: r.look.name, prompt: String(b.prompt || '').slice(0, 1500), preset: b.preset || null, notes: r.notes, by: r.by, at: now() };
   if (b.save) { ctx.store.setSettings({ political: { proLook: out } }); audit.log(actorOf(req), 'political.look_default', { look: out.name }); }
   return out;
@@ -996,8 +997,9 @@ r.post('/api/prospects/:id/look', (req, b, p) => {
   const pr = must(ctx.store.get('prospects', p.id));
   const looks = require('./political/looks');
   if (b.clear) { ctx.store.update('prospects', pr.id, (cur) => ({ pkg: { ...(cur.pkg || {}), proLook: null } })); events.publish('prospects', { id: pr.id }); return { ok: true }; }
-  if (!b.prompt && !looks.PRESETS[b.preset]) throw new HttpError(400, 'Pick a look or describe one.');
-  return queue.enqueue('political.restyle', { prospectId: pr.id, name: pr.name, preset: b.prompt ? null : b.preset, prompt: String(b.prompt || '').slice(0, 1500) }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}` });
+  const density = looks.OPTIONS.density.includes(b.density) ? b.density : null; // how much graphics: full | light | minimal
+  if (!b.prompt && !looks.PRESETS[b.preset] && !density) throw new HttpError(400, 'Pick a look or describe one.');
+  return queue.enqueue('political.restyle', { prospectId: pr.id, name: pr.name, preset: b.prompt ? null : b.preset || null, prompt: String(b.prompt || '').slice(0, 1500), density }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}` });
 });
 // The candidate's own footage, uploaded on the lead (used by the ad styles made from their footage; uploads come first).
 r.post('/api/prospects/:id/footage/upload', async (req, res, p) => {

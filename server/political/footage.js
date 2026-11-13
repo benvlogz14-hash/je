@@ -134,7 +134,8 @@ function sentences(words, clip) {
   for (const w of words) {
     if (cur.length && w.s - cur[cur.length - 1].e > 1.2) flush();
     cur.push(w);
-    if (/[.!?]["”']?$/.test(w.w)) flush();
+    // "Dr.", "Mr.", "St.", "U.S." and initials don't end a sentence.
+    if (/[.!?]["”']?$/.test(w.w) && !/^(dr|mr|mrs|ms|st|jr|sr|rev|sen|rep|gov|prof|u\.s|no|vs|[a-z])\.$/i.test(w.w)) flush();
   }
   flush();
   return out.filter((x) => x.e - x.s >= 1 && x.e - x.s <= 14 && x.words.length >= 4);
@@ -252,20 +253,69 @@ function clauseTrim(x, maxSec = 7.2) {
   return { ...x, s: words[0].s, e: words[words.length - 1].e, words, text: words.map((y) => y.w).join(' ').replace(/\s+([,.!?])/g, '$1'), trimmed: true };
 }
 
+// The opening hook and the closing line (the outro hook) carry the ad, so both are checked in code whoever picked them.
+const GREETING = /^(good (morning|afternoon|evening)|thank you|thanks|hello|hi\b|hey\b|welcome|it'?s (great|good|an honor) to be|i want to thank|i'?d like to thank)/i;
+const LEAD_IN = /^(and|but|so|now|well|look|listen|because|you know|i mean|again|also)$/i;
+const LEANS = /^(it|that|this|these|those|they|he|she|which|who|then|there)$/i;
+const bare = (w) => String(w || '').replace(/[^a-z' ]/gi, '').toLowerCase();
+/** A line as an opening: a leading "And," / "But" / "So" is taken off (the thought then stands alone); null when it still
+ *  leans on something said before it, or is a greeting. */
+function asOpening(x) {
+  let w = x.words || []; let cut = 0;
+  while (cut < 2 && w.length - cut > 4 && LEAD_IN.test(bare(w[cut].w))) cut++;
+  if (cut) w = w.slice(cut);
+  if (!w.length || GREETING.test(w.map((y) => y.w).join(' ')) || LEANS.test(bare(w[0].w))) return null;
+  if (!cut) return x;
+  const text = w.map((y) => y.w).join(' ').replace(/\s+([,.!?])/g, '$1');
+  w = [{ ...w[0], w: w[0].w[0].toUpperCase() + w[0].w.slice(1) }, ...w.slice(1)]; // captions and headlines show these words
+  return { ...x, s: w[0].s, words: w, text: text[0].toUpperCase() + text.slice(1), trimmed: true };
+}
+/** How well a line grabs in its first seconds (higher is better). */
+function hookScore(x) {
+  const d = x.e - x.s; const t = x.text;
+  return (d <= 5 ? 2 : d <= 6.5 ? 0 : -3) + (/\b(most|never|every|no one|nobody|they'?re|they are|trying to|under attack|enough|right now|wealthiest|billionaire|corporat|crisis|can'?t afford|not for sale|fight|erase|stop)\b/i.test(t) ? 3 : 0)
+    + (/\b(but|not|while|instead)\b/i.test(t) ? 1 : 0) + (/\d/.test(t) ? 1 : 0) + (/!$/.test(t) ? 1 : 0) - (GREETING.test(t) ? 9 : 0) - (/\b(said|as i mentioned|like i said)\b/i.test(t) ? 2 : 0);
+}
+/** How well a line closes the ad: short, whole, forward-looking, in "we" or "our". */
+function outroScore(x) {
+  const d = x.e - x.s; const t = x.text;
+  return (d <= 4.5 ? 2 : d <= 6 ? 0.5 : -2) + (/\b(we will|we'll|we are|we're|never|always|together|let'?s|keep fighting|won'?t stop|every|our)\b/i.test(t) ? 3 : 0) + (/\bfor (the|our|every|[A-Z])/.test(t) ? 1.5 : 0)
+    + (/[.!]["”']?$/.test(t) ? 1 : 0) - (/,$/.test(t) ? 3 : 0) - (/\b(and|but|so|because|that|which|to|the|of)[.]?$/i.test(t) ? 4 : 0) - (GREETING.test(t) ? 6 : 0);
+}
+/** Put a story in its final order and shape: the hook first (standing alone), the closing line last. */
+function shapeStory(picks) {
+  if (picks.length < 2) return picks;
+  const out = picks.filter((x) => !GREETING.test(x.text)); // a greeting is never part of an ad
+  if (out.length < 2) return out;
+  // Hook: the line picked as the hook when it stands alone; else the line that grabs best (not one that reads as a closer).
+  let hi = out.findIndex((x) => x.role === 'hook'); if (hi < 0) hi = 0;
+  let open = asOpening(out[hi]);
+  if (!open) {
+    const c = out.map((x, i) => ({ i, o: asOpening(x), sc: hookScore(x) - Math.max(0, outroScore(x) - 2) - i * 0.3 })).filter((y) => y.o && out[y.i].role !== 'rally').sort((p, q) => q.sc - p.sc)[0];
+    if (c) { hi = c.i; open = c.o; }
+  }
+  if (open) { out.splice(hi, 1); out.unshift({ ...open, role: 'hook' }); }
+  // Outro: the rally line last; when nothing was marked, the best closer among the last lines.
+  let ri = out.findIndex((x, i) => i > 0 && x.role === 'rally');
+  if (ri < 0) { const tail = out.map((x, i) => ({ i, sc: outroScore(x) })).filter((c) => c.i >= Math.max(1, out.length - 3)).sort((a, b) => b.sc - a.sc)[0]; if (tail && tail.sc >= 2) ri = tail.i; }
+  if (ri > 0) { const [x] = out.splice(ri, 1); out.push({ ...x, role: 'rally' }); }
+  return out;
+}
+
 /** Code-only story (no AI): one line per beat, found by what each line says, in story order. */
 function heuristicStory(list, { name, office, targetSec, focus = '' }) {
   const first = String(name).split(/\s+/)[0]; const last = String(name).split(/\s+/).slice(-1)[0];
   const fw = String(focus).toLowerCase().split(/[^a-z]+/).filter((y) => y.length > 3);
   const on = (x) => fw.length ? fw.filter((y) => x.text.toLowerCase().includes(y)).length : 0;
   const tests = {
-    hook: (x) => (/\b(most people|they'?re|they are|trying to|not for you|under attack|attack|enough|crisis|right now|wealthiest|corporat)\b/i.test(x.text) ? 4 : 0) + (/\b(they|never|fight)\b/i.test(x.text) ? 1 : 0) + (/!/.test(x.text) ? 1 : 0) - (/\bsaid\b/i.test(x.text) ? 3 : 0),
+    hook: (x) => (asOpening(x) ? hookScore(x) : -9),
     who: (x) => (new RegExp(`\\bI(?:'m| am) (?:${first}|${last})|\\bI represent|\\bI(?:'ve| have) (?:served|been)|\\bmy (?:name|district)`, 'i').test(x.text) ? 6 : 0) + (/\b(I|my)\b/.test(x.text) ? 1 : 0),
     proof: (x) => (/\b(passed|wrote|bill|law|fought|delivered|secured|won|led|built|carried|introduced|funding)\b/i.test(x.text) ? 4 : 0) + (/\d/.test(x.text) ? 2 : 0),
     place: (x) => (/\b(district|community|neighbo|our streets|our town|our city|county|borough|here in|home)\b/i.test(x.text) ? 4 : 0) + (office && String(office).split(/\W+/).some((y) => y.length > 4 && x.text.includes(y)) ? 2 : 0),
     story: (x) => (/\b(walked|grew up|remember|when I|years ago|my (?:mother|father|grand)|history|story|said)\b/i.test(x.text) ? 4 : 0) + (/\b(right|privilege|dream|believe)\b/i.test(x.text) ? 1 : 0),
-    rally: (x) => (/\b(we will|we'll|never stop|keep fighting|won't|together|we can|let's)\b/i.test(x.text) ? 4 : 0) + (/\bfor (the \d+|[A-Z][a-z]+,)/.test(x.text) ? 3 : 0) + (/\b(will|never|every)\b/i.test(x.text) ? 1 : 0),
+    rally: (x) => outroScore(x) - 1,
   };
-  const pool = list.map((x) => clauseTrim(x)).filter((x) => x && !/\?$/.test(x.text) && x.shot?.usable !== false && x.e - x.s >= 1.6);
+  const pool = list.map((x) => clauseTrim(x)).filter((x) => x && !/\?$/.test(x.text) && !GREETING.test(x.text) && x.shot?.usable !== false && x.e - x.s >= 1.6);
   const used = new Set(); const out = []; let total = 0;
   for (const role of ROLES) {
     const cand = pool.filter((x) => !used.has(x.id)).map((x) => ({ x, sc: tests[role](x) + on(x) * 2 })).filter((y) => y.sc >= 2).sort((a, b) => b.sc - a.sc)[0];
@@ -314,7 +364,7 @@ async function pickStory({ name, office, sentences: list, story = {}, notes = ''
     const lines = list.filter((x) => x.shot?.usable !== false).slice(0, 400).map((x) => `#${x.id} [${(x.e - x.s).toFixed(1)}s${x.shot ? `, ${x.shot.kind}` : ''}] ${x.text}`).join('\n').slice(0, 26000);
     try {
       const r = await ai.ask({ role: 'writing', json: true, maxTokens: 2200,
-        system: `You are the story editor of a 30-second political ad cut from a candidate's own speeches. Build a NARRATIVE in beats, in this order: hook (what's at stake, a line that grabs), who (who they are), proof (what they did or fight for), place (their district / the people they serve), story (a moment, image or bit of history; optional), rally (the closing line that lands the theme). Use 5 to 7 lines in total, about ${target} seconds of talk; each line 2 to 7 seconds; one idea per line; every line serves ONE theme so the ad feels like one story. Use only whole sentences the candidate ${name} says themselves, never an interviewer's, never questions. You may never change words.
+        system: `You are the story editor of a 30-second political ad cut from a candidate's own speeches. Build a NARRATIVE in beats, in this order: hook (what's at stake, a line that grabs), who (who they are), proof (what they did or fight for), place (their district / the people they serve), story (a moment, image or bit of history; optional), rally (the closing line that lands the theme). THE HOOK decides whether anyone watches: it plays from the first frame, must make sense with nothing before it (never a greeting, a thank-you, or a line that leans on an earlier one with "it", "that" or "they"), names a stake, a contrast or a surprising claim, and is under 5 seconds. THE RALLY is the outro hook: a short, complete, quotable line (under 5 seconds) that lands the theme and makes people want to follow or share; it stays on screen over the end card, so it must read well on its own. Each line should hand over to the next (the proof answers the hook, the place makes it local), and cuts must sound natural: only whole sentences. Use 5 to 7 lines in total, about ${target} seconds of talk; each line 2 to 7 seconds; one idea per line; every line serves ONE theme so the ad feels like one story. Use only whole sentences the candidate ${name} says themselves, never an interviewer's, never questions. You may never change words.
 For each line you may add ONE graphic, only from that line's own words or the FACTS given: {"kind":"credential","title":"...","sub":"..."} (who they are: a job, degree or title), {"kind":"stat","value":"2021","label":"Serving since"} (a number they said or in the facts), {"kind":"quote","by":"Dr. Martin Luther King Jr."} (only when the line quotes someone named in it), {"kind":"callout","text":"up to 6 words copied from the line"}. Graphics on most lines, but never invented.
 Return JSON {"theme":"the one idea, 3-6 words","lines":[{"id":12,"role":"hook","gfx":null}, ...],"tagline":"a short opening title in their spirit, 3-6 words, 1-2 words in *stars*"}`,
         prompt: `CANDIDATE: ${name}${office ? `, ${office}` : ''}\nFACTS (usable for graphics): ${String(facts || '').slice(0, 1500) || 'none'}\n${focus ? `THE STORY THE FOUNDERS WANT: ${focus}\n` : 'Pick the strongest story the footage can tell.\n'}${notes ? `FOUNDER NOTES: ${notes}\n` : ''}\nSENTENCES\n${lines}` });
@@ -328,6 +378,7 @@ Return JSON {"theme":"the one idea, 3-6 words","lines":[{"id":12,"role":"hook","
     } catch { picks = []; }
   }
   if (picks.length < 3) { picks = heuristicStory(list, { name, office, targetSec: target, focus }); agent = 'built-in story'; }
+  picks = shapeStory(picks);
   // Keep it tight: drop lines past the target (never the hook or the rally).
   let total = picks.reduce((a, x) => a + (x.e - x.s), 0);
   while (total > target + 5 && picks.length > 4) { const k = picks.findIndex((x, i) => i > 0 && i < picks.length - 1 && x.role !== 'who'); if (k < 0) break; total -= picks[k].e - picks[k].s; picks.splice(k, 1); }
@@ -577,4 +628,4 @@ async function renderSpeechAd({ bites, footage, info, vertical, out, work, music
 }
 function assT(t) { t = Math.max(0, t); const h = Math.floor(t / 3600); const m = Math.floor((t % 3600) / 60); const s = Math.floor(t % 60); const cs = Math.floor((t * 100) % 100); return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`; }
 
-module.exports = { topics, repick, pickStory, clauseTrim, iconsFor, groundGfx, find, download, prepare, pickBites, sentences, punctuate, quietWindows, renderSpeechAd, FB_VIDEO, platformOf };
+module.exports = { asOpening, hookScore, outroScore, shapeStory, topics, repick, pickStory, clauseTrim, iconsFor, groundGfx, find, download, prepare, pickBites, sentences, punctuate, quietWindows, renderSpeechAd, FB_VIDEO, platformOf };

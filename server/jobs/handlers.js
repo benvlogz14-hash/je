@@ -934,7 +934,7 @@ queue.register('political.restyle', {
   heavy: true, maxAttempts: 1,
   async run(job, h) {
     if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
-    return political.restyle(job.payload.prospectId, { preset: job.payload.preset || null, prompt: job.payload.prompt || '', actor: job.createdBy }, h);
+    return political.restyle(job.payload.prospectId, { preset: job.payload.preset || null, prompt: job.payload.prompt || '', density: job.payload.density || null, actor: job.createdBy }, h);
   },
 });
 
