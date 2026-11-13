@@ -39,7 +39,7 @@ const OPTIONS = {
 };
 
 /** The ten main styles, in the order shown (the rest sit under "More styles"). */
-const MAIN = ['bold', 'pastel', 'street', 'field', 'tiktok', 'cinematic', 'news', 'clean', 'patriotic', 'dark'];
+const MAIN = ['bold', 'pastel', 'street', 'field', 'direct', 'tiktok', 'cinematic', 'news', 'patriotic', 'dark'];
 const DENSITY = { full: 'All graphics', light: 'Fewer graphics', minimal: 'Captions only' };
 
 /** The reference ad (Larinda Hooks): the default. Other presets only list what differs. */
@@ -112,14 +112,21 @@ const PRESETS = {
     flair: 'street', name: 'Street vlog', about: 'Walk-and-talk creator style: full-screen footage, a flash and punch-in on every cut, big outlined captions under the face, sticker words, transit-style place tags', layout: 'full', colors: { a: '#ff6a13', b: '#1b4dff', c: '#ffd23f' }, light: '#ffffff', dark: '#14121f',
     fonts: { head: 'Archivo Black', body: 'Inter', cap: 'Archivo Black' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'sticker', reveal: 'word', scale: 0.78 },
     cap: { style: 'color', pos: 'center', case: 'none', scale: 1.05 }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false }, accent: '#ffd23f',
-    transition: 'mix', grade: 'punchy', texture: 'none', plate: 'minimal', pill: 'tag', badge: false, end: 'split', motion: 'snappy', punch: true,
+    transition: 'mix', grade: 'punchy', texture: 'none', plate: 'minimal', pill: 'tag', badge: false, end: 'split', motion: 'snappy', punch: true, angles: true,
   },
   field: {
     flair: 'none', name: 'On location', about: 'To-camera and on the street: the footage fills the screen, hard cuts, small bold serif captions a phrase at a time, an orange place title, a plain brand card to end. Almost no graphics',
-    layout: 'full', density: 'minimal', colors: { a: '#2a22d4', b: '#ff9f1c', c: '#ffc61a' }, light: '#ffffff', dark: '#10122b', accent: '#ff9f1c',
+    layout: 'full', density: 'minimal', angles: true, colors: { a: '#2a22d4', b: '#ff9f1c', c: '#ffc61a' }, light: '#ffffff', dark: '#10122b', accent: '#ff9f1c',
     fonts: { head: 'DM Serif Display', body: 'Inter', cap: 'DM Serif Display' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'fade', scale: 0.7 },
     cap: { style: 'plain', pos: 'center', case: 'none', scale: 0.92, chunk: 'phrase', shadow: true }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false },
     transition: 'cut', grade: 'none', texture: 'none', plate: 'none', pill: 'title', badge: false, end: 'brand', motion: 'calm', punch: false,
+  },
+  direct: {
+    flair: 'none', name: 'To camera', about: 'One take cut like three cameras: wide, medium and close punch-ins on every sentence, small clean captions a phrase at a time, hard cuts, a plain end card. For announcements and explainers',
+    layout: 'full', density: 'minimal', angles: true, colors: { a: '#1d2bd8', b: '#0f1014', c: '#f2f2f2' }, light: '#ffffff', dark: '#0f1014', accent: '#ffd23f',
+    fonts: { head: 'Inter', body: 'Inter', cap: 'Inter' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'fade', scale: 0.66 },
+    cap: { style: 'plain', pos: 'center', case: 'none', scale: 0.7, chunk: 'phrase', shadow: true }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false },
+    transition: 'cut', grade: 'none', texture: 'none', plate: 'none', pill: 'none', badge: false, end: 'brand', motion: 'calm', punch: false,
   },
   poster: {
     flair: 'poster', name: 'Retro poster', about: 'Old cinema poster: marigold, magenta and teal, a turning sunburst, 3D stacked type, halftone', layout: 'card', colors: { a: '#b8126b', b: '#ffb21c', c: '#0f7c7a' }, light: '#fff4dc', dark: '#2a0b1f',
@@ -200,10 +207,12 @@ function normalize(x = {}, base = BOLD) {
     plate: pick(x.plate, OPTIONS.plate, B.plate), pill: pick(x.pill, OPTIONS.pill, B.pill), badge: x.badge != null ? !!x.badge : !!B.badge, end: pick(x.end, OPTIONS.end, B.end),
     motion: pick(x.motion, OPTIONS.motion, B.motion), flair: pick(x.flair, OPTIONS.flair, B.flair || 'none'), punch: x.punch != null ? !!x.punch : !!B.punch, ticker: x.ticker != null ? !!x.ticker : !!B.ticker,
     density: pick(x.density, OPTIONS.density, B.density || 'full'),
+    angles: x.angles != null ? !!x.angles : !!B.angles, // one take cut like several cameras (full-screen looks)
   };
   // Full-screen and letterbox footage can't tilt or sit on a block; the cap position must exist in that layout.
   if (L.layout === 'full' || L.layout === 'letterbox') { L.card = { ...L.card, tilt: false, block: false, border: 0, radius: 0 }; L.badge = false; }
   if (L.layout === 'full' && L.cap.pos === 'card') L.cap.pos = 'center';
+  if (L.layout !== 'full') L.angles = false;
   if (!L.accent) L.accent = L.colors.c;
   // Captions only: the captions carry the ad, so they are always on and sit low (under the face on full-screen looks).
   if (L.density === 'minimal') { if (L.cap.style === 'none') L.cap.style = 'color'; L.ticker = false; L.badge = false; }
@@ -234,6 +243,7 @@ const SCHEMA = `{
  "transition": ${OPTIONS.transition.join('|')} (mix = a different one on each line), "grade": ${OPTIONS.grade.join('|')}, "texture": ${OPTIONS.texture.join('|')},
  "plate": ${OPTIONS.plate.join('|')} (name plate), "pill": tag|tape|title|none (place labels; title = plain coloured text over the shot), "badge": true|false, "end": split|solid|stripes|brand (brand = a plain colour card with the name, like a campaign logo), "motion": snappy|smooth|calm,
  "flair": ${OPTIONS.flair.join('|')} (the signature motion graphics: bold = colour blocks and wipes, cinematic = opening bars/gold rules/vignette, clean = gliding soft shapes, news = sweeping red bars and a corner bug, grassroots = tape/marker scribbles/doodles, tiktok = full-screen word flashes and a progress bar, patriotic = flag-stripe wipes and stars, dark = glitches and stamped words, bright = floating shapes and confetti, street = handheld vlog with sticker words and transit-style tags, poster = turning sunburst and 3D stacked type, explainer = grid paper and numbered points, doc = big quote marks and chapter titles, y2k = old computer window and sparkles, zine = ransom-note cut-out letters and torn paper),
+ "angles": true|false (full-screen looks only: cut one take like several cameras, wide / medium / close on each sentence or clause),
  "punch": true|false (zoom punch-ins on key words), "ticker": true|false (scrolling name bar along the bottom),
  "density": full|light|minimal (how much is drawn: full = every graphic; light = headline, captions, name and facts; minimal = captions and the name only, for "less graphics", "clean", "just captions", "let the footage breathe"),
  "notes": "anything in the request about content or pacing (which lines, length, what to open or end on), for the editor; empty if none"
@@ -263,7 +273,7 @@ const WORDS = {
   cinematic: /cinema|film|movie|trailer|documentary|letterbox|serif|elegant|prestige/i, news: /news|breaking|report|headline news|ticker|cable/i,
   grassroots: /grassroots|hand.?made|handwritten|marker|paper|scrapbook|community|homemade|diy/i, tiktok: /tiktok|reels?|full.?screen|vertical video|influencer|gen ?z|captions? big/i,
   patriotic: /patriot|flag|america|red,? white|classic campaign|traditional|serious/i, dark: /dark|gritty|attack|contrast|urgent|ominous|black and red|scary|warning/i,
-  pastel: /pastel blocks|pastel version|soft colou?rs?/i, field: /on location|to.?camera|explainer on the street|serif captions?|plunge|field (video|piece)|no graphics/i, street: /zohran|mamdani|street|vlog|walk.?and.?talk|man.on.the.street|creator|handheld|organic/i, poster: /poster|bollywood|vintage|retro poster|sunburst|marquee|70s|80s/i,
+  pastel: /pastel blocks|pastel version|soft colou?rs?/i, direct: /to.?camera|direct to camera|announcement|punch.?ins?|multi.?cam|jump cuts?/i, field: /on location|explainer on the street|serif captions?|plunge|field (video|piece)|no graphics/i, street: /zohran|mamdani|street|vlog|walk.?and.?talk|man.on.the.street|creator|handheld|organic/i, poster: /poster|bollywood|vintage|retro poster|sunburst|marquee|70s|80s/i,
   explainer: /explain|policy|steps?|numbered|whiteboard|how it works|infographic/i, doc: /documentary|interview|testimonial|story|quote/i, y2k: /y2k|2000s|windows|pixel|internet|retro computer|nostalgia/i, zine: /zine|collage|cut.?out|ransom|punk|photocop/i,
   bright: /bright|pastel|fun|bubbly|playful|pop(py)?|colou?rful|cute|young/i, clean: /clean|minimal|modern|simple|apple|white|corporate|sleek/i, bold: /bold|block|original|reference|larinda|same as/i,
 };

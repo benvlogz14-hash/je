@@ -253,9 +253,17 @@ function CardContent({ seg, fps, w, h, look, keyTimes }) {
     // A pause closed up inside a line is a jump cut: every other piece is punched in a little, like an editor would.
     if (c.jumps?.length && c.jumps.filter((j) => abs >= j).length % 2 === 1) push *= 1.08;
     // Full-screen vertical: lift the shot so the face sits above the captions (text never covers a face).
-    let lift = 0;
-    if (look.layout === 'full' && h > w && c.face && !c.broll) { lift = clamp(c.face.y - faceTarget(look), 0, 0.2); push *= 1 + lift; }
-    const style = { width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${Math.round((c.fx ?? 0.5) * 100)}% ${Math.round((c.fy ?? 0.35) * 100)}%`, transform: `translateY(${(-lift * h).toFixed(1)}px) ${shake}scale(${push})`, transformOrigin: `${Math.round((c.fx ?? 0.5) * 100)}% ${lift ? 0 : 40}%`, filter: GRADE[look.grade] || 'none' };
+    // Also: one take cut like several cameras (c.angles): each framing is a zoom centred on the face.
+    let lift = 0; let oy = 40;
+    if (look.layout === 'full' && c.kind === 'video' && !c.broll) {
+      const z = c.angles ? (c.angles.filter((a) => abs >= a.t - 0.001).pop() || c.angles[0]).z : 1;
+      const fy = c.face ? clamp(c.face.y, 0.15, 0.7) : 0.36;
+      const need = h > w && c.face ? clamp(fy - faceTarget(look), 0, 0.2) : 0;
+      let S = push * z; if ((S - 1) * (1 - fy) < need) S = 1 + need / (1 - fy);
+      push = S; oy = fy * 100;
+      lift = clamp(need + (z > 1.3 && h > w ? 0.02 : 0), 0, (1 - fy) * (S - 1)); // never past the picture's edge
+    }
+    const style = { width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${Math.round((c.fx ?? 0.5) * 100)}% ${Math.round((c.fy ?? 0.35) * 100)}%`, transform: `translateY(${(-lift * h).toFixed(1)}px) ${shake}scale(${push})`, transformOrigin: `${Math.round((c.fx ?? 0.5) * 100)}% ${oy.toFixed(1)}%`, filter: GRADE[look.grade] || 'none' };
     return c.kind === 'photo' ? <Img src={c.src} style={style} /> : <OffthreadVideo src={c.src} muted startFrom={Math.round((c.from || 0) * fps)} style={style} />;
   }
   if (c.kind === 'map') return <MapCard c={c} w={w} h={h} fps={fps} look={look} />;
@@ -636,7 +644,7 @@ function EndCard({ e, look, fps, L }) {
           {look.end === 'split' ? <Outlined stroke={look.dark} width={10} color={nameColor}>{e.name}</Outlined> : e.name}
         </div>
         {e.sub ? <div style={{ fontFamily: look.fonts.body, fontSize: big * 0.2, color: look.dark, background: look.light === A.bg ? B.bg : look.light, padding: `${big * 0.04}px ${big * 0.16}px`, textTransform: 'uppercase', letterSpacing: '0.04em', transform: `scale(${at(2)})` }}>{e.sub}</div> : null}
-        {e.line ? <div style={{ fontFamily: look.fonts.head, fontSize: fitWords(String(e.line).split(/\s+/), look.fonts.head, Math.round(big * 0.34), W * 0.8, big * 0.9, { upper: up, maxLines: 2, min: 24 }), lineHeight: 1.08, color: A.text, textTransform: up ? 'uppercase' : 'none', textAlign: 'center', maxWidth: W * 0.82, marginTop: big * 0.08, opacity: clamp(at(4) * 1.4, 0, 1), transform: `translateY(${(1 - at(4)) * 40}px)` }}>“{String(e.line).replace(/[.!]+$/, '')}{/!$/.test(String(e.line)) ? '!' : '.'}”</div> : null}
+        {e.line ? <div style={{ fontFamily: look.fonts.head, fontSize: fitWords(String(e.line).split(/\s+/), look.fonts.head, Math.round(big * 0.34), W * 0.8, big * 0.9, { upper: up, maxLines: 2, min: 24 }), lineHeight: 1.12, color: brand ? A.text : look.light, background: brand ? 'transparent' : look.dark, padding: brand ? 0 : `${big * 0.06}px ${big * 0.16}px`, textTransform: up ? 'uppercase' : 'none', textAlign: 'center', maxWidth: W * 0.82, marginTop: big * 0.08, opacity: clamp(at(4) * 1.4, 0, 1), transform: `translateY(${(1 - at(4)) * 40}px)` }}>“{String(e.line).replace(/[.!]+$/, '')}{/!$/.test(String(e.line)) ? '!' : '.'}”</div> : null}
         {e.site ? <div style={{ fontFamily: look.fonts.body, fontSize: big * 0.17, color: A.text, marginTop: big * 0.06, opacity: at(3) }}>{e.site}</div> : null}
       </AbsoluteFill>
       {e.tag ? <div style={{ position: 'absolute', bottom: L.v ? 70 : 26, width: '100%', textAlign: 'center', fontFamily: look.fonts.body, fontSize: L.v ? 22 : 18, color: A.text, opacity: 0.8 * at(4) }}>{e.tag}</div> : null}

@@ -339,6 +339,20 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
   const W = vertical ? 1080 : 1920; const H = vertical ? 1920 : 1080;
   const segs = []; const words = []; const voice = [];
   const tilts = [-1.6, 1.3, -1.1, 1.5, -1.4, 1.0];
+  // One take cut like several cameras (full-screen looks): a new framing at each sentence and at clause breaks inside
+  // long lines (never closer than 1.6 s, never in the last 0.9 s), wide → close → medium, centred on the face.
+  const ZOOMS = [1, 1.5, 1.18, 1.75, 1.08, 1.4]; let zi = 0;
+  const anglesFor = (b, cut, t0) => {
+    if (!look.angles) return null;
+    const out = [{ t: t0, z: ZOOMS[zi++ % ZOOMS.length] }];
+    b.words.forEach((w, i) => {
+      const nx = b.words[i + 1]; if (!nx) return;
+      const brk = /[.!?,;:]["”']?$/.test(w.w) || nx.s - w.e > 0.3; if (!brk) return;
+      const at = t0 + mapT(cut, (w.e + nx.s) / 2);
+      if (at - out[out.length - 1].t >= 1.6 && t0 + cut.dur - at >= 0.9) out.push({ t: at, z: ZOOMS[zi++ % ZOOMS.length] });
+    });
+    return out;
+  };
   let t = 0;
   plan.forEach((p, k) => {
     const cut = cuts[k]; const b = bites[k];
@@ -350,7 +364,8 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
     const at = findRun(b.words, hw);
     const keyset = new Set((p.keys || []).map(norm));
     const head = { words: hw.map((w, i) => ({ w, key: keyset.has(norm(w)), t: at >= 0 ? Math.max(t, t + mapT(cut, b.words[at + i].s) - 0.05) : t + 0.08 + i * 0.07 })) };
-    const speaker = (from, to) => ({ kind: 'video', src: cut.url, from: from - t, fx: cut.fx ?? 0.5, fy: 0.3, face: cut.face || null, pushAt: t, pushLen: cut.dur, jumps: (cut.jumps || []).map((j) => t + j) });
+    const angles = anglesFor(b, cut, t);
+    const speaker = (from, to) => ({ kind: 'video', src: cut.url, from: from - t, fx: cut.fx ?? 0.5, fy: 0.3, face: cut.face || null, angles, pushAt: t, pushLen: cut.dur, jumps: (cut.jumps || []).map((j) => t + j) });
     const base = { line: k, bg: p.bg || 'navy', head: dens === 'minimal' ? null : head, tilt: tilts[k % tilts.length], label: b.label || null, icons: dens === 'full' ? (p.icons || []).slice(0, 2) : [], role: p.role || null, hook: k === 0, rally: k === plan.length - 1 && plan.length > 1 };
     const parts = [];
     let ins = p.map ? { kind: 'map', ...p.map } : p.cover && brollFiles[p.cover.broll] ? { kind: 'broll', ...p.cover } : null;

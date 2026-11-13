@@ -137,7 +137,7 @@ async function qa(file, { total = null, voiceEnd = null, cuts = null } = {}) {
   const r = await collect(['-i', file, '-filter_complex', '[0:a]ebur128=peak=true[a];[0:v]blackdetect=d=0.2:pix_th=0.08[v]', '-map', '[a]', '-map', '[v]', '-f', 'null', '-'], { timeoutMs: 300000 });
   const sum = r.err.slice(r.err.lastIndexOf('Summary:'));
   const loudness = Number((/I:\s+(-?[\d.]+) LUFS/.exec(sum) || [])[1]); const peak = Number((/Peak:\s+(-?[\d.]+) dBFS/.exec(sum) || [])[1]);
-  const black = [...r.err.matchAll(/black_start:([\d.]+) black_end:([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  const black = [...r.err.matchAll(/black_start:([\d.]+) black_end:([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]).filter(([a]) => voiceEnd == null || a < voiceEnd - 0.05); // a dark end card is not a fault
   const s = await collect(['-i', file, '-vn', '-af', 'silencedetect=noise=-48dB:d=0.7', '-f', 'null', '-'], { timeoutMs: 300000 });
   const gaps = [...s.err.matchAll(/silence_start: ([\d.]+)[\s\S]*?silence_end: ([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]).filter(([a]) => voiceEnd == null || a < voiceEnd - 0.3);
   const duration = Number((/Duration: (\d+):(\d+):([\d.]+)/.exec(r.err) || []).slice(1).reduce((a, x) => a * 60 + Number(x), 0)) || null;

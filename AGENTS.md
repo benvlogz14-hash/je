@@ -69,7 +69,7 @@ and computes readable text colours per section.
 
 ## 3. Styles
 
-Ten main styles (shown first; six more under "More styles"), each in 9:16 and 16:9:
+Ten main styles (shown first; eight more under "More styles", Clean and Grassroots among them), each in 9:16 and 16:9:
 
 | id | Name | What it is |
 |---|---|---|
@@ -77,10 +77,10 @@ Ten main styles (shown first; six more under "More styles"), each in 9:16 and 16
 | `pastel` | Pastel blocks | the same build in soft colours, orange headlines with a dark outline, yellow-on-navy key boxes |
 | `street` | Street vlog | full-screen footage, a white flash and a punch-in that settles on **every** cut, big outlined captions under the face, sticker words, transit-style tags |
 | `field` | On location | to-camera on the street: full-screen, **hard cuts**, small bold serif captions a phrase at a time with a soft shadow, an orange place title, a plain brand end card. Captions only |
+| `direct` | To camera | one take cut like three cameras: wide / medium / close punch-ins on every sentence and clause (`look.angles`), small clean sans captions a phrase at a time, hard cuts, plain end card. For announcements and explainers |
 | `tiktok` | Full-screen TikTok | giant centre captions, zoom punches on key words |
 | `cinematic` | Cinematic | black bars, serif, slow fades, film grade, grain |
 | `news` | Breaking news | red/black bars, ticker, flashes, corner bug |
-| `clean` | Clean and modern | white, rounded footage, one blue accent |
 | `patriotic` | Red, white and blue | classic campaign, flag-stripe end card |
 | `dark` | Dark and urgent | black and red, black-and-white footage (contrast energy; contrast ads always need a person) |
 
@@ -89,7 +89,7 @@ captions, name and proven facts (no icons, stickers, map, badge or the style's e
 and small fact tags only. On card layouts `minimal` enlarges the footage to take the headline's room. `field` is
 `minimal` by default; any style can be set to any level.
 
-Two references the founders sent, and what was learned from each:
+References the founders sent, and what was learned from each:
 
 - **The house reel** (Kelles / Hooks / Alvarez / Lavine, the `bold` look): one idea per colour section; the headline is
   the spoken phrase and finishes building just as the phrase ends; one boxed key word per headline; the map appears on
@@ -101,6 +101,17 @@ Two references the founders sent, and what was learned from each:
   every 2-4 s to a new framing or location while the argument continues without a breath, captions that are a full
   phrase in a bold serif, one paper-cut-out news clipping as proof, a joke beat in the middle, and a plain brand card.
   Lesson: when the footage is strong, do less. Use `field` or `street` at `minimal`.
+- **Five more Mamdani videos** (the 16:9 launch ad, the Hochul / Blakeman explainer, the night pied-a-terre
+  announcement, the helmet skit, the desk message with Chinese subtitles). The technique they all share is the
+  **punch-in jump cut**: one take is cut as if by three cameras, wide → close → medium, changing on each sentence and
+  often on a clause, always centred on the face, with no transition at all. That is now `look.angles` (`buildSpec`
+  `anglesFor`: a new framing at each line and at clause breaks at least 1.6 s apart; zooms 1.0 / 1.5 / 1.18 / 1.75 /
+  1.08 / 1.4; drawn in `CardContent` as a scale about the face that never shows the picture's edge). On by default in
+  `street`, `field` and `direct`. Other things in them, in order of value: a two-tone serif title (white line, yellow
+  line) for the thesis ("The cost of living / is the real crisis."), policy lines as plain serif lower thirds, voters'
+  words in small yellow captions, opponent clips full-screen with a source bug, press clippings as paper cut-outs,
+  social comments stacked over the shot, and a brand or seal end card. The first three can be made today with `field`
+  at `light` (serif headlines with the key words in the accent colour); the rest are in section 10.
 
 ## 4. Craft: hooks
 
@@ -216,6 +227,9 @@ npm run engine -- --data /tmp/eu-data --port 4599
 
 ## 10. Good next steps (not built yet)
 
+0. **More of the Mamdani kit**: voter testimonial lines (a second speaker's words in a different caption colour), an
+   opponent clip with a network / source bug, stacked social comments, a two-line thesis title held in the centre
+   with captions paused, and subtitles in another language (a translated caption track).
 1. **Paper cut-out citations** (the news clipping in the `field` reference): a card kind that shows a source's name
    and one sentence from the research, only when the research has that exact sentence and link.
 2. **On-screen text reading** (chyrons) at intake, for the title and district.
