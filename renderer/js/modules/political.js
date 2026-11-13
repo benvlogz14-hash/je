@@ -510,7 +510,7 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
 }
 
 /** A short list of what to type, shown as the order box's placeholder. */
-const ORDER_HINT = 'One video per line. For example:\nhousing\nquick video about childcare\nintro\nwhat she delivered on transit, to camera\n20 second video on rent, captions only';
+const ORDER_HINT = 'One video per line. For example:\nscript: Most people in Albany are politicians. I am a scientist. We will never stop fighting.\nhousing\nquick video about childcare\nintro\nwhat she delivered on transit, to camera\n20 second video on rent, captions only';
 
 /**
  * The everyday job: type what you want (one line per video) or tap baselines, see how each line will be read, press Make.
@@ -539,7 +539,7 @@ function BatchMaker({ p, list, busy, up, looks, curLook, reload }) {
   const secs = (o) => o.seconds || (opts?.templates || []).find((t) => t.id === o.template)?.seconds || 26;
   return html`<div class="col" style="gap:10px">
     <textarea class="input" id="am-orders" ref=${box} rows="5" style="font-size:var(--fs-sm);line-height:1.5;min-height:124px;resize:vertical" placeholder=${ORDER_HINT} value=${text} onInput=${(e) => setText(e.target.value)} />
-    <div class="row wrap" style="gap:6px">${(opts?.templates || []).map((t) => html`<button type="button" class="chip" title=${`${t.formula}\n\n${t.about}`} onClick=${() => addLine(t.needsTopic ? 'about ' : t.name.toLowerCase(), true)} style="cursor:pointer;font-size:var(--fs-xs);padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2, var(--surface))">+ ${t.name}</button>`)}</div>
+    <div class="row wrap" style="gap:6px">${(opts?.templates || []).map((t) => html`<button type="button" class="chip" title=${`${t.formula}\n\n${t.about}`} onClick=${() => addLine(t.starter || (t.needsTopic ? 'about ' : t.name.toLowerCase()), true)} style="cursor:pointer;font-size:var(--fs-xs);padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2, var(--surface))">+ ${t.name}</button>`)}</div>
     ${preview.length ? html`<div class="col" style="gap:4px;padding:10px 12px;border-radius:12px;background:var(--surface-2, var(--surface));max-height:210px;overflow:auto" data-animate>
       <b style="font-size:var(--fs-xs)">I'll make ${preview.length} video${preview.length === 1 ? '' : 's'}:</b>
       ${preview.map((o, i) => html`<div key=${i} class="row" style="gap:8px;font-size:var(--fs-xs);align-items:baseline"><span class="faint" style="width:16px;text-align:right">${i + 1}</span><b>${o.templateName}</b>${o.topic ? html`<span>about ${o.topic}</span>` : o.brief ? html`<span class="faint ellipsis" style="max-width:220px">from your prompt</span>` : null}<span class="faint grow">· ${o.styleName || (style === 'mix' ? 'style in turn' : styleName)} · about ${secs(o)} s${o.wide || wide ? ' · + horizontal' : ''}${o.density === 'minimal' ? ' · captions only' : o.density === 'light' ? ' · fewer graphics' : ''}</span></div>`)}

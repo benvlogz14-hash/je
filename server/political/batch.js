@@ -114,7 +114,10 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
     h.progress(base, `Video ${i + 1} of ${todo.length}: ${o.ask}`);
     try {
       const focus = [o.brief || o.topic, prompt].filter(Boolean).join('. ');
-      const st = await footage.pickStory({ name: p.name, office, sentences, story: focus ? { mode: 'brief', brief: focus } : { mode: 'auto' }, facts, template: tpl, seconds: o.seconds || null, avoid });
+      const sc = tpl.id === 'script' ? footage.matchScript(sentences, o.brief) : null;
+      if (sc && sc.picks.length >= 2 && sc.missed.length) skipped.push({ ask: o.ask.slice(0, 60), why: `Made, but these script lines were not found in their footage: ${sc.missed.map((m) => `“${m.slice(0, 60)}”`).join(', ')}` });
+      if (sc && sc.picks.length < 2) { skipped.push({ ask: o.ask.slice(0, 60), why: 'Fewer than two of the script\'s lines were found in their footage. Use words close to what they actually say.' }); continue; }
+      const st = sc ? { picks: sc.picks, agent: 'your script', onTopic: null } : await footage.pickStory({ name: p.name, office, sentences, story: focus ? { mode: 'brief', brief: focus } : { mode: 'auto' }, facts, template: tpl, seconds: o.seconds || null, avoid });
       const bites = st.picks.map((x) => ({ id: x.id, clip: x.clip, s: x.s, e: x.e, text: x.text, words: x.words, role: x.role, gfx: x.gfx || null, icons: x.icons || [] }));
       if (bites.length < 2) { skipped.push({ ask: o.ask, why: 'Not enough clear lines in their footage for this one.' }); continue; }
       if (o.topic && st.onTopic != null && st.onTopic < Math.min(2, bites.length - 1)) { skipped.push({ ask: o.ask, why: `Their footage says little or nothing about “${o.topic}”.` }); continue; }
@@ -125,7 +128,7 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
       const styleId = o.style || rotation[i % rotation.length];
       let look = styleId ? looks.preset(styleId) : own.look ? looks.normalize(own.look, own.look) : looks.preset('bold');
       const dens = o.density || density; if (dens) look = looks.withDensity(look, dens);
-      const id = uid(); const title = `${tpl.name}${o.topic ? `: ${o.topic}` : ''}`;
+      const id = uid(); const title = tpl.id === 'script' ? `Script: ${bites[0].text.split(' ').slice(0, 5).join(' ')}` : `${tpl.name}${o.topic ? `: ${o.topic}` : ''}`;
       const file = path.join(outDir, `${slug} - ${String(i + 1).padStart(2, '0')} ${title.replace(/[^\w\- ]+/g, '').slice(0, 40)} - ${id}.mp4`);
       const common = { bites, footage: ft, music, name: p.name, office, place: p.pkg?.brief?.place || '', state: pr.state || '', cta: 'Follow', site: pkgMod.siteOf(p.pkg || {}), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes: [own.notes, prompt, o.brief].filter(Boolean).join(' | '), look, sound: S('adSound', 'full'), news, crf: Number(S('batchCrf', 21)) || 21 };
       const r = await eng.make({ ...common, vertical: true, out: file, work: path.join(dir, `work_batch_${id}`), onProgress: (f, t) => h.progress(base + span * (o.wide || wide ? 0.5 : 0.95) * f, `Video ${i + 1} of ${todo.length}: ${t}`) });

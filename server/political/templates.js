@@ -31,6 +31,7 @@ const BEATS = {
  * a beat in [brackets] in `formula` is one line of theirs. sec = how much talk to aim for.
  */
 const TEMPLATES = [
+  { id: 'script', name: 'Follow my script', formula: 'your lines, in your order', about: 'Type "script:" then your rough script. It finds where they say each line in the footage and cuts them together in that order, with plain cuts and captions.', beats: ['hook', 'rally'], sec: 30, starter: 'script: ' },
   { id: 'topic', name: 'About a topic', formula: '[the stake] · [what they did about it] · [what it means for people] · [closing line]', about: 'One issue, start to finish. Type the topic and it finds what they said about it.', beats: ['hook', 'problem', 'action', 'result', 'rally'], sec: 26, needsTopic: true },
   { id: 'quick', name: 'Quick video', formula: '[hook] · [one proof] · [closing line]', about: 'Three lines, about 12 seconds. For daily posts.', beats: ['hook', 'proof', 'rally'], sec: 12 },
   { id: 'intro', name: 'Meet them', formula: "[I'm ___] · [what I fight for] · [what I've done] · [where] · [closing line]", about: 'Who they are and why they serve. The first video for a new client.', beats: ['who', 'promise', 'proof', 'place', 'rally'], sec: 26, openWith: 'who' },
@@ -81,6 +82,9 @@ const FILLER = /\b(what|she|he|they|has|have|had|done|did|does|do|make|made|give
 function parseAsk(line, looks) {
   const raw = String(line || '').replace(/^\s*(?:\d+[.)]|[-*•])\s*/, '').trim().slice(0, 600);
   if (!raw) return null;
+  // "script: line one. line two." = follow these lines in this order (plain To camera cuts unless a style is named after a |).
+  const sm = raw.match(/^script\s*[:\-]\s*(.+)$/i);
+  if (sm) { const [body, opt = ''] = sm[1].split(/\s*\|\s*/); const o = opt ? parseAsk(opt, looks) : null; return { ask: raw, template: 'script', topic: '', brief: body.trim(), seconds: null, style: o?.style || 'direct', density: o?.density || null, wide: !!o?.wide }; }
   let template = null;
   for (const [id, re] of Object.entries(TEMPLATE_WORDS)) if (re.test(raw)) { template = id; break; }
   const m = raw.match(/\b(\d{1,3})\s*-?\s*(?:s|sec|secs|second|seconds)\b/i);
@@ -112,6 +116,6 @@ function parseAsk(line, looks) {
 function parseOrders(text, looks) { return String(text || '').split(/\r?\n|;\s*/).map((l) => parseAsk(l, looks)).filter(Boolean).slice(0, 40); }
 
 /** The baselines as the UI and the connector list them. */
-const list = () => TEMPLATES.map(({ id, name, formula, about, sec, needsTopic, review }) => ({ id, name, formula, about, seconds: sec, needsTopic: !!needsTopic, review: !!review }));
+const list = () => TEMPLATES.map(({ id, name, formula, about, sec, needsTopic, review, starter }) => ({ id, name, formula, about, seconds: sec, needsTopic: !!needsTopic, review: !!review, starter: starter || '' }));
 
 module.exports = { TEMPLATES, BEATS, byId, list, parseAsk, parseOrders };

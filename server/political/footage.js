@@ -313,6 +313,26 @@ function shapeStory(picks) {
   return out;
 }
 
+/**
+ * Follow a rough script: for each line of the script (split on sentence ends or " / "), the sentence in the footage
+ * that shares the most of its words, in the script's order, each used once. Their words are never changed: where they
+ * said it differently, their version is what plays. Returns { picks, missed: [script lines not found] }.
+ */
+function matchScript(list, script) {
+  const key = (t) => String(t).toLowerCase().replace(/[^a-z0-9$%' ]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !/^(the|and|for|that|this|with|are|was|will|have|has|our|you|your|they|their|but|not)$/.test(w));
+  const parts = String(script || '').split(/(?<=[.!?])\s+|\s+\/\s+|\r?\n/).map((x) => x.trim()).filter((x) => key(x).length >= 2).slice(0, 12);
+  const pool = list.map((x) => clauseTrim(x) || x).filter((x) => x.shot?.usable !== false);
+  const used = new Set(); const picks = []; const missed = [];
+  for (const part of parts) {
+    const want = key(part); let best = null;
+    for (const x of pool) { if (used.has(x.id)) continue; const have = new Set(key(x.text)); const shared = want.filter((w) => have.has(w)).length; const sc = shared / want.length - Math.max(0, have.size - want.length) * 0.02; if (shared >= 2 && sc >= 0.34 && (!best || sc > best.sc)) best = { x, sc }; }
+    if (!best) { missed.push(part); continue; }
+    used.add(best.x.id); picks.push({ ...best.x, role: 'proof', gfx: codeGfx(best.x), icons: iconsFor(best.x.text) });
+  }
+  if (picks.length) { const o = asOpening(picks[0]); picks[0] = { ...(o || picks[0]), role: 'hook', gfx: picks[0].gfx, icons: picks[0].icons }; if (picks.length > 1) picks[picks.length - 1].role = 'rally'; }
+  return { picks, missed };
+}
+
 /** Code-only story (no AI): one line per beat, found by what each line says, in story order. */
 function heuristicStory(list, { name, office, targetSec, focus = '', beats = null, avoid = null }) {
   const T = require('./templates'); const topic = topicTest(focus);
@@ -662,4 +682,4 @@ async function renderSpeechAd({ bites, footage, info, vertical, out, work, music
 }
 function assT(t) { t = Math.max(0, t); const h = Math.floor(t / 3600); const m = Math.floor((t % 3600) / 60); const s = Math.floor(t % 60); const cs = Math.floor((t * 100) % 100); return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`; }
 
-module.exports = { topicTest, codeGfx, heuristicStory, ICONS, asOpening, hookScore, outroScore, shapeStory, topics, repick, pickStory, clauseTrim, iconsFor, groundGfx, find, download, prepare, pickBites, sentences, punctuate, quietWindows, renderSpeechAd, FB_VIDEO, platformOf };
+module.exports = { matchScript, topicTest, codeGfx, heuristicStory, ICONS, asOpening, hookScore, outroScore, shapeStory, topics, repick, pickStory, clauseTrim, iconsFor, groundGfx, find, download, prepare, pickBites, sentences, punctuate, quietWindows, renderSpeechAd, FB_VIDEO, platformOf };
