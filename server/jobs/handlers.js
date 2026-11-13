@@ -938,6 +938,16 @@ queue.register('political.restyle', {
   },
 });
 
+queue.register('political.batch', {
+  title: (p) => `Videos: ${p.name || 'candidate'}`,
+  heavy: true, maxAttempts: 1,
+  async run(job, h) {
+    if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
+    const { prospectId, text, orders, count, styles, density, wide, prompt } = job.payload;
+    return require('../political/batch').make(prospectId, { text, orders, count, styles, density, wide, prompt, actor: job.createdBy }, h);
+  },
+});
+
 queue.register('political.topics', {
   title: (p) => `Find stories: ${p.name || 'prospect'}`,
   heavy: true, maxAttempts: 1,

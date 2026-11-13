@@ -1791,6 +1791,26 @@ r.get('/api/web/image', async (req, res) => {
 r.post('/api/prospects/:id/videos/find', botErr((req, b, p) => require('./political/videofind').forLead(p.id, { actor: actorOf(req) })));
 r.patch('/api/prospects/:id/videos', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); const list = (pr.footageFound || []).map((v) => (v.url === b.url ? { ...v, off: !!b.off } : v)); ctx.store.update('prospects', p.id, { footageFound: list }); events.publish('prospects', { id: p.id }); return { footageFound: list }; });
 // Hands-off ads: for each lead, find their videos on Google (if nothing was uploaded) and make the whole package.
+// ---- Batches of videos (Ad machine → Videos): baseline templates, typed orders, many politicians at once.
+// The baselines ("About a topic", "Quick video", "Meet them"...), the styles and the graphics levels, for the order box.
+r.get('/api/political/templates', () => { const looks = require('./political/looks'); return { templates: require('./political/templates').list(), styles: looks.list(), density: Object.entries(looks.DENSITY).map(([id, name]) => ({ id, name })), mix: require('./political/batch').MIX }; });
+// How a typed box of orders will be read (one video per line), before anything is made.
+r.post('/api/political/orders/preview', (req, b) => { const looks = require('./political/looks'); const T = require('./political/templates'); return { orders: T.parseOrders(String(b.text || ''), looks).map((o) => ({ ...o, templateName: T.byId(o.template)?.name || o.template, styleName: o.style ? looks.PRESETS[o.style]?.name : null })) }; });
+const batchOpts = (b) => { const looks = require('./political/looks'); return { text: String(b.text || '').slice(0, 6000), orders: Array.isArray(b.orders) ? b.orders.slice(0, 40).map(String) : null, count: Math.max(0, Math.min(40, Number(b.count) || 0)), styles: b.styles === 'mix' ? 'mix' : Array.isArray(b.styles) ? b.styles.filter((x) => x === 'mix' || looks.PRESETS[x]) : null, density: looks.OPTIONS.density.includes(b.density) ? b.density : null, wide: !!b.wide, prompt: String(b.prompt || '').slice(0, 1500) }; };
+// Make a batch of videos for one candidate from their footage (job political.batch). Nothing is sent or posted.
+r.post('/api/prospects/:id/videos', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); return queue.enqueue('political.batch', { prospectId: pr.id, name: pr.name, ...batchOpts(b) }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}`, title: `Videos for ${pr.name}` }); });
+// The same for several politicians by name or id; a name not on the board is added as a political lead first.
+r.post('/api/political/videos', botErr((req, b) => require('./political/batch').start({ ids: Array.isArray(b.ids) ? b.ids : [], names: Array.isArray(b.names) ? b.names.map(String) : [], actor: actorOf(req), ...batchOpts(b) })));
+// A candidate's finished batch videos, newest first, and the last batch's result (what was skipped and why).
+r.get('/api/prospects/:id/videos', (req, b, p) => { must(ctx.store.get('prospects', p.id)); return require('./political/batch').list(p.id); });
+r.get('/api/prospects/:id/videos/:vid/:what', (req, res, p) => {
+  const pr = ctx.store.get('prospects', p.id); const v = (pr?.videos || []).find((x) => x.id === p.vid); if (!v) return send(res, 404, { error: 'Not found' });
+  const f = p.what === 'poster' ? v.poster : p.what === 'wide' ? v.wideFile : v.file;
+  if (!f || !fs.existsSync(f) || !paths.inside(path.join(paths.root, 'political'), f)) return send(res, 404, { error: 'Not made' });
+  if (req.query.reveal && ctx.revealFile) { ctx.revealFile(f); return send(res, 200, { ok: true }); }
+  return serveFile(req, res, f, { download: req.query.download ? path.basename(f) : null });
+}, { stream: true });
+r.del('/api/prospects/:id/videos/:vid', (req, b, p) => ({ ok: require('./political/batch').remove(p.id, p.vid) }));
 r.post('/api/political/autoads', botErr((req, b) => require('./political/autoads').start({ ids: Array.isArray(b.ids) ? b.ids : [], names: Array.isArray(b.names) ? b.names : [], actor: actorOf(req) })));
 r.post('/api/data/:id/ads', botErr((req, b, p) => { const names = Array.isArray(b.only) ? b.only : []; if (!names.length) throw new HttpError(400, 'Tick the people to make ads for.'); dataMod().toLeads(p.id, { only: names, by: actorOf(req) }); return require('./political/autoads').start({ names, actor: actorOf(req) }); }));
 

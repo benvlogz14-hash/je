@@ -687,4 +687,4 @@ function restore(prospectId, n, actor = 'user') {
   return { restored: v.n };
 }
 
-module.exports = { findTopics, storyKey, vetEmail, revise, restyle, lookFor, restore, STEPS, VIDEOS, run, dirFor, fallbackCreative, vetStoryboard, material, attachmentsFor, DEFAULT_PLAN };
+module.exports = { sameFootage, factsFor, shortOffice, siteOf, stepFootage, findTopics, storyKey, vetEmail, revise, restyle, lookFor, restore, STEPS, VIDEOS, run, dirFor, fallbackCreative, vetStoryboard, material, attachmentsFor, DEFAULT_PLAN };

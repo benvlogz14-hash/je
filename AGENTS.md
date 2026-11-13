@@ -67,6 +67,32 @@ A **look** is plain data with a fixed set of options (see `OPTIONS` in `looks.js
 options, real hex colours and bundled fonts, so any prompt gives a look that renders. `normalize` fixes anything else
 and computes readable text colours per section.
 
+## 2b. Batches, baselines and typed orders (the everyday job)
+
+`server/political/batch.js` makes many videos for one politician from one read of their footage; `templates.js` holds
+the baselines and reads typed orders. Ad machine → Make → **Videos**: an order box (one line per video), baseline chips,
+a live "I'll make N videos" preview (`POST /api/political/orders/preview`), style (a mix of old and new, their own, or
+one), Horizontal too, then **Make N videos** (`POST /api/prospects/:id/videos`, job `political.batch`). Results are
+`prospect.videos[]` (files in `<data>/political/<id>/videos`), shown in the **Videos** tab with the lines used, the
+graphics that appeared and the check. `POST /api/political/videos { names }` does the same for several people (a new
+name is added to the board). Connector tools: `video_templates`, `make_videos`, `list_videos`.
+
+- **An order** is plain typing: `housing` · `quick video about childcare` · `intro, pastel` · `what she delivered on
+  transit, to camera, horizontal` · `20 second video on rent, captions only` · or a long prompt (12+ words is kept
+  whole as the brief). `parseAsk` returns `{ template, topic, seconds, style, density, wide }`.
+- **16 baselines** (`TEMPLATES`): About a topic, Quick video, Meet them, What they delivered, Problem then the fix, For
+  this place, The fight, A moment, One thing explained, By the numbers, What comes next, What they believe, Who they
+  fight for, Calling it out (marked "Check first"), Quick update, Best of the footage. Each is a list of **beats**
+  (hook, who, problem, action, result, proof, place, story, contrast, promise, rally); the first beat is the opening
+  and must stand alone, the last is the closing line. `BEATS` scores a sentence for each beat.
+- **Topics** (`footage.topicTest`): the typed words plus the icon family they belong to ("housing" also finds rent,
+  tenants, evictions). A line about a *different* topic is kept out. When the footage says little about the topic the
+  order is skipped with the reason, never padded.
+- **No repeats in a batch**: an opening or closing line used by one video is avoided by the next (`avoid`); an order
+  that comes out as the same lines as an earlier one is skipped.
+- With nothing typed, `planOrders` plans `count` videos from what the footage is about most.
+- Batch files use a lighter encode (`political.batchCrf`, 21) and work folders are deleted after each video.
+
 ## 3. Styles
 
 Ten main styles (shown first; eight more under "More styles", Clean and Grassroots among them), each in 9:16 and 16:9:
@@ -225,8 +251,28 @@ npm run engine -- --data /tmp/eu-data --port 4599
   sessions. Say plainly what could not be tested there; do not claim it.
 - Do not run `npm run selftest` unless asked.
 
+## 9b. Graphics the machine can draw (all grounded: their words, the office, or sourced research)
+
+| Graphic | Where it comes from | Drawn as |
+|---|---|---|
+| Stat badge, credential card, quote attribution, callout | `codeGfx` / `groundGfx` on the line's words | a tag under the footage (`Tag`) |
+| **Bill card** | a bill named in the line ("the Clean Slate Act", "S.567"), status from "passed / signed into law" | a tag with a capitol mark and a status pill |
+| **Checklist** | a list of three in the line ("childcare, housing and schools") | a card cut-in; each item ticks as it's said |
+| **Before / after bars** | two numbers ("from 1,200 to 2,400 dollars") | a card cut-in; the second bar lands late |
+| **Timeline** | two years ("from 2019 to 2024") | a card cut-in; the line draws between them |
+| **Press clipping** | a researched headline sharing 3+ meaningful words with the line (`matchNews`), max 2 per ad | a paper cut-out with the outlet and date |
+| District map | the office ("AD-125", "NY-14"), or the county / city for local offices (`localPlace`) | state outline → shape → pin → label |
+| Icons (20) | what the line is about (`ICONS`) | stickers on the card's corners |
+| End card | the closing line, "for the 125th" / "for <place>", an optional date line | portrait, ask, name |
+
+A line carries at most one extra graphic. Card cut-ins need a line of 2.8 s or more and never go on the opening line.
+`minimal` graphics keeps only clippings, bill / stat / credential / quote tags and captions.
+
 ## 10. Good next steps (not built yet)
 
+0. **Still missing from the wider kit**: charts with three or more values, a headline stack, vote tallies, poll
+   bars, price tags, endorsement cards, split screens, donate / volunteer / polling-place end cards, a countdown, a
+   legal "Paid for by" line, logo stings.
 0. **More of the Mamdani kit**: voter testimonial lines (a second speaker's words in a different caption colour), an
    opponent clip with a network / source bug, stacked social comments, a two-line thesis title held in the centre
    with captions paused, and subtitles in another language (a translated caption track).

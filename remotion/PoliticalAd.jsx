@@ -268,6 +268,10 @@ function CardContent({ seg, fps, w, h, look, keyTimes }) {
   }
   if (c.kind === 'map') return <MapCard c={c} w={w} h={h} fps={fps} look={look} />;
   if (c.kind === 'stat') return <StatCard c={c} w={w} h={h} fps={fps} look={look} />;
+  if (c.kind === 'checklist') return <ChecklistCard c={c} w={w} h={h} fps={fps} look={look} seg={seg} />;
+  if (c.kind === 'compare') return <CompareCard c={c} w={w} h={h} fps={fps} look={look} />;
+  if (c.kind === 'timeline') return <TimelineCard c={c} w={w} h={h} fps={fps} look={look} />;
+  if (c.kind === 'clip') return <ClipCard c={c} w={w} h={h} fps={fps} look={look} />;
   return <AbsoluteFill style={{ background: look.dark }} />;
 }
 
@@ -464,6 +468,13 @@ function Glyph({ k, c }) {
     scales: <g stroke={c} strokeWidth="6" fill="none"><path d="M50 16 V82 M28 82 H72 M18 30 H82" /><path d="M18 30 L8 56 H28 Z M82 30 L72 56 H92 Z" fill={c} /></g>,
     people: <g fill={c}><circle cx="34" cy="34" r="12" /><circle cx="66" cy="34" r="12" /><path d="M12 80 Q14 52 34 52 Q54 52 56 80 Z" /><path d="M44 80 Q46 52 66 52 Q86 52 88 80 Z" /></g>,
     science: <g stroke={c} strokeWidth="7" fill="none" strokeLinecap="round"><path d="M34 14 Q66 32 34 50 Q2 68 34 86" /><path d="M66 14 Q34 32 66 50 Q98 68 66 86" /><path d="M38 26 H62 M38 74 H62 M44 50 H56" /></g>,
+    child: <g fill={c}><circle cx="50" cy="28" r="15" /><path d="M22 86 Q24 48 50 48 Q76 48 78 86 Z" /><circle cx="26" cy="58" r="7" /><circle cx="74" cy="58" r="7" /></g>,
+    senior: <g fill={c}><circle cx="42" cy="22" r="12" /><path d="M26 88 L34 44 Q42 36 52 44 L58 88 Z" /><path d="M66 46 Q78 46 78 58 V88" stroke={c} strokeWidth="6" fill="none" strokeLinecap="round" /></g>,
+    drop: <path d="M50 10 Q78 46 78 62 A28 28 0 0 1 22 62 Q22 46 50 10 Z" fill={c} />,
+    wheat: <g stroke={c} strokeWidth="6" fill={c} strokeLinecap="round"><path d="M50 90 V34" fill="none" />{[36, 50, 64].map((y) => <g key={y}><ellipse cx="38" cy={y} rx="9" ry="5" transform={`rotate(-35 38 ${y})`} /><ellipse cx="62" cy={y} rx="9" ry="5" transform={`rotate(35 62 ${y})`} /></g>)}<ellipse cx="50" cy="20" rx="6" ry="10" /></g>,
+    wifi: <g stroke={c} strokeWidth="9" fill="none" strokeLinecap="round"><path d="M14 44 Q50 10 86 44" /><path d="M28 58 Q50 38 72 58" /><circle cx="50" cy="76" r="6" fill={c} /></g>,
+    bolt: <path d="M58 8 L22 56 H46 L40 92 L78 42 H54 Z" fill={c} />,
+    ballot: <g fill={c}><rect x="14" y="48" width="72" height="40" rx="5" /><rect x="30" y="42" width="40" height="6" fill="#fff" /><path d="M36 14 H64 V44 H36 Z" /><path d="M42 28 L48 34 L58 22" stroke="#fff" strokeWidth="5" fill="none" strokeLinecap="round" /></g>,
     star: <path d="M50 10 L61 38 L91 39 L67 58 L76 88 L50 70 L24 88 L33 58 L9 39 L39 38 Z" fill={c} />,
     capitol: <g fill={c}><rect x="47.5" y="14" width="5" height="9" /><path d="M30 46 Q30 24 50 23 Q70 24 70 46 Z" /><rect x="26" y="46" width="48" height="5" />{[30, 38, 46, 54, 62, 70].map((x) => <rect key={x} x={x - 2} y="53" width="4" height="18" />)}<rect x="22" y="72" width="56" height="5" /><rect x="18" y="78" width="64" height="6" /></g>,
   }[k];
@@ -508,6 +519,15 @@ function Tag({ tag, L, look, fps, seg }) {
       <div>
         <div style={{ fontFamily: look.fonts.head, fontSize: 46 * u, lineHeight: 1, color: dark, textTransform: 'uppercase' }}>{tag.title}</div>
         {tag.sub ? <div style={{ fontFamily: look.fonts.body, fontSize: 24 * u, color: look.sections.c?.bg || look.accent, textTransform: 'uppercase', marginTop: 4 }}>{tag.sub}</div> : null}
+      </div>
+    </div>
+  );
+  if (tag.kind === 'bill') return (
+    <div style={{ ...wrap, display: 'flex', alignItems: 'center', gap: 16 * u, background: light, borderRadius: 12, padding: `${10 * u}px ${24 * u}px ${10 * u}px ${10 * u}px`, boxShadow: `0 ${8 * u}px 0 ${dark}`, borderLeft: `${10 * u}px solid ${key}` }}>
+      <div style={{ width: 58 * u, height: 58 * u, padding: 6 * u, boxSizing: 'border-box' }}><Glyph k="capitol" c={dark} /></div>
+      <div>
+        <div style={{ fontFamily: look.fonts.head, fontSize: 38 * u, lineHeight: 1.05, color: dark, textTransform: 'uppercase', maxWidth: L.card.w * 0.7 }}>{tag.title}</div>
+        {tag.status ? <div style={{ display: 'inline-block', fontFamily: look.fonts.body, fontWeight: 800, fontSize: 20 * u, color: keyText, background: key, textTransform: 'uppercase', letterSpacing: '0.05em', padding: `${2 * u}px ${10 * u}px`, marginTop: 5 * u, borderRadius: 4 }}>{tag.status}</div> : null}
       </div>
     </div>
   );
@@ -612,6 +632,94 @@ function StatCard({ c, w, h, fps, look }) {
   );
 }
 
+// ------------------------------------------------------------------ graphic cards (cut in while the voice carries on)
+
+/** The dark panel the graphic cards sit on (the look's first colour, or its dark when that colour is light). */
+function panel(look) { const A0 = look.sections.a; return lum(A0.bg) > 0.35 ? { bg: look.dark, text: look.light, accent: look.accent } : { bg: A0.bg, text: A0.text, accent: A0.accent }; }
+
+/** A list of three that ticks as each one is said. Items carry the time they're spoken. */
+function ChecklistCard({ c, w, h, fps, look, seg }) {
+  const frame = useCurrentFrame(); const A = panel(look);
+  const base = Math.round(Math.min(w * 0.12, (h * 0.72) / c.items.length / 1.5));
+  const size = Math.min(...c.items.map((it) => fitWords(it.text.split(' '), look.fonts.head, base, w * 0.66, base * 1.3, { upper: true, maxLines: 1, min: 28 })));
+  return (
+    <AbsoluteFill style={{ background: A.bg, justifyContent: 'center', padding: `0 ${w * 0.09}px`, gap: size * 0.5 }}>
+      {c.items.map((it, i) => {
+        const at = Math.max(4 + i * 4, Math.round((it.t - seg.at) * fps));
+        const s = sp(frame, fps, i * 4, { damping: 13, stiffness: 180 }); const tick = sp(frame, fps, at, { damping: 9, stiffness: 240 });
+        return (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: size * 0.4, opacity: clamp(s * 1.6, 0, 1), transform: `translateX(${(1 - s) * -60}px)` }}>
+            <div style={{ width: size * 1.05, height: size * 1.05, flex: 'none', borderRadius: size * 0.18, border: `${Math.max(4, size * 0.08)}px solid ${A.text}`, background: tick > 0.05 ? A.accent : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg viewBox="0 0 100 100" width="76%" height="76%" style={{ transform: `scale(${tick})` }}><path d="M18 54 L42 76 L84 26" fill="none" stroke="#fff" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </div>
+            <div style={{ fontFamily: look.fonts.head, fontSize: size, lineHeight: 1.05, color: A.text, textTransform: 'uppercase' }}>{it.text}</div>
+          </div>
+        );
+      })}
+    </AbsoluteFill>
+  );
+}
+
+/** Before and after: two bars sized by the two numbers they said, the second landing as they say it. */
+function CompareCard({ c, w, h, fps, look }) {
+  const frame = useCurrentFrame(); const A = panel(look);
+  const n = (x) => Number(String(x).replace(/[^\d.]/g, '')) || 0; const a = n(c.a), b = n(c.b); const top = Math.max(a, b) || 1;
+  const g1 = sp(frame, fps, 3, { damping: 16, stiffness: 120 }); const g2 = sp(frame, fps, Math.round(0.7 * fps), { damping: 11, stiffness: 150 });
+  const unit = c.unit === '%' ? '%' : c.unit ? ` ${c.unit}` : ''; const big = Math.round(Math.min(w * 0.13, h * 0.16));
+  const bar = (v, g, col, label) => (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%', gap: big * 0.14 }}>
+      <div style={{ fontFamily: look.fonts.head, fontSize: big, lineHeight: 1, color: A.text, opacity: clamp(g * 1.5, 0, 1) }}>{String(label)}{unit}</div>
+      <div style={{ width: '70%', height: `${Math.max(6, (v / top) * 62 * g)}%`, background: col, borderRadius: `${big * 0.12}px ${big * 0.12}px 0 0` }} />
+    </div>
+  );
+  return (
+    <AbsoluteFill style={{ background: A.bg, padding: `${h * 0.1}px ${w * 0.1}px 0`, flexDirection: 'row', alignItems: 'flex-end', gap: w * 0.06 }}>
+      {bar(a, g1, mix(A.bg, A.text, 0.45), c.a)}{bar(b, g2, A.accent, c.b)}
+    </AbsoluteFill>
+  );
+}
+
+/** Two years on a line, the line drawing from the first to the second. */
+function TimelineCard({ c, w, h, fps, look }) {
+  const frame = useCurrentFrame(); const A = panel(look);
+  const p = interpolate(frame, [0.25 * fps, 1.3 * fps], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.bezier(0.6, 0, 0.3, 1) });
+  const s1 = sp(frame, fps, 2, { damping: 11, stiffness: 180 }); const s2 = sp(frame, fps, Math.round(1.25 * fps), { damping: 9, stiffness: 200 });
+  const big = Math.round(Math.min(w * 0.14, h * 0.2)); const x0 = w * 0.24; const x1 = w * 0.76; const y = h * 0.6; const dot = big * 0.3;
+  return (
+    <AbsoluteFill style={{ background: A.bg }}>
+      <div style={{ position: 'absolute', left: x0, top: y - 4, width: x1 - x0, height: 8, background: mix(A.bg, A.text, 0.25) }} />
+      <div style={{ position: 'absolute', left: x0, top: y - 4, width: (x1 - x0) * p, height: 8, background: A.accent }} />
+      {[[x0, c.from, s1, A.text], [x1, c.to, s2, A.accent]].map(([x, label, s, col], i) => (
+        <React.Fragment key={i}>
+          <div style={{ position: 'absolute', left: x - dot / 2, top: y - dot / 2, width: dot, height: dot, borderRadius: '50%', background: col, transform: `scale(${s})` }} />
+          <div style={{ position: 'absolute', left: x - big * 1.5, width: big * 3, top: y - big * 1.5, textAlign: 'center', fontFamily: look.fonts.head, fontSize: big, lineHeight: 1, color: col, transform: `translateY(${(1 - s) * 30}px)`, opacity: clamp(s * 1.5, 0, 1) }}>{label}</div>
+        </React.Fragment>
+      ))}
+    </AbsoluteFill>
+  );
+}
+
+/** A press clipping: a real headline from the research, as a paper cut-out with the outlet's name and date. */
+function ClipCard({ c, w, h, fps, look }) {
+  const frame = useCurrentFrame(); const A = panel(look);
+  const s = sp(frame, fps, 2, { damping: 12, stiffness: 150 }); const pw = w * 0.84; const pad = pw * 0.07;
+  const size = fitWords(String(c.title).split(/\s+/), 'Georgia', Math.round(Math.min(w * 0.075, h * 0.1)), pw - pad * 2, h * 0.46, { maxLines: 6, min: 22, lh: 1.2, gap: 0.26 });
+  const hl = interpolate(frame, [0.5 * fps, 1.2 * fps], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+  // A torn lower edge, the same every frame.
+  const teeth = Array.from({ length: 28 }, (_, i) => `${(i / 27) * 100}% ${100 - (Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1) * 3.2}%`).join(', ');
+  return (
+    <AbsoluteFill style={{ background: A.bg, alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ width: pw, background: '#f6f1e4', color: '#16161a', padding: `${pad * 0.8}px ${pad}px ${pad * 1.3}px`, boxShadow: '0 18px 0 rgba(0,0,0,0.28)', transform: `rotate(${interpolate(s, [0, 1], [-7, -1.6])}deg) scale(${interpolate(s, [0, 1], [0.7, 1])})`, opacity: clamp(s * 1.6, 0, 1), clipPath: `polygon(0 0, 100% 0, ${teeth.split(', ').reverse().join(', ')})` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: '3px solid #16161a', paddingBottom: size * 0.2, marginBottom: size * 0.35 }}>
+          <div style={{ fontFamily: look.fonts.head, fontSize: size * 0.62, textTransform: 'uppercase', letterSpacing: '0.02em' }}>{c.outlet}</div>
+          {c.date ? <div style={{ fontFamily: look.fonts.body, fontSize: size * 0.3, opacity: 0.7 }}>{c.date}</div> : null}
+        </div>
+        <div style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontWeight: 700, fontSize: size, lineHeight: 1.2, backgroundImage: `linear-gradient(${look.accent}66, ${look.accent}66)`, backgroundRepeat: 'no-repeat', backgroundSize: `${hl * 100}% 38%`, backgroundPosition: '0 88%', display: 'inline' }}>{c.title}</div>
+      </div>
+    </AbsoluteFill>
+  );
+}
+
 // ------------------------------------------------------------------ end card
 
 function EndCard({ e, look, fps, L }) {
@@ -643,8 +751,10 @@ function EndCard({ e, look, fps, L }) {
         <div style={{ fontFamily: look.fonts.head, fontSize: nameSize, color: nameColor, textTransform: up ? 'uppercase' : 'none', lineHeight: 0.98, textAlign: 'center', maxWidth: W * 0.9, transform: `translateY(${(1 - at(1)) * 80}px)`, opacity: clamp(at(1) * 1.5, 0, 1) }}>
           {look.end === 'split' ? <Outlined stroke={look.dark} width={10} color={nameColor}>{e.name}</Outlined> : e.name}
         </div>
+        {e.for ? <div style={{ fontFamily: look.fonts.head, fontSize: big * 0.36, lineHeight: 1, color: contrast(look.accent, A.bg) >= 2 ? look.accent : A.text, textTransform: up ? 'uppercase' : 'none', transform: `scale(${at(2)})` }}>{e.for}</div> : null}
         {e.sub ? <div style={{ fontFamily: look.fonts.body, fontSize: big * 0.2, color: look.dark, background: look.light === A.bg ? B.bg : look.light, padding: `${big * 0.04}px ${big * 0.16}px`, textTransform: 'uppercase', letterSpacing: '0.04em', transform: `scale(${at(2)})` }}>{e.sub}</div> : null}
         {e.line ? <div style={{ fontFamily: look.fonts.head, fontSize: fitWords(String(e.line).split(/\s+/), look.fonts.head, Math.round(big * 0.34), W * 0.8, big * 0.9, { upper: up, maxLines: 2, min: 24 }), lineHeight: 1.12, color: brand ? A.text : look.light, background: brand ? 'transparent' : look.dark, padding: brand ? 0 : `${big * 0.06}px ${big * 0.16}px`, textTransform: up ? 'uppercase' : 'none', textAlign: 'center', maxWidth: W * 0.82, marginTop: big * 0.08, opacity: clamp(at(4) * 1.4, 0, 1), transform: `translateY(${(1 - at(4)) * 40}px)` }}>“{String(e.line).replace(/[.!]+$/, '')}{/!$/.test(String(e.line)) ? '!' : '.'}”</div> : null}
+        {e.date ? <div style={{ fontFamily: look.fonts.body, fontWeight: 800, fontSize: big * 0.2, color: A.text, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: big * 0.06, opacity: at(4) }}>{e.date}</div> : null}
         {e.site ? <div style={{ fontFamily: look.fonts.body, fontSize: big * 0.17, color: A.text, marginTop: big * 0.06, opacity: at(3) }}>{e.site}</div> : null}
       </AbsoluteFill>
       {e.tag ? <div style={{ position: 'absolute', bottom: L.v ? 70 : 26, width: '100%', textAlign: 'center', fontFamily: look.fonts.body, fontSize: L.v ? 22 : 18, color: A.text, opacity: 0.8 * at(4) }}>{e.tag}</div> : null}
