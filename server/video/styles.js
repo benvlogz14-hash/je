@@ -53,6 +53,14 @@ const PRESETS = {
     style: {},
     production: { storySeconds: 45, storyMood: 'suspense' },
   },
+  // 2swag (Nov 13, Ryan sent four ~64 s exploring shorts): Story text's no-voice edit, made like those: ~64 s, ~4 s shots,
+  // ~14 lowercase lines just below the middle, each saying what that shot shows, told as "we", ending on a "??" question.
+  swag: {
+    label: '2swag',
+    blurb: 'No talking: a lowercase line for every shot tells the visit as a story ("we found..."), ~1 minute, ending on a ?? question',
+    style: {},
+    production: { swagSeconds: 64 },
+  },
 };
 
 function patchFor(id, client) {

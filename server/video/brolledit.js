@@ -148,7 +148,7 @@ async function make({ source, duration, shots, scenes, black, avoid, music, leng
     const d = durations(grid); segs = segs.map((x, i) => ({ ...x, dur: d[i] }));
   }
   // texts(grid) -> an ASS file with the story lines, timed to the cuts.
-  const ass = typeof texts === 'function' ? await texts(grid) : null;
+  const ass = typeof texts === 'function' ? await texts(grid, segs) : null; // segs: the shots in order (2swag writes a line per shot)
   const r = await render({ source, segs, grid, music, out, volume, signal, raw, ass });
   if (r.shortened) { const keep = grid.cuts.filter((x) => x < r.duration - 0.3); grid = { ...grid, total: r.duration, cuts: keep, trans: grid.trans.slice(0, keep.length) }; segs = segs.slice(0, keep.length + 1); }
   return { ...r, segs, bpm, cuts: grid.cuts.length, synced: !!bpm, grid, start: grid.start || 0 };
