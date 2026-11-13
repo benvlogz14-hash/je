@@ -20,6 +20,23 @@ function stamp(text, { x, y, size, color = 'white' }) {
 function counter({ x, y, size }) {
   return `drawtext=fontfile='${FONT}':text='%{pts\\:gmtime\\:0\\:%H\\\\\\:%M\\\\\\:%S}':x=${x}:y=${y}:fontsize=${Math.round(size)}:fontcolor=white:borderw=${Math.max(1, Math.round(size / 14))}:bordercolor=black@0.6`;
 }
+/**
+ * A box that moves with time (the VHS rolling bar, Old Film's scratch, Glitch's bars). FFmpeg's drawbox can't do that:
+ * its `t` is the box's line thickness, not the time, so those boxes were never drawn in exports (only in the preview).
+ * drawtext's `t` is the time and it can draw a box of a set size (boxw/boxh, FFmpeg 6.1+), so the box is an empty
+ * drawtext. x/y are expressions (t = seconds), w/h whole pixels. On an older FFmpeg it's left out, as before.
+ */
+let boxOk = null;
+function canMoveBox() {
+  if (boxOk !== null) return boxOk;
+  try { const out = require('child_process').execFileSync(require('./ffmpeg').bin('ffmpeg'), ['-hide_banner', '-h', 'filter=drawtext'], { encoding: 'utf8', timeout: 8000, windowsHide: true }); boxOk = /\bboxw\b/.test(out); } catch { boxOk = false; }
+  return boxOk;
+}
+function movingBox({ x, y, w, h, color, enable }) {
+  if (!canMoveBox()) return [];
+  // fontsize 1 keeps the (empty) text's own line height out of the box's position
+  return [`drawtext=fontfile='${FONT}':text=' ':fontsize=1:fontcolor=white@0:x='${x}':y='${y}':box=1:boxw=${Math.max(1, Math.round(w))}:boxh=${Math.max(1, Math.round(h))}:boxcolor=${color}${enable ? `:enable='${enable}'` : ''}`];
+}
 const scanlines = (h, a) => `drawgrid=w=iw:h=${Math.max(3, Math.round(h / 320))}:t=1:c=black@${r2(a)}`; // h: the visible height
 
 /**
@@ -36,15 +53,15 @@ function filters(id, p = {}, w = 1080, h = 1920, view = null) {
   const L = vx + m, T = vy + m, R = (extra = 0) => `${vx + vw - m - extra}-tw`, B = vy + vh - m;
   switch (id) {
     case 'vhs': {
-      const sh = Math.max(1, Math.round((2 + 7 * k) * u));
+      const sh = Math.max(1, Math.round((2 + 7 * k) * u)); const bd = Math.max(0, Math.min(100, p.band ?? 100)) / 100;
       return [
         `gblur=sigma=${r2(0.6 + 1.6 * k)}:sigmaV=0.3`,
         `rgbashift=rh=${-sh}:bh=${sh}`,
         `eq=saturation=${r2(1 + 0.3 * k)}:contrast=${r2(1 + 0.08 * k)}:brightness=0.02`,
         `noise=alls=${Math.round(4 + 14 * k)}:allf=t`,
         scanlines(vh, 0.1 + 0.25 * k),
-        // the tracking band that rolls down a worn tape
-        `drawbox=x=0:y='${vy}+mod(t*${Math.round(vh / 3.5)},${Math.round(vh * 1.4)})-${Math.round(vh * 0.2)}':w=iw:h=${even(vh * 0.035)}:color=white@${r2(0.05 + 0.1 * k)}:t=fill`,
+        // the tracking band that rolls down a worn tape ("Rolling bar %", p.band: 0 = off, missing = 100 as before)
+        ...(bd > 0 ? movingBox({ x: 0, y: `${vy}+mod(t*${Math.round(vh / 3.5)},${Math.round(vh * 1.4)})-${Math.round(vh * 0.2)}`, w, h: even(vh * 0.035), color: `white@${r2((0.05 + 0.1 * k) * bd)}` }) : []),
         ...(st ? [stamp('PLAY', { x: L, y: T, size: fs }), stamp('OCT. 29 1996', { x: L, y: B - Math.round(fs * 0.8), size: fs * 0.8 })] : []),
       ];
     }
@@ -82,7 +99,7 @@ function filters(id, p = {}, w = 1080, h = 1920, view = null) {
         `eq=contrast=${r2(1 + 0.15 * k)}:brightness='${r2(0.05 * k)}*sin(t*43)':eval=frame`,
         `noise=alls=${Math.round(10 + 20 * k)}:allf=t+u`,
         // a scratch that jumps across the frame
-        `drawbox=x='${vx}+${vw}*abs(sin(t*13.7))':y=0:w=${even(2 * u)}:h=ih:color=white@${r2(0.15 + 0.25 * k)}:t=fill`,
+        ...movingBox({ x: `${vx}+${vw}*abs(sin(t*13.7))`, y: 0, w: even(2 * u), h, color: `white@${r2(0.15 + 0.25 * k)}` }),
         `vignette=angle=${r2(0.4 + 0.4 * k)}`,
       ];
     }
@@ -93,9 +110,9 @@ function filters(id, p = {}, w = 1080, h = 1920, view = null) {
         `eq=saturation=${r2(1 + 0.25 * k)}:contrast=${r2(1 + 0.1 * k)}`,
         `noise=alls=${Math.round(4 + 10 * k)}:allf=t`,
         // colour blocks that flash in now and then
-        `drawbox=x='${vx}+${vw}*abs(sin(t*7.1))':y='${vy}+${vh}*abs(sin(t*3.3))':w=${even(vw * 0.45)}:h=${even(vh * 0.022)}:color=0x00FFFF@${r2(0.35 + 0.4 * k)}:t=fill:enable='lt(mod(t,1.3),0.18)'`,
-        `drawbox=x='${vx}+${vw}*abs(cos(t*5.3))-${Math.round(vw * 0.2)}':y='${vy}+${vh}*abs(cos(t*2.7))':w=${even(vw * 0.6)}:h=${even(vh * 0.015)}:color=0xFF00FF@${r2(0.35 + 0.4 * k)}:t=fill:enable='lt(mod(t+0.6,1.7),0.14)'`,
-        `drawbox=x=0:y='${vy}+${vh}*abs(sin(t*1.9))':w=iw:h=${even(vh * 0.05)}:color=white@${r2(0.08 + 0.12 * k)}:t=fill:enable='lt(mod(t+0.3,2.1),0.1)'`,
+        ...movingBox({ x: `${vx}+${vw}*abs(sin(t*7.1))`, y: `${vy}+${vh}*abs(sin(t*3.3))`, w: even(vw * 0.45), h: even(vh * 0.022), color: `0x00FFFF@${r2(0.35 + 0.4 * k)}`, enable: 'lt(mod(t,1.3),0.18)' }),
+        ...movingBox({ x: `${vx}+${vw}*abs(cos(t*5.3))-${Math.round(vw * 0.2)}`, y: `${vy}+${vh}*abs(cos(t*2.7))`, w: even(vw * 0.6), h: even(vh * 0.015), color: `0xFF00FF@${r2(0.35 + 0.4 * k)}`, enable: 'lt(mod(t+0.6,1.7),0.14)' }),
+        ...movingBox({ x: 0, y: `${vy}+${vh}*abs(sin(t*1.9))`, w, h: even(vh * 0.05), color: `white@${r2(0.08 + 0.12 * k)}`, enable: 'lt(mod(t+0.3,2.1),0.1)' }),
       ];
     }
     case 'crt':

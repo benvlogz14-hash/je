@@ -5,8 +5,9 @@
 const AMOUNT = ['amount', 'Strength', 0, 100, 70];
 const MIX = ['mix', 'Intensity %', 1, 100, 100]; // how much of the look is laid over the untouched picture
 const STAMP = ['stamp', 'Date stamp', 0, 1, 1, 1];
+const BAND = ['band', 'Rolling bar %', 0, 100, 100]; // the grey tracking bar that rolls down the tape (0 = off; missing = 100, as before)
 export const RETRO_EFFECTS = [
-  { id: 'vhs', name: 'VHS', cat: 'Retro', params: [MIX, AMOUNT, STAMP] },
+  { id: 'vhs', name: 'VHS', cat: 'Retro', params: [MIX, AMOUNT, BAND, STAMP] },
   { id: 'camcorder', name: '90s Camcorder', cat: 'Retro', params: [MIX, AMOUNT, STAMP] },
   { id: 'digicam', name: 'Y2K Digicam', cat: 'Retro', params: [MIX, AMOUNT, STAMP] },
   { id: 'super8', name: 'Super 8', cat: 'Retro', params: [MIX, AMOUNT] },
@@ -48,7 +49,8 @@ export function retroLook(id, p, local, u) {
     case 'vhs':
       L.css.push(`blur(${(0.3 + 0.8 * k) * u}px)`); split(Math.max(1, Math.round(2 + 7 * k)));
       L.css.push(`saturate(${1 + 0.3 * k})`, `contrast(${1 + 0.08 * k})`, `brightness(1.02)`);
-      L.grain = 0.06 + 0.16 * k; L.lines = 0.1 + 0.25 * k; L.draw.push({ band: { speed: 1 / 3.5, len: 1.4, off: 0.2, hh: 0.035, a: 0.05 + 0.1 * k } });
+      L.grain = 0.06 + 0.16 * k; L.lines = 0.1 + 0.25 * k;
+      { const bd = Math.max(0, Math.min(100, p.band ?? 100)) / 100; if (bd > 0) L.draw.push({ band: { speed: 1 / 3.5, len: 1.4, off: 0.2, hh: 0.035, a: (0.05 + 0.1 * k) * bd } }); }
       if (st) L.draw.push({ text: 'PLAY', at: 'tl' }, { text: 'OCT. 29 1996', at: 'bl', size: 0.8 });
       break;
     case 'camcorder':
