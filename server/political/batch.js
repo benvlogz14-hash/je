@@ -65,7 +65,7 @@ function newsFor(p) {
   return out.slice(0, 30);
 }
 
-function publicVideo(v) { const { file, poster, wideFile, ...rest } = v; return { ...rest, hasWide: !!wideFile }; }
+function publicVideo(v) { const { file, poster, wideFile, layers, ...rest } = v; return { ...rest, hasWide: !!wideFile, canEdit: !!layers }; }
 function list(prospectId) { const p = ctx.store.get('prospects', prospectId); return { videos: (p?.videos || []).filter((v) => v.file && fs.existsSync(v.file)).map(publicVideo).reverse(), last: p?.videoRun || null }; }
 function remove(prospectId, vid) {
   const p = ctx.store.get('prospects', prospectId); const v = (p?.videos || []).find((x) => x.id === vid); if (!v) return false;
@@ -75,7 +75,7 @@ function remove(prospectId, vid) {
 }
 
 /** Make the batch. Returns { made, skipped: [{ ask, why }], seconds }. */
-async function make(prospectId, { text = '', orders = null, count = 0, styles = null, density = null, wide = false, prompt = '', actor = 'user' } = {}, h) {
+async function make(prospectId, { text = '', orders = null, count = 0, styles = null, density = null, wide = false, prompt = '', textStyle = null, purpose = null, actor = 'user' } = {}, h) {
   const pkgMod = require('./package'); const footage = require('./footage'); const eng = require('./adengine');
   let p = ctx.store.get('prospects', prospectId); if (!p) throw Object.assign(new Error('That candidate is not on the board.'), { permanent: true });
   const t0 = Date.now();
@@ -91,6 +91,19 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
   const ft = p.pkg?.footage;
   if (!fs.existsSync(sentFile) || !(ft?.clips || []).length) throw Object.assign(new Error(`No usable footage of ${p.name} yet. ${p.pkg?.steps?.footage?.note || p.pkg?.steps?.footage?.error || 'Upload their videos, or paste links to them, then try again.'}`), { permanent: true });
   const saved = JSON.parse(fs.readFileSync(sentFile, 'utf8'));
+  // Whose voice is it? Hearings and interviews have other speakers. Lines that are clearly the member's own (they say
+  // "my district", "I represent", "Madam Speaker"...) give their voice's pitch; lines far from it are someone else's.
+  if (!saved.voiced) {
+    try {
+      h.progress(0.3, 'Telling their voice from other speakers');
+      const edit = require('./edit');
+      for (let k = 0; k < ft.clips.length; k++) { const mine = saved.sentences.filter((x) => x.clip === k); if (!mine.length || !fs.existsSync(ft.clips[k].file)) continue; const f0 = await edit.pitches(ft.clips[k].file, mine.map((x) => [x.s, x.e])); mine.forEach((x, i) => { x.f0 = f0[i]; }); }
+      const OWN = /\b(my district|my constituents|i represent|my bill|i (sponsor|introduced|wrote|carry)|as (a|your) (assembly|senator|council|representative|legislator|mayor)|i rise|madam speaker|mr\.? speaker|my colleagues|my community|my neighbors)\b/i;
+      const anchors = saved.sentences.filter((x) => x.f0 && OWN.test(x.text)).map((x) => x.f0).sort((a, b) => a - b);
+      if (anchors.length >= 2 && anchors[anchors.length - 1] / anchors[0] < 1.35) { const mid = anchors[anchors.length >> 1]; for (const x of saved.sentences) x.other = !!(x.f0 && (x.f0 / mid > 1.3 || x.f0 / mid < 0.77)); saved.voice = mid; }
+      saved.voiced = true; fs.writeFileSync(sentFile, JSON.stringify(saved));
+    } catch { /* without it, every line is treated as theirs */ }
+  }
   const sentences = saved.sentences.filter((x) => ft.clips[x.clip]?.file && fs.existsSync(ft.clips[x.clip].file));
   const pr = p.pkg?.profile || {}; const office = pkgMod.shortOffice(pr.office || p.office || p.location || '');
   // Words on screen in their videos (name bars, signs) count as facts for graphics, like the research does.
@@ -119,7 +132,7 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
       if (sc && sc.picks.length < 2) { skipped.push({ ask: o.ask.slice(0, 60), why: 'Fewer than two of the script\'s lines were found in their footage. Use words close to what they actually say.' }); continue; }
       const st = sc ? { picks: sc.picks, agent: 'your script', onTopic: null } : await footage.pickStory({ name: p.name, office, sentences, story: focus ? { mode: 'brief', brief: focus } : { mode: 'auto' }, facts, template: tpl, seconds: o.seconds || null, avoid });
       const bites = st.picks.map((x) => ({ id: x.id, clip: x.clip, s: x.s, e: x.e, text: x.text, words: x.words, role: x.role, gfx: x.gfx || null, icons: x.icons || [] }));
-      if (bites.length < 2) { skipped.push({ ask: o.ask, why: 'Not enough clear lines in their footage for this one.' }); continue; }
+      if (bites.length < 2) { skipped.push({ ask: o.ask, why: st.weak || 'Not enough clear lines in their footage for this one.' }); continue; }
       if (o.topic && st.onTopic != null && st.onTopic < Math.min(2, bites.length - 1)) { skipped.push({ ask: o.ask, why: `Their footage says little or nothing about “${o.topic}”.` }); continue; }
       const sig = bites.map((b) => b.id).join('-');
       if (sigs.has(sig)) { skipped.push({ ask: o.ask, why: 'It came out as the same lines as an earlier video in this batch (not enough different footage).' }); continue; }
@@ -128,9 +141,11 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
       const styleId = o.style || rotation[i % rotation.length];
       let look = styleId ? looks.preset(styleId) : own.look ? looks.normalize(own.look, own.look) : looks.preset('bold');
       const dens = o.density || density; if (dens) look = looks.withDensity(look, dens);
+      if (textStyle) look = looks.withText(look, textStyle);
+      const social = (purpose || S('purpose', 'social')) !== 'campaign';
       const id = uid(); const title = tpl.id === 'script' ? `Script: ${bites[0].text.split(' ').slice(0, 5).join(' ')}` : `${tpl.name}${o.topic ? `: ${o.topic}` : ''}`;
       const file = path.join(outDir, `${slug} - ${String(i + 1).padStart(2, '0')} ${title.replace(/[^\w\- ]+/g, '').slice(0, 40)} - ${id}.mp4`);
-      const common = { bites, footage: ft, music, name: p.name, office, place: p.pkg?.brief?.place || '', state: pr.state || '', cta: 'Follow', site: pkgMod.siteOf(p.pkg || {}), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes: [own.notes, prompt, o.brief].filter(Boolean).join(' | '), look, sound: S('adSound', 'full'), news, crf: Number(S('batchCrf', 21)) || 21 };
+      const common = { bites, footage: ft, music, name: p.name, office, place: p.pkg?.brief?.place || '', state: pr.state || '', cta: social ? 'Follow' : 'Vote', endFor: social ? '' : null, site: pkgMod.siteOf(p.pkg || {}), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes: [own.notes, prompt, o.brief].filter(Boolean).join(' | '), look, sound: S('adSound', 'full'), news, crf: Number(S('batchCrf', 21)) || 21 };
       const r = await eng.make({ ...common, vertical: true, out: file, work: path.join(dir, `work_batch_${id}`), onProgress: (f, t) => h.progress(base + span * (o.wide || wide ? 0.5 : 0.95) * f, `Video ${i + 1} of ${todo.length}: ${t}`) });
       fs.rmSync(path.join(dir, `work_batch_${id}`), { recursive: true, force: true });
       let wideFile = null;
@@ -141,7 +156,7 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
       }
       const poster = file.replace(/\.mp4$/, '.jpg');
       await ff.thumbnail(file, poster, Math.min(2.5, r.duration / 4), 540).catch(() => {});
-      const rec = { id, batch, n: i + 1, at: now(), ask: o.ask, title, template: tpl.id, topic: o.topic || '', style: styleId || 'own', styleName: look.name, density: look.density, duration: Math.round(r.duration * 10) / 10, file, poster: fs.existsSync(poster) ? poster : null, wideFile, qa: r.qa || null, lines: bites.map((b) => b.text), graphics: [...new Set(r.spec.segs.flatMap((s) => [s.tag?.kind, s.card?.kind !== 'video' ? s.card?.kind : null]).filter(Boolean))], agent: st.agent, review: !!tpl.review, by: actor };
+      const rec = { id, batch, n: i + 1, at: now(), ask: o.ask, title, template: tpl.id, topic: o.topic || '', style: styleId || 'own', styleName: look.name, density: look.density, duration: Math.round(r.duration * 10) / 10, file, poster: fs.existsSync(poster) ? poster : null, wideFile, qa: r.qa || null, lines: bites.map((b) => b.text), layers: r.layers || null, graphics: [...new Set(r.spec.segs.flatMap((s) => [s.tag?.kind, s.card?.kind !== 'video' ? s.card?.kind : null]).filter(Boolean))], agent: st.agent, review: !!tpl.review, by: actor };
       ctx.store.update('prospects', prospectId, (cur) => ({ videos: [...(cur.videos || []), rec].slice(-200) }));
       events.publish('prospects', { id: prospectId });
       made.push(rec);
@@ -154,6 +169,38 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
   audit.log(actor, 'political.batch', { prospectId, name: p.name, made: made.length, skipped: skipped.length, seconds: run.seconds });
   if (!made.length) throw Object.assign(new Error(`No videos made for ${p.name}. ${skipped[0]?.why || ''}`.trim()), { permanent: true });
   return { made: made.length, skipped, seconds: run.seconds };
+}
+
+/**
+ * Open a batch video in the Studio as layers: every cut of their footage on V1 with its sound on A1 (from the original
+ * files, so each piece can be trimmed, moved or swapped), the captions as editable titles on their own track, and the
+ * music on its own track. The motion graphics are not layers (they are drawn by the ad designer); the finished video
+ * stays in the Videos tab.
+ */
+async function toStudio(prospectId, vid) {
+  const p = ctx.store.get('prospects', prospectId); const v = (p?.videos || []).find((x) => x.id === vid);
+  if (!v) throw new Error('That video is not in the list any more.');
+  if (!v.layers) throw new Error('This video was made before layers were kept. Make it again, then open it in the Studio.');
+  const W = 1080; const H = 1920; let nid = 1; const an = (base) => ({ base });
+  const clip = (o) => ({ id: String(nid++), type: o.type, mediaId: o.mediaId || '', name: o.name || '', start: o.start, duration: o.duration, in: o.in || 0, speed: 1, preservePitch: false, linkId: String(o.linkId || 0), enabled: true, posX: an(0), posY: an(0), scaleX: an(o.scale ?? 1), scaleY: an(o.scale ?? 1), rotation: an(0), opacity: an(1), volume: an(o.volume ?? 1), uniformScale: true, effects: [], transIn: { type: 0, duration: 1 }, transOut: { type: 0, duration: 1 }, ...(o.text ? { text: o.text, isCaption: true } : {}) });
+  const files = [...new Set(v.layers.lines.map((l) => l.file))].filter((f) => fs.existsSync(f));
+  if (!files.length) throw new Error('Their original footage for this video is no longer on this computer.');
+  const media = []; const info = {};
+  for (const f of files) { const i = await ff.probe(f); info[f] = i; media.push({ id: `m${media.length + 1}`, path: f, name: path.basename(f), kind: 0, duration: i.duration, width: i.width, height: i.height, fps: i.fps, hasVideo: true, hasAudio: i.hasAudio, srcIn: 0, srcOut: -1 }); }
+  const v1 = []; const a1 = []; let t = 0;
+  v.layers.lines.forEach((l, k) => { const m = media[files.indexOf(l.file)]; if (!m) return; for (const [a, b] of l.keep) { const d = Math.max(0.1, b - a); const link = nid + 1000; v1.push(clip({ type: 0, mediaId: m.id, name: `Line ${k + 1}`, start: t, duration: d, in: a, linkId: link, scale: Math.max(W / m.width, H / m.height) })); a1.push(clip({ type: 1, mediaId: m.id, name: `Line ${k + 1}`, start: t, duration: d, in: a, linkId: link })); t += d; } });
+  // Captions: a phrase at a time (a new one at a pause, a sentence end, or after 5 words).
+  const caps = []; let cur = [];
+  const flush = () => { if (!cur.length) return; const s = cur[0].s; const e = cur[cur.length - 1].e; caps.push(clip({ type: 3, name: cur.map((w) => w.w).join(' ').slice(0, 40), start: s, duration: Math.max(0.3, e - s), text: { text: cur.map((w) => w.w).join(' '), family: v.layers.fonts?.cap || 'Inter', pixelSize: 64, bold: true, italic: false, color: '#ffffffff', outlineColor: '#ff000000', outlineWidth: 5, shadow: 2, shadowColor: '#90000000' } })); caps[caps.length - 1].posY = an(H * 0.2); cur = []; };
+  for (const w of v.layers.words) { if (cur.length && (cur.length >= 5 || w.s - cur[cur.length - 1].e > 0.4)) flush(); cur.push(w); if (/[.!?]$/.test(w.w)) flush(); }
+  flush();
+  const music = [];
+  if (v.layers.music && fs.existsSync(v.layers.music)) { const mi = await ff.probe(v.layers.music).catch(() => ({ duration: 600 })); media.push({ id: 'mu1', path: v.layers.music, name: path.basename(v.layers.music), kind: 1, duration: mi.duration || 600, hasVideo: false, hasAudio: true, srcIn: 0, srcOut: -1 }); music.push({ ...clip({ type: 1, mediaId: 'mu1', name: 'Music', start: 0, duration: Math.min(t, mi.duration || t), volume: 0.26 }), transOut: { type: 2, duration: 1 } }); }
+  const track = (type, nm, clips) => ({ type, name: nm, muted: false, locked: false, volume: an(1), clips });
+  const data = { app: 'velo', version: 1, media, sequences: [{ id: 's1', name: v.title, width: W, height: H, fps: 30, videoTracks: [track(0, 'V1', v1), track(0, 'Captions', caps)], audioTracks: [track(1, 'A1', a1), track(1, 'Music', music)] }], openTabs: ['s1'], activeSequence: 's1', nextClipId: String(nid + 2000) };
+  const proj = ctx.store.insert('projects', { name: `${p.name}: ${v.title}`, clientId: null, prospectId, data, exports: [] });
+  audit.log('user', 'political.video_to_studio', { prospectId, video: vid, project: proj.id });
+  return { id: proj.id, name: proj.name };
 }
 
 /** Start batches for people by name or id (a name not on the board is added as a political lead). */
@@ -178,4 +225,4 @@ function start({ ids = [], names = [], add = true, actor = 'user', ...opts } = {
   return { started, skipped };
 }
 
-module.exports = { make, start, list, remove, planOrders, newsFor, MIX };
+module.exports = { toStudio, make, start, list, remove, planOrders, newsFor, MIX };

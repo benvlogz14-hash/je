@@ -423,7 +423,7 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
     const keyset = new Set((p.keys || []).map(norm));
     const head = { words: hw.map((w, i) => ({ w, key: keyset.has(norm(w)), t: at >= 0 ? Math.max(t, t + mapT(cut, b.words[at + i].s) - 0.05) : t + 0.08 + i * 0.07 })) };
     const angles = anglesFor(b, cut, t);
-    const speaker = (from, to) => ({ kind: 'video', src: cut.url, from: from - t, fx: cut.fx ?? 0.5, fy: 0.3, face: cut.face || null, angles, pushAt: t, pushLen: cut.dur, jumps: (cut.jumps || []).map((j) => t + j) });
+    const speaker = (from, to) => ({ kind: 'video', src: cut.url, from: from - t, fx: cut.fx ?? 0.5, fy: 0.3, face: cut.face || null, ar: cut.ar || null, fit: !!cut.fit, angles: cut.face ? angles : null, pushAt: t, pushLen: cut.dur, jumps: (cut.jumps || []).map((j) => t + j) });
     const base = { line: k, bg: p.bg || 'navy', head: dens === 'minimal' ? null : head, tilt: tilts[k % tilts.length], label: b.label || null, icons: dens === 'full' ? (p.icons || []).slice(0, 2) : [], role: p.role || null, hook: k === 0, rally: k === plan.length - 1 && plan.length > 1 };
     const parts = [];
     let ins = p.map ? { kind: 'map', ...p.map } : p.card ? { kind: 'card', ...p.card } : p.cover && brollFiles[p.cover.broll] ? { kind: 'broll', ...p.cover } : null;
@@ -468,7 +468,8 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
   const last = plan[plan.length - 1]; const lastWords = String(last?.headline || '').split(/\s+/).filter(Boolean);
   const lastLine = String(bites[plan.length - 1]?.text || '').trim(); const whole = lastLine.split(/\s+/).length <= 12 && /[.!]$/.test(lastLine);
   const cap1 = (x) => (x ? x[0].toUpperCase() + x.slice(1) : x);
-  const outro = plan.length < 2 ? '' : whole ? lastLine : lastWords.length >= 2 && lastWords.length <= 10 ? cap1(lastWords.join(' ').replace(/[,;:]+$/, '')) : '';
+  const headWhole = lastWords.length >= 3 && lastWords.length <= 10 && /[.!]$/.test(lastWords[lastWords.length - 1]) && findRun(bites[plan.length - 1].words, lastWords) === 0;
+  const outro = plan.length < 2 ? '' : whole ? lastLine : headWhole ? cap1(lastWords.join(' ')) : '';
   // The end card's portrait: the speaker from the WHO line (else the first), mid-line, in a ring.
   const pk = Math.max(0, plan.findIndex((p) => p.role === 'who')); const pc = cuts[pk];
   const portrait = pc ? { src: pc.url, from: Math.max(0, Math.min(pc.dur * 0.45, pc.dur - 3.2)), fx: pc.fx ?? 0.5 } : null; // the clip must last the whole end card
@@ -515,9 +516,13 @@ async function make({ bites, footage, vertical, out, work, music, name, office, 
     const dur = await edit.cutLine(c, snap.keep, file, { level: snap.level, fps: FPS, first: k === 0 });
     cleanCuts += (snap.clean.in ? 1 : 0) + (snap.clean.out ? 1 : 0);
     const mid = (snap.keep[0][0] + snap.keep[snap.keep.length - 1][1]) / 2;
-    const face = await edit.faceBox(c, [snap.keep[0][0] + 0.4, mid], work);
-    const fx = c.width / c.height > 1.1 ? (face?.x ?? await faceX(c, snap.keep[0][0], snap.keep[0][0] + dur)) : 0.5;
-    cuts.push({ start: snap.keep[0][0], dur, map: m.map, jumps: m.jumps, url: `/m/line${k}.mp4`, fx: fx ?? 0.5, face, tightened: snap.keep.length - 1 });
+    const t0 = snap.keep[0][0]; const t1 = snap.keep[snap.keep.length - 1][1];
+    const face = await edit.faceBox(c, [t0 + 0.3, t0 + (t1 - t0) * 0.33, mid, t0 + (t1 - t0) * 0.75], work);
+    const wideSrc = c.width / c.height > 1.1;
+    const tracked = wideSrc && !face ? await faceX(c, t0, t0 + dur) : null;
+    const fx = wideSrc ? (face?.x ?? tracked ?? 0.5) : 0.5;
+    // No face found anywhere in a wide shot: a tall crop would be a guess (it showed empty chairs), so the whole picture is shown.
+    cuts.push({ keep: snap.keep, start: t0, dur, map: m.map, jumps: m.jumps, url: `/m/line${k}.mp4`, fx, face, ar: c.width / c.height, fit: wideSrc && vertical && !face && tracked == null, tightened: snap.keep.length - 1 });
   }
   const brollFiles = {};
   for (const p of plan) if (p.cover && !brollFiles[p.cover.broll]) {
@@ -550,7 +555,8 @@ async function make({ bites, footage, vertical, out, work, music, name, office, 
   onProgress(0.97, 'Checking the finished ad');
   let qa = null;
   try { qa = await edit.qa(out, { total: spec.total, voiceEnd: spec.voiceEnd, cuts: { clean: cleanCuts, total: bites.length * 2 } }); } catch { /* the ad is still made */ }
-  return { file: out, duration: spec.total, spec, plan, agent, qa, sounds: events.length, tightened: cuts.reduce((a, c) => a + (c.tightened || 0), 0) };
+  const layers = { lines: bites.map((b, k) => ({ file: clips[b.clip].file, keep: cuts[k].keep, fx: cuts[k].fx })), words: spec.words.map((w) => ({ w: w.w, s: +w.s.toFixed(3), e: +w.e.toFixed(3) })), music: music && fs.existsSync(music) ? music : null, voiceEnd: spec.voiceEnd, fonts: lookN.fonts };
+  return { file: out, duration: spec.total, spec, plan, agent, qa, layers, sounds: events.length, tightened: cuts.reduce((a, c) => a + (c.tightened || 0), 0) };
 }
 
 /** A still of a look (for the style picker): a sample headline, captions, a stat card and a name plate. Cached by look. */

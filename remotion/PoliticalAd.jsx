@@ -256,14 +256,29 @@ function CardContent({ seg, fps, w, h, look, keyTimes }) {
     // Also: one take cut like several cameras (c.angles): each framing is a zoom centred on the face.
     let lift = 0; let oy = 40;
     if (look.layout === 'full' && c.kind === 'video' && !c.broll) {
-      const z = c.angles ? (c.angles.filter((a) => abs >= a.t - 0.001).pop() || c.angles[0]).z : 1;
+      const z = c.angles && c.face ? (c.angles.filter((a) => abs >= a.t - 0.001).pop() || c.angles[0]).z : 1; // never zoom without knowing where the face is
       const fy = c.face ? clamp(c.face.y, 0.15, 0.7) : 0.36;
       const need = h > w && c.face ? clamp(fy - faceTarget(look), 0, 0.2) : 0;
       let S = push * z; if ((S - 1) * (1 - fy) < need) S = 1 + need / (1 - fy);
       push = S; oy = fy * 100;
       lift = clamp(need + (z > 1.3 && h > w ? 0.02 : 0), 0, (1 - fy) * (S - 1)); // never past the picture's edge
     }
-    const style = { width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${Math.round((c.fx ?? 0.5) * 100)}% ${Math.round((c.fy ?? 0.35) * 100)}%`, transform: `translateY(${(-lift * h).toFixed(1)}px) ${shake}scale(${push})`, transformOrigin: `${Math.round((c.fx ?? 0.5) * 100)}% ${oy.toFixed(1)}%`, filter: GRADE[look.grade] || 'none' };
+    // Centre the face: a wide picture in a narrower window shows only a slice of its width; the slice is placed so the
+    // face sits in the middle of it (not at the same fraction it had in the full picture), kept inside the picture.
+    const vis = c.ar && c.kind === 'video' ? clamp((w / h) / c.ar, 0.05, 1) : 1;
+    const px = vis < 0.999 ? clamp(((c.fx ?? 0.5) - vis / 2) / (1 - vis), 0, 1) : 0.5;
+    const ox = vis < 0.999 ? clamp(((c.fx ?? 0.5) - px * (1 - vis)) / vis, 0.1, 0.9) : (c.fx ?? 0.5);
+    if (c.fit && c.kind === 'video') {
+      // No face was found in this wide shot: show all of it over a blurred copy instead of cropping blind.
+      const from = Math.round((c.from || 0) * fps);
+      return (
+        <AbsoluteFill style={{ background: '#000' }}>
+          <OffthreadVideo src={c.src} muted startFrom={from} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', filter: 'blur(26px) brightness(0.55)', transform: 'scale(1.2)' }} />
+          <OffthreadVideo src={c.src} muted startFrom={from} style={{ position: 'absolute', left: 0, top: '22%', width: '100%', height: '56%', objectFit: 'contain', filter: GRADE[look.grade] || 'none', transform: `scale(${1 + 0.04 * clamp(t / seg.dur, 0, 1)})` }} />
+        </AbsoluteFill>
+      );
+    }
+    const style = { width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${(px * 100).toFixed(1)}% ${Math.round((c.fy ?? 0.35) * 100)}%`, transform: `translateY(${(-lift * h).toFixed(1)}px) ${shake}scale(${push})`, transformOrigin: `${(ox * 100).toFixed(1)}% ${oy.toFixed(1)}%`, filter: GRADE[look.grade] || 'none' };
     return c.kind === 'photo' ? <Img src={c.src} style={style} /> : <OffthreadVideo src={c.src} muted startFrom={Math.round((c.from || 0) * fps)} style={style} />;
   }
   if (c.kind === 'map') return <MapCard c={c} w={w} h={h} fps={fps} look={look} />;

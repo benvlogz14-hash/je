@@ -475,8 +475,7 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;align-items:start">
       <div class="col" style="gap:10px;min-width:0">
         <b style="font-size:var(--fs-sm)">1 · The candidate</b>
-        <select class="input" id="am-lead" value=${pid} onChange=${(e) => setPid(e.target.value)}>${!list.length ? html`<option value="">No candidates yet: add one below</option>` : null}${list.map((x) => html`<option value=${x.id}>${x.name}${x.pkg?.profile?.office || x.location ? ` · ${x.pkg?.profile?.office || x.location}` : ''}</option>`)}</select>
-        <div class="row" style="gap:6px"><input class="input grow" id="am-new" placeholder="Or add someone: name" value=${newName} onInput=${(e) => setNewName(e.target.value)} /><input class="input" id="am-office" style="width:42%" placeholder="Office, e.g. Assembly AD-35, NY" value=${newOffice} onInput=${(e) => setNewOffice(e.target.value)} /><${Button} size="sm" kind="ghost" disabled=${!newName.trim()} onClick=${add}>Add</${Button}></div>
+        <${CandidatePicker} list=${list} pid=${pid} setPid=${setPid} reload=${reload} />
         <b style="font-size:var(--fs-sm);margin-top:4px">2 · Their footage</b>
         <label style=${`display:flex;flex-direction:column;align-items:center;gap:4px;padding:18px;border:2px dashed var(--line-strong, var(--line));border-radius:12px;cursor:pointer;text-align:center;background:${over ? 'var(--surface-2)' : 'transparent'}`}
           onDragOver=${(e) => { e.preventDefault(); setOver(true); }} onDragLeave=${() => setOver(false)} onDrop=${(e) => { e.preventDefault(); setOver(false); drop(e.dataTransfer.files); }}>
@@ -509,6 +508,35 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
   </div>`;
 }
 
+/**
+ * Find a politician fast: type any part of a name or office, click one. Not on the list? Add them from the same box
+ * ("Name, office"), or send the words to the scout to find more people like that.
+ */
+function CandidatePicker({ list, pid, setPid, reload }) {
+  const [q, setQ] = useState(''); const [open, setOpen] = useState(false);
+  const cur = list.find((x) => x.id === pid);
+  const officeOf = (x) => x.pkg?.profile?.office || x.office || x.location || '';
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const hits = (words.length ? list.filter((x) => { const t = `${x.name} ${officeOf(x)} ${x.stage || ''}`.toLowerCase(); return words.every((w) => t.includes(w)); }) : list.slice().reverse()).slice(0, 8);
+  const exact = list.some((x) => x.name.toLowerCase() === q.trim().split(',')[0].trim().toLowerCase());
+  const add = () => { const [name, ...rest] = q.split(','); return act(() => api.post('/api/prospects', { name: name.trim(), type: 'political', location: rest.join(',').trim() }), { ok: `${name.trim()} added` }).then((r) => { if (r?.id) { setPid(r.id); setQ(''); setOpen(false); reload(); } }); };
+  const scout = () => act(() => api.post('/api/political/scout', { query: q.trim(), count: 10 }), { ok: 'Scouting. New people show up under New prospects further down this page.' }).then(() => { setQ(''); setOpen(false); });
+  return html`<div class="col" style="gap:6px;position:relative">
+    <input class="input" id="am-search" autocomplete="off" placeholder=${cur ? `${cur.name}${officeOf(cur) ? ` · ${officeOf(cur)}` : ''}  (type to search ${list.length} people)` : 'Search by name or office, or type a new name'} value=${q}
+      onFocus=${() => setOpen(true)} onInput=${(e) => { setQ(e.target.value); setOpen(true); }} onKeyDown=${(e) => { if (e.key === 'Enter' && hits[0]) { setPid(hits[0].id); setQ(''); setOpen(false); } if (e.key === 'Escape') setOpen(false); }} />
+    ${open ? html`<div class="col" style="gap:2px;padding:6px;border-radius:12px;border:1px solid var(--line);background:var(--surface);max-height:300px;overflow:auto">
+      ${hits.map((x) => html`<button key=${x.id} type="button" onClick=${() => { setPid(x.id); setQ(''); setOpen(false); }} style=${`display:flex;gap:8px;align-items:baseline;text-align:left;padding:7px 9px;border:0;border-radius:8px;cursor:pointer;background:${x.id === pid ? 'var(--surface-2, #f1f1f1)' : 'transparent'}`}>
+        <b style="font-size:var(--fs-sm)">${x.name}</b><span class="faint grow ellipsis" style="font-size:var(--fs-xs)">${officeOf(x)}</span>
+        <span class="faint" style="font-size:10px">${(x.videos || []).length ? `${(x.videos || []).length} videos` : (x.footageUploads || []).length ? `${(x.footageUploads || []).length} uploads` : ''}</span></button>`)}
+      ${!hits.length ? html`<span class="faint" style="font-size:var(--fs-xs);padding:6px 9px">Nobody on the list matches.</span>` : null}
+      ${q.trim().length >= 3 ? html`<div class="row wrap" style="gap:6px;padding:6px 4px 2px;border-top:1px solid var(--line);margin-top:4px">
+        ${!exact ? html`<${Button} size="sm" kind="ghost" icon="plus" onClick=${add}>Add “${q.trim().slice(0, 40)}”</${Button}>` : null}
+        <${Button} size="sm" kind="ghost" icon="search" onClick=${scout} title="Sends these words to the scout, e.g. Queens assembly members, or Connecticut state senators">Scout for more: “${q.trim().slice(0, 30)}”</${Button}>
+        <${Button} size="sm" kind="ghost" onClick=${() => setOpen(false)}>Close</${Button}></div>` : html`<span class="faint" style="font-size:10px;padding:4px 9px">To add someone new, type their name, a comma, then the office: Jane Rivera, State Senate SD-12, NY</span>`}
+    </div>` : null}
+  </div>`;
+}
+
 /** A short list of what to type, shown as the order box's placeholder. */
 const ORDER_HINT = 'One video per line. For example:\nscript: Most people in Albany are politicians. I am a scientist. We will never stop fighting.\nhousing\nquick video about childcare\nintro\nwhat she delivered on transit, to camera\n20 second video on rent, captions only';
 
@@ -522,6 +550,8 @@ function BatchMaker({ p, list, busy, up, looks, curLook, reload }) {
   const [style, setStyle] = useState('mix'); const [pickStyle, setPickStyle] = useState(false);
   const [dens, setDens] = useState(''); const [wide, setWide] = useState(false);
   const [note, setNote] = useState(''); const [more, setMore] = useState(false);
+  // Text: the font, how big, and an outline or a soft shadow round captions. Purpose: everyday social content or a race ad.
+  const [font, setFont] = useState(''); const [tsize, setTsize] = useState(1); const [outline, setOutline] = useState(''); const [purpose, setPurpose] = useState('');
   const [preview, setPreview] = useState([]); const [others, setOthers] = useState(false); const [names, setNames] = useState('');
   const box = useRef(null);
   // How each line will be read, a moment after typing stops.
@@ -532,7 +562,7 @@ function BatchMaker({ p, list, busy, up, looks, curLook, reload }) {
   }, [text]);
   const addLine = (line, focus) => { setText((cur) => `${cur.trim() ? `${cur.replace(/\s+$/, '')}\n` : ''}${line}`); if (focus) setTimeout(() => { const el = box.current; if (el) { el.focus(); el.selectionStart = el.selectionEnd = el.value.length; } }, 30); };
   const n = preview.length || count;
-  const body = () => ({ text, count: text.trim() ? 0 : count, styles: style === 'mix' ? 'mix' : style === 'own' ? null : [style], density: dens || null, wide, prompt: note.trim() });
+  const body = () => ({ text, count: text.trim() ? 0 : count, styles: style === 'mix' ? 'mix' : style === 'own' ? null : [style], density: dens || null, wide, prompt: note.trim(), purpose: purpose || null, textStyle: font || tsize !== 1 || outline ? { font, size: tsize, ...(outline ? { outline: outline === 'on' } : {}) } : null });
   const go = () => act(() => api.post(`/api/prospects/${p.id}/videos`, body()), { ok: `Making ${n} video${n === 1 ? '' : 's'} for ${p.name}. They appear in the Videos tab as each one finishes.` }).then(() => reload());
   const goMany = () => { const who = names.split(/\r?\n/).map((x) => x.trim()).filter(Boolean); if (!who.length) return; act(() => api.post('/api/political/videos', { names: who, ...body() }), { ok: (r) => `Started for ${r.started.length}${r.skipped.length ? `; left out: ${r.skipped.join(', ')}` : ''}. One politician is made at a time.` }).then(() => { setOthers(false); setNames(''); reload(); }); };
   const styleName = style === 'mix' ? 'A mix of old and new styles' : style === 'own' ? `Their own (${curLook})` : (looks?.presets || []).find((x) => x.id === style)?.name || style;
@@ -558,6 +588,14 @@ function BatchMaker({ p, list, busy, up, looks, curLook, reload }) {
     ${pickStyle ? html`<div style="max-height:330px;overflow:auto;padding-right:4px"><${LookPicker} presets=${looks?.presets || []} sel=${['mix', 'own'].includes(style) ? null : style} onSel=${(id) => { if (id) { setStyle(id); setPickStyle(false); } }} /></div>` : null}
     ${more ? html`<div class="col" style="gap:8px">
       <div class="col" style="gap:4px"><b style="font-size:var(--fs-xs)">How much graphics</b><${Seg} value=${dens} onChange=${setDens} options=${[{ value: '', label: 'The style\'s own' }, ...(opts?.density || []).map((d) => ({ value: d.id, label: d.name }))]} /></div>
+      <div class="col" style="gap:4px"><b style="font-size:var(--fs-xs)">What it's for</b><${Seg} value=${purpose || opts?.purpose || 'social'} onChange=${setPurpose} options=${[{ value: 'social', label: 'Social content' }, { value: 'campaign', label: 'Campaign ad' }]} /><span class="faint" style="font-size:10px">${(purpose || opts?.purpose || 'social') === 'social' ? 'For people already in office: ends on Follow, no race or vote language.' : 'For a race: ends on Vote, with "for the 35th" under the name.'}</span></div>
+      <div class="col" style="gap:4px"><b style="font-size:var(--fs-xs)">Text</b>
+        <div class="row wrap" style="gap:8px;align-items:center">
+          <select class="input" style="max-width:200px" value=${font} onChange=${(e) => setFont(e.target.value)}><option value="">The style's own font</option>${(opts?.fonts || []).map((f) => html`<option value=${f}>${f}</option>`)}</select>
+          <${Seg} value=${String(tsize)} onChange=${(v) => setTsize(Number(v))} options=${[{ value: '0.85', label: 'Smaller' }, { value: '1', label: 'Normal' }, { value: '1.2', label: 'Bigger' }, { value: '1.4', label: 'Biggest' }]} />
+          <${Seg} value=${outline} onChange=${setOutline} options=${[{ value: '', label: 'Style\'s own edge' }, { value: 'on', label: 'Outline' }, { value: 'off', label: 'Soft shadow' }]} />
+        </div>
+        ${font ? html`<span style=${`font-family:'${font}', sans-serif;font-size:26px;line-height:1.2`}>${p ? p.name : 'Sample'} · The quick brown fox</span>` : null}</div>
       <input class="input" id="am-note" placeholder="A note for every video, e.g. keep it upbeat, end on the district" value=${note} onInput=${(e) => setNote(e.target.value)} />
     </div>` : null}
     <div class="row wrap" style="gap:8px;align-items:center">
@@ -606,7 +644,7 @@ function VideosTab({ list, pid, setPid, jobs, reload, onMake }) {
         <span style=${`font-size:10px;color:${x.qa?.ok ? 'var(--moss-ink, #2f7d4f)' : 'var(--coral-ink, #b4532a)'}`}>${x.qa ? (x.qa.ok ? 'Checked: sound and cuts fine' : `Check: ${x.qa.notes[0]}`) : ''}</span>
       </button>`)}
     </div>
-    ${v ? html`<${Modal} wide title=${`${p.name}: ${v.title}`} onClose=${() => setOpen(null)} footer=${html`<${Button} kind="ghost" onClick=${() => del(v)}>Delete</${Button}><a class="btn" href=${url(v, 'file', '&download=1')}>Download</a>${v.hasWide ? html`<a class="btn" href=${url(v, 'wide', '&download=1')}>Download horizontal</a>` : null}<${Button} kind="primary" onClick=${() => setOpen(null)}>Done</${Button}>`}>
+    ${v ? html`<${Modal} wide title=${`${p.name}: ${v.title}`} onClose=${() => setOpen(null)} footer=${html`<${Button} kind="ghost" onClick=${() => del(v)}>Delete</${Button}>${v.canEdit ? html`<${Button} kind="slate" icon="studio" title="Opens their footage cut by cut, the captions and the music as separate layers you can change" onClick=${() => act(() => api.post(`/api/prospects/${p.id}/videos/${v.id}/studio`), { sound: 'open' }).then((r) => { if (r?.id) { setOpen(null); navigate(`/studio/${r.id}`); } })}>Edit in Studio</${Button}>` : null}<a class="btn" href=${url(v, 'file', '&download=1')}>Download</a>${v.hasWide ? html`<a class="btn" href=${url(v, 'wide', '&download=1')}>Download horizontal</a>` : null}<${Button} kind="primary" onClick=${() => setOpen(null)}>Done</${Button}>`}>
       <div class="row wrap" style="gap:16px;align-items:flex-start">
         <video key=${v.id} src=${url(v, 'file')} poster=${url(v, 'poster')} controls autoplay playsinline style="width:270px;max-width:100%;aspect-ratio:9/16;border-radius:14px;background:#000" />
         <div class="col grow" style="gap:10px;min-width:240px;font-size:var(--fs-sm)">

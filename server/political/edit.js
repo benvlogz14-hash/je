@@ -151,6 +151,28 @@ async function qa(file, { total = null, voiceEnd = null, cuts = null } = {}) {
   return { ok: !notes.length, loudness: Number.isFinite(loudness) ? loudness : null, peak: Number.isFinite(peak) ? peak : null, black, gaps, duration, cuts, notes, at: new Date().toISOString() };
 }
 
+/**
+ * The pitch of the voice in each stretch of a video (Hz, or null), from one read of its sound. Used to tell the
+ * politician's lines from another speaker's in hearings and interviews. ranges = [[from, to], ...].
+ */
+async function pitches(file, ranges) {
+  const SR = 8000;
+  let pcm; try { pcm = (await collect(['-loglevel', 'error', '-i', file, '-vn', '-ac', '1', '-ar', String(SR), '-af', 'highpass=f=60,lowpass=f=900', '-f', 's16le', '-'], { timeoutMs: 240000 })).out; } catch { return ranges.map(() => null); }
+  const n = Math.floor(pcm.length / 2); const W = 320; const lo = Math.floor(SR / 320); const hi = Math.ceil(SR / 75);
+  return ranges.map(([a, b]) => {
+    const i0 = Math.max(0, Math.round(a * SR)); const i1 = Math.min(n - W - hi, Math.round(b * SR)); const f0 = [];
+    for (let i = i0; i < i1; i += 400) {
+      let e = 0; for (let k = 0; k < W; k++) { const v = pcm.readInt16LE((i + k) * 2); e += v * v; }
+      if (e / W < 250000) continue; // quiet: not voiced
+      let best = 0; let lag = 0;
+      for (let L = lo; L <= hi; L++) { let c = 0; let d = 0; for (let k = 0; k < W; k++) { const x = pcm.readInt16LE((i + k) * 2); const y = pcm.readInt16LE((i + k + L) * 2); c += x * y; d += y * y; } const r = c / Math.sqrt(e * d + 1); if (r > best) { best = r; lag = L; } }
+      if (best > 0.55 && lag) f0.push(SR / lag);
+    }
+    if (f0.length < 4) return null;
+    f0.sort((x, y) => x - y); return Math.round(f0[f0.length >> 1]);
+  });
+}
+
 /** The speaker's face in a shot: { x, y, h } as fractions of the picture (centre and height), or null. */
 async function faceBox(c, times, work) {
   try {
@@ -174,4 +196,4 @@ async function faceBox(c, times, work) {
   } catch { return null; }
 }
 
-module.exports = { energy, snapLine, mapper, cutLine, master, qa, faceBox, LEAD, TAIL };
+module.exports = { pitches, energy, snapLine, mapper, cutLine, master, qa, faceBox, LEAD, TAIL };

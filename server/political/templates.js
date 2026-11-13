@@ -47,6 +47,12 @@ const TEMPLATES = [
   { id: 'people', name: 'Who they fight for', formula: '[the people] · [what they are facing] · [what was done for them] · [closing line]', about: 'Built around constituents: families, workers, seniors, tenants.', beats: ['place', 'problem', 'result', 'rally'], sec: 24, openWith: 'place' },
   { id: 'callout', name: 'Calling it out', formula: '[what the other side is doing] · [the cost to people] · [what they stand for instead] · [closing line]', about: 'Contrast in their own words only. Always check this one yourself before it goes anywhere.', beats: ['contrast', 'problem', 'promise', 'rally'], sec: 22, openWith: 'contrast', review: true },
   { id: 'update', name: 'Quick update', formula: '[what just happened] · [what it means] · [closing line]', about: 'News from them this week, short.', beats: ['action', 'result', 'rally'], sec: 15, openWith: 'action' },
+  // Everyday social content for people already in office (not race ads).
+  { id: 'district', name: 'In the district', formula: '[where they are or who they met] · [what is happening there] · [what they are doing about it] · [closing line]', about: 'A visit, an event, a neighbourhood. Good with B-roll.', beats: ['place', 'story', 'action', 'rally'], sec: 22, openWith: 'place' },
+  { id: 'vote', name: 'Why I voted', formula: '[the bill or vote] · [what it does] · [why they voted that way] · [closing line]', about: 'One vote or bill explained in their own words.', beats: ['action', 'result', 'promise', 'rally'], sec: 24, openWith: 'action' },
+  { id: 'help', name: 'How we can help', formula: '[a problem people bring to the office] · [what the office does] · [how to reach them] · [closing line]', about: 'Constituent services: what their office can do for people.', beats: ['problem', 'action', 'place', 'rally'], sec: 22, openWith: 'problem' },
+  { id: 'myth', name: 'Setting it straight', formula: '[what people get wrong] · [the fact or number] · [what it means] · [closing line]', about: 'A claim corrected with their own facts.', beats: ['contrast', 'proof', 'result', 'rally'], sec: 22, openWith: 'contrast' },
+  { id: 'clip', name: 'One strong moment', formula: '[the moment, uncut] · [closing line]', about: 'Their single best stretch, kept together, for a daily post.', beats: ['hook', 'proof', 'rally'], sec: 18 },
   { id: 'best', name: 'Best of the footage', formula: '[hook] · [who] · [proof] · [place] · [story] · [closing line]', about: 'The strongest story the footage can tell, picked automatically.', beats: ['hook', 'who', 'proof', 'place', 'story', 'rally'], sec: 26 },
 ];
 const byId = (id) => TEMPLATES.find((t) => t.id === id) || null;
@@ -67,6 +73,11 @@ const TEMPLATE_WORDS = {
   people: /\b(who (he|she|they) fights? for|constituents?|the people|working families|for families)\b/i,
   callout: /\b(call(ing|s)? out|opponent|the other side|hold(ing)? .* accountable)\b/i,
   update: /\b(update|this week|news|just (passed|happened|announced)|announcement)\b/i,
+  district: /\b(in the district|visit(ed|ing)?|tour(ed|ing)?|event|town hall|neighbou?rhood walk)\b/i,
+  vote: /\b(why (i|he|she|they) voted|vote explained|my vote|(his|her|their) vote)\b/i,
+  help: /\b(constituent services?|how (we|the office) can help|office hours|casework)\b/i,
+  myth: /\b(myth|fact check|setting it straight|misinformation|get(s)? wrong)\b/i,
+  clip: /\b(one moment|strong moment|single clip|best moment|uncut)\b/i,
   best: /\b(best of|best lines?|highlights?|anything|whatever|surprise me|strongest)\b/i,
 };
 const FILLER = /\b(what|she|he|they|has|have|had|done|did|does|do|make|made|give|want|need|some|this|an?|the|video|videos|ad|ads|clip|reel|short|one|make|me|us|please|about|on|for|of|with|in|style|look|vertical|horizontal|wide|landscape|portrait|and|that|is|it|a quick|quick|second|seconds|sec|long|their|his|her)\b/gi;

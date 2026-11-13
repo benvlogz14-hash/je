@@ -425,7 +425,7 @@ async function stepVideo(p, h, kind) {
     const lk = lookFor(p);
     const notes = [lk.notes, ...(p.pkg.notes || []).filter((n) => n.target !== 'email').slice(-3).map((n) => n.text)].filter(Boolean).join(' | ');
     try {
-      const r = await eng.make({ bites: okBites, footage: ft, vertical: K.vertical, out, work, music, name: p.name, office: shortOffice(pr.office || ''), place: p.pkg.brief?.place || '', state: pr.state || '', cta: K.social ? 'Follow' : 'Vote', site: siteOf(p.pkg), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes, look: lk.look, sound: S('adSound', 'full'), prev: p.pkg.pro?.[kind]?.plan || null, onProgress: (f, t) => h.progress(f * 0.92, t) });
+      const r = await eng.make({ bites: okBites, footage: ft, vertical: K.vertical, out, work, music, name: p.name, office: shortOffice(pr.office || ''), place: p.pkg.brief?.place || '', state: pr.state || '', cta: K.social || S('purpose', 'social') !== 'campaign' ? 'Follow' : 'Vote', endFor: S('purpose', 'social') !== 'campaign' ? '' : null, site: siteOf(p.pkg), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes, look: lk.look, sound: S('adSound', 'full'), prev: p.pkg.pro?.[kind]?.plan || null, onProgress: (f, t) => h.progress(f * 0.92, t) });
       save(p.id, (pkg) => ({ pro: { ...(pkg.pro || {}), [kind]: { plan: r.plan, agent: r.agent, look: r.spec.look?.name || '', density: r.spec.look?.density || 'full', qa: r.qa || null, sounds: r.sounds || 0, tightened: r.tightened || 0, at: new Date().toISOString() } } }));
       res = r;
     } catch (e) {

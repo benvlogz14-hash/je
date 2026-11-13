@@ -226,6 +226,20 @@ function normalize(x = {}, base = BOLD) {
 const preset = (id, density = null) => { const P = PRESETS[id] || PRESETS.bold; return normalize(density ? { ...P, density } : P, P); };
 /** A look with another amount of graphics. */
 const withDensity = (look, density) => (OPTIONS.density.includes(density) ? normalize({ ...strip(look), density }, look) : look);
+/**
+ * The founders' own text choices laid over any look: { font, capFont, size: 0.7-1.5, outline: true | false, upper: true | false }.
+ * font = headlines (and captions unless capFont is given); outline true = a dark outline round captions on footage,
+ * false = a soft shadow instead.
+ */
+function withText(look, t = {}) {
+  if (!t || typeof t !== 'object') return look;
+  const x = strip(look); const size = Number(t.size) > 0 ? Math.max(0.7, Math.min(1.5, Number(t.size))) : 1;
+  const hf = font(t.font, null); const cf = font(t.capFont, null) || hf;
+  x.fonts = { ...x.fonts, ...(hf ? { head: hf } : {}), ...(cf ? { cap: cf } : {}) };
+  x.head = { ...x.head, scale: Math.max(0.6, Math.min(1.3, x.head.scale * size)), ...(t.upper != null ? { case: t.upper ? 'upper' : 'none' } : {}), ...(t.outline != null && x.layout !== 'full' ? { outline: !!t.outline } : {}) };
+  x.cap = { ...x.cap, scale: Math.max(0.5, Math.min(1.4, x.cap.scale * size)), ...(t.upper != null ? { case: t.upper ? 'upper' : 'none' } : {}), ...(t.outline != null ? { shadow: !t.outline } : {}) };
+  return normalize(x, look);
+}
 /** Every preset, the ten main styles first. */
 const list = () => [...MAIN, ...Object.keys(PRESETS).filter((id) => !MAIN.includes(id))].map((id) => { const L = preset(id); return { id, name: L.name, about: L.about, colors: [L.colors.a, L.colors.b, L.colors.c, L.accent], font: L.fonts.head, layout: L.layout, main: MAIN.includes(id) }; });
 
@@ -302,4 +316,4 @@ function strip(L) { const { sections: _s, ...rest } = L || {}; return rest; }
 /** Font files the renderer must load for a look. */
 function fontFiles(L) { return [...new Set([L.fonts.head, L.fonts.body, L.fonts.cap])].map((family) => ({ family, url: `/f/${FONTS[family]}` })); }
 
-module.exports = { PRESETS, FONTS, OPTIONS, MAIN, DENSITY, withDensity, preset, list, normalize, fromPrompt, fromWords, fontFiles, strip, contrast, guess };
+module.exports = { withText, PRESETS, FONTS, OPTIONS, MAIN, DENSITY, withDensity, preset, list, normalize, fromPrompt, fromWords, fontFiles, strip, contrast, guess };
