@@ -16,6 +16,8 @@ module.exports = {
   // Offer values go into his outreach email (Part 3 of his master prompt).
   hal: { brain: 'local', watch: { on: true, everyMin: 60, topics: 'New York politics\nConnecticut politics\nLong Island politics', useGrok: true, grokPerHour: 4, maxStories: 8 } },
   political: {
+    purpose: 'social',         // what the videos are for: 'social' (everyday content for people in office: Follow, no race language) or 'campaign' (Vote, "for the 35th")
+    adSound: 'full',           // interface sounds on the pro ads: 'full' (cuts, graphics, end card), 'light' (cuts and end card) or 'off'
     videoStyle: 'pro',         // 'pro' (motion-graphics ads from their footage, Remotion), 'campaign' (modern political ad look), 'speech' (their own speeches + B-roll) or 'pop' (bubbly)
     conceptTag: true,          // small "Concept by Euclidean Media" line on the pro ads' end card
     footageClips: 4,           // public videos downloaded per lead for 'speech' ads

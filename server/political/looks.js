@@ -29,11 +29,18 @@ const OPTIONS = {
   headPos: ['top', 'bottom'], headCase: ['upper', 'none'], headAlign: ['center', 'left'],
   keyStyle: ['box', 'underline', 'color', 'highlight', 'circle', 'sticker'], reveal: ['word', 'line', 'type', 'fade', 'blur'],
   flair: ['bold', 'cinematic', 'clean', 'news', 'grassroots', 'tiktok', 'patriotic', 'dark', 'bright', 'street', 'poster', 'explainer', 'doc', 'y2k', 'zine', 'none'],
-  capStyle: ['box', 'color', 'plain', 'underline', 'none'], capPos: ['card', 'low', 'center'], capCase: ['upper', 'none'],
+  capStyle: ['box', 'color', 'plain', 'underline', 'none'], capPos: ['card', 'low', 'center'], capCase: ['upper', 'none'], capChunk: ['words', 'phrase'],
   transition: ['wipe', 'cut', 'fade', 'flash', 'slide', 'zoom', 'mix'],
   grade: ['none', 'warm', 'cool', 'bw', 'film', 'punchy', 'dark'], texture: ['none', 'grain', 'paper', 'halftone', 'scanlines', 'stripes'],
-  plate: ['box', 'bar', 'minimal', 'none'], pill: ['tag', 'tape', 'none'], end: ['split', 'solid', 'stripes'], motion: ['snappy', 'smooth', 'calm'],
+  plate: ['box', 'bar', 'minimal', 'none'], pill: ['tag', 'tape', 'title', 'none'], end: ['split', 'solid', 'stripes', 'brand'], motion: ['snappy', 'smooth', 'calm'],
+  // How much is drawn: full = every graphic; light = headline, captions, name, proven facts; minimal = captions, the name
+  // and small fact tags only (the vertical "almost no graphics" option: the footage and their words carry it).
+  density: ['full', 'light', 'minimal'],
 };
+
+/** The ten main styles, in the order shown (the rest sit under "More styles"). */
+const MAIN = ['bold', 'pastel', 'street', 'field', 'direct', 'tiktok', 'cinematic', 'news', 'patriotic', 'dark'];
+const DENSITY = { full: 'All graphics', light: 'Fewer graphics', minimal: 'Captions only' };
 
 /** The reference ad (Larinda Hooks): the default. Other presets only list what differs. */
 const BOLD = {
@@ -47,6 +54,12 @@ const BOLD = {
 
 const PRESETS = {
   bold: { ...BOLD, about: 'The reference ad: navy, yellow and red blocks, tilted footage card, boxed key words' },
+  pastel: {
+    ...BOLD, flair: 'bold', name: 'Pastel blocks', about: 'The same build in soft colours: pastel sections, orange headlines with a black outline, yellow-on-navy key words',
+    colors: { a: '#cfe6ff', b: '#ffe9a8', c: '#ffd3c4' }, light: '#fff8e7', dark: '#1b2a6b', accent: '#ff5a36',
+    head: { pos: 'top', case: 'upper', align: 'center', keyStyle: 'box', reveal: 'word', scale: 1, outline: true, color: '#ff5a36', keyBox: '#1b2a6b', keyInk: '#ffc72c' },
+    card: { tilt: true, border: 12, radius: 22, block: true, shadow: true, borderColor: '#fff8e7' }, texture: 'grain',
+  },
   cinematic: {
     flair: 'cinematic', name: 'Cinematic', about: 'Film look: black bars, serif headlines, slow fades, warm film grade, grain', layout: 'letterbox', colors: { a: '#0b0b0d', b: '#14110e', c: '#0b0b0d' }, light: '#f4efe6', dark: '#0b0b0d',
     fonts: { head: 'DM Serif Display', body: 'Montserrat', cap: 'Inter' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'blur', scale: 0.85 },
@@ -96,10 +109,24 @@ const PRESETS = {
     transition: 'slide', grade: 'punchy', texture: 'halftone', plate: 'box', pill: 'tag', badge: false, end: 'split', motion: 'snappy',
   },
   street: {
-    flair: 'street', name: 'Street vlog', about: 'Walk-and-talk creator style: handheld full-screen footage, big friendly captions, sticker words, transit-style place tags', layout: 'full', colors: { a: '#ff6a13', b: '#1b4dff', c: '#ffd23f' }, light: '#ffffff', dark: '#14121f',
+    flair: 'street', name: 'Street vlog', about: 'Walk-and-talk creator style: full-screen footage, a flash and punch-in on every cut, big outlined captions under the face, sticker words, transit-style place tags', layout: 'full', colors: { a: '#ff6a13', b: '#1b4dff', c: '#ffd23f' }, light: '#ffffff', dark: '#14121f',
     fonts: { head: 'Archivo Black', body: 'Inter', cap: 'Archivo Black' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'sticker', reveal: 'word', scale: 0.78 },
     cap: { style: 'color', pos: 'center', case: 'none', scale: 1.05 }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false }, accent: '#ffd23f',
-    transition: 'mix', grade: 'punchy', texture: 'none', plate: 'minimal', pill: 'tag', badge: false, end: 'split', motion: 'snappy', punch: true,
+    transition: 'mix', grade: 'punchy', texture: 'none', plate: 'minimal', pill: 'tag', badge: false, end: 'split', motion: 'snappy', punch: true, angles: true,
+  },
+  field: {
+    flair: 'none', name: 'On location', about: 'To-camera and on the street: the footage fills the screen, hard cuts, small bold serif captions a phrase at a time, an orange place title, a plain brand card to end. Almost no graphics',
+    layout: 'full', density: 'minimal', angles: true, colors: { a: '#2a22d4', b: '#ff9f1c', c: '#ffc61a' }, light: '#ffffff', dark: '#10122b', accent: '#ff9f1c',
+    fonts: { head: 'DM Serif Display', body: 'Inter', cap: 'DM Serif Display' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'fade', scale: 0.7 },
+    cap: { style: 'plain', pos: 'center', case: 'none', scale: 0.92, chunk: 'phrase', shadow: true }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false },
+    transition: 'cut', grade: 'none', texture: 'none', plate: 'none', pill: 'title', badge: false, end: 'brand', motion: 'calm', punch: false,
+  },
+  direct: {
+    flair: 'none', name: 'To camera', about: 'One take cut like three cameras: wide, medium and close punch-ins on every sentence, small clean captions a phrase at a time, hard cuts, a plain end card. For announcements and explainers',
+    layout: 'full', density: 'minimal', angles: true, colors: { a: '#1d2bd8', b: '#0f1014', c: '#f2f2f2' }, light: '#ffffff', dark: '#0f1014', accent: '#ffd23f',
+    fonts: { head: 'Inter', body: 'Inter', cap: 'Inter' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'fade', scale: 0.66 },
+    cap: { style: 'plain', pos: 'center', case: 'none', scale: 0.7, chunk: 'phrase', shadow: true }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false },
+    transition: 'cut', grade: 'none', texture: 'none', plate: 'none', pill: 'none', badge: false, end: 'brand', motion: 'calm', punch: false,
   },
   poster: {
     flair: 'poster', name: 'Retro poster', about: 'Old cinema poster: marigold, magenta and teal, a turning sunburst, 3D stacked type, halftone', layout: 'card', colors: { a: '#b8126b', b: '#ffb21c', c: '#0f7c7a' }, light: '#fff4dc', dark: '#2a0b1f',
@@ -172,23 +199,49 @@ function normalize(x = {}, base = BOLD) {
     colors: { a: hex(col.a, B.colors.a), b: hex(col.b, B.colors.b), c: hex(col.c, B.colors.c) },
     light: hex(x.light, B.light), dark: hex(x.dark, B.dark), accent: hex(x.accent, B.accent || null),
     fonts: { head: font(f.head, B.fonts.head), body: font(f.body, B.fonts.body), cap: font(f.cap, B.fonts.cap) },
-    head: { pos: pick(h.pos, OPTIONS.headPos, B.head.pos), case: pick(h.case, OPTIONS.headCase, B.head.case), align: pick(h.align, OPTIONS.headAlign, B.head.align), keyStyle: pick(h.keyStyle, OPTIONS.keyStyle, B.head.keyStyle), reveal: pick(h.reveal, OPTIONS.reveal, B.head.reveal), scale: num(h.scale, 0.6, 1.3, B.head.scale) },
-    cap: { style: pick(cp.style, OPTIONS.capStyle, B.cap.style), pos: pick(cp.pos, OPTIONS.capPos, B.cap.pos), case: pick(cp.case, OPTIONS.capCase, B.cap.case), scale: num(cp.scale, 0.5, 1.4, B.cap.scale) },
+    head: { pos: pick(h.pos, OPTIONS.headPos, B.head.pos), case: pick(h.case, OPTIONS.headCase, B.head.case), align: pick(h.align, OPTIONS.headAlign, B.head.align), keyStyle: pick(h.keyStyle, OPTIONS.keyStyle, B.head.keyStyle), reveal: pick(h.reveal, OPTIONS.reveal, B.head.reveal), scale: num(h.scale, 0.6, 1.3, B.head.scale),
+      outline: h.outline != null ? !!h.outline : !!B.head.outline, color: hex(h.color, B.head.color || null), keyBox: hex(h.keyBox, B.head.keyBox || null), keyInk: hex(h.keyInk, B.head.keyInk || null) },
+    cap: { style: pick(cp.style, OPTIONS.capStyle, B.cap.style), pos: pick(cp.pos, OPTIONS.capPos, B.cap.pos), case: pick(cp.case, OPTIONS.capCase, B.cap.case), scale: num(cp.scale, 0.5, 1.4, B.cap.scale), chunk: pick(cp.chunk, OPTIONS.capChunk, B.cap.chunk || 'words'), shadow: cp.shadow != null ? !!cp.shadow : !!B.cap.shadow },
     card: { tilt: cd.tilt != null ? !!cd.tilt : B.card.tilt, border: num(cd.border, 0, 30, B.card.border), radius: num(cd.radius, 0, 60, B.card.radius), block: cd.block != null ? !!cd.block : B.card.block, shadow: cd.shadow != null ? !!cd.shadow : B.card.shadow, borderColor: hex(cd.borderColor, B.card.borderColor || '#ffffff') },
     transition: pick(x.transition, OPTIONS.transition, B.transition), grade: pick(x.grade, OPTIONS.grade, B.grade), texture: pick(x.texture, OPTIONS.texture, B.texture),
     plate: pick(x.plate, OPTIONS.plate, B.plate), pill: pick(x.pill, OPTIONS.pill, B.pill), badge: x.badge != null ? !!x.badge : !!B.badge, end: pick(x.end, OPTIONS.end, B.end),
     motion: pick(x.motion, OPTIONS.motion, B.motion), flair: pick(x.flair, OPTIONS.flair, B.flair || 'none'), punch: x.punch != null ? !!x.punch : !!B.punch, ticker: x.ticker != null ? !!x.ticker : !!B.ticker,
+    density: pick(x.density, OPTIONS.density, B.density || 'full'),
+    angles: x.angles != null ? !!x.angles : !!B.angles, // one take cut like several cameras (full-screen looks)
   };
   // Full-screen and letterbox footage can't tilt or sit on a block; the cap position must exist in that layout.
   if (L.layout === 'full' || L.layout === 'letterbox') { L.card = { ...L.card, tilt: false, block: false, border: 0, radius: 0 }; L.badge = false; }
   if (L.layout === 'full' && L.cap.pos === 'card') L.cap.pos = 'center';
+  if (L.layout !== 'full') L.angles = false;
   if (!L.accent) L.accent = L.colors.c;
+  // Captions only: the captions carry the ad, so they are always on and sit low (under the face on full-screen looks).
+  if (L.density === 'minimal') { if (L.cap.style === 'none') L.cap.style = 'color'; L.ticker = false; L.badge = false; }
   L.sections = sections(L);
+  // A headline colour of its own (pastel: orange with a dark outline) and its own key-word box, where they stay readable.
+  if (L.head.color) for (const k of ['a', 'b', 'c']) { const S = L.sections[k]; if (L.head.outline || contrast(L.head.color, S.bg) >= 2.2) S.text = L.head.color; }
+  if (L.head.keyBox) for (const k of ['a', 'b', 'c']) { const S = L.sections[k]; if (contrast(L.head.keyBox, S.bg) >= 1.6) { S.key = L.head.keyBox; S.keyText = L.head.keyInk && contrast(L.head.keyInk, S.key) >= 3 ? L.head.keyInk : readable(S.key, L.light, L.dark); } }
   return L;
 }
 
-const preset = (id) => normalize(PRESETS[id] || PRESETS.bold, PRESETS[id] || PRESETS.bold);
-const list = () => Object.entries(PRESETS).map(([id, p]) => { const L = preset(id); return { id, name: L.name, about: L.about, colors: [L.colors.a, L.colors.b, L.colors.c, L.accent], font: L.fonts.head, layout: L.layout }; });
+const preset = (id, density = null) => { const P = PRESETS[id] || PRESETS.bold; return normalize(density ? { ...P, density } : P, P); };
+/** A look with another amount of graphics. */
+const withDensity = (look, density) => (OPTIONS.density.includes(density) ? normalize({ ...strip(look), density }, look) : look);
+/**
+ * The founders' own text choices laid over any look: { font, capFont, size: 0.7-1.5, outline: true | false, upper: true | false }.
+ * font = headlines (and captions unless capFont is given); outline true = a dark outline round captions on footage,
+ * false = a soft shadow instead.
+ */
+function withText(look, t = {}) {
+  if (!t || typeof t !== 'object') return look;
+  const x = strip(look); const size = Number(t.size) > 0 ? Math.max(0.7, Math.min(1.5, Number(t.size))) : 1;
+  const hf = font(t.font, null); const cf = font(t.capFont, null) || hf;
+  x.fonts = { ...x.fonts, ...(hf ? { head: hf } : {}), ...(cf ? { cap: cf } : {}) };
+  x.head = { ...x.head, scale: Math.max(0.6, Math.min(1.3, x.head.scale * size)), ...(t.upper != null ? { case: t.upper ? 'upper' : 'none' } : {}), ...(t.outline != null && x.layout !== 'full' ? { outline: !!t.outline } : {}) };
+  x.cap = { ...x.cap, scale: Math.max(0.5, Math.min(1.4, x.cap.scale * size)), ...(t.upper != null ? { case: t.upper ? 'upper' : 'none' } : {}), ...(t.outline != null ? { shadow: !t.outline } : {}) };
+  return normalize(x, look);
+}
+/** Every preset, the ten main styles first. */
+const list = () => [...MAIN, ...Object.keys(PRESETS).filter((id) => !MAIN.includes(id))].map((id) => { const L = preset(id); return { id, name: L.name, about: L.about, colors: [L.colors.a, L.colors.b, L.colors.c, L.accent], font: L.fonts.head, layout: L.layout, main: MAIN.includes(id) }; });
 
 // ------------------------------------------------------------------ from a prompt
 
@@ -199,12 +252,14 @@ const SCHEMA = `{
  "colors": {"a": "#hex section colour 1", "b": "#hex section colour 2", "c": "#hex section colour 3"}, "accent": "#hex", "light": "#hex light text", "dark": "#hex dark text",
  "fonts": {"head": headline font, "body": small text font, "cap": captions font}  (only from: ${Object.keys(FONTS).join(', ')}),
  "head": {"pos": top|bottom, "case": upper|none, "align": center|left, "keyStyle": ${OPTIONS.keyStyle.join('|')}, "reveal": ${OPTIONS.reveal.join('|')}, "scale": 0.6-1.3},
- "cap": {"style": ${OPTIONS.capStyle.join('|')}, "pos": card|low|center, "case": upper|none, "scale": 0.5-1.4},
+ "cap": {"style": ${OPTIONS.capStyle.join('|')}, "pos": card|low|center, "case": upper|none, "scale": 0.5-1.4, "chunk": words|phrase (words = 2-3 words at a time with the spoken word marked; phrase = a whole phrase on 2-3 lines, calm), "shadow": true|false (soft shadow instead of an outline on footage)},
  "card": {"tilt": true|false, "border": 0-30, "radius": 0-60, "block": true|false (offset colour block behind), "shadow": true|false, "borderColor": "#hex"},
  "transition": ${OPTIONS.transition.join('|')} (mix = a different one on each line), "grade": ${OPTIONS.grade.join('|')}, "texture": ${OPTIONS.texture.join('|')},
- "plate": ${OPTIONS.plate.join('|')} (name plate), "pill": tag|tape|none (place labels), "badge": true|false, "end": split|solid|stripes, "motion": snappy|smooth|calm,
- "flair": bold|cinematic|clean|news|grassroots|tiktok|patriotic|dark|bright|none (the signature motion graphics: bold = colour blocks and wipes, cinematic = opening bars/gold rules/vignette, clean = gliding soft shapes, news = sweeping red bars and a corner bug, grassroots = tape/marker scribbles/doodles, tiktok = full-screen word flashes and a progress bar, patriotic = flag-stripe wipes and stars, dark = glitches and stamped words, bright = floating shapes and confetti, street = handheld vlog with sticker words and transit-style tags, poster = turning sunburst and 3D stacked type, explainer = grid paper and numbered points, doc = big quote marks and chapter titles, y2k = old computer window and sparkles, zine = ransom-note cut-out letters and torn paper),
+ "plate": ${OPTIONS.plate.join('|')} (name plate), "pill": tag|tape|title|none (place labels; title = plain coloured text over the shot), "badge": true|false, "end": split|solid|stripes|brand (brand = a plain colour card with the name, like a campaign logo), "motion": snappy|smooth|calm,
+ "flair": ${OPTIONS.flair.join('|')} (the signature motion graphics: bold = colour blocks and wipes, cinematic = opening bars/gold rules/vignette, clean = gliding soft shapes, news = sweeping red bars and a corner bug, grassroots = tape/marker scribbles/doodles, tiktok = full-screen word flashes and a progress bar, patriotic = flag-stripe wipes and stars, dark = glitches and stamped words, bright = floating shapes and confetti, street = handheld vlog with sticker words and transit-style tags, poster = turning sunburst and 3D stacked type, explainer = grid paper and numbered points, doc = big quote marks and chapter titles, y2k = old computer window and sparkles, zine = ransom-note cut-out letters and torn paper),
+ "angles": true|false (full-screen looks only: cut one take like several cameras, wide / medium / close on each sentence or clause),
  "punch": true|false (zoom punch-ins on key words), "ticker": true|false (scrolling name bar along the bottom),
+ "density": full|light|minimal (how much is drawn: full = every graphic; light = headline, captions, name and facts; minimal = captions and the name only, for "less graphics", "clean", "just captions", "let the footage breathe"),
  "notes": "anything in the request about content or pacing (which lines, length, what to open or end on), for the editor; empty if none"
 }`;
 
@@ -232,7 +287,7 @@ const WORDS = {
   cinematic: /cinema|film|movie|trailer|documentary|letterbox|serif|elegant|prestige/i, news: /news|breaking|report|headline news|ticker|cable/i,
   grassroots: /grassroots|hand.?made|handwritten|marker|paper|scrapbook|community|homemade|diy/i, tiktok: /tiktok|reels?|full.?screen|vertical video|influencer|gen ?z|captions? big/i,
   patriotic: /patriot|flag|america|red,? white|classic campaign|traditional|serious/i, dark: /dark|gritty|attack|contrast|urgent|ominous|black and red|scary|warning/i,
-  street: /zohran|mamdani|street|vlog|walk.?and.?talk|man.on.the.street|creator|handheld|organic/i, poster: /poster|bollywood|vintage|retro poster|sunburst|marquee|70s|80s/i,
+  pastel: /pastel blocks|pastel version|soft colou?rs?/i, direct: /to.?camera|direct to camera|announcement|punch.?ins?|multi.?cam|jump cuts?/i, field: /on location|explainer on the street|serif captions?|plunge|field (video|piece)|no graphics/i, street: /zohran|mamdani|street|vlog|walk.?and.?talk|man.on.the.street|creator|handheld|organic/i, poster: /poster|bollywood|vintage|retro poster|sunburst|marquee|70s|80s/i,
   explainer: /explain|policy|steps?|numbered|whiteboard|how it works|infographic/i, doc: /documentary|interview|testimonial|story|quote/i, y2k: /y2k|2000s|windows|pixel|internet|retro computer|nostalgia/i, zine: /zine|collage|cut.?out|ransom|punk|photocop/i,
   bright: /bright|pastel|fun|bubbly|playful|pop(py)?|colou?rful|cute|young/i, clean: /clean|minimal|modern|simple|apple|white|corporate|sleek/i, bold: /bold|block|original|reference|larinda|same as/i,
 };
@@ -250,6 +305,8 @@ function fromWords(text, current) {
   if (/no (tilt|angle)|straight/i.test(text)) x.card = { tilt: false };
   if (/black.?and.?white|b&w|monochrome/i.test(text)) x.grade = 'bw';
   if (/grain|vintage|retro/i.test(text)) x.texture = 'grain';
+  if (/captions? only|no graphics|just captions|minimal graphics|least graphics/i.test(text)) x.density = 'minimal';
+  else if (/less graphics|fewer graphics|light on graphics|not too (many|much) graphics|subtle/i.test(text)) x.density = 'light';
   return normalize(x, base);
 }
 
@@ -259,4 +316,4 @@ function strip(L) { const { sections: _s, ...rest } = L || {}; return rest; }
 /** Font files the renderer must load for a look. */
 function fontFiles(L) { return [...new Set([L.fonts.head, L.fonts.body, L.fonts.cap])].map((family) => ({ family, url: `/f/${FONTS[family]}` })); }
 
-module.exports = { PRESETS, FONTS, OPTIONS, preset, list, normalize, fromPrompt, fromWords, fontFiles, strip, contrast, guess };
+module.exports = { withText, PRESETS, FONTS, OPTIONS, MAIN, DENSITY, withDensity, preset, list, normalize, fromPrompt, fromWords, fontFiles, strip, contrast, guess };

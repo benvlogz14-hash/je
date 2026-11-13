@@ -832,7 +832,7 @@ r.get('/api/workers', () => ctx.store.all('workers').map((w) => ({ ...w, online:
 
 // ------------------------------------------------------------ prospects (growth)
 r.get('/api/prospects', () => ctx.store.all('prospects').reverse());
-r.post('/api/prospects', (req, b) => ctx.store.insert('prospects', { name: b.name, type: b.type || 'creator', handle: b.handle || '', platforms: b.platforms || [], why: b.why || '', angle: b.angle || '', publicContact: b.publicContact || '', stage: 'new', verified: true, source: 'manual' }));
+r.post('/api/prospects', (req, b) => ctx.store.insert('prospects', { name: b.name, type: b.type || 'creator', location: String(b.location || '').slice(0, 120), handle: b.handle || '', platforms: b.platforms || [], why: b.why || '', angle: b.angle || '', publicContact: b.publicContact || '', stage: 'new', verified: true, source: 'manual' }));
 r.patch('/api/prospects/:id', (req, b, p) => { must(ctx.store.get('prospects', p.id)); const patch = {}; for (const k of ['name', 'type', 'handle', 'stage', 'why', 'angle', 'publicContact', 'verified', 'notes', 'followers', 'location', 'footageLinks', 'videoLink', 'electionResult']) if (b[k] !== undefined) patch[k] = b[k]; events.publish('prospects', {}); return ctx.store.update('prospects', p.id, patch); });
 r.del('/api/prospects/:id', (req, b, p) => ({ ok: ctx.store.remove('prospects', p.id) }));
 r.post('/api/prospects/:id/audit', (req, b, p) => queue.enqueue('prospect.audit', { prospectId: must(ctx.store.get('prospects', p.id)).id }, { actor: actorOf(req) }));
@@ -959,11 +959,12 @@ r.get('/api/prospects/:id/runs', (req, b, p) => {
   return { jobs, waiting, steps: polPkg.STEPS.map(([key, label]) => ({ key, label })), pkgSteps: pr.pkg?.steps || {}, noAds: pr.pkg?.noAds || null, error: pr.pkg?.error || null };
 });
 // Looks for the pro ads: presets, a look designed from a typed description, per lead or as the default.
-r.get('/api/political/looks', () => ({ presets: require('./political/looks').list(), current: ctx.setting('political.proLook', null) }));
+r.get('/api/political/looks', () => { const looks = require('./political/looks'); return { presets: looks.list(), density: Object.entries(looks.DENSITY).map(([id, name]) => ({ id, name })), current: ctx.setting('political.proLook', null) }; });
 r.post('/api/political/looks/design', async (req, b) => {
   const looks = require('./political/looks');
   if (b.preset && !looks.PRESETS[b.preset]) throw new HttpError(400, 'Unknown look');
   const r = b.prompt ? await looks.fromPrompt(String(b.prompt)) : { look: looks.preset(b.preset || 'bold'), notes: '', by: 'preset' };
+  if (b.density) r.look = looks.withDensity(r.look, String(b.density));
   const out = { look: looks.strip(r.look), name: r.look.name, prompt: String(b.prompt || '').slice(0, 1500), preset: b.preset || null, notes: r.notes, by: r.by, at: now() };
   if (b.save) { ctx.store.setSettings({ political: { proLook: out } }); audit.log(actorOf(req), 'political.look_default', { look: out.name }); }
   return out;
@@ -996,8 +997,9 @@ r.post('/api/prospects/:id/look', (req, b, p) => {
   const pr = must(ctx.store.get('prospects', p.id));
   const looks = require('./political/looks');
   if (b.clear) { ctx.store.update('prospects', pr.id, (cur) => ({ pkg: { ...(cur.pkg || {}), proLook: null } })); events.publish('prospects', { id: pr.id }); return { ok: true }; }
-  if (!b.prompt && !looks.PRESETS[b.preset]) throw new HttpError(400, 'Pick a look or describe one.');
-  return queue.enqueue('political.restyle', { prospectId: pr.id, name: pr.name, preset: b.prompt ? null : b.preset, prompt: String(b.prompt || '').slice(0, 1500) }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}` });
+  const density = looks.OPTIONS.density.includes(b.density) ? b.density : null; // how much graphics: full | light | minimal
+  if (!b.prompt && !looks.PRESETS[b.preset] && !density) throw new HttpError(400, 'Pick a look or describe one.');
+  return queue.enqueue('political.restyle', { prospectId: pr.id, name: pr.name, preset: b.prompt ? null : b.preset || null, prompt: String(b.prompt || '').slice(0, 1500), density }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}` });
 });
 // The candidate's own footage, uploaded on the lead (used by the ad styles made from their footage; uploads come first).
 r.post('/api/prospects/:id/footage/upload', async (req, res, p) => {
@@ -1789,6 +1791,28 @@ r.get('/api/web/image', async (req, res) => {
 r.post('/api/prospects/:id/videos/find', botErr((req, b, p) => require('./political/videofind').forLead(p.id, { actor: actorOf(req) })));
 r.patch('/api/prospects/:id/videos', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); const list = (pr.footageFound || []).map((v) => (v.url === b.url ? { ...v, off: !!b.off } : v)); ctx.store.update('prospects', p.id, { footageFound: list }); events.publish('prospects', { id: p.id }); return { footageFound: list }; });
 // Hands-off ads: for each lead, find their videos on Google (if nothing was uploaded) and make the whole package.
+// ---- Batches of videos (Ad machine → Videos): baseline templates, typed orders, many politicians at once.
+// The baselines ("About a topic", "Quick video", "Meet them"...), the styles and the graphics levels, for the order box.
+r.get('/api/political/templates', () => { const looks = require('./political/looks'); return { templates: require('./political/templates').list(), styles: looks.list(), density: Object.entries(looks.DENSITY).map(([id, name]) => ({ id, name })), mix: require('./political/batch').MIX, fonts: Object.keys(looks.FONTS), purpose: ctx.setting('political.purpose', 'social') }; });
+// How a typed box of orders will be read (one video per line), before anything is made.
+r.post('/api/political/orders/preview', (req, b) => { const looks = require('./political/looks'); const T = require('./political/templates'); return { orders: T.parseOrders(String(b.text || ''), looks).map((o) => ({ ...o, templateName: T.byId(o.template)?.name || o.template, styleName: o.style ? looks.PRESETS[o.style]?.name : null })) }; });
+const batchOpts = (b) => { const looks = require('./political/looks'); return { text: String(b.text || '').slice(0, 6000), orders: Array.isArray(b.orders) ? b.orders.slice(0, 40).map(String) : null, count: Math.max(0, Math.min(40, Number(b.count) || 0)), styles: b.styles === 'mix' ? 'mix' : Array.isArray(b.styles) ? b.styles.filter((x) => x === 'mix' || looks.PRESETS[x]) : null, density: looks.OPTIONS.density.includes(b.density) ? b.density : null, wide: !!b.wide, prompt: String(b.prompt || '').slice(0, 1500), purpose: ['social', 'campaign'].includes(b.purpose) ? b.purpose : null, textStyle: b.textStyle && typeof b.textStyle === 'object' ? { font: String(b.textStyle.font || '').slice(0, 40), capFont: String(b.textStyle.capFont || '').slice(0, 40), size: Number(b.textStyle.size) || 1, ...(b.textStyle.outline != null ? { outline: !!b.textStyle.outline } : {}), ...(b.textStyle.upper != null ? { upper: !!b.textStyle.upper } : {}) } : null }; };
+// Make a batch of videos for one candidate from their footage (job political.batch). Nothing is sent or posted.
+r.post('/api/prospects/:id/videos', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); return queue.enqueue('political.batch', { prospectId: pr.id, name: pr.name, ...batchOpts(b) }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}`, title: `Videos for ${pr.name}` }); });
+// The same for several politicians by name or id; a name not on the board is added as a political lead first.
+r.post('/api/political/videos', botErr((req, b) => require('./political/batch').start({ ids: Array.isArray(b.ids) ? b.ids : [], names: Array.isArray(b.names) ? b.names.map(String) : [], actor: actorOf(req), ...batchOpts(b) })));
+// A candidate's finished batch videos, newest first, and the last batch's result (what was skipped and why).
+r.get('/api/prospects/:id/videos', (req, b, p) => { must(ctx.store.get('prospects', p.id)); return require('./political/batch').list(p.id); });
+r.get('/api/prospects/:id/videos/:vid/:what', (req, res, p) => {
+  const pr = ctx.store.get('prospects', p.id); const v = (pr?.videos || []).find((x) => x.id === p.vid); if (!v) return send(res, 404, { error: 'Not found' });
+  const f = p.what === 'poster' ? v.poster : p.what === 'wide' ? v.wideFile : v.file;
+  if (!f || !fs.existsSync(f) || !paths.inside(path.join(paths.root, 'political'), f)) return send(res, 404, { error: 'Not made' });
+  if (req.query.reveal && ctx.revealFile) { ctx.revealFile(f); return send(res, 200, { ok: true }); }
+  return serveFile(req, res, f, { download: req.query.download ? path.basename(f) : null });
+}, { stream: true });
+// Open a batch video in the Studio as layers (their footage cut by cut, captions as titles, music on its own track).
+r.post('/api/prospects/:id/videos/:vid/studio', async (req, b, p) => { must(ctx.store.get('prospects', p.id)); try { return await require('./political/batch').toStudio(p.id, p.vid); } catch (e) { throw new HttpError(400, e.message); } });
+r.del('/api/prospects/:id/videos/:vid', (req, b, p) => ({ ok: require('./political/batch').remove(p.id, p.vid) }));
 r.post('/api/political/autoads', botErr((req, b) => require('./political/autoads').start({ ids: Array.isArray(b.ids) ? b.ids : [], names: Array.isArray(b.names) ? b.names : [], actor: actorOf(req) })));
 r.post('/api/data/:id/ads', botErr((req, b, p) => { const names = Array.isArray(b.only) ? b.only : []; if (!names.length) throw new HttpError(400, 'Tick the people to make ads for.'); dataMod().toLeads(p.id, { only: names, by: actorOf(req) }); return require('./political/autoads').start({ names, actor: actorOf(req) }); }));
 

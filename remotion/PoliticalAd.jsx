@@ -38,6 +38,8 @@ export function layout(w, h, look) {
   else if (kind === 'letterbox') card = v ? { x: 0, y: Math.round(h * 0.3), w, h: Math.round(h * 0.4) } : { x: 0, y: Math.round(h * 0.11), w, h: Math.round(h * 0.62) };
   else if (kind === 'frame') card = v ? { x: 54, y: Math.round(h * 0.28), w: w - 108, h: Math.round(h * 0.45) } : { x: Math.round((w - 1240) / 2), y: Math.round(h * 0.235), w: 1240, h: Math.round(h * 0.62) };
   else card = v ? { x: Math.round(w * 0.045), y: Math.round(h * 0.285), w: Math.round(w * 0.91), h: Math.round(h * 0.44) } : { x: Math.round((w - 1120) / 2), y: Math.round(h * 0.25), w: 1120, h: Math.round(h * 0.59) };
+  // Captions only: no headline above the footage, so the footage takes the room.
+  if (look.density === 'minimal' && (kind === 'card' || kind === 'frame')) card = v ? { x: Math.round(w * 0.05), y: Math.round(h * 0.15), w: Math.round(w * 0.9), h: Math.round(h * 0.6) } : { x: Math.round((w - 1420) / 2), y: Math.round(h * 0.085), w: 1420, h: Math.round(h * 0.74) };
   const pad = v ? 60 : 120;
   const above = { y: v ? Math.round(h * 0.07) : 22, h: card.y - (v ? Math.round(h * 0.07) : 22) - (v ? 28 : 18) };
   const belowY = card.y + card.h + (v ? 36 : 18);
@@ -70,6 +72,12 @@ function useFonts(fonts) {
 
 const sp = (frame, fps, at, cfg = {}) => spring({ frame: frame - at, fps, config: { damping: 16, stiffness: 170, mass: 0.8, ...cfg } });
 const segAt = (segs, t) => segs.find((s) => t >= s.at && t < s.at + s.dur);
+/** Full-screen, fast looks: a short white flash and a punch-in that settles on every cut (the street / creator edit). */
+const cutFlash = (look) => look.layout === 'full' && look.motion === 'snappy';
+const onFootageOf = (look, inCard) => inCard || look.layout === 'full';
+/** Where the speaker's face should sit in a full-screen vertical frame (fraction of the height), so the headline has
+ *  the top and the captions sit under the chin. */
+const faceTarget = (look) => (look.density === 'minimal' ? 0.36 : 0.42);
 /** The transition into section i ('mix' varies it from one line to the next). */
 const MIX = ['wipe', 'zoom', 'flash', 'slide', 'cut', 'zoom', 'wipe', 'flash'];
 const transAt = (look, i) => (look.transition === 'mix' ? MIX[Math.max(0, i) % MIX.length] : look.transition);
@@ -113,9 +121,10 @@ function Background({ segs, endCard, look, fps }) {
     return <AbsoluteFill style={{ background: before }}><AbsoluteFill style={{ background: now, opacity: p }} />{tex}</AbsoluteFill>;
   }
   const p = interpolate(local, [0, 11], [0, 1], { extrapolateRight: 'clamp', easing: Easing.bezier(0.7, 0, 0.2, 1) });
-  const slant = H * 0.45; const span = W + slant + 120; const edge = p * span - slant;
+  const slant = H * 0.45; const span = W + slant + 240; const edge = p * span - slant - 240 * (1 - p);
   return (
     <AbsoluteFill style={{ background: before }}>
+      <AbsoluteFill style={{ background: schemeOf(look, cur.bg).key, clipPath: `polygon(0 0, ${edge + 230}px 0, ${edge + 230 + slant}px ${H}px, 0 ${H}px)` }} />
       <AbsoluteFill style={{ background: schemeOf(look, cur.bg).block, clipPath: `polygon(0 0, ${edge + 110}px 0, ${edge + 110 + slant}px ${H}px, 0 ${H}px)` }} />
       <AbsoluteFill style={{ background: now, clipPath: `polygon(0 0, ${edge}px 0, ${edge + slant}px ${H}px, 0 ${H}px)` }} />
       {tex}
@@ -162,6 +171,7 @@ function TransitionFX({ segs, look, fps, endAt }) {
   if (!hits.length) return null;
   const [at, idx] = hits[hits.length - 1];
   const local = frame - at; const tr = transAt(look, idx);
+  if (cutFlash(look) && ['flash', 'zoom', 'cut', 'slide'].includes(tr)) return null;
   if (tr === 'flash') return <AbsoluteFill style={{ background: '#ffffff', opacity: interpolate(local, [0, 7], [0.85, 0], { extrapolateRight: 'clamp' }) }} />;
   if (tr === 'fade') return <AbsoluteFill style={{ background: look.dark, opacity: interpolate(local, [0, 9], [0.7, 0], { extrapolateRight: 'clamp' }) }} />;
   if (tr === 'wipe' && (look.layout === 'full' || look.layout === 'letterbox')) {
@@ -181,7 +191,7 @@ function Headline({ seg, L, look, fps }) {
   const over = look.layout === 'full';
   const color = over ? ON_FOOTAGE.color : S.text;
   const caseUp = look.head.case === 'upper';
-  const size = fitWords(head.words.map((x) => x.w), look.fonts.head, L.head.size, L.head.w * 0.97, L.head.h, { upper: caseUp, gap: 0.24, lh: 1.12, extra: (w) => (head.words.find((x) => x.w === w)?.key ? 0.3 : 0) });
+  const size = fitWords(head.words.map((x) => x.w), look.fonts.head, Math.round(L.head.size * (seg.hook ? 1.1 : 1)), L.head.w * 0.97, L.head.h, { upper: caseUp, gap: 0.24, lh: 1.12, extra: (w) => (head.words.find((x) => x.w === w)?.key ? 0.3 : 0) });
   const first = Math.round((head.words.find((x) => x.t != null)?.t ?? seg.at) * fps);
   const lineS = sp(frame, fps, first, M.word);
   const fade = interpolate(frame, [first, first + 12], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
@@ -200,11 +210,12 @@ function Headline({ seg, L, look, fps }) {
           const blurIn = look.head.reveal === 'blur';
           const bp = blurIn ? interpolate(frame - at, [0, 14], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }) : 1;
           const opacity = look.head.reveal === 'word' ? (shown ? clamp(s * 1.6, 0, 1) : 0) : look.head.reveal === 'line' ? (shown ? clamp(lineS * 1.6, 0, 1) : 0) : blurIn ? (frame >= at ? bp : 0) : 1;
-          const move = look.head.reveal === 'word' ? `translateY(${interpolate(s, [0, 1], [size * 0.35, 0])}px)` : blurIn ? `scale(${1.06 - 0.06 * bp})` : 'none';
+          const move = look.head.reveal === 'word' ? `translateY(${interpolate(s, [0, 1], [size * 0.35, 0])}px) scale(${interpolate(s, [0, 1], [1 + 0.2 * M.rot, 1])})` : blurIn ? `scale(${1.06 - 0.06 * bp})` : 'none';
           const blurF = blurIn ? `blur(${(1 - bp) * 14}px)` : 'none';
           let text = x.w;
+          const ol = (node) => (look.head.outline && !over ? <Outlined stroke={look.dark} width={Math.max(4, size * 0.09)} color={color}>{node}</Outlined> : node);
           if (look.head.reveal === 'type') { const n = Math.floor(clamp((frame - at) / Math.max(1, fps * 0.035), 0, x.w.length)); text = <>{x.w.slice(0, n)}<span style={{ opacity: 0 }}>{x.w.slice(n)}</span></>; }
-          if (!x.key) { const sc = scrap(k); return <span key={k} style={{ display: 'inline-block', opacity, transform: move, filter: blurF, ...(sc || {}), ...(sc ? { transform: `${move === 'none' ? '' : move} ${sc.transform}` } : {}) }}>{text}</span>; }
+          if (!x.key) { const sc = scrap(k); return <span key={k} style={{ display: 'inline-block', opacity, transform: move, filter: blurF, ...(sc || {}), ...(sc ? { transform: `${move === 'none' ? '' : move} ${sc.transform}` } : {}) }}>{sc ? text : ol(text)}</span>; }
           const ks = look.head.keyStyle; const kpop = look.head.reveal === 'word' ? s : lineS;
           if (ks === 'circle') { const cp = interpolate(frame - at, [3, 17], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }); return <span key={k} style={{ display: 'inline-block', position: 'relative', opacity, transform: move }}><span style={{ position: 'relative', color: over ? ON_FOOTAGE.color : S.text }}>{text}</span><svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ position: 'absolute', left: '-14%', top: '-22%', width: '128%', height: '140%', overflow: 'visible' }}><path d="M8 58 C 4 22, 70 6, 94 30 C 108 52, 70 96, 30 90 C 6 86, 2 60, 14 40 C 24 26, 46 18, 62 16" fill="none" stroke={S.accent} strokeWidth={Math.max(4, size * 0.06)} strokeLinecap="round" vectorEffect="non-scaling-stroke" pathLength={1} strokeDasharray="1 1" strokeDashoffset={1 - cp} /></svg></span>; }
           if (ks === 'sticker') return <span key={k} style={{ display: 'inline-block', opacity, transform: `rotate(${-4 * M.rot}deg) scale(${interpolate(kpop, [0, 1], [0.5, 1])})`, filter: `drop-shadow(0 ${size * 0.06}px 0 ${look.dark})` }}><Outlined stroke={S.accent} width={size * 0.16} color={look.light}>{text}</Outlined></span>;
@@ -236,14 +247,46 @@ function CardContent({ seg, fps, w, h, look, keyTimes }) {
   if (c.kind === 'video' || c.kind === 'photo') {
     const abs = seg.at + t;
     let push = c.pushLen ? 1 + 0.06 * clamp((abs - c.pushAt) / c.pushLen, 0, 1) : 1 + 0.05 * clamp(t / seg.dur, 0, 1);
-    if (look.punch && c.kind === 'video') for (const k of keyTimes || []) push += 0.09 * interpolate(abs - k, [-0.02, 0.08, 0.85, 1.0], [0, 1, 1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+    if ((look.punch || seg.rally) && c.kind === 'video' && !c.broll) for (const k of (keyTimes || []).filter((x) => look.punch || (x >= seg.at && x < seg.at + seg.dur))) push += 0.09 * interpolate(abs - k, [-0.02, 0.08, 0.85, 1.0], [0, 1, 1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
     const shake = look.flair === 'street' && c.kind === 'video' ? `translate(${(Math.sin(abs * 1.7) * 6 + Math.sin(abs * 4.3) * 3).toFixed(1)}px, ${(Math.cos(abs * 1.3) * 5 + Math.sin(abs * 3.1) * 2).toFixed(1)}px) rotate(${(Math.sin(abs * 0.9) * 0.4).toFixed(2)}deg) ` : '';
     if (shake) push += 0.03; // room for the handheld drift
-    const style = { width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${Math.round((c.fx ?? 0.5) * 100)}% ${Math.round((c.fy ?? 0.35) * 100)}%`, transform: `${shake}scale(${push})`, transformOrigin: `${Math.round((c.fx ?? 0.5) * 100)}% 40%`, filter: GRADE[look.grade] || 'none' };
+    // A pause closed up inside a line is a jump cut: every other piece is punched in a little, like an editor would.
+    if (c.jumps?.length && c.jumps.filter((j) => abs >= j).length % 2 === 1) push *= 1.08;
+    // Full-screen vertical: lift the shot so the face sits above the captions (text never covers a face).
+    // Also: one take cut like several cameras (c.angles): each framing is a zoom centred on the face.
+    let lift = 0; let oy = 40;
+    if (look.layout === 'full' && c.kind === 'video' && !c.broll) {
+      const z = c.angles && c.face ? (c.angles.filter((a) => abs >= a.t - 0.001).pop() || c.angles[0]).z : 1; // never zoom without knowing where the face is
+      const fy = c.face ? clamp(c.face.y, 0.15, 0.7) : 0.36;
+      const need = h > w && c.face ? clamp(fy - faceTarget(look), 0, 0.2) : 0;
+      let S = push * z; if ((S - 1) * (1 - fy) < need) S = 1 + need / (1 - fy);
+      push = S; oy = fy * 100;
+      lift = clamp(need + (z > 1.3 && h > w ? 0.02 : 0), 0, (1 - fy) * (S - 1)); // never past the picture's edge
+    }
+    // Centre the face: a wide picture in a narrower window shows only a slice of its width; the slice is placed so the
+    // face sits in the middle of it (not at the same fraction it had in the full picture), kept inside the picture.
+    const vis = c.ar && c.kind === 'video' ? clamp((w / h) / c.ar, 0.05, 1) : 1;
+    const px = vis < 0.999 ? clamp(((c.fx ?? 0.5) - vis / 2) / (1 - vis), 0, 1) : 0.5;
+    const ox = vis < 0.999 ? clamp(((c.fx ?? 0.5) - px * (1 - vis)) / vis, 0.1, 0.9) : (c.fx ?? 0.5);
+    if (c.fit && c.kind === 'video') {
+      // No face was found in this wide shot: show all of it over a blurred copy instead of cropping blind.
+      const from = Math.round((c.from || 0) * fps);
+      return (
+        <AbsoluteFill style={{ background: '#000' }}>
+          <OffthreadVideo src={c.src} muted startFrom={from} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', filter: 'blur(26px) brightness(0.55)', transform: 'scale(1.2)' }} />
+          <OffthreadVideo src={c.src} muted startFrom={from} style={{ position: 'absolute', left: 0, top: '22%', width: '100%', height: '56%', objectFit: 'contain', filter: GRADE[look.grade] || 'none', transform: `scale(${1 + 0.04 * clamp(t / seg.dur, 0, 1)})` }} />
+        </AbsoluteFill>
+      );
+    }
+    const style = { width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${(px * 100).toFixed(1)}% ${Math.round((c.fy ?? 0.35) * 100)}%`, transform: `translateY(${(-lift * h).toFixed(1)}px) ${shake}scale(${push})`, transformOrigin: `${(ox * 100).toFixed(1)}% ${oy.toFixed(1)}%`, filter: GRADE[look.grade] || 'none' };
     return c.kind === 'photo' ? <Img src={c.src} style={style} /> : <OffthreadVideo src={c.src} muted startFrom={Math.round((c.from || 0) * fps)} style={style} />;
   }
   if (c.kind === 'map') return <MapCard c={c} w={w} h={h} fps={fps} look={look} />;
   if (c.kind === 'stat') return <StatCard c={c} w={w} h={h} fps={fps} look={look} />;
+  if (c.kind === 'checklist') return <ChecklistCard c={c} w={w} h={h} fps={fps} look={look} seg={seg} />;
+  if (c.kind === 'compare') return <CompareCard c={c} w={w} h={h} fps={fps} look={look} />;
+  if (c.kind === 'timeline') return <TimelineCard c={c} w={w} h={h} fps={fps} look={look} />;
+  if (c.kind === 'clip') return <ClipCard c={c} w={w} h={h} fps={fps} look={look} />;
   return <AbsoluteFill style={{ background: look.dark }} />;
 }
 
@@ -253,21 +296,22 @@ function Card({ seg, prevTilt, L, look, fps, keyTimes, children }) {
   const S = schemeOf(look, seg.bg); const M = MOTION[look.motion] || MOTION.snappy;
   const tiltOn = look.card.tilt;
   const flat = look.layout === 'full' || look.layout === 'letterbox';
-  const enter = seg.enter ? sp(frame, fps, 0, M.enter) : 1;
+  const enter = seg.enter ? sp(frame + 5, fps, 0, M.enter) : 1; // already on its way in on the first frame (the cover)
   const tiltS = sp(frame, fps, 0, { damping: 18, stiffness: 160 });
   const tilt = tiltOn ? interpolate(tiltS, [0, 1], [prevTilt ?? seg.tilt ?? 0, seg.tilt ?? 0]) : 0;
   const trans = transAt(look, seg.idx ?? 0);
   let punch = 1; let tx = 0;
   if (!seg.enter) {
-    if (trans === 'zoom') punch = 1 + 0.12 * (1 - sp(frame, fps, 0, { damping: 18, stiffness: 200 }));
+    if (cutFlash(look)) punch = 1 + 0.13 * (1 - sp(frame, fps, 0, { damping: 200, stiffness: 300 }));
+    else if (trans === 'zoom') punch = 1 + 0.12 * (1 - sp(frame, fps, 0, { damping: 18, stiffness: 200 }));
     else if (trans === 'slide' && seg.cut) tx = interpolate(sp(frame, fps, 0, M.enter), [0, 1], [W * 0.5, 0]);
     else if (look.layout === 'card' && look.motion === 'snappy') punch = 1 + 0.03 * (1 - sp(frame, fps, 0, { damping: 13, stiffness: 220 }));
   }
   const { x, y, w, h } = L.card; const border = Math.round(look.card.border * (L.v ? 1 : 0.85));
-  const ty = flat ? 0 : interpolate(enter, [0, 1], [L.v ? 900 : 700, 0]);
+  const ty = flat ? 0 : interpolate(enter, [0, 1], [L.v ? 620 : 480, 0]);
   const rot = tilt + (tiltOn ? interpolate(enter, [0, 1], [10, 0]) : 0);
   const sc = punch * (flat && seg.enter ? interpolate(enter, [0, 1], [1.08, 1]) : 1);
-  const op = flat && seg.enter ? clamp(enter * 1.4, 0, 1) : 1;
+  const op = 1; // the first frame is the cover: the footage is fully there from frame 0
   const r = look.card.radius;
   const openBars = look.flair === 'cinematic' && seg.enter ? `inset(${(1 - clamp(enter, 0, 1)) * 50}% 0)` : 'none';
   return (
@@ -276,25 +320,27 @@ function Card({ seg, prevTilt, L, look, fps, keyTimes, children }) {
       <div style={{ position: 'absolute', inset: 0, background: look.card.borderColor, borderRadius: r, boxShadow: look.card.shadow && !flat ? '0 22px 50px rgba(0,0,0,0.28)' : 'none', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', inset: border, overflow: 'hidden', background: '#0c1020', borderRadius: Math.max(0, r - border) }}>
           <CardContent seg={seg} fps={fps} w={w - border * 2} h={h - border * 2} look={look} keyTimes={keyTimes} />
-          {!['grassroots', 'zine', 'y2k'].includes(look.flair) ? <CardFlair look={look} w={w - border * 2} h={h - border * 2} frame={frame} fps={fps} seg={seg} /> : null}
+          {!['grassroots', 'zine', 'y2k'].includes(look.flair) && (look.density || 'full') === 'full' ? <CardFlair look={look} w={w - border * 2} h={h - border * 2} frame={frame} fps={fps} seg={seg} /> : null}
+          {look.layout === 'full' ? <AbsoluteFill style={{ background: 'rgba(8,12,30,0.16)' }} /> : null}
+          {cutFlash(look) && !seg.enter ? <AbsoluteFill style={{ background: '#ffffff', opacity: interpolate(frame, [0, 5], [0.5, 0], { extrapolateRight: 'clamp' }) }} /> : null}
           {children}
         </div>
       </div>
-      {['grassroots', 'zine', 'y2k'].includes(look.flair) ? <CardFlair look={look} w={w} h={h} frame={frame} fps={fps} seg={seg} /> : null}
+      {['grassroots', 'zine', 'y2k'].includes(look.flair) && (look.density || 'full') !== 'minimal' ? <CardFlair look={look} w={w} h={h} frame={frame} fps={fps} seg={seg} /> : null}
     </div>
   );
 }
 
 // ------------------------------------------------------------------ captions (the spoken word marked)
 
-function chunkWords(words, max) {
+function chunkWords(words, max, chars = 16) {
   const out = []; let cur = [];
   const flush = () => { if (cur.length) out.push(cur); cur = []; };
   words.forEach((x, i) => {
     const prev = words[i - 1];
-    if (cur.length && (cur.length >= max || x.s - prev.e > 0.4 || x.b !== prev.b || cur.map((c) => c.w).join(' ').length + x.w.length > 16)) flush();
+    if (cur.length && (cur.length >= max || x.s - prev.e > 0.4 || x.b !== prev.b || cur.map((c) => c.w).join(' ').length + x.w.length > chars)) flush();
     cur.push(x);
-    if (/[.!?,;:]["”']?$/.test(x.w)) flush();
+    if ((chars > 16 ? /[.!?]["”']?$/ : /[.!?,;:]["”']?$/).test(x.w) || (chars > 16 && cur.length >= 4 && /[,;:]$/.test(x.w))) flush();
   });
   flush();
   return out;
@@ -303,24 +349,26 @@ function chunkWords(words, max) {
 function Captions({ words, L, look, fps, seg, offset, inCard }) {
   const frame = useCurrentFrame() + offset; const t = frame / fps; // absolute time
   const { width: W } = useVideoConfig();
-  const max = look.cap.scale > 1.05 ? 2 : 3;
-  const chunks = useMemo(() => chunkWords(words || [], max), [words, max]);
+  const phrase = look.cap.chunk === 'phrase'; const max = phrase ? 8 : look.cap.scale > 1.05 ? 2 : 3;
+  const chunks = useMemo(() => chunkWords(words || [], max, phrase ? 38 : 16), [words, max, phrase]);
   const k = chunks.findIndex((c, i) => t >= c[0].s - 0.04 && t < Math.min(chunks[i + 1] ? chunks[i + 1][0].s - 0.04 : Infinity, c[c.length - 1].e + 0.45));
   if (k < 0 || look.cap.style === 'none') return null;
   const S = schemeOf(look, seg.bg); const M = MOTION[look.motion] || MOTION.snappy;
   const c = chunks[k]; const at = Math.round((c[0].s - 0.04) * fps);
   const s = sp(frame, fps, at, { damping: 14, stiffness: 240 });
   const maxW = (inCard ? L.card.w : W - 80) * 0.9;
-  const size = fitWords(c.map((x) => x.w), look.fonts.cap, L.cap, maxW, L.cap * 2.5, { upper: look.cap.case === 'upper', gap: 0.24, lh: 1.12, extra: () => 0.22, maxLines: 2 });
+  const capW = phrase && !inCard ? Math.min(maxW, W * (W > 1300 ? 0.5 : 0.7)) : maxW;
+  const size = fitWords(c.map((x) => x.w), look.fonts.cap, L.cap, capW, L.cap * (phrase ? 3.8 : 2.5), { upper: look.cap.case === 'upper', gap: 0.24, lh: 1.12, extra: () => (phrase ? 0 : 0.22), maxLines: phrase ? 3 : 2 });
   const onFootage = inCard || look.layout === 'full';
   const base = onFootage ? ON_FOOTAGE.color : S.text;
-  const pos = inCard ? { position: 'absolute', left: 0, right: 0, bottom: L.card.h * 0.07 } : { position: 'absolute', left: 40, right: 40, top: L.capY - size * 0.6 };
+  const pos = inCard ? { position: 'absolute', left: 0, right: 0, bottom: L.card.h * 0.07 } : { position: 'absolute', left: (W - capW) / 2 - 10, width: capW + 20, top: L.capY - size * 0.6 };
+  const soft = look.cap.shadow && onFootageOf(look, inCard);
   return (
-    <div style={{ ...pos, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: size * 0.22, fontFamily: look.fonts.cap, fontSize: size, lineHeight: 1.12, textTransform: look.cap.case === 'upper' ? 'uppercase' : 'none', transform: `scale(${interpolate(s, [0, 1], [0.86, 1])})` }}>
+    <div style={{ ...pos, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: size * 0.22, fontFamily: look.fonts.cap, fontSize: size, lineHeight: 1.12, textTransform: look.cap.case === 'upper' ? 'uppercase' : 'none', textShadow: soft ? '0 3px 14px rgba(0,0,0,0.75), 0 1px 3px rgba(0,0,0,0.8)' : 'none', opacity: phrase && k > 0 ? clamp(s * 2.2, 0, 1) : 1, transform: `scale(${interpolate(s, [0, 1], [phrase ? 0.97 : 0.86, 1])})` }}>
       {c.map((x, i) => {
         const on = look.cap.style !== 'plain' && t >= x.s - 0.03 && (i === c.length - 1 || t < c[i + 1].s - 0.03);
         const pop = on ? sp(frame, fps, Math.round((x.s - 0.03) * fps), M.pop) : 1;
-        const plain = (color) => (onFootage ? <Outlined key={i} stroke={ON_FOOTAGE.stroke} width={size * 0.14} color={color}>{x.w}</Outlined> : <span key={i} style={{ color }}>{x.w}</span>);
+        const plain = (color) => (onFootage && !soft ? <Outlined key={i} stroke={ON_FOOTAGE.stroke} width={size * 0.14} color={color}>{x.w}</Outlined> : <span key={i} style={{ color }}>{x.w}</span>);
         if (!on) return plain(base);
         if (look.cap.style === 'box') return <span key={i} style={{ display: 'inline-block', background: S.capKey, color: '#fff', padding: `0 ${size * 0.1}px`, transform: `rotate(${-2 * M.rot}deg) scale(${interpolate(pop, [0, 1], [1.18, 1])})` }}>{x.w}</span>;
         if (look.cap.style === 'underline') return <span key={i} style={{ display: 'inline-block', position: 'relative' }}>{plain(base)}<span style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: Math.max(5, size * 0.09), background: look.accent, transform: `scaleX(${pop})`, transformOrigin: '0 50%' }} /></span>;
@@ -337,7 +385,8 @@ function Plate({ seg, L, look, fps, name, office }) {
   const S = schemeOf(look, seg.bg);
   const s = sp(frame, fps, Math.round(0.25 * fps), M.enter);
   const size = L.plate.size; const onFootage = L.plate.inside || look.layout === 'full';
-  const wrap = { position: 'absolute', left: L.plate.x, top: L.plate.y, opacity: clamp(s * 1.5, 0, 1), transform: `translateX(${interpolate(s, [0, 1], [-60, 0])}px)` };
+  const gone = look.layout === 'full' && seg.tag ? interpolate(frame, [Math.round(3.0 * fps), Math.round(3.3 * fps)], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }) : 1;
+  const wrap = { position: 'absolute', left: L.plate.x, top: L.plate.y, opacity: clamp(s * 1.5, 0, 1) * gone, transform: `translateX(${interpolate(s, [0, 1], [-60, 0])}px)` };
   if (look.plate === 'bar') return (
     <div style={{ ...wrap, display: 'flex', alignItems: 'stretch', clipPath: `inset(0 ${(1 - s) * 100}% 0 0)` }}>
       <div style={{ width: size * 0.2, background: look.accent }} />
@@ -374,6 +423,9 @@ function Pill({ text, L, look, fps, seg, right }) {
   const below = L.belowFree && look.layout !== 'full';
   const pos = below ? { top: L.card.y + L.card.h + (L.v ? 60 : 14) } : { top: L.card.y + (look.layout === 'full' ? (L.v ? 300 : 40) : 30) };
   const side = right ? { right: (look.layout === 'full' ? 0 : L.card.x) + 40 } : { left: L.card.x + 40 };
+  if (look.pill === 'title') return (
+    <div style={{ position: 'absolute', left: 60, right: 60, top: Math.round(L.card.y + L.card.h * (L.v ? 0.3 : 0.2)), textAlign: 'center', fontFamily: look.fonts.head, fontSize: L.v ? 62 : 54, lineHeight: 1.1, color: look.accent, textShadow: '0 3px 14px rgba(0,0,0,0.7), 0 1px 3px rgba(0,0,0,0.8)', opacity: clamp(s * 2, 0, 1) }}>{text}</div>
+  );
   if (look.flair === 'street') return (
     <div style={{ position: 'absolute', ...pos, ...side, transform: `scale(${interpolate(s, [0, 1], [0.4, 1])})`, opacity: clamp(s * 2, 0, 1), display: 'flex', alignItems: 'center', gap: 14, background: look.dark, borderRadius: 999, padding: L.v ? '8px 26px 8px 8px' : '6px 20px 6px 6px' }}>
       <div style={{ width: L.v ? 56 : 44, height: L.v ? 56 : 44, borderRadius: '50%', background: look.sections.a.bg, color: '#fff', fontFamily: look.fonts.head, fontSize: L.v ? 32 : 26, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{String(text).trim()[0]?.toUpperCase()}</div>
@@ -431,6 +483,13 @@ function Glyph({ k, c }) {
     scales: <g stroke={c} strokeWidth="6" fill="none"><path d="M50 16 V82 M28 82 H72 M18 30 H82" /><path d="M18 30 L8 56 H28 Z M82 30 L72 56 H92 Z" fill={c} /></g>,
     people: <g fill={c}><circle cx="34" cy="34" r="12" /><circle cx="66" cy="34" r="12" /><path d="M12 80 Q14 52 34 52 Q54 52 56 80 Z" /><path d="M44 80 Q46 52 66 52 Q86 52 88 80 Z" /></g>,
     science: <g stroke={c} strokeWidth="7" fill="none" strokeLinecap="round"><path d="M34 14 Q66 32 34 50 Q2 68 34 86" /><path d="M66 14 Q34 32 66 50 Q98 68 66 86" /><path d="M38 26 H62 M38 74 H62 M44 50 H56" /></g>,
+    child: <g fill={c}><circle cx="50" cy="28" r="15" /><path d="M22 86 Q24 48 50 48 Q76 48 78 86 Z" /><circle cx="26" cy="58" r="7" /><circle cx="74" cy="58" r="7" /></g>,
+    senior: <g fill={c}><circle cx="42" cy="22" r="12" /><path d="M26 88 L34 44 Q42 36 52 44 L58 88 Z" /><path d="M66 46 Q78 46 78 58 V88" stroke={c} strokeWidth="6" fill="none" strokeLinecap="round" /></g>,
+    drop: <path d="M50 10 Q78 46 78 62 A28 28 0 0 1 22 62 Q22 46 50 10 Z" fill={c} />,
+    wheat: <g stroke={c} strokeWidth="6" fill={c} strokeLinecap="round"><path d="M50 90 V34" fill="none" />{[36, 50, 64].map((y) => <g key={y}><ellipse cx="38" cy={y} rx="9" ry="5" transform={`rotate(-35 38 ${y})`} /><ellipse cx="62" cy={y} rx="9" ry="5" transform={`rotate(35 62 ${y})`} /></g>)}<ellipse cx="50" cy="20" rx="6" ry="10" /></g>,
+    wifi: <g stroke={c} strokeWidth="9" fill="none" strokeLinecap="round"><path d="M14 44 Q50 10 86 44" /><path d="M28 58 Q50 38 72 58" /><circle cx="50" cy="76" r="6" fill={c} /></g>,
+    bolt: <path d="M58 8 L22 56 H46 L40 92 L78 42 H54 Z" fill={c} />,
+    ballot: <g fill={c}><rect x="14" y="48" width="72" height="40" rx="5" /><rect x="30" y="42" width="40" height="6" fill="#fff" /><path d="M36 14 H64 V44 H36 Z" /><path d="M42 28 L48 34 L58 22" stroke="#fff" strokeWidth="5" fill="none" strokeLinecap="round" /></g>,
     star: <path d="M50 10 L61 38 L91 39 L67 58 L76 88 L50 70 L24 88 L33 58 L9 39 L39 38 Z" fill={c} />,
     capitol: <g fill={c}><rect x="47.5" y="14" width="5" height="9" /><path d="M30 46 Q30 24 50 23 Q70 24 70 46 Z" /><rect x="26" y="46" width="48" height="5" />{[30, 38, 46, 54, 62, 70].map((x) => <rect key={x} x={x - 2} y="53" width="4" height="18" />)}<rect x="22" y="72" width="56" height="5" /><rect x="18" y="78" width="64" height="6" /></g>,
   }[k];
@@ -459,11 +518,13 @@ function Icons({ icons, L, look, fps, seg }) {
  *  badge, a quote's attribution, or a callout of their own words. Springs in with an overshoot. */
 function Tag({ tag, L, look, fps, seg }) {
   const frame = useCurrentFrame();
-  const s = sp(frame, fps, Math.round(0.45 * fps), { damping: 8, stiffness: 180, mass: 0.8 });
-  const S = schemeOf(look, seg.bg); const v = L.v; const u = v ? 1.4 : 0.9;
+  const full0 = look.layout === 'full'; const wait = full0 && seg.plate ? 3.35 : 0.45;
+  if (full0 && seg.plate && seg.dur < 4.6) return null; // no room beside the name on a short opening line
+  const s = sp(frame, fps, Math.round(wait * fps), { damping: 8, stiffness: 180, mass: 0.8 });
+  const S = schemeOf(look, seg.bg); const v = L.v; const u = (v ? 1.4 : 0.9) * (look.density === 'minimal' ? 0.82 : 1);
   const full = look.layout === 'full';
   const plateBelow = seg.plate && !L.plate.inside && look.plate !== 'none';
-  const top = full ? Math.round(L.card.h * (v ? 0.66 : 0.6)) : L.card.y + L.card.h + (v ? 26 : 10) + (plateBelow ? Math.round(L.plate.size * (v ? 2.2 : 1.9)) : 0);
+  const top = full ? Math.round(L.card.h * (v ? 0.735 : 0.6)) : L.card.y + L.card.h + (v ? 26 : 10) + (plateBelow ? Math.round(L.plate.size * (v ? 2.2 : 1.9)) : 0);
   const left = full ? (v ? 64 : 90) : L.card.x + (v ? 30 : 40);
   const wrap = { position: 'absolute', left, top, transformOrigin: '0% 50%', transform: `rotate(${interpolate(s, [0, 1], [-10, look.card.tilt ? -2 : 0])}deg) scale(${s})` };
   const dark = look.dark; const light = look.light; const key = S.key; const keyText = S.keyText;
@@ -473,6 +534,15 @@ function Tag({ tag, L, look, fps, seg }) {
       <div>
         <div style={{ fontFamily: look.fonts.head, fontSize: 46 * u, lineHeight: 1, color: dark, textTransform: 'uppercase' }}>{tag.title}</div>
         {tag.sub ? <div style={{ fontFamily: look.fonts.body, fontSize: 24 * u, color: look.sections.c?.bg || look.accent, textTransform: 'uppercase', marginTop: 4 }}>{tag.sub}</div> : null}
+      </div>
+    </div>
+  );
+  if (tag.kind === 'bill') return (
+    <div style={{ ...wrap, display: 'flex', alignItems: 'center', gap: 16 * u, background: light, borderRadius: 12, padding: `${10 * u}px ${24 * u}px ${10 * u}px ${10 * u}px`, boxShadow: `0 ${8 * u}px 0 ${dark}`, borderLeft: `${10 * u}px solid ${key}` }}>
+      <div style={{ width: 58 * u, height: 58 * u, padding: 6 * u, boxSizing: 'border-box' }}><Glyph k="capitol" c={dark} /></div>
+      <div>
+        <div style={{ fontFamily: look.fonts.head, fontSize: 38 * u, lineHeight: 1.05, color: dark, textTransform: 'uppercase', maxWidth: L.card.w * 0.7 }}>{tag.title}</div>
+        {tag.status ? <div style={{ display: 'inline-block', fontFamily: look.fonts.body, fontWeight: 800, fontSize: 20 * u, color: keyText, background: key, textTransform: 'uppercase', letterSpacing: '0.05em', padding: `${2 * u}px ${10 * u}px`, marginTop: 5 * u, borderRadius: 4 }}>{tag.status}</div> : null}
       </div>
     </div>
   );
@@ -577,6 +647,94 @@ function StatCard({ c, w, h, fps, look }) {
   );
 }
 
+// ------------------------------------------------------------------ graphic cards (cut in while the voice carries on)
+
+/** The dark panel the graphic cards sit on (the look's first colour, or its dark when that colour is light). */
+function panel(look) { const A0 = look.sections.a; return lum(A0.bg) > 0.35 ? { bg: look.dark, text: look.light, accent: look.accent } : { bg: A0.bg, text: A0.text, accent: A0.accent }; }
+
+/** A list of three that ticks as each one is said. Items carry the time they're spoken. */
+function ChecklistCard({ c, w, h, fps, look, seg }) {
+  const frame = useCurrentFrame(); const A = panel(look);
+  const base = Math.round(Math.min(w * 0.12, (h * 0.72) / c.items.length / 1.5));
+  const size = Math.min(...c.items.map((it) => fitWords(it.text.split(' '), look.fonts.head, base, w * 0.66, base * 1.3, { upper: true, maxLines: 1, min: 28 })));
+  return (
+    <AbsoluteFill style={{ background: A.bg, justifyContent: 'center', padding: `0 ${w * 0.09}px`, gap: size * 0.5 }}>
+      {c.items.map((it, i) => {
+        const at = Math.max(4 + i * 4, Math.round((it.t - seg.at) * fps));
+        const s = sp(frame, fps, i * 4, { damping: 13, stiffness: 180 }); const tick = sp(frame, fps, at, { damping: 9, stiffness: 240 });
+        return (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: size * 0.4, opacity: clamp(s * 1.6, 0, 1), transform: `translateX(${(1 - s) * -60}px)` }}>
+            <div style={{ width: size * 1.05, height: size * 1.05, flex: 'none', borderRadius: size * 0.18, border: `${Math.max(4, size * 0.08)}px solid ${A.text}`, background: tick > 0.05 ? A.accent : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg viewBox="0 0 100 100" width="76%" height="76%" style={{ transform: `scale(${tick})` }}><path d="M18 54 L42 76 L84 26" fill="none" stroke="#fff" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </div>
+            <div style={{ fontFamily: look.fonts.head, fontSize: size, lineHeight: 1.05, color: A.text, textTransform: 'uppercase' }}>{it.text}</div>
+          </div>
+        );
+      })}
+    </AbsoluteFill>
+  );
+}
+
+/** Before and after: two bars sized by the two numbers they said, the second landing as they say it. */
+function CompareCard({ c, w, h, fps, look }) {
+  const frame = useCurrentFrame(); const A = panel(look);
+  const n = (x) => Number(String(x).replace(/[^\d.]/g, '')) || 0; const a = n(c.a), b = n(c.b); const top = Math.max(a, b) || 1;
+  const g1 = sp(frame, fps, 3, { damping: 16, stiffness: 120 }); const g2 = sp(frame, fps, Math.round(0.7 * fps), { damping: 11, stiffness: 150 });
+  const unit = c.unit === '%' ? '%' : c.unit ? ` ${c.unit}` : ''; const big = Math.round(Math.min(w * 0.13, h * 0.16));
+  const bar = (v, g, col, label) => (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%', gap: big * 0.14 }}>
+      <div style={{ fontFamily: look.fonts.head, fontSize: big, lineHeight: 1, color: A.text, opacity: clamp(g * 1.5, 0, 1) }}>{String(label)}{unit}</div>
+      <div style={{ width: '70%', height: `${Math.max(6, (v / top) * 62 * g)}%`, background: col, borderRadius: `${big * 0.12}px ${big * 0.12}px 0 0` }} />
+    </div>
+  );
+  return (
+    <AbsoluteFill style={{ background: A.bg, padding: `${h * 0.1}px ${w * 0.1}px 0`, flexDirection: 'row', alignItems: 'flex-end', gap: w * 0.06 }}>
+      {bar(a, g1, mix(A.bg, A.text, 0.45), c.a)}{bar(b, g2, A.accent, c.b)}
+    </AbsoluteFill>
+  );
+}
+
+/** Two years on a line, the line drawing from the first to the second. */
+function TimelineCard({ c, w, h, fps, look }) {
+  const frame = useCurrentFrame(); const A = panel(look);
+  const p = interpolate(frame, [0.25 * fps, 1.3 * fps], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.bezier(0.6, 0, 0.3, 1) });
+  const s1 = sp(frame, fps, 2, { damping: 11, stiffness: 180 }); const s2 = sp(frame, fps, Math.round(1.25 * fps), { damping: 9, stiffness: 200 });
+  const big = Math.round(Math.min(w * 0.14, h * 0.2)); const x0 = w * 0.24; const x1 = w * 0.76; const y = h * 0.6; const dot = big * 0.3;
+  return (
+    <AbsoluteFill style={{ background: A.bg }}>
+      <div style={{ position: 'absolute', left: x0, top: y - 4, width: x1 - x0, height: 8, background: mix(A.bg, A.text, 0.25) }} />
+      <div style={{ position: 'absolute', left: x0, top: y - 4, width: (x1 - x0) * p, height: 8, background: A.accent }} />
+      {[[x0, c.from, s1, A.text], [x1, c.to, s2, A.accent]].map(([x, label, s, col], i) => (
+        <React.Fragment key={i}>
+          <div style={{ position: 'absolute', left: x - dot / 2, top: y - dot / 2, width: dot, height: dot, borderRadius: '50%', background: col, transform: `scale(${s})` }} />
+          <div style={{ position: 'absolute', left: x - big * 1.5, width: big * 3, top: y - big * 1.5, textAlign: 'center', fontFamily: look.fonts.head, fontSize: big, lineHeight: 1, color: col, transform: `translateY(${(1 - s) * 30}px)`, opacity: clamp(s * 1.5, 0, 1) }}>{label}</div>
+        </React.Fragment>
+      ))}
+    </AbsoluteFill>
+  );
+}
+
+/** A press clipping: a real headline from the research, as a paper cut-out with the outlet's name and date. */
+function ClipCard({ c, w, h, fps, look }) {
+  const frame = useCurrentFrame(); const A = panel(look);
+  const s = sp(frame, fps, 2, { damping: 12, stiffness: 150 }); const pw = w * 0.84; const pad = pw * 0.07;
+  const size = fitWords(String(c.title).split(/\s+/), 'Georgia', Math.round(Math.min(w * 0.075, h * 0.1)), pw - pad * 2, h * 0.46, { maxLines: 6, min: 22, lh: 1.2, gap: 0.26 });
+  const hl = interpolate(frame, [0.5 * fps, 1.2 * fps], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+  // A torn lower edge, the same every frame.
+  const teeth = Array.from({ length: 28 }, (_, i) => `${(i / 27) * 100}% ${100 - (Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1) * 3.2}%`).join(', ');
+  return (
+    <AbsoluteFill style={{ background: A.bg, alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ width: pw, background: '#f6f1e4', color: '#16161a', padding: `${pad * 0.8}px ${pad}px ${pad * 1.3}px`, boxShadow: '0 18px 0 rgba(0,0,0,0.28)', transform: `rotate(${interpolate(s, [0, 1], [-7, -1.6])}deg) scale(${interpolate(s, [0, 1], [0.7, 1])})`, opacity: clamp(s * 1.6, 0, 1), clipPath: `polygon(0 0, 100% 0, ${teeth.split(', ').reverse().join(', ')})` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: '3px solid #16161a', paddingBottom: size * 0.2, marginBottom: size * 0.35 }}>
+          <div style={{ fontFamily: look.fonts.head, fontSize: size * 0.62, textTransform: 'uppercase', letterSpacing: '0.02em' }}>{c.outlet}</div>
+          {c.date ? <div style={{ fontFamily: look.fonts.body, fontSize: size * 0.3, opacity: 0.7 }}>{c.date}</div> : null}
+        </div>
+        <div style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontWeight: 700, fontSize: size, lineHeight: 1.2, backgroundImage: `linear-gradient(${look.accent}66, ${look.accent}66)`, backgroundRepeat: 'no-repeat', backgroundSize: `${hl * 100}% 38%`, backgroundPosition: '0 88%', display: 'inline' }}>{c.title}</div>
+      </div>
+    </AbsoluteFill>
+  );
+}
+
 // ------------------------------------------------------------------ end card
 
 function EndCard({ e, look, fps, L }) {
@@ -592,22 +750,26 @@ function EndCard({ e, look, fps, L }) {
   if (look.end === 'stripes') deco = (
     <AbsoluteFill>{Array.from({ length: 7 }).map((_, i) => { const s = sp(frame, fps, 2 + i * 2, { damping: 20, stiffness: 140 }); return <div key={i} style={{ position: 'absolute', left: 0, top: i * (H * 0.035), width: W * s, height: H * 0.035, background: i % 2 ? look.light : look.accent }} />; })}</AbsoluteFill>
   );
-  const nameColor = A.text;
+  const brand = look.end === 'brand';
+  const nameColor = brand ? (contrast(look.accent, A.bg) >= 2 ? look.accent : A.text) : A.text;
   const pd = Math.round(Math.min(W, H) * (L.v ? 0.44 : 0.34)); const ps = sp(frame, fps, 1, { damping: 8, stiffness: 150 });
   return (
     <AbsoluteFill>
       {deco}
       <AbsoluteFill style={{ alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: big * 0.08, paddingTop: look.end === 'stripes' ? H * 0.12 : 0 }}>
-        {e.portrait ? (
+        {e.portrait && !brand ? (
           <div style={{ width: pd, height: pd, borderRadius: '50%', border: `${Math.round(pd * 0.07)}px solid ${B.bg === A.bg ? look.accent : B.bg}`, overflow: 'hidden', transform: `scale(${ps})`, boxShadow: `0 ${pd * 0.04}px 0 ${look.dark}`, marginBottom: big * 0.1, background: look.dark }}>
             <OffthreadVideo src={e.portrait.src} muted startFrom={Math.round((e.portrait.from || 0) * fps)} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${Math.round((e.portrait.fx ?? 0.5) * 100)}% 30%`, filter: GRADE[look.grade] || 'none' }} />
           </div>
         ) : null}
-        {e.cta ? <div style={{ fontFamily: look.fonts.head, fontSize: big * 0.42, color: A.keyText, background: A.key, padding: `0 ${big * 0.12}px`, borderRadius: look.card.radius ? 12 : 0, transform: `rotate(${-2 * M.rot}deg) scale(${at(0)})`, textTransform: up ? 'uppercase' : 'none' }}>{e.cta}</div> : null}
+        {e.cta && !brand ? <div style={{ fontFamily: look.fonts.head, fontSize: big * 0.42, color: A.keyText, background: A.key, padding: `0 ${big * 0.12}px`, borderRadius: look.card.radius ? 12 : 0, transform: `rotate(${-2 * M.rot}deg) scale(${at(0)})`, textTransform: up ? 'uppercase' : 'none' }}>{e.cta}</div> : null}
         <div style={{ fontFamily: look.fonts.head, fontSize: nameSize, color: nameColor, textTransform: up ? 'uppercase' : 'none', lineHeight: 0.98, textAlign: 'center', maxWidth: W * 0.9, transform: `translateY(${(1 - at(1)) * 80}px)`, opacity: clamp(at(1) * 1.5, 0, 1) }}>
           {look.end === 'split' ? <Outlined stroke={look.dark} width={10} color={nameColor}>{e.name}</Outlined> : e.name}
         </div>
+        {e.for ? <div style={{ fontFamily: look.fonts.head, fontSize: big * 0.36, lineHeight: 1, color: contrast(look.accent, A.bg) >= 2 ? look.accent : A.text, textTransform: up ? 'uppercase' : 'none', transform: `scale(${at(2)})` }}>{e.for}</div> : null}
         {e.sub ? <div style={{ fontFamily: look.fonts.body, fontSize: big * 0.2, color: look.dark, background: look.light === A.bg ? B.bg : look.light, padding: `${big * 0.04}px ${big * 0.16}px`, textTransform: 'uppercase', letterSpacing: '0.04em', transform: `scale(${at(2)})` }}>{e.sub}</div> : null}
+        {e.line ? <div style={{ fontFamily: look.fonts.head, fontSize: fitWords(String(e.line).split(/\s+/), look.fonts.head, Math.round(big * 0.34), W * 0.8, big * 0.9, { upper: up, maxLines: 2, min: 24 }), lineHeight: 1.12, color: brand ? A.text : look.light, background: brand ? 'transparent' : look.dark, padding: brand ? 0 : `${big * 0.06}px ${big * 0.16}px`, textTransform: up ? 'uppercase' : 'none', textAlign: 'center', maxWidth: W * 0.82, marginTop: big * 0.08, opacity: clamp(at(4) * 1.4, 0, 1), transform: `translateY(${(1 - at(4)) * 40}px)` }}>“{String(e.line).replace(/[.!]+$/, '')}{/!$/.test(String(e.line)) ? '!' : '.'}”</div> : null}
+        {e.date ? <div style={{ fontFamily: look.fonts.body, fontWeight: 800, fontSize: big * 0.2, color: A.text, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: big * 0.06, opacity: at(4) }}>{e.date}</div> : null}
         {e.site ? <div style={{ fontFamily: look.fonts.body, fontSize: big * 0.17, color: A.text, marginTop: big * 0.06, opacity: at(3) }}>{e.site}</div> : null}
       </AbsoluteFill>
       {e.tag ? <div style={{ position: 'absolute', bottom: L.v ? 70 : 26, width: '100%', textAlign: 'center', fontFamily: look.fonts.body, fontSize: L.v ? 22 : 18, color: A.text, opacity: 0.8 * at(4) }}>{e.tag}</div> : null}
@@ -629,10 +791,11 @@ export const PoliticalAd = ({ spec }) => {
   const keyTimes = (spec.segs || []).flatMap((s) => (s.head?.words || []).filter((w) => w.key && w.t != null).map((w) => w.t));
   const capsInCard = (look.cap.pos === 'card' && look.layout !== 'full') || (look.layout === 'letterbox' && W > H);
   const t = frame / fps; const now = segAt(segs, t);
+  const dens = look.density || 'full';
   return (
     <AbsoluteFill style={{ overflow: 'hidden' }}>
       <Background segs={segs} endCard={spec.end} look={look} fps={fps} />
-      <FlairUnder segs={segs} look={look} L={L} fps={fps} endAt={spec.end?.at} />
+      {dens !== 'minimal' ? <FlairUnder segs={segs} look={look} L={L} fps={fps} endAt={spec.end?.at} /> : null}
       {segs.map((seg, i) => (
         <Sequence key={`s${i}`} from={F(seg.at)} durationInFrames={Math.max(1, F(seg.at + seg.dur) - F(seg.at))} layout="none">
           <Card seg={{ ...seg, idx: i, cut: i > 0 && segs[i - 1].card?.src !== seg.card?.src }} prevTilt={i > 0 && !seg.enter ? segs[i - 1].tilt : null} L={L} look={look} fps={fps} keyTimes={keyTimes}>
@@ -640,7 +803,7 @@ export const PoliticalAd = ({ spec }) => {
           </Card>
           {seg.pill && look.pill !== 'none' ? <Pill text={seg.pill} L={L} look={look} fps={fps} seg={seg} right={!L.v || !!seg.plate} /> : null}
           {seg.badge && look.badge ? <Badge L={L} look={look} fps={fps} /> : null}
-          {seg.icons?.length && seg.card?.kind === 'video' && look.layout !== 'full' && (i === 0 || segs[i - 1].icons?.join() !== seg.icons.join() || segs[i - 1].card?.kind !== 'video') ? <Icons icons={seg.icons} L={L} look={look} fps={fps} seg={seg} /> : null}
+          {seg.icons?.length && seg.card?.kind === 'video' && look.layout !== 'full' && dens === 'full' && (i === 0 || segs[i - 1].icons?.join() !== seg.icons.join() || segs[i - 1].card?.kind !== 'video') ? <Icons icons={seg.icons} L={L} look={look} fps={fps} seg={seg} /> : null}
           {seg.tag ? <Tag tag={seg.tag} L={L} look={look} fps={fps} seg={seg} /> : null}
         </Sequence>
       ))}
@@ -653,7 +816,7 @@ export const PoliticalAd = ({ spec }) => {
       {now ? <Headline seg={now} L={L} look={look} fps={fps} /> : null}
       {!look.ticker ? <Progress look={look} fps={fps} total={spec.total} until={spec.end ? spec.end.at : spec.total} /> : null}
       {look.ticker && spec.ticker ? <Ticker text={spec.ticker} look={look} fps={fps} until={spec.end ? spec.end.at : spec.total} /> : null}
-      <FlairOver segs={segs} look={look} L={L} fps={fps} spec={spec} />
+      {dens === 'full' ? <FlairOver segs={segs} look={look} L={L} fps={fps} spec={spec} /> : null}
       {spec.end ? (
         <Sequence from={F(spec.end.at)} durationInFrames={Math.max(1, F(spec.end.dur))} layout="none">
           <EndCard e={spec.end} look={look} fps={fps} L={L} />
