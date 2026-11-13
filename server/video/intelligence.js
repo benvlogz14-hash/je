@@ -199,6 +199,10 @@ function topicHook(name) {
   const out = []; for (const w of ws.slice(i)) { if (out.length >= 2 && HOOK_BREAK.has(w.toLowerCase())) break; out.push(w); if (out.length >= 4) break; }
   return out.length ? `${out.join(' ')}...` : '';
 }
+/** The AI sometimes copies the reply format's own hints instead of writing ("<=60 chars, curiosity-driven" as a clip's
+ *  title, Nov 13). Those fields are dropped, so the clip keeps its normal title/hook/caption instead. */
+const ECHO = /^\s*<=?\s*\d+\s*(chars|words)\b|curiosity-driven$|^2-5 word on-screen title|^1-2 sentence social caption$|^why it (will )?works?$|^what this version tests$|^a different opening headline$/i;
+function unecho(x) { const o = { ...x }; for (const k of ['title', 'hook', 'caption', 'reason']) if (typeof o[k] === 'string' && ECHO.test(o[k].trim())) delete o[k]; if (Array.isArray(o.hashtags) && o.hashtags.every((h) => /^#?tag$/i.test(String(h)))) delete o.hashtags; return o; }
 function cleanHook(hook, { spoken = '', name = '' } = {}) {
   let h = String(hook || '').replace(/["“”]/g, '').replace(/\s+/g, ' ').trim();
   const norm = (t) => String(t).toLowerCase().replace(/[^a-z0-9' ]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -350,7 +354,7 @@ async function discoverClips(asset, transcript, { count = 6, jobId, exclude = []
           const chosen = []; const seen = new Set();
           for (const x of r.json?.clips || []) {
             const c = cands[Number(x.pick) - 1]; if (!c || seen.has(c)) continue; seen.add(c);
-            chosen.push({ ...fallback(c, chosen.length), ...x, start: c.start, end: c.end, keep: c.keep, span: c.span, score: Math.round(c.score), reason: `${x.reason || ''}${c.why.length ? ` (${c.why.join(', ')})` : ''}`.trim(), punchIns: Array.isArray(x.punchIns) && x.punchIns.length ? x.punchIns : zoomsFor(c, analysis), agent: `${r.provider}:${r.model}` });
+            chosen.push({ ...fallback(c, chosen.length), ...unecho(x), start: c.start, end: c.end, keep: c.keep, span: c.span, score: Math.round(c.score), reason: `${x.reason || ''}${c.why.length ? ` (${c.why.join(', ')})` : ''}`.trim(), punchIns: Array.isArray(x.punchIns) && x.punchIns.length ? x.punchIns : zoomsFor(c, analysis), agent: `${r.provider}:${r.model}` });
             if (chosen.length >= count) break;
           }
           for (const c of cands) { if (chosen.length >= count) break; if (!seen.has(c)) { seen.add(c); chosen.push(fallback(c, chosen.length)); } }
@@ -417,4 +421,4 @@ function transcriptExcerpt(transcript, start, end, pad = 20) {
   return (transcript.segments || []).filter((s) => s.e > start - pad && s.s < end + pad).map((s) => `[${s.s.toFixed(1)}] ${s.t}`).join('\n').slice(0, 6000);
 }
 
-module.exports = { needsRedo, wordsFromWhisper, segmentsFromWords, whisperLocal, cleanHook, topicHook, TASTE_RULES, transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };
+module.exports = { unecho, needsRedo, wordsFromWhisper, segmentsFromWords, whisperLocal, cleanHook, topicHook, TASTE_RULES, transcribe, discoverClips, planRevision, transcriptExcerpt, normalizeClips };

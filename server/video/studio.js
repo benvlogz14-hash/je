@@ -446,8 +446,14 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
   f.push(`${audio.map((a) => `[${a}]`).join('')}amix=inputs=${audio.length}:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95[aout]`);
 
   const enc = ff.pickEncoder();
-  args.push('-filter_complex', f.join(';'), '-map', '[vout]', '-map', '[aout]', '-t', num(dur), '-r', String(fps), ...ff.encoderArgs(enc, 18), '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', outPath);
-  await ff.ffmpegWithProgress(args, { totalSec: dur, onProgress, cwd: paths.root, signal });
+  const run = (e) => ff.ffmpegWithProgress([...args, '-filter_complex', f.join(';'), '-map', '[vout]', '-map', '[aout]', '-t', num(dur), '-r', String(fps), ...ff.encoderArgs(e, 18), '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', outPath], { totalSec: dur, onProgress, cwd: paths.root, signal });
+  try { await run(enc); } catch (err) {
+    // The graphics card's encoder (NVENC/QSV/AMF) can refuse a job now and then (busy with a render, a driver hiccup).
+    // Only then is the export made again on the computer's own encoder; exports that work are unchanged.
+    if (enc === 'libx264' || signal?.aborted || err.canceled) throw err;
+    warnings.add(`The graphics card's encoder stopped (${require('../jobs/queue').ffmpegReason(err.message).slice(0, 140)}), so this export was made with the computer's own encoder.`);
+    await run('libx264');
+  }
   return { outPath, duration: dur, warnings: [...warnings] };
 }
 

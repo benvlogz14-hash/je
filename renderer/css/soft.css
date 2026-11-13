@@ -50,8 +50,7 @@
 /* ---- buttons: pills; main buttons keep their own mint green (Ryan: "I liked the buttons green"), approvals (moss) are the green gradient */
 :root:not([data-night]) .btn { border-color: transparent; }
 :root:not([data-night]) .btn:not(:is(.primary, .soft, .gold, .moss, .coral, .lav, .slate, .sky, .rose, .ghost)) { --b-bg: var(--surface); box-shadow: 0 0 0 1px var(--line-strong) inset; }
-:root:not([data-night]) .btn.moss { --b-fg: #fff; --b-line: #1d9a47; background: var(--go); color: #fff; box-shadow: 0 6px 16px -8px rgba(31, 168, 79, 0.7); }
-:root:not([data-night]) .btn.moss:not(:disabled):hover { background: var(--go); filter: brightness(1.05); }
+:root:not([data-night]) .btn.moss { --b-bg: #cdeccf; --b-fg: #2c6a37; --b-line: #9dd4a3; } /* the main button's mint, a shade greener (Ryan: "a slighter greener shade of the right button") */
 :root:not([data-night]) .btn.ghost { box-shadow: none; }
 
 /* ---- segmented controls and tabs: grey pill track, the picked one a white pill */

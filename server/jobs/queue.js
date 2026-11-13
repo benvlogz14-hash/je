@@ -34,6 +34,16 @@ function setGate(fn) { gate = fn; }
 function publish(job) { events.publish('job', slim(job), { coalesceKey: `job:${job.id}` }); }
 function slim(j) { const { log, ...rest } = j; return { ...rest, logTail: (log || []).slice(-3) }; }
 
+/** FFmpeg's real reason, not its last line. Its errors start with "[filter @ 0x...]" and end with a generic
+ *  "Conversion failed!", so the line that says what went wrong is the last one that sounds like an error. */
+function ffmpegReason(raw) {
+  const NOISE = /^(Conversion failed!?|Metadata|encoder|Stream #|Duration|configuration|built with|Press \[q\]|frame=|size=|video:|Input #|Output #|  )|lib\w+\s+\d/i;
+  const lines = String(raw).split('|').map((x) => x.trim().replace(/^(Details:\s*)?.*?exited with code -?\d+:\s*/i, '').replace(/^(\[[^\]]*@[^\]]*\]\s*)+/, '')).filter((x) => x && !NOISE.test(x));
+  const bad = /error|invalid|failed|cannot|could not|unable|not found|no such|unknown|unsupported|out of memory|too (many|large|big)|incompatible|no capable|not (supported|available)|exceed|denied/i;
+  // The first error is the cause; the ones after it ("Error initializing filters", "Error while filtering") just follow from it.
+  const generic = /^(Error (initializing|while (filtering|processing|decoding|opening|encoding)|reinitializing)|Task finished with error|Nothing was written|Terminating thread)/i;
+  return lines.find((x) => bad.test(x) && !generic.test(x)) || lines.find((x) => bad.test(x)) || lines[lines.length - 1] || 'unknown error';
+}
 function enqueue(type, payload = {}, opts = {}) {
   if (!handlers[type]) throw new Error(`Unknown job type ${type}`);
   if (opts.dedupeKey) {
@@ -95,7 +105,7 @@ async function execute(job) {
       const plain = /matches no streams|does not contain any stream|Invalid data found|moov atom not found/i.test(raw) ? "The video file can't be read as video (it may be audio only, damaged or still downloading). Upload the .mp4 again."
         : /No such file or directory/i.test(raw) ? 'A file it needs is missing (moved or deleted). Upload it again.'
         : /No space left on device/i.test(raw) ? 'The disk is full. Free some space, then Retry.'
-        : /exited with code/i.test(raw) && raw.length > 300 ? `The video tool stopped: ${raw.split('|').map((x) => x.trim()).filter((x) => x && !/^\[|Metadata|encoder|Stream #|Duration|configuration|built with|lib\w+\s+\d/i.test(x)).slice(-1)[0] || 'unknown error'}`.slice(0, 220) : null;
+        : /exited with code/i.test(raw) && raw.length > 300 ? `The video tool stopped: ${ffmpegReason(raw)}`.slice(0, 300) : null;
       if (plain) e = Object.assign(new Error(plain), { permanent: e.permanent || /can't be read|missing|disk is full/.test(plain), notConnected: e.notConnected, detail: raw.slice(0, 2000) });
       const permanent = e.permanent || e.notConnected;
       const willRetry = !permanent && cur.attempts < cur.maxAttempts;
@@ -207,4 +217,4 @@ function stats() {
   return { paused, running: by('running'), queued: by('queued'), waitingAgent: by('waiting_agent'), failed24h: all.filter((j) => j.status === 'failed' && (j.finishedAt || '') > day).length, done24h: all.filter((j) => j.status === 'done' && (j.finishedAt || '') > day).length, localRunning: [...running.keys()] };
 }
 
-module.exports = { register, enqueue, start, stop, tick, cancel, retry, setPaused, setGate, lease, heartbeat, stats, handlers, get paused() { return paused; }, slim, publish };
+module.exports = { ffmpegReason, register, enqueue, start, stop, tick, cancel, retry, setPaused, setGate, lease, heartbeat, stats, handlers, get paused() { return paused; }, slim, publish };
