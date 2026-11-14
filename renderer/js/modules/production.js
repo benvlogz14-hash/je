@@ -47,6 +47,7 @@ export function Production() {
     </div>
     <${HealthBanner} clientId=${clientId} />
     ${client?.quota ? html`<${QuotaStrip} client=${client} />` : null}
+    ${client?.quota ? html`<${AutoPanel} client=${client} />` : null}
     <${Intake} clients=${clients || []} clientId=${clientId} setClientId=${setClientId} assets=${assets || []} jobs=${jobs || []} clipped=${new Set((clips || []).map((c) => c.assetId))} setDetail=${setDetail} setShotsOf=${setShotsOf} />
     ${shotsOf ? html`<${ShotsDrawer} asset=${shotsOf} onClose=${() => setShotsOf(null)} />` : null}
     ${detail ? html`<${FootageDrawer} id=${detail} onClose=${() => setDetail(null)} onShots=${(a) => { setDetail(null); setShotsOf(a); }} />` : null}
@@ -69,6 +70,43 @@ function QuotaStrip({ client }) {
     <div class="col" style="gap:6px"><span class="eyebrow">Next ${client.schedule.bufferDays || 2} days</span><${QuotaBar} q=${q} /></div>
     ${[['Posted today', q.postedToday], ['Scheduled', q.scheduled], ['In review', q.inReview], ['In production', q.inProduction], ['Open slots', q.open], ['Unused footage', q.unusedFootage]].map(([l, v]) => html`<div><div class="eyebrow">${l}</div><div class="tnum" style="font:600 18px var(--font-display)">${v}</div></div>`)}
     <div class="spacer" /><${Button} kind="soft" icon="bolt" onClick=${() => act(() => api.post(`/api/clients/${client.id}/autopilot-now`), { ok: (r) => r.message || 'Autopilot started' })}>Run autopilot now</${Button}>
+  </div>`;
+}
+
+/** Autopilot extras (Nov 14): footage from the client's own YouTube channel, and the polish pass before review. */
+function AutoPanel({ client }) {
+  const { data: ch, reload } = useApi(`/api/clients/${client.id}/channel`, ['clients', 'jobs']);
+  const [url, setUrl] = useState(null);
+  const prod = client.production || {}; const auto = !!client.schedule?.autopilot; const polish = prod.autoPolish !== false;
+  const inReview = client.quota?.inReview || 0;
+  const saveCh = (body, ok) => act(() => api.post(`/api/clients/${client.id}/channel`, body), { ok }).then(() => { setUrl(null); reload(); });
+  const setAuto = (on) => act(() => api.patch(`/api/clients/${client.id}`, { schedule: { ...(client.schedule || {}), autopilot: on } }), { ok: on ? 'Autopilot on' : 'Autopilot off' });
+  const setPolish = (on) => act(() => api.patch(`/api/clients/${client.id}`, { production: { autoPolish: on } }), { ok: on ? 'Clips are polished before review' : 'Polish off' });
+  return html`<div class="panel pad col" style="gap:12px;margin-bottom:14px">
+    <div class="row wrap" style="gap:14px;align-items:center">
+      <div class="row" style="gap:8px"><${Toggle} on=${auto} onChange=${setAuto} label="Autopilot" /><b>Autopilot</b></div>
+      <span class="faint" style="font-size:var(--fs-sm)">${auto ? 'Keeps the posting slots full: new footage gets clipped in your style mix without pressing Make clips.' : 'Off: clips are only made when you press Make clips.'}</span>
+    </div>
+    <div class="set-grid">
+      <div class="set-card col" style="gap:8px">
+        <b>Their YouTube channel</b>
+        <div class="row" style="gap:6px"><input class="input" placeholder="https://www.youtube.com/@channel" value=${url ?? ch?.url ?? ''} onInput=${(e) => setUrl(e.target.value)} aria-label="Their YouTube channel" />
+          ${url != null && url !== (ch?.url || '') ? html`<${Button} size="sm" kind="primary" onClick=${() => saveCh({ url }, 'Channel saved')}>Save</${Button}>` : null}</div>
+        ${ch?.url ? html`
+          ${ch.error ? html`<div class="notice coral" style="font-size:var(--fs-xs)">${ch.error}</div>` : html`<div class="faint" style="font-size:var(--fs-xs)">${ch.name ? `${ch.name} · ` : ''}${ch.long} long videos · ${ch.pulled} pulled${ch.next ? ` · next older: ${ch.next}` : ' · all pulled'}</div>`}
+          <div class="faint" style="font-size:var(--fs-xs)">With autopilot on, new uploads come in by themselves, and when the footage runs out it takes the next older video, up to
+            <select class="select" style="height:26px;width:auto;font-size:var(--fs-xs);display:inline-block;margin:0 4px" value=${String(ch.perDay)} onChange=${(e) => saveCh({ perDay: Number(e.target.value) }, 'Saved')} aria-label="Older videos a day">${[0, 1, 2, 3, 5].map((n) => html`<option value=${n}>${n}</option>`)}</select>a day. Each one is clipped in the style mix below.</div>
+          <div class="row wrap" style="gap:6px">
+            <${Button} size="sm" kind="soft" icon="download" disabled=${!ch.next} onClick=${() => act(() => api.post(`/api/clients/${client.id}/channel/pull`, {}), { ok: (r) => `Downloading ${r.title}` }).then(reload)}>Pull the next one now</${Button}>
+            <${Button} size="sm" kind="ghost" icon="refresh" onClick=${() => act(() => api.get(`/api/clients/${client.id}/channel?refresh=1`), { ok: 'Checked the channel' }).then(reload)}>Check for new uploads</${Button}>
+          </div>` : html`<div class="faint" style="font-size:var(--fs-xs)">Paste their channel link and autopilot downloads their videos (new uploads first, then older ones) and clips them.</div>`}
+      </div>
+      <div class="set-card col" style="gap:8px">
+        <div class="row" style="gap:8px"><${Toggle} on=${polish} onChange=${setPolish} label="Polish clips before review" /><b>Polish clips before review</b></div>
+        <div class="faint" style="font-size:var(--fs-xs)">Each clip checks itself once before it reaches Approvals: pauses the background noise kept in are cut, a style's font and look are put back if they drifted, captions added if the transcript is ready. Fixed clips are made again and the approval card says what changed.</div>
+        ${inReview ? html`<div><${Button} size="sm" kind="soft" icon="wand" onClick=${() => act(() => api.post(`/api/clients/${client.id}/polish`, {}), { ok: (r) => r.fixed ? `${r.fixed} clip${r.fixed > 1 ? 's' : ''} being polished, ${r.ok} already fine` : `All ${r.ok} clips in review look fine` })}>Polish the ${inReview} in review now</${Button}></div>` : null}
+      </div>
+    </div>
   </div>`;
 }
 

@@ -39,6 +39,12 @@ function feedClient(client) {
     queue.enqueue('discover', { assetId: asset.id, count: Math.min(need + 1, 8) }, { clientId: client.id, dedupeKey: `discover:${asset.id}:${Math.floor(Date.now() / 600000)}`, title: `Find ${Math.min(need + 1, 8)} clips for ${client.name}` });
     return { client: client.name, need, action: 'discover' };
   }
+  // Out of footage: the next older video from the client's own YouTube channel when one is set (channel.js).
+  const channel = require('./channel');
+  if (channel.canBackfill(client)) {
+    channel.backfill(client).catch((e) => audit.log('system', 'channel.error', { clientId: client.id, error: e.message }, 'warn'));
+    return { client: client.name, need, action: 'channel', message: 'Downloading the next video from their channel.' };
+  }
   // Out of footage: alert once a day and prepare (not send) a footage request for approval.
   const key = `dry:${client.id}`;
   if (every(key, 24 * 3600000)) {
@@ -81,6 +87,8 @@ function tick() {
   const lite = ctx.setting('resources.mode', 'full') === 'lite';
   for (const client of ctx.store.all('clients', (c) => c.status === 'active' && c.schedule?.autopilot)) {
     try { feedClient(client); } catch (e) { audit.log('system', 'autopilot.error', { clientId: client.id, error: e.message }, 'error'); }
+    // New uploads on their channel are pulled as they come out (listed every few hours; channel.js).
+    if (client.production?.channelUrl) require('./channel').tick(client).catch((e) => { if (every(`chanerr:${client.id}`, 6 * 3600000)) audit.log('system', 'channel.error', { clientId: client.id, error: e.message }, 'warn'); });
   }
   // B-roll edit of the day: clients with "one per day" get a fresh one from their footage (it goes to review like any clip).
   for (const client of ctx.store.all('clients', (c) => c.status === 'active' && c.production?.brollDaily)) {

@@ -370,6 +370,24 @@ r.post('/api/clients/:id/upload', async (req, b, p) => {
   }
   return out;
 }, { raw: true });
+// The client's YouTube channel as a footage source (server/automation/channel.js) and the polish pass (video/polish.js).
+r.get('/api/clients/:id/channel', async (req, b, p) => require('./automation/channel').status(must(ctx.store.get('clients', p.id)), { refresh: req.query.refresh === '1' }));
+r.post('/api/clients/:id/channel', async (req, b, p) => {
+  const c = must(ctx.store.get('clients', p.id)); const prod = { ...(c.production || {}) };
+  if (b.url !== undefined) { const u = String(b.url || '').trim(); if (u && !/^https?:\/\/(www\.|m\.)?youtube\.com\/|^https?:\/\/youtube\.com\//i.test(u)) throw new HttpError(400, 'Paste the channel link from YouTube, e.g. https://www.youtube.com/@stringer'); if (u !== prod.channelUrl) { prod.channelUrl = u; delete prod._channel; delete prod._channelSince; delete prod._channelEmpty; } }
+  if (b.on !== undefined) prod.channelOn = !!b.on;
+  if (b.perDay !== undefined) prod.channelBackfillPerDay = Math.max(0, Math.min(10, Number(b.perDay) || 0));
+  if (b.minMinutes !== undefined) prod.channelMinMinutes = Math.max(1, Math.min(120, Number(b.minMinutes) || 4));
+  ctx.store.update('clients', c.id, { production: prod }); audit.log(actorOf(req), 'channel.set', { clientId: c.id, url: prod.channelUrl || null });
+  return require('./automation/channel').status(ctx.store.get('clients', c.id), { refresh: true });
+});
+r.post('/api/clients/:id/channel/pull', async (req, b, p) => {
+  const c = must(ctx.store.get('clients', p.id)); const ch = require('./automation/channel');
+  const videos = await ch.list(c); const v = b.id ? videos.find((x) => x.id === b.id) : ch.nextOld(c, videos);
+  if (!v) throw new HttpError(400, 'Every long video on the channel has been pulled already.');
+  return { job: ch.pull(c, v, 'pulled by hand').id, title: v.title };
+});
+r.post('/api/clients/:id/polish', (req, b, p) => { must(ctx.store.get('clients', p.id)); return require('./video/polish').sweep(p.id); });
 r.post('/api/clients/:id/autopilot-now', async (req, b, p) => {
   const c = must(ctx.store.get('clients', p.id));
   const h = await require('./setup/production').health(c.id);
@@ -377,7 +395,7 @@ r.post('/api/clients/:id/autopilot-now', async (req, b, p) => {
   if (block) throw new HttpError(400, block.text);
   const r = require('./automation/scheduler').feedClient(c);
   const importing = ctx.store.all('assets', (a) => a.clientId === c.id && a.status === 'importing').length;
-  r.message = r.action === 'transcribe' ? 'Turning the newest footage into text, then finding clips.' : r.action === 'discover' ? 'Finding new clips in your footage.' : r.waiting ? 'Already working on footage. Watch the Footage list.' : r.need === 0 ? 'Nothing to do: the next days are already filled with clips.' : importing ? `Waiting for ${importing} video${importing === 1 ? '' : 's'} to finish importing.` : 'Out of footage. Upload a video or paste a link first.';
+  r.message = r.action === 'channel' ? r.message : r.action === 'transcribe' ? 'Turning the newest footage into text, then finding clips.' : r.action === 'discover' ? 'Finding new clips in your footage.' : r.waiting ? 'Already working on footage. Watch the Footage list.' : r.need === 0 ? 'Nothing to do: the next days are already filled with clips.' : importing ? `Waiting for ${importing} video${importing === 1 ? '' : 's'} to finish importing.` : 'Out of footage. Upload a video or paste a link first.';
   return r;
 });
 
