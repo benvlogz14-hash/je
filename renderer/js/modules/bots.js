@@ -9,6 +9,7 @@ const TOOL = {
   research: ['search', 'Searched and read'], web_search: ['search', 'Searched'], read_page: ['book', 'Read a page'], news: ['globe', 'Checked the news'],
   browser_open: ['monitor', 'Opened'], browser_read: ['eye', 'Looked at the page'], browser_scroll: ['chevronDown', 'Scrolled'], browser_click: ['pointer', 'Clicked'], browser_type: ['type', 'Typed'],
   computer_run: ['cpu', 'Ran a command'], computer_write_file: ['edit', 'Saved a file'], computer_read_file: ['folder', 'Opened a file'], computer_screenshot: ['monitor', 'Took a picture of'],
+  deep_research: ['layers', 'Deep research'], plan: ['edit', 'Planned'], ask_grokbot: ['send', 'Asked GrokBot'],
   notebook_recall: ['book', 'Checked the notebook'], notebook_learn: ['book', 'Wrote in the notebook'], app_records: ['layers', 'Looked in Euclidean'], ask_bot: ['robot', 'Asked'],
 };
 const COLORS = ['sky', 'coral', 'gold', 'lav', 'moss', 'teal', 'rose'];

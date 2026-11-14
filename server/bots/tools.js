@@ -238,6 +238,14 @@ const TOOLS = [
     },
   },
   {
+    name: 'deep_research', kinds: ['web'], long: true, args: '{"task": "the whole job in the person\'s words, e.g. find 10 young Democrats who won in NY or CT and look set for higher office"}',
+    about: 'For big jobs (find/scout/list N people or facts, a deep or thorough search): plans the searches, reads the best pages, keeps only names and facts that are really on those pages (with the sentence and link), checks them against the request, and saves the list to the Data tab. Takes a few minutes; every step shows in the chat.',
+    async run(a, t) {
+      const res = await require('./agent').deepSteps(t.bot, t.run, a.task || t.question);
+      return { text: res ? res.answer : 'The deep research stopped before it found anything.' };
+    },
+  },
+  {
     name: 'propose_leads', kinds: ['leads'], args: '{"leads": [{"name": "...", "office": "office and district", "type": "political|creator", "party": "", "email": "public campaign/press email you saw on their own site, or empty", "website": "", "phone": "", "hook": "the one sharp fact for an opening line", "why": "why they fit, one line", "source": "link where you confirmed it"}]}',
     about: 'Add people you researched to Politics/Outreach → New prospects (they wait there for the founders to approve; nothing is sent). Only people you confirmed with a link; never .gov emails, never home addresses or family details.',
     needsOk: () => 'add new leads to New prospects',

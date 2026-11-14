@@ -52,7 +52,7 @@ function workspaceDir(ws) { return ws === 'internal' ? path.join(paths.root, 'ag
 // ------------------------------------------------------------ threads
 function createThread({ title, workspaceId, participants = [], createdBy }) {
   const ws = assertWorkspace(workspaceId || 'internal');
-  const ids = [...new Set(participants.map((x) => String(x).toLowerCase()))];
+  const ids = [...new Set(participants.map((x) => registry.findId(x) || String(x).toLowerCase()))];
   for (const a of ids) {
     if (!registry.def(a)) throw new HttpError(400, `There's no agent called "${a}".`);
     if (!registry.allowedIn(a, ws)) throw new HttpError(403, `${registry.name(a)} isn't allowed in ${workspaceLabel(ws)}. Change that under its "Show advanced" options.`);
@@ -66,7 +66,7 @@ function createThread({ title, workspaceId, participants = [], createdBy }) {
 function thread(id) { const t = ctx.store.get('agentThreads', id); if (!t) throw new HttpError(404, 'That conversation no longer exists.'); return t; }
 
 function join(threadId, agentId, actor) {
-  const t = thread(threadId); const a = String(agentId).toLowerCase();
+  const t = thread(threadId); const a = registry.findId(agentId) || String(agentId).toLowerCase();
   if (!registry.def(a)) throw new HttpError(400, `There's no agent called "${a}".`);
   if (t.participants.includes(a)) return t;
   if (!registry.allowedIn(a, t.workspaceId)) throw new HttpError(403, `${registry.name(a)} isn't allowed in ${workspaceLabel(t.workspaceId)}.`);
@@ -138,6 +138,7 @@ function send(raw, { actor } = {}) {
     if (!t.participants.includes(from)) throw new HttpError(403, `${registry.name(from)} isn't part of this conversation. It needs to join first.`);
   }
   // Recipients: '*' means everyone else in the thread. Named agents not yet in the thread join it (if allowed).
+  m.to = m.to.map((x) => (x === '*' ? x : registry.findId(x) || x));
   let to = m.to.includes('*') ? t.participants.filter((a) => a !== from) : m.to.filter((a) => a !== from);
   for (const a of to) if (!t.participants.includes(a)) join(t.id, a, from);
   to = [...new Set(to)];
@@ -189,7 +190,11 @@ async function pump(agentId) {
     setDelivery(msgId, agentId, { status: 'running' });
     try {
       const reply = await answer(agentId, m, t, ac.signal);
-      setDelivery(msgId, agentId, { status: 'replied', replyId: reply?.id || null });
+      if (reply && reply.waiting) {
+        // Answers later (the Claude app through the connector, or a GrokBot by email): not a failure.
+        setDelivery(msgId, agentId, { status: 'waiting', note: reply.note || '' });
+        events.publish('notify', { title: `${registry.name(agentId)} has a message waiting`, body: `${t.title}: ${String(m.body || '').slice(0, 100)}` });
+      } else setDelivery(msgId, agentId, { status: 'replied', replyId: reply?.id || null });
     } catch (e) {
       const paused = settings().paused || ctx.store.get('agentThreads', t.id)?.paused;
       setDelivery(msgId, agentId, paused && ac.signal.aborted ? { status: 'held' } : { status: 'failed', error: plain(e, agentId) });
@@ -203,6 +208,16 @@ function plain(e, agentId) {
   if (/abort/i.test(s)) return 'Stopped.';
   if (/timed? ?out|did not finish/i.test(s)) return `${registry.name(agentId)} took too long to answer. Try again, or raise the time limit under Show advanced.`;
   return s.slice(0, 400);
+}
+
+/** Plain "@Name ..." in a reply (easier for small local models than the JSON block) is a question to that agent. */
+function mentions(text, self, outgoing) {
+  for (const mm of String(text || '').matchAll(/(?:^|[\s(])@([A-Za-z][\w.\/-]{0,30})[,:]?\s+([^@\n]{3,})/g)) {
+    const to = registry.findId(mm[1]); if (!to || to === self) continue;
+    if (outgoing.some((o) => (o.to || []).includes(to))) continue;
+    outgoing.push({ to: [to], type: 'question', body: mm[2].trim() });
+  }
+  return outgoing;
 }
 
 /** Ask one agent to respond to one message, then post its reply (and any messages it sends on). */
@@ -221,8 +236,15 @@ async function answer(agentId, m, t, signal) {
     t.workspaceId !== 'internal' ? require('../integrations/ai').clientContext(t.workspaceId) : '', protocol.studioPrompt(projInfo, editOps.OPS_DOC)].filter(Boolean).join('\n\n');
   const prompt = `Conversation "${t.title}" so far:\n\n${protocol.transcript(history, registry.name)}\n\n---\nRespond to the latest message from ${registry.name(m.from)} (${protocol.TYPES[m.type]}).`;
   const raw = await adapter.deliver({ system, prompt, message: m, thread: { id: t.id, title: t.title, workspaceId: t.workspaceId }, clientId: t.workspaceId === 'internal' ? null : t.workspaceId, signal });
-  if (raw == null) return null; // mailbox agents fetch the message themselves
+  if (raw == null) {
+    // Mailbox agents fetch the message themselves; the Claude app and GrokBots answer later.
+    const kind = registry.connectionOf(agentId);
+    if (kind === 'connector') return { waiting: true, note: 'Waiting for the Claude app (it answers through the Euclidean connector)' };
+    if (kind === 'grokbot') return { waiting: true, note: 'Emailed to your GrokBot; its reply comes back here' };
+    return null;
+  }
   const { text, outgoing, edits } = protocol.parseReply(raw);
+  mentions(text, agentId, outgoing);
   ctx.store.update('agentThreads', t.id, (x) => ({ autoTurns: (x.autoTurns || 0) + 1 }));
   let reply = null;
   if (text) reply = send({ threadId: t.id, from: agentId, to: m.from.startsWith('human:') || m.from === 'system' ? ['*'] : [m.from], type: 'reply', body: text, inReplyTo: m.id });
@@ -239,6 +261,36 @@ async function answer(agentId, m, t, signal) {
     catch (e) { record({ threadId: t.id, workspaceId: t.workspaceId, from: 'system', to: [agentId], type: 'system', body: `A message from ${def.name} wasn't sent: ${e.message}` }); }
   }
   return reply;
+}
+
+/**
+ * An answer that arrives later from an agent that couldn't reply straight away (Claude through the connector,
+ * a GrokBot by email): posted in the thread as that agent, and its waiting deliveries there are marked answered.
+ */
+function lateReply({ threadId, agentId, body, to = null, inReplyTo = null, type = 'reply' }) {
+  const t = thread(threadId); const a = String(agentId).toLowerCase();
+  if (!registry.def(a)) throw new HttpError(400, `There's no agent called "${agentId}".`);
+  if (!t.participants.includes(a)) join(t.id, a, a);
+  const waiting = ctx.store.all('agentMessages', (x) => x.threadId === t.id && ['waiting', 'queued', 'delivered'].includes(x.deliveries?.[a]?.status)).sort((x, y) => String(x.createdAt).localeCompare(String(y.createdAt)));
+  // Answer what was actually waiting for this agent; else the newest message it saw.
+  const asked = waiting.filter((x) => x.deliveries[a].status === 'waiting');
+  const last = (asked.length ? asked : waiting)[(asked.length ? asked : waiting).length - 1];
+  const parsed = protocol.parseReply(body);
+  mentions(parsed.text || body, a, parsed.outgoing);
+  const recips = Array.isArray(to) && to.length ? to : last && !String(last.from).startsWith('human:') && last.from !== 'system' ? [last.from] : ['*'];
+  const reply = send({ threadId: t.id, from: a, to: recips, type, body: parsed.text || String(body).slice(0, 20000), inReplyTo: inReplyTo || last?.id || null });
+  for (const w of waiting) setDelivery(w.id, a, { status: 'replied', replyId: reply.id });
+  for (const o of parsed.outgoing) { try { send({ ...o, threadId: t.id, workspaceId: t.workspaceId, from: a, inReplyTo: reply.id }); } catch { /* skipped */ } }
+  ctx.store.update('agentThreads', t.id, { autoTurns: 0 });
+  return reply;
+}
+/** Messages waiting for one agent (for Claude's connector inbox). */
+function waitingFor(agentId) {
+  const a = String(agentId).toLowerCase();
+  return ctx.store.all('agentMessages', (m) => m.deliveries?.[a]?.status === 'waiting').map((m) => {
+    const t = ctx.store.get('agentThreads', m.threadId);
+    return { ...view(m), threadTitle: t?.title, workspace: t ? workspaceLabel(t.workspaceId) : '', participants: (t?.participants || []).map((x) => ({ id: x, name: registry.name(x) })) };
+  }).filter((m) => m.threadTitle);
 }
 
 function retry(msgId, agentId, actor) {
@@ -304,4 +356,4 @@ function start() {
   for (const m of ctx.store.all('agentMessages')) for (const [a, d] of Object.entries(m.deliveries || {})) if (d.status === 'running' || d.status === 'queued') { setDelivery(m.id, a, { status: 'queued' }); enqueue(a, m.id); }
 }
 
-module.exports = { createThread, join, send, setPaused, setGlobalPause, retry, cancel, decide, threads, messages, inbox, outbox, failed, approvals, status, start, workspaceLabel, workspaceDir };
+module.exports = { lateReply, waitingFor, createThread, join, send, setPaused, setGlobalPause, retry, cancel, decide, threads, messages, inbox, outbox, failed, approvals, status, start, workspaceLabel, workspaceDir };

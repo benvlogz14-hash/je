@@ -55,6 +55,14 @@ function ask(site, text, { newChat = false, record = true, actor = 'user', quiet
   return p;
 }
 
+/** Is this one account signed in and under the hourly limit (agent conversations use each site directly)? */
+function siteReady(site) {
+  if (!B() || !loggedIn()[site]) return false;
+  const hour = Date.now() - 3600000; while (sent.length && sent[0] < hour) sent.shift();
+  return sent.length < Number(S('perHour', 20));
+}
+const siteKnown = (site) => !!loggedIn()[site];
+
 /** For ai.ask: can Euclidean's own AI work go through your accounts right now? */
 function usable() {
   if (!B() || S('use', 'off') === 'off') return false;
@@ -70,4 +78,4 @@ async function complete({ system, prompt, json }) {
   return { text: r.text, model: `${LABEL[site]} (your account)` };
 }
 
-module.exports = { SITES, LABEL, available, status, ask, history, usable, complete };
+module.exports = { siteReady, siteKnown, SITES, LABEL, available, status, ask, history, usable, complete };

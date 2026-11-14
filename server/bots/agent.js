@@ -102,7 +102,7 @@ const recentOf = (q) => (/\b(today|tonight|yesterday|last night|this morning|bre
 const NO_WEB = /real[- ]time|training data|knowledge cut-?off|cut-?off date|don'?t have (access|the ability)|do not have (access|the ability)|can(no|')t (browse|access the internet|search the web)|as of my last update|not able to browse|up-to-date information|check reputable news/i;
 
 // ------------------------------------------------------------------ "what can you do?"
-const ABILITIES = /\b(what (can|do) you (do|have)|your (abilities|tools|skills|capabilities)|abilities|capabilities|what tools|do you have (access|internet|the internet|duckduckgo|google|serper|a computer|email)|can you (search|browse|google|use the internet|access the internet|see the web)|duckduckgo|serper)\b/i;
+const ABILITIES = /\b(what (can|do) you (do|have)|your (abilities|tools|skills|capabilities)|abilities|capabilities|what tools|do you have (access|internet|the internet|duckduckgo|google|serper|a computer|email)|can you (search|browse|google|use the internet|access the internet|see the web)|(do|can) you (use|access|have) (duckduckgo|serper|google))\b/i;
 function abilitiesAnswer(bot, list) {
   const has = (n) => list.some((t) => t.name === n);
   let google = false; try { google = require('../integrations/serper').ready(); } catch { /* not set up */ }
@@ -178,7 +178,7 @@ const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, no) => set
 async function useTool(bot, run, step, list, { depth = 0 } = {}) {
   const t = list.find((x) => x.name === step.tool);
   const tctx = { bot, question: run.question, depth, run };
-  const r = await withTimeout(t.run(step.args || {}, tctx), STEP_TIMEOUT, step.tool);
+  const r = t.long ? await t.run(step.args || {}, tctx) : await withTimeout(t.run(step.args || {}, tctx), STEP_TIMEOUT, step.tool);
   return r || { text: '(nothing came back)' };
 }
 
@@ -211,8 +211,22 @@ async function drive(runId) {
       afterRun(bot.id);
       return ctx.store.get(RUNS, runId);
     }
+    const asked = run.focus || run.question;
+    // Big jobs ("scout 10 ...", "deep search", "overnight"): the deep research engine runs the steps in code, so a
+    // small local model never answers from memory. Every step shows in the chat as it happens.
+    if (!(run.steps || []).length && list.some((t) => t.name === 'research') && require('./deep').isDeepTask(asked)) {
+      const res = await deepSteps(bot, run, asked);
+      run = ctx.store.get(RUNS, runId);
+      if (run.cancel && !res) { save(run, { status: 'stopped', endedAt: now(), note: 'Stopped' }); afterRun(bot.id); return ctx.store.get(RUNS, runId); }
+      const answer = res ? res.answer : 'The deep research stopped before it found anything.';
+      save(run, { status: 'done', answer, endedAt: now(), note: null, typing: null, provider: 'deep research' });
+      ctx.store.insert('botMessages', { botId: bot.id, role: 'bot', text: answer, runId: run.id, at: now(), by: 'deep research' });
+      events.publish('bots', { botId: bot.id, runId: run.id });
+      afterRun(bot.id);
+      return ctx.store.get(RUNS, runId);
+    }
     // "What can you do?" / "do you have DuckDuckGo?": answered from its real tools, instantly and correctly.
-    if (!(run.steps || []).length && ABILITIES.test(run.question) && String(run.question).split(/\s+/).length <= 25) {
+    if (!(run.steps || []).length && ABILITIES.test(asked) && String(asked).split(/\s+/).length <= 25) {
       const answer = abilitiesAnswer(bot, list);
       save(run, { status: 'done', answer, endedAt: now(), note: null, typing: null });
       ctx.store.insert('botMessages', { botId: bot.id, role: 'bot', text: answer, runId: run.id, at: now(), by: 'Euclidean' });
@@ -221,7 +235,7 @@ async function drive(runId) {
       return ctx.store.get(RUNS, runId);
     }
     // Anything about the world right now: search first (DuckDuckGo, or Google when asked), so the answer is live.
-    if (!(run.steps || []).length && list.some((t) => t.name === 'research') && needsWeb(run.question)) await webStep(bot, run, list, run.question);
+    if (!(run.steps || []).length && list.some((t) => t.name === 'research') && needsWeb(asked)) await webStep(bot, run, list, asked);
     let webRetry = false;
     for (;;) {
       run = ctx.store.get(RUNS, runId);
@@ -253,7 +267,7 @@ async function drive(runId) {
       if (!run.provider) save(run, { provider: r.provider, model: r.model });
       // Said it can't see the live web without having looked: search, then answer again (once).
       if (step.answer != null && !last && !webRetry && NO_WEB.test(String(step.answer)) && list.some((t) => t.name === 'research') && !(run.steps || []).some((x) => /research|web_search|news|google_search/.test(x.tool || ''))) {
-        webRetry = true; await webStep(bot, run, list, run.question); continue;
+        webRetry = true; await webStep(bot, run, list, asked); continue;
       }
       if (step.answer != null || last) {
         const answer = String(step.answer ?? r.text).trim() || 'I could not come up with an answer.';
@@ -287,7 +301,16 @@ async function drive(runId) {
 /** One search step the bot didn't have to think of: DuckDuckGo (free) unless Google was asked for; recent when it's news. */
 async function webStep(bot, run, list, question) {
   let google = false; try { google = wantsGoogle(question) && require('../integrations/serper').ready(); } catch { /* no key */ }
-  const args = { question: String(question).slice(0, 300), ...(recentOf(question) ? { recent: recentOf(question) } : {}), ...(google ? { full: true } : {}) };
+  const q = await searchQuery(question);
+  // Asked to use its browser: open the search there first, so the person can watch it live.
+  if (require('./deep').wantsBrowser(question) && list.some((t) => t.name === 'browser_open') && ctx.botBrowser) {
+    const b = { id: `s${(run.steps || []).length + 1}`, say: 'Searching in its browser (DuckDuckGo)', tool: 'browser_open', args: { url: `https://duckduckgo.com/?q=${encodeURIComponent(q)}` }, at: now(), auto: true };
+    save(run, { steps: [...(run.steps || []), { ...b, running: true }], note: b.say });
+    let r; try { r = await useTool(bot, run, b, list); } catch (e) { r = { text: `The browser didn't open: ${e.message}`, failed: true }; }
+    const c = ctx.store.get(RUNS, run.id); save(c, { steps: c.steps.map((x) => (x.id === b.id ? { ...x, running: false, result: String(r.text).slice(0, 4000), forModel: String(r.text).slice(0, 5000), shot: r.shot || null, failed: !!r.failed } : x)) });
+    Object.assign(run, ctx.store.get(RUNS, run.id));
+  }
+  const args = { question: q, query: q, ...(recentOf(question) ? { recent: recentOf(question) } : {}), ...(google ? { full: true } : {}) };
   const s = { id: `s${(run.steps || []).length + 1}`, say: google ? 'Searching Google' : 'Searching the live web (DuckDuckGo)', tool: 'research', args, at: now(), auto: true };
   save(run, { steps: [...(run.steps || []), { ...s, running: true }], note: s.say });
   let res; try { res = await useTool(bot, run, s, list); } catch (e) { res = { text: `The search didn't work: ${e.message}`, failed: true }; }
@@ -296,6 +319,39 @@ async function webStep(bot, run, list, question) {
   const cur = ctx.store.get(RUNS, run.id);
   save(cur, { steps: cur.steps.map((x) => (x.id === s.id ? { ...x, running: false, result: String(res.text).slice(0, 4000), forModel: `${String(res.text).slice(0, 7000)}\n\n(Answer from these results, with the links. If they don't cover it, say what you found and offer to dig deeper${google ? '' : ' with Google'}.)`, links: res.links?.slice(0, 8) || null, failed: !!res.failed } : x)) });
 }
+/** A short search query from a message ("use your browser and ... what did X say yesterday about Y" → "X said Y"). */
+async function searchQuery(text) {
+  const deep = require('./deep');
+  const web = require('../integrations/websearch');
+  let q = web.queryOf(deep.cleanTask(text));
+  if (q.split(/\s+/).length > 10) {
+    try {
+      const r = await require('../integrations/ai').ask({ role: roleOf(), json: true, maxTokens: 80, system: 'Reply with JSON only.', prompt: `Write the best web search for this request: 3 to 8 words, no quotes.\nREQUEST: ${deep.cleanTask(text).slice(0, 600)}\nJSON: {"query": "..."}` });
+      const x = String(r.json?.query || '').replace(/["']/g, '').trim(); if (x.length > 3 && x.split(/\s+/).length <= 12) q = x;
+    } catch { q = q.split(/\s+/).slice(0, 10).join(' '); }
+  }
+  return q.slice(0, 160);
+}
+
+/** Run the deep research engine as this run's steps (each search and page shows in the chat as it happens). */
+async function deepSteps(bot, run, task) {
+  const id0 = (run.steps || []).length;
+  let n = id0;
+  const top = { id: `s${++n}`, say: 'Deep research: planning, searching and reading pages', tool: 'deep_research', args: { task: String(task).slice(0, 200) }, at: now(), running: true };
+  save(run, { steps: [...(run.steps || []), top], note: top.say });
+  const onStep = (st) => {
+    const cur = ctx.store.get(RUNS, run.id); if (!cur) return;
+    const step = { id: `s${++n}`, say: st.say || '', tool: st.tool || 'research', args: st.args || {}, result: String(st.result || '').slice(0, 4000), shot: st.shot || null, links: st.links || null, failed: !!st.failed, at: now(), auto: true };
+    save(cur, { steps: [...(cur.steps || []), step], note: st.say || cur.note });
+  };
+  let res = null;
+  try { res = await require('./deep').run(bot, task, { onStep, isCancelled: () => !!ctx.store.get(RUNS, run.id)?.cancel }); }
+  catch (e) { onStep({ tool: 'deep_research', say: `Deep research stopped: ${e.message}`, failed: true }); }
+  const cur = ctx.store.get(RUNS, run.id);
+  save(cur, { steps: cur.steps.map((x) => (x.id === top.id ? { ...x, running: false, result: res ? `Read ${res.pages} pages, confirmed ${res.found.length}.` : 'Stopped.' } : x)) });
+  return res;
+}
+
 /** The next queued message for this bot, if any (setImmediate: the finished run is fully saved first). */
 function afterRun(botId) { setImmediate(() => { try { require('./index').next(botId); } catch { /* none */ } }); }
 
@@ -325,4 +381,4 @@ async function runInline(bot, task, { depth = 1, parent = null } = {}) {
   return 'No answer.';
 }
 
-module.exports = { needsWeb, wantsGoogle, readable, abilitiesAnswer, ABILITIES, compactInstructions, partialOf, SMALL_TALK, drive, runInline, parse, systemFor, messagesFor, brainLabel, RUNS };
+module.exports = { deepSteps, searchQuery, needsWeb, wantsGoogle, readable, abilitiesAnswer, ABILITIES, compactInstructions, partialOf, SMALL_TALK, drive, runInline, parse, systemFor, messagesFor, brainLabel, RUNS };

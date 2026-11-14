@@ -60,6 +60,8 @@ function receive(m) {
   audit.log('system', 'grokbot.answered', { bot: t.bot, taskId: t.id });
   events.publish('botTasks', { id: t.id });
   // Asked by one of Euclidean's bots: the answer goes back into that bot's chat and it carries on with the job.
+  // Asked from an agent conversation: the answer goes back into that conversation as Grok.
+  if (t.context?.agentThread) { try { require('../agents/broker').lateReply({ threadId: t.context.agentThread, agentId: 'grok', body }); } catch { /* the answer is still on the task */ } }
   if (t.context?.botId) { try { require('../bots').deliver(t.context.botId, t.context.question || t.title, body, t.bot || 'GrokBot'); } catch { /* the answer is still on the task */ } }
   return true;
 }

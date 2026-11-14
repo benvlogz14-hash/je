@@ -1,13 +1,19 @@
 // Agent Connections (Settings → Advanced) and Agent Conversations.
-// Grok, Claude, GPT/Codex, Cursor, opencode and custom agents talk to each other as peers.
+// Grok, Claude, GPT/Codex, Cursor, opencode, the free Llama, Euclidean's own bots and custom agents talk to each other
+// as peers. Claude, Grok and ChatGPT work without API keys (the Claude app, your GrokBot, your logins).
 // Euclidean only routes, logs and asks you before anything leaves the app.
 import { html, useState, useEffect, useRef, useStore, useApi, navigate, Button, HoldButton, Seg, Toggle, Field, Loading, Empty, Avatar, Modal, Tabs, act, toast, confirmDialog } from '../lib/ui.js';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { ago } from '../lib/format.js';
 
-const CONN_LABEL = { api: 'API key', cli: 'On this computer', herdr: 'Herdr terminal', local: 'Local / network' };
+const CONN_LABEL = { api: 'API key', cli: 'On this computer', herdr: 'Herdr terminal', local: 'Local / network', connector: 'Claude app (no key)', account: 'Your login (no key)', grokbot: 'Your GrokBot (email)', ollama: 'Free on this PC', bot: 'Euclidean bot' };
 const CONN_HINT = {
+  connector: 'No key needed: messages wait for the Claude app on this computer, which answers through the Euclidean connector. With your Claude login open on the AI apps page, it answers at once instead.',
+  account: 'No key needed: uses your own login from the AI apps page (sign in there once). Limited per hour to protect your account.',
+  grokbot: 'No key needed: emails your GrokBot (Bots page → GrokBots by email) and posts its reply here. Counts against the weekly GrokBot limit.',
+  ollama: 'The free AI on this computer. No key, no limits.',
+  bot: 'One of your Euclidean bots. It answers with its own tools: the live web, the Data tab, leads and documents.',
   api: 'Talks to the provider over the internet with your API key. Easiest to set up.',
   cli: 'Runs the agent\'s own app on this computer (installed and kept up to date from here).',
   herdr: 'Runs the agent\'s app inside a Herdr terminal session that stays open between messages.',
@@ -16,7 +22,7 @@ const CONN_HINT = {
 const HEALTH = { connected: ['moss', 'Connected'], not_connected: ['', 'Not connected'], needs_attention: ['gold', 'Needs attention'] };
 const TYPE_LABEL = { message: 'Message', reply: 'Reply', question: 'Question', critique_request: 'Critique request', task_request: 'Task request', context: 'Context / files', join: 'Joined', action_request: 'Needs approval', system: 'Note' };
 const TYPE_TONE = { question: 'sky', critique_request: 'lav', task_request: 'teal', action_request: 'gold', system: 'slate', join: 'slate', context: 'moss' };
-const DELIVERY = { queued: ['slate', 'Waiting'], running: ['teal', 'Thinking'], replied: ['moss', 'Answered'], delivered: ['', 'In inbox'], read: ['', 'Read'], held: ['gold', 'Paused'], failed: ['coral', 'Failed'] };
+const DELIVERY = { waiting: ['gold', 'Will answer soon'], queued: ['slate', 'Waiting'], running: ['teal', 'Thinking'], replied: ['moss', 'Answered'], delivered: ['', 'In inbox'], read: ['', 'Read'], held: ['gold', 'Paused'], failed: ['coral', 'Failed'] };
 
 function Health({ h }) { const [tone, label] = HEALTH[h?.state] || HEALTH.not_connected; return html`<span class=${'badge ' + tone}><span class="led" style=${{ background: tone ? `var(--${tone})` : 'var(--ink-3)' }} />${label}</span>`; }
 const resultToast = (r, ok) => { if (r && r.ok === false) { toast(r.error || 'That didn\'t work', { kind: 'error', title: 'Not connected yet' }); throw Object.assign(new Error(r.error), { shown: true }); } if (ok) toast(typeof ok === 'function' ? ok(r) : ok, { kind: 'ok' }); return r; };
@@ -272,6 +278,7 @@ function Bubble({ m, agents }) {
       ${m.action ? html`<div class="notice gold" style="margin-top:8px"><${Icon} name="lock" size=${14} />Needs your approval (${m.action.kind}): ${m.action.summary}</div>` : null}
       ${(m.context || []).length ? html`<div class="row wrap" style="gap:6px;margin-top:6px">${m.context.map((c) => html`<span class="chip"><${Icon} name="paperclip" size=${12} />${c.name}</span>`)}</div>` : null}</div>
     ${deliveries.length ? html`<div class="row wrap" style="gap:4px;margin-top:3px">${deliveries.map(([id, d]) => { const [tone, label] = DELIVERY[d.status] || ['', d.status]; return html`<span class=${'badge ' + tone} title=${d.error || ''}>${agents.find((x) => x.id === id)?.name || id}: ${label}${d.status === 'failed' ? html` <span style="cursor:pointer;text-decoration:underline" onClick=${() => act(() => api.post(`/api/agentnet/messages/${m.id}/retry`, { agentId: id }), { ok: 'Trying again' })}>retry</span>` : null}</span>`; })}</div>` : null}
+    ${deliveries.some(([, d]) => d.status === 'waiting' && d.note) ? html`<div class="faint" style="font-size:var(--fs-xs);margin-top:2px">${deliveries.filter(([, d]) => d.status === 'waiting' && d.note).map(([id, d]) => `${agents.find((x) => x.id === id)?.name || id}: ${d.note}`).join(' · ')}</div>` : null}
     ${deliveries.some(([, d]) => d.status === 'failed') ? html`<div style="font-size:var(--fs-xs);color:var(--coral-ink);margin-top:2px">${deliveries.filter(([, d]) => d.status === 'failed').map(([id, d]) => `${agents.find((x) => x.id === id)?.name || id}: ${d.error}`).join(' · ')}</div>` : null}
   </div>`;
 }

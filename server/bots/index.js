@@ -191,18 +191,18 @@ function deliver(botId, question, answer, from = 'Claude') {
   return send(botId, `${from} answered your question "${String(question).slice(0, 400)}":\n${String(answer).slice(0, 6000)}\n\nCarry on with the job that needed this, then answer.`, 'claude', { role: 'claude', shown: String(answer).slice(0, 8000), from });
 }
 
-function send(botId, text, actor = 'user', { role = 'you', shown = null, from = null } = {}) {
+function send(botId, text, actor = 'user', { role = 'you', shown = null, from = null, focus = null } = {}) {
   const bot = get(botId); if (!bot) throw new Error('No such bot.');
   const t = String(text || '').trim(); if (!t) throw new Error('Write something first.');
   // Busy (working, or waiting for an Allow card): the message waits in line and goes next, in the order sent.
   const busy = ctx.store.find(agent.RUNS, (r) => r.botId === botId && ['working', 'waiting'].includes(r.status));
   if (busy || queued(botId).length) {
-    const m = ctx.store.insert('botMessages', { botId, role, text: (shown ?? t).slice(0, 8000), question: t.slice(0, 8000), queued: true, at: now(), by: actor, ...(from ? { from } : {}) });
+    const m = ctx.store.insert('botMessages', { botId, role, text: (shown ?? t).slice(0, 8000), question: t.slice(0, 8000), queued: true, at: now(), by: actor, ...(from ? { from } : {}), ...(focus ? { focus: String(focus).slice(0, 4000) } : {}) });
     events.publish('bots', { botId });
     if (!busy) setImmediate(() => next(botId));
     return { queued: true, messageId: m.id, ahead: queued(botId).length - 1 };
   }
-  const run = ctx.store.insert(agent.RUNS, { botId, question: t.slice(0, 8000), status: 'working', steps: [], by: actor, startedAt: now() });
+  const run = ctx.store.insert(agent.RUNS, { botId, question: t.slice(0, 8000), ...(focus ? { focus: String(focus).slice(0, 4000) } : {}), status: 'working', steps: [], by: actor, startedAt: now() });
   ctx.store.insert('botMessages', { botId, role, text: (shown ?? t).slice(0, 8000), runId: run.id, at: now(), by: actor, ...(from ? { from } : {}) });
   audit.log(actor, 'bot.asked', { botId, bot: bot.name, text: t.slice(0, 120) });
   prune(botId);
@@ -215,7 +215,7 @@ const queued = (botId) => ctx.store.all('botMessages', (m) => m.botId === botId 
 function next(botId) {
   if (ctx.store.find(agent.RUNS, (r) => r.botId === botId && ['working', 'waiting'].includes(r.status))) return null;
   const m = queued(botId)[0]; if (!m) return null;
-  const run = ctx.store.insert(agent.RUNS, { botId, question: m.question || m.text, status: 'working', steps: [], by: m.by, startedAt: now() });
+  const run = ctx.store.insert(agent.RUNS, { botId, question: m.question || m.text, ...(m.focus ? { focus: m.focus } : {}), status: 'working', steps: [], by: m.by, startedAt: now() });
   ctx.store.update('botMessages', m.id, { queued: false, runId: run.id, at: now() });
   audit.log(m.by || 'user', 'bot.asked', { botId, text: String(m.question || m.text).slice(0, 120), fromQueue: true });
   events.publish('bots', { botId, runId: run.id });
@@ -275,9 +275,9 @@ function start() {
 }
 
 /** Ask a bot and wait for its answer (HAL and other parts of the app). Resolves the answer text. */
-async function ask(nameOrId, text, actor = 'hal') {
+async function ask(nameOrId, text, actor = 'hal', opts = {}) {
   const bot = findBot(nameOrId); if (!bot) throw new Error(`No bot called ${nameOrId}.`);
-  const sent = send(bot.id, text, actor);
+  const sent = send(bot.id, text, actor, opts);
   let runId = sent.queued ? null : sent.id;
   for (let i = 0; i < 900; i++) {
     await new Promise((r) => setTimeout(r, 1000));

@@ -135,6 +135,18 @@ module.exports = function mount(r) {
     if (b.body) broker.send({ threadId: t.id, from: human(req), to: b.to || ['*'], type: b.type || 'message', body: b.body, context: b.context || [] });
     return t;
   }, { roles: STAFF });
+  // Claude through the Euclidean connector (no API key): what's waiting for it, and its answers / new messages.
+  r.get('/api/agentnet/claude/inbox', () => ({ waiting: broker.waitingFor('claude') }), { roles: STAFF });
+  r.post('/api/agentnet/threads/:id/claude', (req, b, p) => {
+    if (!String(b.body || '').trim()) throw new HttpError(400, 'Write the message.');
+    return broker.lateReply({ threadId: p.id, agentId: 'claude', body: String(b.body), to: Array.isArray(b.to) ? b.to.map((x) => registry.findId(x) || x) : null, inReplyTo: b.inReplyTo || null, type: b.type || 'reply' });
+  }, { roles: STAFF });
+  r.post('/api/agentnet/claude/start', (req, b) => {
+    const ids = [...new Set(['claude', ...(Array.isArray(b.agents) ? b.agents : []).map((x) => registry.findId(x)).filter(Boolean)])];
+    const t = broker.createThread({ title: b.title || String(b.body || '').slice(0, 60) || 'Conversation from Claude', workspaceId: b.workspaceId || 'internal', participants: ids, createdBy: 'claude' });
+    if (b.body) broker.send({ threadId: t.id, from: 'claude', to: b.to ? (Array.isArray(b.to) ? b.to : [b.to]).map((x) => registry.findId(x) || x) : ['*'], type: b.type || 'message', body: String(b.body) });
+    return { thread: t, messages: broker.messages(t.id) };
+  }, { roles: STAFF });
   r.get('/api/agentnet/threads/:id/messages', (req, b, p) => broker.messages(p.id), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/messages', (req, b, p) => broker.send({ ...b, threadId: p.id, from: human(req) }, { actor: human(req) }), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/join', (req, b, p) => broker.join(p.id, b.agentId, human(req)), { roles: STAFF });

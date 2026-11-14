@@ -236,7 +236,98 @@ class LocalAdapter extends AgentAdapter {
   }
 }
 
-const KINDS = { api: ApiAdapter, cli: CliAdapter, herdr: HerdrAdapter, local: LocalAdapter };
+// ------------------------------------------------------------ Free connections (no API keys)
+/** The free Llama on this PC (Ollama). */
+class OllamaAdapter extends AgentAdapter {
+  get kind() { return 'ollama'; }
+  async detect() {
+    if (!ai.connected('ollama')) { try { await ai.test('ollama'); } catch { /* still off */ } }
+    const ok = ai.connected('ollama');
+    return { installed: ok, ready: ok, note: ok ? 'Running on this computer (free)' : 'The free AI isn\'t running. Set it up in Settings → AI (one click).' };
+  }
+  async test() { const d = await this.detect(); return d.ready ? { ok: true, message: 'Llama is running on this computer.' } : { ok: false, error: d.note }; }
+  async deliver({ system, prompt }) {
+    const r = await ai.ask({ role: 'operations', provider: 'ollama', system, prompt, maxTokens: 1400 });
+    return r.text;
+  }
+}
+
+/** One of Euclidean's own bots: it answers with its own brain and tools (web, Data tab, leads, documents...). */
+class BotAdapter extends AgentAdapter {
+  get kind() { return 'bot'; }
+  bot() { return ctx.store.get('bots', this.def.botId); }
+  async detect() { const b = this.bot(); return b ? { installed: true, ready: true, note: `${b.name} answers with its own tools` } : { installed: false, note: 'This bot was deleted.' }; }
+  async test() { return this.bot() ? { ok: true, message: `${this.def.name} is ready.` } : { ok: false, error: 'This bot was deleted.' }; }
+  async deliver({ prompt, thread, message }) {
+    const b = this.bot(); if (!b) throw new Error('This bot was deleted.');
+    // The bot keeps its own instructions and tools; it gets the conversation and how to talk to the others.
+    const q = `(Agent conversation "${thread?.title || ''}" in Euclidean. Other agents and the founders are in it.)\n\n${prompt}\n\nAnswer in plain text, using your tools when the question needs facts. To ask another agent in this conversation something, start a line with @ and their name, like "@Llama what do you think?".`;
+    const latest = String(message?.body || '').slice(0, 4000);
+    const r = await require('../bots').ask(b.id, q, `agentnet:${thread?.id || ''}`, { focus: latest, shown: `From the agent conversation "${thread?.title || ''}" (${registry().name(message?.from)}): ${latest}` });
+    if (r.waiting) return `(${b.name} is waiting for your OK on an Allow card in its own chat on the Bots page before it carries on.)`;
+    if (r.answer == null) throw new Error(`${b.name} is still working. Its answer will show in its own chat on the Bots page.`);
+    return r.answer;
+  }
+}
+
+const registry = () => require('./registry');
+const SITE_LABEL = { grok: 'Grok', claude: 'Claude', chatgpt: 'ChatGPT' };
+/** Your own Grok / Claude / ChatGPT login (AI apps page), driven like a person typing. */
+class AccountAdapter extends AgentAdapter {
+  get kind() { return 'account'; }
+  site() { return this.def.site; }
+  async detect() {
+    const br = require('../integrations/bridge');
+    if (!br.available()) return { installed: false, note: 'Works in the Euclidean desktop app.' };
+    if (!br.siteKnown(this.site())) return { installed: false, note: `Sign in to ${SITE_LABEL[this.site()]} once on the AI apps page.` };
+    return { installed: true, ready: br.siteReady(this.site()), note: br.siteReady(this.site()) ? `Your ${SITE_LABEL[this.site()]} login (no key)` : 'Hourly limit reached for your login; try again soon.' };
+  }
+  async test() { const d = await this.detect(); return d.installed ? { ok: true, message: d.note } : { ok: false, error: d.note }; }
+  async deliver({ system, prompt }) {
+    const br = require('../integrations/bridge');
+    const r = await br.ask(this.site(), `${system}\n\n${prompt}`.slice(0, 30000), { newChat: true, record: false, actor: 'agentnet', quiet: true });
+    return r.text;
+  }
+}
+
+/**
+ * Claude through the Claude app on this PC (Euclidean's connector), no key: the message waits for Claude, who reads
+ * it with the connector's agent_inbox and answers with agent_reply. When your Claude login is open on the AI apps
+ * page, it answers at once through that instead.
+ */
+class ConnectorAdapter extends AgentAdapter {
+  get kind() { return 'connector'; }
+  async detect() {
+    let viaLogin = false; try { viaLogin = require('../integrations/bridge').siteReady('claude'); } catch { /* none */ }
+    return { installed: true, ready: true, note: viaLogin ? 'Answers through your Claude login' : 'Answers from the Claude app (Euclidean connector)' };
+  }
+  async test() { return { ok: true, message: 'Messages to Claude wait for the Claude app, which answers through the Euclidean connector.' }; }
+  async deliver({ system, prompt }) {
+    let br = null; try { br = require('../integrations/bridge'); } catch { /* none */ }
+    if (br && br.siteReady('claude')) { const r = await br.ask('claude', `${system}\n\n${prompt}`.slice(0, 30000), { newChat: true, record: false, actor: 'agentnet', quiet: true }); return r.text; }
+    return null; // waits for the Claude app
+  }
+}
+
+/** Your GrokBot, by email: the message goes out tagged, its reply comes back into the conversation. */
+class GrokBotAdapter extends AgentAdapter {
+  get kind() { return 'grokbot'; }
+  async detect() {
+    const G = require('../integrations/grokbots');
+    if (!G.bots().length) return { installed: false, note: 'Add your GrokBot\'s email on the Bots page (GrokBots by email).' };
+    if (!require('../integrations/email').configured()) return { installed: false, note: 'Connect the outreach email first (Settings → Connections → Email).' };
+    const b = G.budget();
+    return { installed: true, ready: true, note: `Your GrokBot by email (${b.left} of ${b.cap} questions left this week)` };
+  }
+  async test() { const d = await this.detect(); return d.installed ? { ok: true, message: d.note } : { ok: false, error: d.note }; }
+  async deliver({ prompt, thread, message }) {
+    const G = require('../integrations/grokbots');
+    await G.send({ task: `${prompt}\n\n(Reply with your answer. Keep the [JEV-...] tag in the subject.)`.slice(0, 18000), title: `Agent conversation: ${thread?.title || ''}`.slice(0, 80), actor: 'bot:Agent conversations', context: { agentThread: thread?.id || null, agentMessage: message?.id || null } });
+    return null; // the reply arrives by email
+  }
+}
+
+const KINDS = { api: ApiAdapter, cli: CliAdapter, herdr: HerdrAdapter, local: LocalAdapter, ollama: OllamaAdapter, bot: BotAdapter, account: AccountAdapter, connector: ConnectorAdapter, grokbot: GrokBotAdapter };
 
 function create(def, conf) {
   const kind = conf?.connection || def.defaultConnection;
@@ -245,4 +336,4 @@ function create(def, conf) {
   return new C(def, conf);
 }
 
-module.exports = { AgentAdapter, ApiAdapter, CliAdapter, HerdrAdapter, LocalAdapter, create, customKeyName, stripAnsi };
+module.exports = { OllamaAdapter, BotAdapter, AccountAdapter, ConnectorAdapter, GrokBotAdapter, AgentAdapter, ApiAdapter, CliAdapter, HerdrAdapter, LocalAdapter, create, customKeyName, stripAnsi };
