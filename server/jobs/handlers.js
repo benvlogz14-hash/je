@@ -422,7 +422,7 @@ async function renderBroll(job, h, clip) {
   } : null;
   h.progress(0.2, 'Finding the beat and cutting the shots to it');
   const r = await be.make({ source: asset.path, duration: asset.info?.duration || 0, shots: vis?.shots || [], scenes: an?.scenes || [], black, avoid, music: track?.file || null, length: clip.end - clip.start, out: outPath, volume: Number(clip.musicVol ?? 0.9), signal: h.signal,
-    ...(story ? { raw: true, window: clip.window || null, cutBeats: swag ? 4 : 2.6, texts, strict: true } : {}) });
+    ...(story ? { raw: true, window: clip.window || null, cutBeats: swag ? 4 : 2.6, texts, strict: true, fill: swag } : {}) });
   const segs = r.segs;
   const qc = await ff.qualityCheck(outPath, { expectWidth: 1080, expectHeight: 1920, minSec: 3, maxSec: 180 });
   const thumb = path.join(outDir, `v${n}.jpg`); await ff.thumbnail(outPath, thumb, Math.min(1.5, r.duration / 2), 405);

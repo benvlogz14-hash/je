@@ -14,11 +14,11 @@ const montage = require('./montage');
 const W = 1080, H = 1920, FPS = 30, FADE = 0.4;
 
 /** Shots between the scene cuts, when the video hasn't been looked through. */
-function sceneShots(scenes = [], duration = 0) {
+function sceneShots(scenes = [], duration = 0, piece = 3.5) {
   const cuts = [0, ...scenes.filter((t) => t > 0.5 && t < duration - 0.5).sort((a, b) => a - b), duration];
   const out = []; for (let i = 0; i < cuts.length - 1; i++) out.push({ s: cuts[i], e: cuts[i + 1] });
   // Long stretches without a cut are split into ~3.5 s pieces, so a single long take still gives several shots.
-  return out.flatMap((x) => { const n = Math.max(1, Math.floor((x.e - x.s) / 3.5)); return Array.from({ length: n }, (_, k) => ({ s: x.s + (k * (x.e - x.s)) / n, e: x.s + ((k + 1) * (x.e - x.s)) / n })); });
+  return out.flatMap((x) => { const n = Math.max(1, Math.floor((x.e - x.s) / Math.max(3.5, piece))); return Array.from({ length: n }, (_, k) => ({ s: x.s + (k * (x.e - x.s)) / n, e: x.s + ((k + 1) * (x.e - x.s)) / n })); });
 }
 
 /**
@@ -29,10 +29,10 @@ function sceneShots(scenes = [], duration = 0) {
  * footage runs out the plan is simply shorter (make() then ends the edit early) instead of showing a moment twice.
  * durs: how long each shot plays (from the beat grid); returns [{ src, dur }] (source seconds).
  */
-function plan({ shots = [], scenes = [], duration, durs, black = [], avoid = [], window = null, strict = false }) {
+function plan({ shots = [], scenes = [], duration, durs, black = [], avoid = [], window = null, strict = false, piece = null }) {
   const inWin = (x) => !window || (x.s >= window[0] - 0.01 && x.e <= window[1] + 0.01);
   const longest = Math.max(...durs); const need = longest + 0.04;
-  const base = (shots.length ? shots : sceneShots(scenes, duration))
+  const base = (shots.length ? shots : sceneShots(scenes, duration, piece ? piece + 0.1 : 3.5))
     .filter(inWin).filter((x) => x.usable !== false && x.e - x.s >= Math.min(1.2, need) && !(x.bright != null && x.bright < 35))
     .map((x) => ({ ...x, q: shots.length ? montage.shotScore(x) + (montage.isDrone(x) ? 0.2 : 0) : 0.5 }));
   const touchesBlack = (a, b) => black.some(([x, y]) => x < b + 0.15 && y > a - 0.15);
@@ -131,16 +131,39 @@ async function render({ source, segs, grid, music, out, volume = 0.9, signal, ra
 /**
  * Plan and render a whole edit. With music, the cuts land on its beats (beats.js); without, soft crossfades every ~2.4 s.
  */
-async function make({ source, duration, shots, scenes, black, avoid, music, length = 20, out, volume, signal, raw = false, window = null, cutBeats = null, texts = null, strict = false }) {
-  let grid = null; let bpm = null;
-  if (music) { try { const bt = await require('./beats').detect(music); const g = require('./beats').cutGrid(bt, length, cutBeats); if (g && g.cuts.length >= 2) { const avail = await require('./studio').xfadeSupport().catch(() => null); grid = { ...g, trans: beatTransitions(g.cuts, avail && avail.size ? avail : null) }; bpm = bt.bpm; } } catch { /* no beat: plain grid */ } }
-  if (!grid) grid = plainGrid(length, raw ? 2.6 : 2.4);
-  if (raw) grid.trans = grid.cuts.map(() => ({ type: 'fade', d: 0.04 })); // story edits: straight cuts, like a phone edit
+async function make({ source, duration, shots, scenes, black, avoid, music, length = 20, out, volume, signal, raw = false, window = null, cutBeats = null, texts = null, strict = false, fill = false }) {
+  let bt = null; let avail = null;
+  if (music) { try { bt = await require('./beats').detect(music); avail = await require('./studio').xfadeSupport().catch(() => null); } catch { bt = null; } }
+  const gridFor = (per) => {
+    let g = null;
+    if (bt) { const c = require('./beats').cutGrid(bt, length, per); if (c && c.cuts.length >= 2) g = { ...c, trans: beatTransitions(c.cuts, avail && avail.size ? avail : null) }; }
+    if (!g) g = plainGrid(length, per || (raw ? 2.6 : 2.4));
+    if (raw) g.trans = g.cuts.map(() => ({ type: 'fade', d: 0.04 })); // story edits: straight cuts, like a phone edit
+    return g;
+  };
+  let grid = gridFor(cutBeats); const bpm = bt && grid.perBeats ? bt.bpm : null;
   let segs = plan({ shots, scenes, duration, durs: durations(grid), black, avoid, window, strict });
   // Too few shots in this part: widen it step by step (still never reusing another edit's shots when strict).
   for (let k = 1; window && k <= 3 && segs.length < Math.min(grid.cuts.length + 1, 8); k++) {
     const pad = ((window[1] - window[0]) * k) / 2; const more = plan({ shots, scenes, duration, durs: durations(grid), black, avoid, window: [Math.max(0, window[0] - pad), Math.min(duration, window[1] + pad)], strict });
     if (more.length > segs.length) segs = more;
+  }
+  // fill (2swag, Nov 14, Ryan: "each clip is 6 seconds long"): long shots need a long stretch of footage for every one,
+  // so on a re-clip (a thin slice of the video, and the other story edits' shots kept out) the edit ran out after two
+  // shots. Until it reaches ~90% of its length: the whole video, then shorter shots (~3 s, ~2.4 s), and last of all
+  // shots other edits already use. The longest plan wins.
+  const covers = (g, sg) => (sg.length >= g.cuts.length + 1 ? g.total : sg.length >= 2 ? g.cuts[sg.length - 1] : 0);
+  if (fill && covers(grid, segs) < length * 0.9) {
+    let best = { grid, segs, cov: covers(grid, segs) };
+    for (const st of strict ? [true, false] : [false]) {
+      for (const per of [cutBeats, 3, 2.4].filter(Boolean)) {
+        if (best.cov >= length * 0.9) break;
+        const g = gridFor(per); const sg = plan({ shots, scenes, duration, durs: durations(g), black, avoid, window: null, strict: st, piece: Math.max(...durations(g)) });
+        const cov = covers(g, sg); if (cov > best.cov + 0.5) best = { grid: g, segs: sg, cov };
+      }
+      if (best.cov >= length * 0.9) break;
+    }
+    grid = best.grid; segs = best.segs;
   }
   // Not enough different footage for the whole length: end the edit at the last fresh shot rather than repeat one.
   if (segs.length >= 2 && segs.length < grid.cuts.length + 1) {
