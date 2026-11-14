@@ -96,12 +96,24 @@ function parseAsk(line, looks) {
   // "script: line one. line two." = follow these lines in this order (plain To camera cuts unless a style is named after a |).
   const sm = raw.match(/^script\s*[:\-]\s*(.+)$/i);
   if (sm) { const [body, opt = ''] = sm[1].split(/\s*\|\s*/); const o = opt ? parseAsk(opt, looks) : null; return { ask: raw, template: 'script', topic: '', brief: body.trim(), seconds: null, style: o?.style || 'direct', density: o?.density || null, wide: !!o?.wide }; }
+  // "hook: most people in Albany" = open with the line of theirs closest to these words ("hook: #12" = that line), and
+  // build the rest around it. Options after a bar: "hook: rent is too high | quick, on location".
+  const hm = raw.match(/^hook\s*[:\-]\s*(.+)$/i);
+  if (hm) { const [body, opt = ''] = hm[1].split(/\s*\|\s*/); const o = opt ? parseAsk(opt, looks) : null; const num = body.match(/^#\s*(\d+)\b/); return { ...(o || { template: 'best', topic: '', brief: '', seconds: null, style: null, density: null, wide: false }), ask: raw, hook: num ? '' : body.trim(), hookId: num ? Number(num[1]) : null }; }
   let template = null;
   for (const [id, re] of Object.entries(TEMPLATE_WORDS)) if (re.test(raw)) { template = id; break; }
   const m = raw.match(/\b(\d{1,3})\s*-?\s*(?:s|sec|secs|second|seconds)\b/i);
   const seconds = m ? Math.max(8, Math.min(90, Number(m[1]))) : null;
   const wide = /\b(horizontal|wide|landscape|16[:x]9|youtube)\b/i.test(raw);
   const density = /\b(captions? only|no graphics|just captions|minimal)\b/i.test(raw) ? 'minimal' : /\b(less|fewer|light) graphics\b/i.test(raw) ? 'light' : /\b(all|full|lots of|heavy|max(imum)?) graphics\b/i.test(raw) ? 'full' : null;
+  // The kind of edit, when the line says so: "straight cut" / "no captions" = only the cuts; "captions only"; "no music".
+  const edit = {};
+  if (/\b(straight cut|raw cut|just the cuts?|no captions|no text|no subtitles)\b/i.test(raw)) edit.kind = 'raw';
+  else if (/\b(captions? only|just captions|subtitles only)\b/i.test(raw)) edit.kind = 'captions';
+  else if (/\b(clean edit|no graphics|no headlines?)\b/i.test(raw)) edit.kind = 'clean';
+  if (/\b(no music|without music)\b/i.test(raw)) edit.music = false;
+  if (/\b(no (sound effects|sounds|sfx))\b/i.test(raw)) edit.sounds = 'off';
+  if (/\b(no end ?card|no outro card)\b/i.test(raw)) edit.endCard = false;
   // A style named in the line (by a preset's own name first, then by the words that suggest one).
   let style = null;
   if (looks) {
@@ -113,18 +125,27 @@ function parseAsk(line, looks) {
   const words = raw.split(/\s+/).length;
   let topic = raw;
   if (words < 12) {
-    topic = raw.replace(/\b\d{1,3}\s*-?\s*(?:s|sec|secs|second|seconds)\b/gi, ' ').replace(/\b(captions? only|no graphics|just captions|less graphics|fewer graphics|all graphics|16[:x]9)\b/gi, ' ');
+    topic = raw.replace(/\b\d{1,3}\s*-?\s*(?:s|sec|secs|second|seconds)\b/gi, ' ').replace(/\b(captions? only|no graphics|just captions|less graphics|fewer graphics|all graphics|16[:x]9|straight cut|raw cut|just the cuts?|no captions|no text|no subtitles|subtitles only|clean edit|no headlines?|no music|without music|no sound effects|no sounds|no sfx|no end ?card|no outro card)\b/gi, ' ');
     for (const re of Object.values(TEMPLATE_WORDS)) topic = topic.replace(new RegExp(re.source, 'gi'), ' ');
     if (style && looks) topic = topic.replace(new RegExp(`\\b${String(looks.PRESETS[style].name).replace(/[^a-z ]/gi, '').trim()}\\b`, 'gi'), ' ').replace(/\b(cinematic|tiktok|news|pastel|bold|street|vlog|to.?camera|on location|dark|patriotic|grassroots|zine|poster|y2k|documentary|clean|minimal)\b/gi, ' ');
     topic = topic.replace(FILLER, ' ').replace(/[,.;:!?]+/g, ' ').replace(/\s+/g, ' ').trim();
   }
   if (!template) template = topic ? 'topic' : 'best';
   if (template === 'topic' && !topic) template = 'best';
-  return { ask: raw, template, topic, brief: words >= 12 ? raw : '', seconds, style, density, wide };
+  return { ask: raw, template, topic, brief: words >= 12 ? raw : '', seconds, style, density, wide, ...(Object.keys(edit).length ? { edit } : {}) };
 }
 
 /** A typed box (one video per line) → orders. */
-function parseOrders(text, looks) { return String(text || '').split(/\r?\n|;\s*/).map((l) => parseAsk(l, looks)).filter(Boolean).slice(0, 40); }
+function parseOrders(text, looks) {
+  const out = [];
+  for (const l of String(text || '').split(/\r?\n|;\s*/)) {
+    // "3 hooks about housing" = the same video three times, each opening with a different one of their best hooks.
+    const m = l.match(/^\s*(\d)\s+(?:different\s+)?(?:hooks?|openings?|hook tests?)\b\s*(?:for|about|on|,|:)?\s*(.*)$/i);
+    if (m && Number(m[1]) >= 2) { const o = parseAsk(m[2] || 'best of', looks) || parseAsk('best of', looks); for (let i = 0; i < Math.min(6, Number(m[1])); i++) out.push({ ...o, ask: `Hook ${i + 1} of ${Math.min(6, Number(m[1]))}${o.topic ? `: ${o.topic}` : ''}`, hookRank: i }); continue; }
+    const o = parseAsk(l, looks); if (o) out.push(o);
+  }
+  return out.slice(0, 40);
+}
 
 /** The baselines as the UI and the connector list them. */
 const list = () => TEMPLATES.map(({ id, name, formula, about, sec, needsTopic, review, starter }) => ({ id, name, formula, about, seconds: sec, needsTopic: !!needsTopic, review: !!review, starter: starter || '' }));

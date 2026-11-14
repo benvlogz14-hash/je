@@ -41,8 +41,7 @@ function planOrders({ text = '', orders = null, count = 0, sentences = [] }) {
   if (typed.length) return typed.slice(0, MAX);
   const n = Math.max(1, Math.min(MAX, Number(count) || 8));
   // What they talk about most, from the footage itself (the same families the icons use).
-  const { ICONS } = require('./footage');
-  const NAMES = { health: 'health care', school: 'schools', house: 'housing', money: 'taxes and costs', work: 'jobs', shield: 'public safety', leaf: 'climate', bus: 'transit', scales: 'rights', people: 'families', science: 'science', star: 'history and service', capitol: 'their bills', child: 'childcare', senior: 'seniors', drop: 'water', wheat: 'food and farms', wifi: 'internet access', bolt: 'utility bills', ballot: 'voting' };
+  const { ICONS, TOPIC_NAMES: NAMES } = require('./footage');
   const themes = ICONS.map(([k, rx]) => ({ k, n: sentences.filter((x) => rx.test(x.text)).length })).filter((t) => t.n >= 3 && NAMES[t.k]).sort((a, b) => b.n - a.n).map((t) => NAMES[t.k]);
   const out = ['best', 'intro'].map((template) => ({ ask: T.byId(template).name, template, topic: '', brief: '' }));
   for (const topic of themes) out.push({ ask: `About ${topic}`, template: 'topic', topic, brief: '' });
@@ -74,18 +73,18 @@ function remove(prospectId, vid) {
   return true;
 }
 
-/** Make the batch. Returns { made, skipped: [{ ask, why }], seconds }. */
-async function make(prospectId, { text = '', orders = null, count = 0, styles = null, density = null, wide = false, prompt = '', textStyle = null, purpose = null, actor = 'user' } = {}, h) {
-  const pkgMod = require('./package'); const footage = require('./footage'); const eng = require('./adengine');
+/**
+ * Their footage, read once (found or uploaded, transcribed, looked through), with other speakers' lines marked.
+ * Returns { p, ft, saved, sentences }. Throws a plain reason when there's nothing usable.
+ */
+async function read(prospectId, h, actor = 'user', span = [0, 1]) {
+  const pkgMod = require('./package');
+  const prog = (f, t) => h.progress(span[0] + (span[1] - span[0]) * f, t);
   let p = ctx.store.get('prospects', prospectId); if (!p) throw Object.assign(new Error('That candidate is not on the board.'), { permanent: true });
-  const t0 = Date.now();
   const dir = pkgMod.dirFor(p); const sentFile = path.join(dir, 'footage', 'sentences.json');
-  // 1. Who they are (office, state, facts) and their footage, read once. Research can fail offline: the videos don't need it.
-  if (!p.pkg?.profile) { h.progress(0.01, 'Looking up who they are'); try { await pkgMod.run(prospectId, { only: 'research', actor }, { progress: (f, t) => h.progress(0.01 + 0.04 * f, t) }); } catch { /* carry on with what we have */ } }
-  p = ctx.store.get('prospects', prospectId);
   if (!fs.existsSync(sentFile) || !pkgMod.sameFootage(p, p.pkg?.footage) || !(p.pkg?.footage?.clips || []).length) {
-    h.progress(0.06, 'Reading their footage (once for the whole batch)');
-    await pkgMod.run(prospectId, { only: 'footage', actor }, { progress: (f, t) => h.progress(0.06 + 0.24 * f, t) });
+    prog(0.02, 'Reading their footage (once, then every video uses it)');
+    await pkgMod.run(prospectId, { only: 'footage', actor }, { progress: (f, t) => prog(0.02 + 0.85 * f, t) });
   }
   p = ctx.store.get('prospects', prospectId);
   const ft = p.pkg?.footage;
@@ -95,7 +94,7 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
   // "my district", "I represent", "Madam Speaker"...) give their voice's pitch; lines far from it are someone else's.
   if (!saved.voiced) {
     try {
-      h.progress(0.3, 'Telling their voice from other speakers');
+      prog(0.9, 'Telling their voice from other speakers');
       const edit = require('./edit');
       for (let k = 0; k < ft.clips.length; k++) { const mine = saved.sentences.filter((x) => x.clip === k); if (!mine.length || !fs.existsSync(ft.clips[k].file)) continue; const f0 = await edit.pitches(ft.clips[k].file, mine.map((x) => [x.s, x.e])); mine.forEach((x, i) => { x.f0 = f0[i]; }); }
       const OWN = /\b(my district|my constituents|i represent|my bill|i (sponsor|introduced|wrote|carry)|as (a|your) (assembly|senator|council|representative|legislator|mayor)|i rise|madam speaker|mr\.? speaker|my colleagues|my community|my neighbors)\b/i;
@@ -105,6 +104,35 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
     } catch { /* without it, every line is treated as theirs */ }
   }
   const sentences = saved.sentences.filter((x) => ft.clips[x.clip]?.file && fs.existsSync(ft.clips[x.clip].file));
+  events.publish('prospects', { id: prospectId });
+  return { p, ft, saved, sentences };
+}
+
+/**
+ * What's in a candidate's footage (Ad machine → What's in their footage): topics, the best openings, how many videos
+ * it can carry. { ready: false, why } until the footage has been read.
+ */
+function insight(prospectId) {
+  const pkgMod = require('./package'); const footage = require('./footage');
+  const p = ctx.store.get('prospects', prospectId); if (!p) return { ready: false, why: 'Pick a candidate.' };
+  const sentFile = path.join(pkgMod.dirFor(p), 'footage', 'sentences.json'); const ft = p.pkg?.footage;
+  const has = (p.footageUploads || []).some((u) => !u.off) || (p.footageLinks || []).length || (p.footageFound || []).some((v) => !v.off);
+  if (!fs.existsSync(sentFile) || !(ft?.clips || []).length) return { ready: false, hasFootage: !!has, why: has ? 'Their footage has not been read yet.' : 'No footage yet. Upload their videos, or find their public ones.', note: p.pkg?.steps?.footage?.error || '' };
+  let saved; try { saved = JSON.parse(fs.readFileSync(sentFile, 'utf8')); } catch { return { ready: false, hasFootage: !!has, why: 'Their footage needs to be read again.' }; }
+  const sentences = (saved.sentences || []).filter((x) => ft.clips[x.clip]?.file);
+  return { ready: true, stale: !pkgMod.sameFootage(p, ft), clips: ft.clips.length, minutes: Math.round(ft.clips.reduce((a, c) => a + (c.duration || 0), 0) / 6) / 10, ...footage.insight(sentences) };
+}
+
+/** Make the batch. Returns { made, skipped: [{ ask, why }], seconds }. */
+async function make(prospectId, { text = '', orders = null, count = 0, styles = null, density = null, wide = false, prompt = '', textStyle = null, purpose = null, edit = null, actor = 'user' } = {}, h) {
+  const pkgMod = require('./package'); const footage = require('./footage'); const eng = require('./adengine');
+  let p = ctx.store.get('prospects', prospectId); if (!p) throw Object.assign(new Error('That candidate is not on the board.'), { permanent: true });
+  const t0 = Date.now();
+  const dir = pkgMod.dirFor(p);
+  // 1. Who they are (office, state, facts) and their footage, read once. Research can fail offline: the videos don't need it.
+  if (!p.pkg?.profile) { h.progress(0.01, 'Looking up who they are'); try { await pkgMod.run(prospectId, { only: 'research', actor }, { progress: (f, t) => h.progress(0.01 + 0.04 * f, t) }); } catch { /* carry on with what we have */ } }
+  const rd = await read(prospectId, h, actor, [0.05, 0.3]);
+  p = rd.p; const ft = rd.ft; const sentences = rd.sentences;
   const pr = p.pkg?.profile || {}; const office = pkgMod.shortOffice(pr.office || p.office || p.location || '');
   // Words on screen in their videos (name bars, signs) count as facts for graphics, like the research does.
   const seen = [...new Set(sentences.map((x) => x.shot?.text).filter(Boolean))].slice(0, 20).join(' | ');
@@ -130,7 +158,12 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
       const sc = tpl.id === 'script' ? footage.matchScript(sentences, o.brief) : null;
       if (sc && sc.picks.length >= 2 && sc.missed.length) skipped.push({ ask: o.ask.slice(0, 60), why: `Made, but these script lines were not found in their footage: ${sc.missed.map((m) => `“${m.slice(0, 60)}”`).join(', ')}` });
       if (sc && sc.picks.length < 2) { skipped.push({ ask: o.ask.slice(0, 60), why: 'Fewer than two of the script\'s lines were found in their footage. Use words close to what they actually say.' }); continue; }
-      const st = sc ? { picks: sc.picks, agent: 'your script', onTopic: null } : await footage.pickStory({ name: p.name, office, sentences, story: focus ? { mode: 'brief', brief: focus } : { mode: 'auto' }, facts, template: tpl, seconds: o.seconds || null, avoid });
+      // The opening: a line they asked for ("hook: ..."), the n-th best hook ("3 hooks about housing"), else the picker's own.
+      let hookId = null;
+      if (o.hookId != null && sentences.some((x) => x.id === o.hookId)) hookId = o.hookId;
+      else if (o.hook) { const hx = footage.findLine(sentences, o.hook); if (!hx) { skipped.push({ ask: o.ask.slice(0, 60), why: 'That opening line was not found in their footage. Pick one from the hook list, or use words close to what they say.' }); continue; } hookId = hx.id; }
+      else if (o.hookRank != null) { const hs = footage.hooks(sentences, 8, o.topic || ''); const hx = hs[o.hookRank]; if (!hx) { skipped.push({ ask: o.ask, why: `Their footage has only ${hs.length} strong opening line${hs.length === 1 ? '' : 's'}${o.topic ? ` about “${o.topic}”` : ''}.` }); continue; } hookId = hx.id; }
+      const st = sc ? { picks: sc.picks, agent: 'your script', onTopic: null } : await footage.pickStory({ name: p.name, office, sentences, story: focus ? { mode: 'brief', brief: focus } : { mode: 'auto' }, facts, template: tpl, seconds: o.seconds || null, avoid: hookId != null ? { ...avoid, open: new Set() } : avoid, hookId });
       const bites = st.picks.map((x) => ({ id: x.id, clip: x.clip, s: x.s, e: x.e, text: x.text, words: x.words, role: x.role, gfx: x.gfx || null, icons: x.icons || [] }));
       if (bites.length < 2) { skipped.push({ ask: o.ask, why: st.weak || 'Not enough clear lines in their footage for this one.' }); continue; }
       if (o.topic && st.onTopic != null && st.onTopic < Math.min(2, bites.length - 1)) { skipped.push({ ask: o.ask, why: `Their footage says little or nothing about “${o.topic}”.` }); continue; }
@@ -142,10 +175,13 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
       let look = styleId ? looks.preset(styleId) : own.look ? looks.normalize(own.look, own.look) : looks.preset('bold');
       const dens = o.density || density; if (dens) look = looks.withDensity(look, dens);
       if (textStyle) look = looks.withText(look, textStyle);
+      // The kind of edit: the batch's choice, with anything this line said itself on top.
+      const ed = looks.withEdit(look, { ...(edit || {}), ...(o.edit || {}) }); look = ed.look;
+      if (o.density && !(o.edit || {}).kind) look = looks.withDensity(look, o.density);
       const social = (purpose || S('purpose', 'social')) !== 'campaign';
       const id = uid(); const title = tpl.id === 'script' ? `Script: ${bites[0].text.split(' ').slice(0, 5).join(' ')}` : `${tpl.name}${o.topic ? `: ${o.topic}` : ''}`;
       const file = path.join(outDir, `${slug} - ${String(i + 1).padStart(2, '0')} ${title.replace(/[^\w\- ]+/g, '').slice(0, 40)} - ${id}.mp4`);
-      const common = { bites, footage: ft, music, name: p.name, office, place: p.pkg?.brief?.place || '', state: pr.state || '', cta: social ? 'Follow' : 'Vote', endFor: social ? '' : null, site: pkgMod.siteOf(p.pkg || {}), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes: [own.notes, prompt, o.brief].filter(Boolean).join(' | '), look, sound: S('adSound', 'full'), news, crf: Number(S('batchCrf', 21)) || 21 };
+      const common = { bites, footage: ft, music: ed.music ? music : null, name: p.name, office, place: p.pkg?.brief?.place || '', state: pr.state || '', cta: social ? 'Follow' : 'Vote', endFor: social ? '' : null, site: pkgMod.siteOf(p.pkg || {}), tag: S('conceptTag', true) ? `Concept by ${ctx.setting('agency.name', 'Euclidean Media')}` : '', notes: [own.notes, prompt, o.brief].filter(Boolean).join(' | '), look, sound: ed.sfx || S('adSound', 'full'), news, crf: Number(S('batchCrf', 21)) || 21 };
       const r = await eng.make({ ...common, vertical: true, out: file, work: path.join(dir, `work_batch_${id}`), onProgress: (f, t) => h.progress(base + span * (o.wide || wide ? 0.5 : 0.95) * f, `Video ${i + 1} of ${todo.length}: ${t}`) });
       fs.rmSync(path.join(dir, `work_batch_${id}`), { recursive: true, force: true });
       let wideFile = null;
@@ -156,7 +192,7 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
       }
       const poster = file.replace(/\.mp4$/, '.jpg');
       await ff.thumbnail(file, poster, Math.min(2.5, r.duration / 4), 540).catch(() => {});
-      const rec = { id, batch, n: i + 1, at: now(), ask: o.ask, title, template: tpl.id, topic: o.topic || '', style: styleId || 'own', styleName: look.name, density: look.density, duration: Math.round(r.duration * 10) / 10, file, poster: fs.existsSync(poster) ? poster : null, wideFile, qa: r.qa || null, lines: bites.map((b) => b.text), layers: r.layers || null, graphics: [...new Set(r.spec.segs.flatMap((s) => [s.tag?.kind, s.card?.kind !== 'video' ? s.card?.kind : null]).filter(Boolean))], agent: st.agent, review: !!tpl.review, by: actor };
+      const rec = { id, batch, n: i + 1, at: now(), ask: o.ask, title, template: tpl.id, topic: o.topic || '', style: styleId || 'own', styleName: look.name, density: look.density, edit: (o.edit || {}).kind || (edit || {}).kind || 'graphics', hook: bites[0].text, duration: Math.round(r.duration * 10) / 10, file, poster: fs.existsSync(poster) ? poster : null, wideFile, qa: r.qa || null, lines: bites.map((b) => b.text), layers: r.layers || null, graphics: [...new Set(r.spec.segs.flatMap((s) => [s.tag?.kind, s.card?.kind !== 'video' ? s.card?.kind : null]).filter(Boolean))], agent: st.agent, review: !!tpl.review, by: actor };
       ctx.store.update('prospects', prospectId, (cur) => ({ videos: [...(cur.videos || []), rec].slice(-200) }));
       events.publish('prospects', { id: prospectId });
       made.push(rec);
@@ -225,4 +261,4 @@ function start({ ids = [], names = [], add = true, actor = 'user', ...opts } = {
   return { started, skipped };
 }
 
-module.exports = { toStudio, make, start, list, remove, planOrders, newsFor, MIX };
+module.exports = { read, insight, toStudio, make, start, list, remove, planOrders, newsFor, MIX };

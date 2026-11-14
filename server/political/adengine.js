@@ -392,7 +392,7 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
   look = look || looks.preset('bold');
   // How much is drawn (look.density): full = everything; light = headline, captions, name and proven facts only;
   // minimal = captions, the name and small fact tags (the full-screen vertical look with almost no graphics).
-  const dens = look.density || 'full';
+  const dens = look.density || 'full'; const off = look.off || {};
   const mapT = (cut, src) => (cut.map ? cut.map(src) : src - cut.start);
   const W = vertical ? 1080 : 1920; const H = vertical ? 1920 : 1080;
   const segs = []; const words = []; const voice = [];
@@ -424,10 +424,10 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
     const head = { words: hw.map((w, i) => ({ w, key: keyset.has(norm(w)), t: at >= 0 ? Math.max(t, t + mapT(cut, b.words[at + i].s) - 0.05) : t + 0.08 + i * 0.07 })) };
     const angles = anglesFor(b, cut, t);
     const speaker = (from, to) => ({ kind: 'video', src: cut.url, from: from - t, fx: cut.fx ?? 0.5, fy: 0.3, face: cut.face || null, ar: cut.ar || null, fit: !!cut.fit, angles: cut.face ? angles : null, pushAt: t, pushLen: cut.dur, jumps: (cut.jumps || []).map((j) => t + j) });
-    const base = { line: k, bg: p.bg || 'navy', head: dens === 'minimal' ? null : head, tilt: tilts[k % tilts.length], label: b.label || null, icons: dens === 'full' ? (p.icons || []).slice(0, 2) : [], role: p.role || null, hook: k === 0, rally: k === plan.length - 1 && plan.length > 1 };
+    const base = { line: k, bg: p.bg || 'navy', head: dens === 'minimal' || off.head ? null : head, tilt: tilts[k % tilts.length], label: b.label || null, icons: dens === 'full' ? (p.icons || []).slice(0, 2) : [], role: p.role || null, hook: k === 0, rally: k === plan.length - 1 && plan.length > 1 };
     const parts = [];
     let ins = p.map ? { kind: 'map', ...p.map } : p.card ? { kind: 'card', ...p.card } : p.cover && brollFiles[p.cover.broll] ? { kind: 'broll', ...p.cover } : null;
-    if (ins && ins.kind === 'card' && dens === 'minimal' && ins.card.kind !== 'clip') ins = null;
+    if (ins && ins.kind === 'card' && ((dens === 'minimal' && ins.card.kind !== 'clip') || off.tags)) ins = null;
     // Cut-ins start and end in the gaps between words (never mid-word), like the reference ads.
     if (ins) {
       const gaps = b.words.slice(1).map((w, i) => mapT(cut, (b.words[i].e + w.s) / 2)).filter((g) => g > 0.5 && g < cut.dur - 0.5);
@@ -435,7 +435,7 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
       const a0 = near(ins.at); let e0 = near(ins.at + ins.dur); if (e0 - a0 < 1.2) e0 = Math.min(cut.dur, a0 + Math.max(1.2, ins.dur));
       ins = { ...ins, at: a0, dur: e0 - a0 };
     }
-    if (ins && ins.kind === 'map' && dens !== 'full') ins = null;
+    if (ins && ins.kind === 'map' && (dens !== 'full' || off.tags)) ins = null;
     if (ins && ins.at < cut.dur - 0.6) {
       const a = t + ins.at; let e = Math.min(t + cut.dur, a + ins.dur); if (t + cut.dur - e < 0.7) e = t + cut.dur;
       parts.push({ ...base, at: t, dur: a - t, card: speaker(t) });
@@ -457,7 +457,7 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
     if (k === 0) { parts[0].enter = true; parts.forEach((x) => { if (x.card.kind === 'video' && x.card.src === cut.url) x.plate = true; }); }
     if (dens === 'full' && k >= 2 && k % 2 === 0 && !(p.icons || []).length) parts.forEach((x) => { if (x.card.kind === 'video' && x.card.src === cut.url) x.badge = true; });
     // The line's graphic (credential, stat, quote, callout) on its first speaker part.
-    if (p.gfx && (dens === 'full' || ['stat', 'credential', 'quote', 'bill'].includes(p.gfx.kind))) { const first = parts.find((x) => x.card.kind === 'video'); if (first) first.tag = p.gfx; }
+    if (p.gfx && !off.tags && (dens === 'full' || ['stat', 'credential', 'quote', 'bill'].includes(p.gfx.kind))) { const first = parts.find((x) => x.card.kind === 'video'); if (first) first.tag = p.gfx; }
     segs.push(...parts.filter((x) => x.dur > 0.02));
     t += cut.dur;
   });
@@ -473,9 +473,10 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
   // The end card's portrait: the speaker from the WHO line (else the first), mid-line, in a ring.
   const pk = Math.max(0, plan.findIndex((p) => p.role === 'who')); const pc = cuts[pk];
   const portrait = pc ? { src: pc.url, from: Math.max(0, Math.min(pc.dur * 0.45, pc.dur - 3.2)), fx: pc.fx ?? 0.5 } : null; // the clip must last the whole end card
-  const end = { at: t, dur: endDur, bg: 'navy', cta, name, sub: office || '', site: site || '', tag: tag || '', portrait, line: outro, for: endFor || '', date: endDate || '' };
+  // Plain edits can leave the end card off: the video then ends with their last word.
+  const end = off.end ? null : { at: t, dur: endDur, bg: 'navy', cta, name, sub: office || '', site: site || '', tag: tag || '', portrait, line: outro, for: endFor || '', date: endDate || '' };
   return {
-    w: W, h: H, fps: FPS, total: t + endDur, voiceEnd: t, segs, words, voice, end, name, office: [office, place].filter(Boolean).join(', ').slice(0, 70),
+    w: W, h: H, fps: FPS, total: t + (end ? endDur : 0), voiceEnd: t, segs, words, voice, end, name, office: [office, place].filter(Boolean).join(', ').slice(0, 70),
     bug: map ? (map.number ? `${map.stateName} · District ${map.number}` : map.stateName) : String(office || '').slice(0, 30),
     look, fonts: looks.fontFiles(look), ticker: [name, office, place, site].filter(Boolean).join('  •  '),
   };

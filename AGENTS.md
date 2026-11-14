@@ -93,6 +93,39 @@ name is added to the board). Connector tools: `video_templates`, `make_videos`, 
 - With nothing typed, `planOrders` plans `count` videos from what the footage is about most.
 - Batch files use a lighter encode (`political.batchCrf`, 21) and work folders are deleted after each video.
 
+## 2c. The hook finder, the footage readout and plain edits
+
+Not every post is a motion-graphics ad. Most weeks a politician needs plain, well-cut clips, and the opening line decides
+whether any of them gets watched. Three pieces serve that:
+
+- **Readout** (`footage.insight(sentences)`, `batch.insight(prospectId)`, `GET /api/prospects/:id/insight`): clear
+  statements, topics with counts, the best openings, lines that close well, what was left out and why, and a rough
+  number of videos the footage can carry. `POST` on the same path reads the footage without making anything (job
+  `political.read`, `batch.read`). Show the founders this before they order, so they never order a video the footage
+  can't make.
+- **Hook finder** (`footage.hooks(list, n, topic)`): a hook must pass `asOpening` (stands alone), `substance` (says
+  something), last 1.4 to 6.5 s, and not read as a closer (`outroScore` is taken off). Orders use it three ways:
+  `hook: <words>` (nearest line of theirs, `findLine`), `hook: #id`, and `3 hooks about X` (`hookRank`, one video per
+  top hook, for testing openings). A chosen hook is `forced`: it always opens, and the story is built round it
+  (`pickStory({ hookId })`, `heuristicStory({ seed })` leans to its subject and to lines said within 40 s of it).
+- **Edit types** (`looks.EDITS`, `looks.withEdit`): graphics, light, clean, captions, raw. They work by `look.density`
+  plus `look.off` (caps, plate, progress, tags, head, end). `raw` is a straight cut: full screen, hard cuts, no text,
+  no music, no sounds, no end card (`spec.end` is null and the video ends on their last word). Every switch can also be
+  set alone in `edit` (`captions`, `name`, `progress`, `endCard`, `music`, `sounds`, `punchIns`, `hardCuts`). When you
+  add a drawn element, decide which `off` key hides it and honour it in `buildSpec` or the composition.
+
+The page for all of this is `AdMachine`, `Insight` and `BatchMaker` in `renderer/js/modules/political.js`, styled by
+`renderer/css/admachine.css` (theme variables only, so the light look and Night both work). The readout talks to the
+order box through the `eu:amAdd` window event.
+
+Tested Nov 14 (synthesized voice, no AI): one batch of three with the batch set to Clean edit: `hook: Rents in our
+district went from 1,200 | housing` opened on that line and stayed on housing (captions, name tag, bill card),
+`childcare, straight cut` came out with no text, music or end card (22.0 s, ending on the last word), `housing,
+captions only, no music` had captions and the end card only; all three passed the check, 286 s in all on 4 cores. In
+that run two videos opened on lines that read as closers ("I will never stop fighting for tenants"); the opening test
+now takes `outroScore` off, and the same orders pick "We delivered for childcare...", "I wrote the Good Cause Eviction
+Act..." and "Rents in our district..." as openings (checked on the picks, not re-rendered).
+
 ## 3. Styles
 
 Ten main styles (shown first; eight more under "More styles", Clean and Grassroots among them), each in 9:16 and 16:9:

@@ -950,8 +950,19 @@ queue.register('political.batch', {
   heavy: true, maxAttempts: 1,
   async run(job, h) {
     if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
-    const { prospectId, text, orders, count, styles, density, wide, prompt, textStyle, purpose } = job.payload;
-    return require('../political/batch').make(prospectId, { text, orders, count, styles, density, wide, prompt, textStyle, purpose, actor: job.createdBy }, h);
+    const { prospectId, text, orders, count, styles, density, wide, prompt, textStyle, purpose, edit } = job.payload;
+    return require('../political/batch').make(prospectId, { text, orders, count, styles, density, wide, prompt, textStyle, purpose, edit, actor: job.createdBy }, h);
+  },
+});
+
+// Read a candidate's footage without making anything (so the Ad machine can show what's in it).
+queue.register('political.read', {
+  title: (p) => `Read footage: ${p.name || 'candidate'}`,
+  heavy: true, maxAttempts: 1,
+  async run(job, h) {
+    if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
+    const r = await require('../political/batch').read(job.payload.prospectId, h, job.createdBy);
+    return { sentences: r.sentences.length };
   },
 });
 

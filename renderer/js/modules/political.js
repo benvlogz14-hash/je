@@ -423,7 +423,7 @@ function StoryPicker({ p, jobs, reload }) {
 }
 
 /** The ad machine, up front on Politics: pick the candidate, drop their footage, pick or describe a style, make the ads. */
-const MAKING = ['political.package', 'political.restyle', 'political.batch'];
+const MAKING = ['political.package', 'political.restyle', 'political.batch', 'political.read'];
 export function AdMachine({ list, jobs, onOpen, reload }) {
   const { data: looks } = useApi('/api/political/looks');
   const [pid, setPid] = useState(() => list[0]?.id || '');
@@ -459,52 +459,106 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
     const running = (jobs || []).filter((j) => MAKING.includes(j.type) && j.payload?.prospectId);
     const now = new Map(running.map((j) => [j.payload.prospectId, j.type]));
     // When a batch finishes its videos open; when a package finishes its ads open.
-    for (const [id, type] of wasBusy.current) if (!now.has(id)) { const x = list.find((y) => y.id === id); if (!x) continue; if (type === 'political.batch') { setPid(id); setTab('videos'); } else if (['v', 'h', 'hl', 's'].some((k) => x.pkg?.files?.[k])) { setTab('finished'); setViewing(id); } }
+    for (const [id, type] of wasBusy.current) if (!now.has(id)) { const x = list.find((y) => y.id === id); if (!x) continue; if (type === 'political.batch') { setPid(id); setTab('videos'); } else if (type === 'political.read') { /* the readout on the Make tab updates by itself */ } else if (['v', 'h', 'hl', 's'].some((k) => x.pkg?.files?.[k])) { setTab('finished'); setViewing(id); } }
     wasBusy.current = now;
   }, [jobs, list]);
   const viewed = viewing && list.find((x) => x.id === viewing);
   const curLook = p?.pkg?.proLook?.name || looks?.current?.name || 'Bold blocks';
-  return html`<div class="panel pad col" style="gap:14px">
-    <div class="row" style="gap:10px;align-items:center"><div class="avatar" style="background:var(--coral-soft, var(--sky-soft));color:var(--coral-ink, var(--sky-ink))"><${Icon} name="film" size=${16} /></div>
-      <div class="col grow" style="gap:2px"><h4>Ad machine</h4><span class="faint" style="font-size:var(--fs-xs)">Upload a candidate's footage. Pick a politician, add their footage (or let it find their public videos), and type what you want: one line per video. Their own words become finished videos with graphics, sound and a closing hook.</span></div></div>
-    <${Tabs} value=${tab} onChange=${setTab} tabs=${[{ value: 'make', label: 'Make' }, { value: 'videos', label: `Videos${nVideos ? ` (${nVideos})` : ''}` }, { value: 'styles', label: `Styles (${(looks?.presets || []).length || 18})` }, { value: 'finished', label: `Sample ads${nDone ? ` (${nDone})` : ''}` }]} />
+  const office = p ? (p.pkg?.profile?.office || p.office || p.location || '') : '';
+  const nUp = p ? (p.footageUploads || []).length : 0; const nOn = p ? (p.footageUploads || []).filter((u) => !u.off).length : 0; const nFound = p ? (p.footageFound || []).filter((v) => !v.off).length : 0;
+  const tabs = [{ value: 'make', label: 'Make' }, { value: 'videos', label: `Videos${nVideos ? ` (${nVideos})` : ''}` }, { value: 'styles', label: `Styles (${(looks?.presets || []).length || 18})` }, { value: 'finished', label: `Sample ads${nDone ? ` (${nDone})` : ''}` }];
+  const step = (n, title, sub, done) => html`<div class="am-step"><span class=${`am-num${done ? ' done' : ''}`}>${n}</span><h4>${title}</h4>${sub ? html`<span class="am-sub">${sub}</span>` : null}</div>`;
+  return html`<div class="am">
+    <div class="am-head">
+      <div class="grow" style="min-width:260px"><h3>Ad machine</h3><p>Pick a politician, add their footage, and say what you want. Their own words come back as finished videos: full motion graphics, a clean captioned edit, or just the cuts.</p></div>
+      <${Tabs} value=${tab} onChange=${setTab} tabs=${tabs} />
+    </div>
     ${viewed ? html`<${Modal} wide title=${`${viewed.name}'s ads`} onClose=${() => setViewing(null)} footer=${html`<${Button} kind="ghost" onClick=${() => { setViewing(null); onOpen(viewed.id); }}>Open ${viewed.name.split(' ')[0]}'s lead</${Button}><${Button} kind="ghost" onClick=${() => { setPid(viewed.id); setViewing(null); setTab('make'); }}>Make them again</${Button}><${Button} kind="primary" onClick=${() => setViewing(null)}>Done</${Button}>`}><${FinishedAds} p=${viewed} /></${Modal}>` : null}
-    ${tab === 'styles' ? html`<${StylesGallery} presets=${looks?.presets || []} sel=${sel} onUse=${(id) => { setSel(id); setPrompt(''); setTab('make'); toast(`${(looks?.presets || []).find((x) => x.id === id)?.name || 'Style'} picked. Pick the candidate and press Make the ads.`, { kind: 'ok' }); }} />`
-    : tab === 'videos' ? html`<${VideosTab} list=${list} pid=${pid} setPid=${setPid} jobs=${jobs} reload=${reload} onMake=${() => setTab('make')} />`
-    : tab === 'finished' ? html`<${FinishedGallery} list=${list} jobs=${jobs} onOpen=${setViewing} />` : html`<div class="col" style="gap:14px">
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;align-items:start">
-      <div class="col" style="gap:10px;min-width:0">
-        <b style="font-size:var(--fs-sm)">1 · The candidate</b>
-        <${CandidatePicker} list=${list} pid=${pid} setPid=${setPid} reload=${reload} />
-        <b style="font-size:var(--fs-sm);margin-top:4px">2 · Their footage</b>
-        <label style=${`display:flex;flex-direction:column;align-items:center;gap:4px;padding:18px;border:2px dashed var(--line-strong, var(--line));border-radius:12px;cursor:pointer;text-align:center;background:${over ? 'var(--surface-2)' : 'transparent'}`}
-          onDragOver=${(e) => { e.preventDefault(); setOver(true); }} onDragLeave=${() => setOver(false)} onDrop=${(e) => { e.preventDefault(); setOver(false); drop(e.dataTransfer.files); }}>
-          <b>${up ? `Uploading ${up.n} of ${up.of}: ${Math.round(up.frac * 100)}%` : 'Drop their videos here, or click to choose'}</b>
-          <span class="faint" style="font-size:var(--fs-xs)">${p ? `${(p.footageUploads || []).length} uploaded for ${p.name}` : 'Pick the candidate first'} · speeches, interviews, rallies, B-roll</span>
-          <input type="file" accept="video/*" multiple style="display:none" disabled=${!!up || !p} onChange=${(e) => { drop(e.target.files); e.target.value = ''; }} />
-        </label>
-        ${up ? html`<${Progress} value=${up.frac} />` : null}
-        ${p ? html`<${FootageBank} p=${p} reload=${reload} />` : null}
-        ${p ? html`<${GoogleVideos} p=${p} reload=${reload} />` : null}
-        ${made.length ? html`<b style="font-size:var(--fs-sm);margin-top:4px">Made recently</b><div class="row wrap" style="gap:8px">${made.map((x) => html`<button class="ghost" title=${`Show ${x.name}'s ads`} onClick=${() => setViewing(x.id)} style="padding:0;border:0;background:none;cursor:pointer;display:flex;flex-direction:column;gap:3px;align-items:center"><img src=${api.url(`/api/prospects/${x.id}/file/posterV?at=${encodeURIComponent(x.pkg?.steps?.video_v?.at || '')}`)} alt="" style="height:96px;border-radius:8px;border:1px solid var(--line)" onError=${(e) => { e.target.closest('button').style.display = 'none'; }} /><span class="faint ellipsis" style="font-size:10px;max-width:70px">${x.name.split(' ').slice(-1)[0]}</span></button>`)}</div>` : null}
+    ${tab === 'styles' ? html`<section class="panel am-card"><${StylesGallery} presets=${looks?.presets || []} sel=${sel} onUse=${(id) => { setSel(id); setPrompt(''); window.dispatchEvent(new CustomEvent('eu:amStyle', { detail: id })); setTab('make'); toast(`${(looks?.presets || []).find((x) => x.id === id)?.name || 'Style'} picked.`, { kind: 'ok' }); }} /></section>`
+    : tab === 'videos' ? html`<section class="panel am-card"><${VideosTab} list=${list} pid=${pid} setPid=${setPid} jobs=${jobs} reload=${reload} onMake=${() => setTab('make')} /></section>`
+    : tab === 'finished' ? html`<section class="panel am-card"><${FinishedGallery} list=${list} jobs=${jobs} onOpen=${setViewing} /></section>` : html`<div class="am-grid">
+      <div class="am-col">
+        <section class="panel am-card">
+          ${step(1, 'Who it\'s for', `${list.length} on your list`, !!p)}
+          ${p ? html`<div class="am-who"><span class="am-ini">${p.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase()}</span>
+            <div class="col grow" style="gap:1px;min-width:0"><b class="ellipsis">${p.name}</b><span class="am-help ellipsis">${office || 'No office noted yet'}${(p.videos || []).length ? ` · ${(p.videos || []).length} videos made` : ''}</span></div>
+            <${Button} kind="ghost" size="sm" onClick=${() => onOpen(p.id)}>Open</${Button}></div>` : null}
+          <${CandidatePicker} list=${list} pid=${pid} setPid=${setPid} reload=${reload} />
+        </section>
+        <section class="panel am-card">
+          ${step(2, 'Their footage', p ? (nUp ? `${nOn} of ${nUp} uploads in use` : nFound ? `${nFound} public videos picked` : 'none yet') : '', nOn > 0 || nFound > 0)}
+          <label class=${`am-drop${over ? ' over' : ''}`} onDragOver=${(e) => { e.preventDefault(); setOver(true); }} onDragLeave=${() => setOver(false)} onDrop=${(e) => { e.preventDefault(); setOver(false); drop(e.dataTransfer.files); }}>
+            <b>${up ? `Uploading ${up.n} of ${up.of}: ${Math.round(up.frac * 100)}%` : 'Drop their videos here, or click to choose'}</b>
+            <span class="am-help">${p ? 'Speeches, interviews, hearings, rallies, phone clips, B-roll. Raw is fine.' : 'Pick who it\'s for first'}</span>
+            <input type="file" accept="video/*" multiple style="display:none" disabled=${!!up || !p} onChange=${(e) => { drop(e.target.files); e.target.value = ''; }} />
+          </label>
+          ${up ? html`<${Progress} value=${up.frac} />` : null}
+          ${p ? html`<${FootageBank} p=${p} reload=${reload} />` : null}
+          ${p ? html`<${GoogleVideos} p=${p} reload=${reload} />` : null}
+        </section>
+        <section class="panel am-card">
+          ${step(3, 'What\'s in it', 'topics and the hook finder', false)}
+          <${Insight} key=${p?.id || 'none'} p=${p} jobs=${jobs} />
+        </section>
       </div>
-      <div class="col" style="gap:10px;min-width:0">
-        <div class="row" style="gap:10px;align-items:center"><b style="font-size:var(--fs-sm)" class="grow">3 · What to make</b><${Seg} value=${mode} onChange=${pickMode} options=${[{ value: 'videos', label: 'Videos' }, { value: 'package', label: 'Sample package' }]} /></div>
-        ${mode === 'videos' ? html`<${BatchMaker} key=${p?.id || 'none'} p=${p} list=${list} busy=${busy} up=${up} looks=${looks} curLook=${curLook} reload=${reload} />` : html`<span class="faint" style="font-size:var(--fs-xs)">The outreach sample: a short vertical ad, a short horizontal ad, a long one, the one-page sheet and the email draft.</span>
-        <b style="font-size:var(--fs-sm)">The style <span class="faint" style="font-weight:400">now: ${curLook}</span></b>
-        <div style="max-height:420px;overflow:auto;padding-right:4px"><${LookPicker} presets=${looks?.presets || []} sel=${sel} onSel=${(id) => { setSel(id); if (id) setPrompt(''); }} /></div>
-        <div class="col" style="gap:4px"><b style="font-size:var(--fs-xs)">How much graphics</b><${Seg} value=${dens} onChange=${setDens} options=${[{ value: '', label: 'The style\'s own' }, ...(looks?.density || []).map((d) => ({ value: d.id, label: d.name }))]} /><span class="faint" style="font-size:10px">${dens === 'minimal' ? 'Captions, their name and proven facts only: the footage and their words carry it.' : dens === 'light' ? 'Headline, captions, name and proven facts. No stickers, icons, maps or extras.' : dens === 'full' ? 'Everything: headlines, icons, map, badges and the style\'s own moving extras.' : 'Each style decides (On location is captions only, the others use everything).'}</span></div>
-        <textarea class="input" rows="2" id="am-prompt" placeholder=${'Or describe it: "Zohran-style street vlog, orange and blue", "dark and cinematic, black and gold"'} value=${prompt} onInput=${(e) => { setPrompt(e.target.value); if (e.target.value.trim()) setSel(null); }} />
-        ${p ? html`<${StoryPicker} key=${p.id} p=${p} jobs=${jobs} reload=${reload} />` : null}`}
+      <div class="am-col">
+        <div class="row wrap" style="gap:10px;align-items:center"><span class="am-label grow">What to make</span><${Seg} value=${mode} onChange=${pickMode} options=${[{ value: 'videos', label: 'Videos' }, { value: 'package', label: 'Outreach sample' }]} /></div>
+        ${mode === 'videos' ? html`<${BatchMaker} key=${p?.id || 'none'} p=${p} list=${list} busy=${busy} job=${job} up=${up} looks=${looks} curLook=${curLook} reload=${reload} />` : html`
+        <section class="panel am-card">
+          ${step(4, 'The outreach sample', `now: ${curLook}`, false)}
+          <span class="am-help">A short vertical ad, a short horizontal ad, a long one, the one-page sheet and the email draft. Nothing is sent.</span>
+          <div style="max-height:420px;overflow:auto;padding-right:4px"><${LookPicker} presets=${looks?.presets || []} sel=${sel} onSel=${(id) => { setSel(id); if (id) setPrompt(''); }} /></div>
+          <div class="am-sec"><span class="am-label">How much graphics</span><${Seg} value=${dens} onChange=${setDens} options=${[{ value: '', label: 'The style\'s own' }, ...(looks?.density || []).map((d) => ({ value: d.id, label: d.name }))]} /><span class="am-help">${dens === 'minimal' ? 'Captions, their name and proven facts only: the footage and their words carry it.' : dens === 'light' ? 'Headline, captions, name and proven facts. No stickers, icons, maps or extras.' : dens === 'full' ? 'Everything: headlines, icons, map, badges and the style\'s own moving extras.' : 'Each style decides (On location is captions only, the others use everything).'}</span></div>
+          <textarea class="am-orders" style="min-height:64px" rows="2" id="am-prompt" placeholder=${'Or describe a style: "street vlog, orange and blue", "dark and cinematic, black and gold"'} value=${prompt} onInput=${(e) => { setPrompt(e.target.value); if (e.target.value.trim()) setSel(null); }} />
+          ${p ? html`<${StoryPicker} key=${p.id} p=${p} jobs=${jobs} reload=${reload} />` : null}
+        </section>
+        <div class="am-bar">
+          ${job ? html`<div class="col grow" style="gap:4px;min-width:200px"><${Progress} value=${job.progress || 0} /><span class="am-help">${Math.round((job.progress || 0) * 100)}% · ${job.note || 'working'}</span></div>` : html`<span class="sum">${p ? html`<b>${p.name}</b><br />${nUp ? `${nOn} of ${nUp} videos ticked` : 'no footage yet (it will look for public videos)'} · ${prompt.trim() ? 'your described style' : sel ? (looks?.presets || []).find((x) => x.id === sel)?.name : curLook}` : 'Pick who it\'s for'}</span>`}
+          <${Button} kind="primary" icon="sparkle" disabled=${!p || busy || !!up} title=${!p ? 'Pick or add the candidate first' : busy ? 'Already making this candidate\'s ads: see the progress below' : up ? 'Wait for the upload to finish' : ''} onClick=${make}>${busy ? 'Making the ads…' : up ? 'Uploading…' : 'Make the sample package'}</${Button}>
+        </div>`}
+        ${p ? html`<${RunStatus} key=${p.id} p=${p} onWatch=${() => setViewing(p.id)} />` : null}
+        ${made.length ? html`<section class="panel am-card"><span class="am-label">Sample ads made recently</span><div class="row wrap" style="gap:8px">${made.map((x) => html`<button class="ghost" title=${`Show ${x.name}'s ads`} onClick=${() => setViewing(x.id)} style="padding:0;border:0;background:none;cursor:pointer;display:flex;flex-direction:column;gap:3px;align-items:center"><img src=${api.url(`/api/prospects/${x.id}/file/posterV?at=${encodeURIComponent(x.pkg?.steps?.video_v?.at || '')}`)} alt="" style="height:96px;border-radius:10px;border:1px solid var(--line)" onError=${(e) => { e.target.closest('button').style.display = 'none'; }} /><span class="faint ellipsis" style="font-size:10px;max-width:70px">${x.name.split(' ').slice(-1)[0]}</span></button>`)}</div></section>` : null}
       </div>
-    </div>
-    <div class="row wrap" style="gap:10px;align-items:center">
-      ${job ? html`<div class="col grow" style="gap:4px;min-width:200px"><${Progress} value=${job.progress || 0} /><span class="faint" style="font-size:var(--fs-xs)">${Math.round((job.progress || 0) * 100)}% · ${job.note || 'working'}</span></div>` : html`<span class="faint grow" style="font-size:var(--fs-xs)">${p ? `${p.name}: ${(p.footageUploads || []).length ? `${(p.footageUploads || []).filter((u) => !u.off).length} of ${(p.footageUploads || []).length} videos ticked` : 'no footage yet (it will look for public videos)'} · ${prompt.trim() ? 'your described style' : sel ? (looks?.presets || []).find((x) => x.id === sel)?.name : curLook}` : ''}</span>`}
-      ${p ? html`<${Button} kind="ghost" size="sm" onClick=${() => onOpen(p.id)}>Open ${p.name.split(' ')[0]}</${Button}>` : null}
-      ${mode === 'package' ? html`<${Button} kind="primary" icon="sparkle" disabled=${!p || busy || !!up} title=${!p ? 'Pick or add the candidate first' : busy ? 'Already making this candidate\'s ads: see the progress below' : up ? 'Wait for the upload to finish' : ''} onClick=${make}>${busy ? 'Making the ads…' : up ? 'Uploading…' : 'Make the sample package'}</${Button}>` : null}
-    </div>
-    ${p ? html`<${RunStatus} key=${p.id} p=${p} onWatch=${() => setViewing(p.id)} />` : null}
     </div>`}
+  </div>`;
+}
+
+/**
+ * What's in their footage, before anything is made: how much they say, what about, and the hook finder (their best
+ * opening lines). Clicking a topic or a hook adds a line to the order box.
+ */
+function Insight({ p, jobs }) {
+  const { data: d, reload } = useApi(p ? `/api/prospects/${p.id}/insight` : null, ['prospects', 'job']);
+  const [all, setAll] = useState(false);
+  if (!p) return html`<span class="am-help">Pick who it's for, and what their footage holds shows here: what they talk about, and their strongest opening lines.</span>`;
+  const reading = (jobs || []).find((j) => j.type === 'political.read' && j.payload?.prospectId === p.id);
+  const busy = (jobs || []).some((j) => MAKING.includes(j.type) && j.payload?.prospectId === p.id);
+  const read = () => act(() => api.post(`/api/prospects/${p.id}/insight`, {}), { ok: 'Reading their footage. The first time takes a few minutes; after that every video uses it.' }).then(reload);
+  const add = (line) => { window.dispatchEvent(new CustomEvent('eu:amAdd', { detail: line })); toast(`Added: ${line.slice(0, 60)}`, { kind: 'ok' }); };
+  if (!d) return html`<span class="am-help">Looking…</span>`;
+  if (!d.ready) return html`<div class="am-sec">
+    ${reading ? html`<${Progress} value=${reading.progress || 0} /><span class="am-help">${Math.round((reading.progress || 0) * 100)}% · ${reading.note || (reading.status === 'queued' ? 'waiting its turn' : 'reading')}</span>` : html`<span class="am-help">${d.why}${d.note ? ` ${d.note}` : ''} Reading it finds the videos, writes down every word and marks what's usable, so you can see what can be made before making it.</span>
+    <div><${Button} kind="ghost" icon="search" disabled=${busy} onClick=${read}>${d.hasFootage ? 'Read their footage' : 'Find and read their public videos'}</${Button}></div>`}
+  </div>`;
+  const hooks = all ? d.hooks : d.hooks.slice(0, 5);
+  const left = [d.left.procedure && `${d.left.procedure} procedure`, d.left.otherSpeakers && `${d.left.otherSpeakers} by other speakers`, d.left.questions && `${d.left.questions} questions`, d.left.greetings && `${d.left.greetings} greetings`].filter(Boolean);
+  return html`<div class="am-sec" style="gap:14px">
+    <div class="am-tiles">
+      <div class="am-tile"><b>${d.clips}</b><span>video${d.clips === 1 ? '' : 's'} · ${d.minutes} min</span></div>
+      <div class="am-tile"><b>${d.statements}</b><span>clear statements</span></div>
+      <div class="am-tile"><b>${d.hooks.length}</b><span>strong openings</span></div>
+      <div class="am-tile"><b>~${d.room}</b><span>videos it can carry</span></div>
+    </div>
+    ${d.statements < 4 ? html`<span class="am-help" style="color:var(--coral-ink)">There are too few clear statements here to build a video from. Add footage where they speak to an audience or a camera, not only hearings.</span>` : null}
+    ${d.stale ? html`<span class="am-help">The footage changed since this was read. <button class="am-link" disabled=${busy || !!reading} onClick=${read}>Read it again</button></span>` : null}
+    ${d.topics.length ? html`<div class="am-sec"><span class="am-label">What they talk about</span>
+      <div class="am-chips">${d.topics.map((t) => html`<button type="button" class=${`am-chip${t.enough ? '' : ' dim'}`} title=${t.enough ? `Add a video about ${t.name}` : `Only ${t.n} lines: probably too little for a whole video`} onClick=${() => add(t.name)}>${t.name} <i>${t.n}</i></button>`)}</div></div>` : null}
+    ${d.hooks.length ? html`<div class="am-sec"><div class="row" style="align-items:baseline;gap:8px"><span class="am-label grow">Hook finder: their best opening lines</span>${d.hooks.length >= 2 ? html`<button class="am-link" title="The same video, each opening with a different one of these" onClick=${() => add(`${Math.min(3, d.hooks.length)} hooks`)}>Test the top ${Math.min(3, d.hooks.length)}</button>` : null}</div>
+      <div class="am-hooks">${hooks.map((h, i) => html`<button type="button" key=${h.id} class="am-hook" title="Make a video that opens with this line" onClick=${() => add(`hook: ${h.text}`)}>
+        <span class="am-rank">${i + 1}</span><span class="q">${h.text}<span class="m">${h.seconds} s · ${h.why}${h.topic ? ` · ${h.topic}` : ''}</span></span><span class="go">Open with this</span></button>`)}</div>
+      ${d.hooks.length > 5 ? html`<button class="am-link" style="align-self:flex-start" onClick=${() => setAll(!all)}>${all ? 'Show fewer' : `Show all ${d.hooks.length}`}</button>` : null}</div>` : html`<span class="am-help">No line here works as an opening on its own yet (each leans on something said before it, or is a greeting).</span>`}
+    ${d.closers.length ? html`<div class="am-sec"><span class="am-label">Lines that close well</span><span class="am-help">${d.closers.slice(0, 3).map((c) => `“${c.text}”`).join('  ')}</span></div>` : null}
+    ${left.length ? html`<span class="am-help">Left out on purpose: ${left.join(', ')}.</span>` : null}
   </div>`;
 }
 
@@ -538,22 +592,32 @@ function CandidatePicker({ list, pid, setPid, reload }) {
 }
 
 /** A short list of what to type, shown as the order box's placeholder. */
-const ORDER_HINT = 'One video per line. For example:\nscript: Most people in Albany are politicians. I am a scientist. We will never stop fighting.\nhousing\nquick video about childcare\nintro\nwhat she delivered on transit, to camera\n20 second video on rent, captions only';
+const ORDER_HINT = 'One video per line. For example:\nhousing\nquick video about childcare, captions only\nhook: Most people in Albany are politicians\n3 hooks about rent\nscript: First line. Second line. Closing line.\nwhat she delivered on transit, to camera, no music';
+
+// What each kind of edit draws (for the small phone pictures and the switches' starting positions).
+const EDIT_PARTS = { graphics: 'htnc', light: 'hnc', clean: 'tnc', captions: 'c', raw: '' };
+const EDIT_ON = { graphics: { captions: true, name: true, progress: true, endCard: true, music: true }, light: { captions: true, name: true, progress: true, endCard: true, music: true }, clean: { captions: true, name: true, progress: true, endCard: true, music: true }, captions: { captions: true, name: false, progress: false, endCard: true, music: true }, raw: { captions: false, name: false, progress: false, endCard: false, music: false } };
+const SWITCHES = [['captions', 'Captions'], ['name', 'Name tag'], ['endCard', 'End card'], ['music', 'Music'], ['progress', 'Progress bar']];
+const GROUPS = [['Everyday', ['topic', 'quick', 'update', 'district', 'help', 'vote', 'clip', 'best']], ['Who they are', ['intro', 'values', 'people', 'story', 'local']], ['The record', ['delivered', 'numbers', 'problem', 'explainer', 'promise']], ['Pushing back', ['fight', 'myth', 'callout']]];
+const saved = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v == null ? d : v; } catch { return d; } };
 
 /**
- * The everyday job: type what you want (one line per video) or tap baselines, see how each line will be read, press Make.
- * Empty box = "plan N for me" from what their footage is about.
+ * The everyday job: type what you want (one line per video) or tap baselines, see how each line will be read, choose
+ * the kind of edit and the look, press Make. Empty box = "plan N for me" from what their footage is about.
  */
-function BatchMaker({ p, list, busy, up, looks, curLook, reload }) {
+function BatchMaker({ p, list, busy, job, up, looks, curLook, reload }) {
   const { data: opts } = useApi('/api/political/templates');
-  const [text, setText] = useState(''); const [count, setCount] = useState(8);
-  const [style, setStyle] = useState('mix'); const [pickStyle, setPickStyle] = useState(false);
-  const [dens, setDens] = useState(''); const [wide, setWide] = useState(false);
-  const [note, setNote] = useState(''); const [more, setMore] = useState(false);
+  const o0 = saved('eu.amOpts', {});
+  const [text, setText] = useState(''); const [count, setCount] = useState(o0.count || 8);
+  const [style, setStyle] = useState(o0.style || 'mix'); const [pickStyle, setPickStyle] = useState(false);
+  const [kind, setKind] = useState(o0.kind || 'graphics'); const [sw, setSw] = useState(o0.sw || {}); const [sounds, setSounds] = useState(o0.sounds || '');
+  const [punch, setPunch] = useState(o0.punch || ''); const [hard, setHard] = useState(!!o0.hard);
+  const [wide, setWide] = useState(!!o0.wide); const [note, setNote] = useState(''); const [fold, setFold] = useState(o0.fold || '');
   // Text: the font, how big, and an outline or a soft shadow round captions. Purpose: everyday social content or a race ad.
-  const [font, setFont] = useState(''); const [tsize, setTsize] = useState(1); const [outline, setOutline] = useState(''); const [purpose, setPurpose] = useState('');
-  const [preview, setPreview] = useState([]); const [others, setOthers] = useState(false); const [names, setNames] = useState('');
+  const [font, setFont] = useState(o0.font || ''); const [tsize, setTsize] = useState(o0.tsize || 1); const [outline, setOutline] = useState(o0.outline || ''); const [purpose, setPurpose] = useState(o0.purpose || '');
+  const [preview, setPreview] = useState([]); const [others, setOthers] = useState(false); const [names, setNames] = useState(''); const [group, setGroup] = useState(0);
   const box = useRef(null);
+  useEffect(() => { try { localStorage.setItem('eu.amOpts', JSON.stringify({ count, style, kind, sw, sounds, punch, hard, wide, fold, font, tsize, outline, purpose })); } catch { /* private window */ } }, [count, style, kind, sw, sounds, punch, hard, wide, fold, font, tsize, outline, purpose]);
   // How each line will be read, a moment after typing stops.
   useEffect(() => {
     if (!text.trim()) { setPreview([]); return undefined; }
@@ -561,55 +625,88 @@ function BatchMaker({ p, list, busy, up, looks, curLook, reload }) {
     return () => clearTimeout(t);
   }, [text]);
   const addLine = (line, focus) => { setText((cur) => `${cur.trim() ? `${cur.replace(/\s+$/, '')}\n` : ''}${line}`); if (focus) setTimeout(() => { const el = box.current; if (el) { el.focus(); el.selectionStart = el.selectionEnd = el.value.length; } }, 30); };
+  // Topics and hooks clicked in "What's in it", and a style picked on the Styles tab, land here.
+  useEffect(() => { const on = (e) => addLine(String(e.detail || '')); const st = (e) => { setStyle(String(e.detail)); setPickStyle(false); }; window.addEventListener('eu:amAdd', on); window.addEventListener('eu:amStyle', st); return () => { window.removeEventListener('eu:amAdd', on); window.removeEventListener('eu:amStyle', st); }; }, []);
   const n = preview.length || count;
-  const body = () => ({ text, count: text.trim() ? 0 : count, styles: style === 'mix' ? 'mix' : style === 'own' ? null : [style], density: dens || null, wide, prompt: note.trim(), purpose: purpose || null, textStyle: font || tsize !== 1 || outline ? { font, size: tsize, ...(outline ? { outline: outline === 'on' } : {}) } : null });
+  const bare = kind === 'raw'; const isOn = (k) => (sw[k] != null ? sw[k] : EDIT_ON[kind][k]);
+  const edit = () => ({ kind, ...sw, ...(sounds ? { sounds } : {}), ...(punch ? { punchIns: punch === 'on' } : {}), ...(hard ? { hardCuts: true } : {}) });
+  const body = () => ({ text, count: text.trim() ? 0 : count, styles: style === 'mix' ? 'mix' : style === 'own' ? null : [style], edit: edit(), wide, prompt: note.trim(), purpose: purpose || null, textStyle: font || tsize !== 1 || outline ? { font, size: tsize, ...(outline ? { outline: outline === 'on' } : {}) } : null });
   const go = () => act(() => api.post(`/api/prospects/${p.id}/videos`, body()), { ok: `Making ${n} video${n === 1 ? '' : 's'} for ${p.name}. They appear in the Videos tab as each one finishes.` }).then(() => reload());
   const goMany = () => { const who = names.split(/\r?\n/).map((x) => x.trim()).filter(Boolean); if (!who.length) return; act(() => api.post('/api/political/videos', { names: who, ...body() }), { ok: (r) => `Started for ${r.started.length}${r.skipped.length ? `; left out: ${r.skipped.join(', ')}` : ''}. One politician is made at a time.` }).then(() => { setOthers(false); setNames(''); reload(); }); };
-  const styleName = style === 'mix' ? 'A mix of old and new styles' : style === 'own' ? `Their own (${curLook})` : (looks?.presets || []).find((x) => x.id === style)?.name || style;
+  const styleName = style === 'mix' ? 'A mix of styles' : style === 'own' ? `Their own (${curLook})` : (looks?.presets || []).find((x) => x.id === style)?.name || style;
   const secs = (o) => o.seconds || (opts?.templates || []).find((t) => t.id === o.template)?.seconds || 26;
-  return html`<div class="col" style="gap:10px">
-    <textarea class="input" id="am-orders" ref=${box} rows="5" style="font-size:var(--fs-sm);line-height:1.5;min-height:124px;resize:vertical" placeholder=${ORDER_HINT} value=${text} onInput=${(e) => setText(e.target.value)} />
-    <div class="row wrap" style="gap:6px">${(opts?.templates || []).map((t) => html`<button type="button" class="chip" title=${`${t.formula}\n\n${t.about}`} onClick=${() => addLine(t.starter || (t.needsTopic ? 'about ' : t.name.toLowerCase()), true)} style="cursor:pointer;font-size:var(--fs-xs);padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2, var(--surface))">+ ${t.name}</button>`)}</div>
-    ${preview.length ? html`<div class="col" style="gap:4px;padding:10px 12px;border-radius:12px;background:var(--surface-2, var(--surface));max-height:210px;overflow:auto" data-animate>
-      <b style="font-size:var(--fs-xs)">I'll make ${preview.length} video${preview.length === 1 ? '' : 's'}:</b>
-      ${preview.map((o, i) => html`<div key=${i} class="row" style="gap:8px;font-size:var(--fs-xs);align-items:baseline"><span class="faint" style="width:16px;text-align:right">${i + 1}</span><b>${o.templateName}</b>${o.topic ? html`<span>about ${o.topic}</span>` : o.brief ? html`<span class="faint ellipsis" style="max-width:220px">from your prompt</span>` : null}<span class="faint grow">· ${o.styleName || (style === 'mix' ? 'style in turn' : styleName)} · about ${secs(o)} s${o.wide || wide ? ' · + horizontal' : ''}${o.density === 'minimal' ? ' · captions only' : o.density === 'light' ? ' · fewer graphics' : ''}</span></div>`)}
-    </div>` : html`<div class="row" style="gap:10px;align-items:center;padding:10px 12px;border-radius:12px;background:var(--surface-2, var(--surface))">
-      <span style="font-size:var(--fs-xs)" class="grow">Nothing typed: I'll plan them from what ${p ? p.name.split(' ')[0] : 'they'} talk${p ? 's' : ''} about most.</span>
-      <button type="button" class="ghost" aria-label="Fewer" onClick=${() => setCount(Math.max(1, count - 1))} style="width:28px;height:28px;border-radius:50%;border:1px solid var(--line);background:var(--surface);cursor:pointer">−</button>
-      <b style="min-width:70px;text-align:center;font-size:var(--fs-sm)">${count} videos</b>
-      <button type="button" class="ghost" aria-label="More" onClick=${() => setCount(Math.min(40, count + 1))} style="width:28px;height:28px;border-radius:50%;border:1px solid var(--line);background:var(--surface);cursor:pointer">+</button>
-    </div>`}
-    <div class="row wrap" style="gap:8px;align-items:center">
-      <b style="font-size:var(--fs-xs)">Style</b>
-      <${Seg} value=${['mix', 'own'].includes(style) ? style : 'one'} onChange=${(v) => { if (v === 'one') setPickStyle(true); else { setStyle(v); setPickStyle(false); } }} options=${[{ value: 'mix', label: 'Mix of old and new' }, { value: 'own', label: 'Their own' }, { value: 'one', label: ['mix', 'own'].includes(style) ? 'Pick one…' : styleName }]} />
-      <label class="row" style="gap:6px;align-items:center;font-size:var(--fs-xs);cursor:pointer"><${Toggle} on=${wide} onChange=${setWide} /><span>Horizontal too</span></label>
-      <button type="button" class="ghost" onClick=${() => setMore(!more)} style="border:0;background:none;cursor:pointer;font-size:var(--fs-xs);color:var(--ink-2, inherit);text-decoration:underline">${more ? 'Fewer options' : 'More options'}</button>
-    </div>
-    ${pickStyle ? html`<div style="max-height:330px;overflow:auto;padding-right:4px"><${LookPicker} presets=${looks?.presets || []} sel=${['mix', 'own'].includes(style) ? null : style} onSel=${(id) => { if (id) { setStyle(id); setPickStyle(false); } }} /></div>` : null}
-    ${more ? html`<div class="col" style="gap:8px">
-      <div class="col" style="gap:4px"><b style="font-size:var(--fs-xs)">How much graphics</b><${Seg} value=${dens} onChange=${setDens} options=${[{ value: '', label: 'The style\'s own' }, ...(opts?.density || []).map((d) => ({ value: d.id, label: d.name }))]} /></div>
-      <div class="col" style="gap:4px"><b style="font-size:var(--fs-xs)">What it's for</b><${Seg} value=${purpose || opts?.purpose || 'social'} onChange=${setPurpose} options=${[{ value: 'social', label: 'Social content' }, { value: 'campaign', label: 'Campaign ad' }]} /><span class="faint" style="font-size:10px">${(purpose || opts?.purpose || 'social') === 'social' ? 'For people already in office: ends on Follow, no race or vote language.' : 'For a race: ends on Vote, with "for the 35th" under the name.'}</span></div>
-      <div class="col" style="gap:4px"><b style="font-size:var(--fs-xs)">Text</b>
+  const edits = opts?.edits || []; const editName = (id) => edits.find((e) => e.id === id)?.name || '';
+  const tpl = (id) => (opts?.templates || []).find((t) => t.id === id);
+  const lineNote = (o) => [o.hook ? `opens with “${o.hook.slice(0, 34)}${o.hook.length > 34 ? '…' : ''}”` : o.hookId != null ? `opens with line ${o.hookId}` : o.hookRank != null ? `their no. ${o.hookRank + 1} hook` : '', o.styleName || (bare ? '' : style === 'mix' ? 'style in turn' : styleName), `about ${secs(o)} s`, o.wide || wide ? '+ horizontal' : '', o.edit?.kind ? editName(o.edit.kind).toLowerCase() : '', o.edit?.music === false ? 'no music' : ''].filter(Boolean).join(' · ');
+  const foldBtn = (id, label, now) => html`<button type="button" class="am-fold" aria-expanded=${fold === id} onClick=${() => setFold(fold === id ? '' : id)}>${fold === id ? '▾' : '▸'} ${label}<i>${now}</i></button>`;
+  const first = p ? p.name.split(' ')[0] : 'they';
+  return html`
+    <section class="panel am-card">
+      <div class="am-step"><span class=${`am-num${text.trim() ? ' done' : ''}`}>4</span><h4>The videos</h4><span class="am-sub">one line each · or leave empty and it plans them</span></div>
+      <textarea class="am-orders" id="am-orders" ref=${box} rows="5" placeholder=${ORDER_HINT} value=${text} onInput=${(e) => setText(e.target.value)} />
+      <div class="am-sec">
+        <div class="row wrap" style="gap:8px;align-items:center"><span class="am-label">Baselines</span><${Seg} value=${String(group)} onChange=${(v) => setGroup(Number(v))} options=${GROUPS.map(([g], i) => ({ value: String(i), label: g }))} /></div>
+        <div class="am-chips">
+          ${group === 0 ? html`<button type="button" class="am-chip" title="Type a rough script: it finds where they say each line and cuts them together in that order" onClick=${() => addLine('script: ', true)}>+ Follow my script</button><button type="button" class="am-chip" title="Open the video with a line you choose (see the hook finder)" onClick=${() => addLine('hook: ', true)}>+ Open with a line</button><button type="button" class="am-chip" title="The same video three times, each with a different one of their best openings" onClick=${() => addLine('3 hooks about ', true)}>+ Hook test</button>` : null}
+          ${GROUPS[group][1].map(tpl).filter(Boolean).map((t) => html`<button type="button" class="am-chip" title=${`${t.formula}\n\n${t.about}`} onClick=${() => addLine(t.starter || (t.needsTopic ? 'about ' : t.name.toLowerCase()), true)}>+ ${t.name}</button>`)}
+        </div>
+      </div>
+      ${preview.length ? html`<div class="am-plan" data-animate>
+        <b style="font-size:var(--fs-xs);margin-bottom:2px">I'll make ${preview.length} video${preview.length === 1 ? '' : 's'}:</b>
+        ${preview.map((o, i) => html`<div key=${i} class="ln"><span class="n">${i + 1}</span><b>${o.templateName}</b>${o.topic ? html`<span>about ${o.topic}</span>` : o.brief && o.template !== 'script' ? html`<span class="faint">from your prompt</span>` : null}<span class="faint grow">${lineNote(o)}</span></div>`)}
+      </div>` : html`<div class="am-count">
+        <span style="font-size:var(--fs-xs)" class="grow">Nothing typed: it plans them from what ${first} talk${p ? 's' : ''} about most.</span>
+        <button type="button" class="am-round" aria-label="Fewer" onClick=${() => setCount(Math.max(1, count - 1))}>−</button>
+        <b style="min-width:72px;text-align:center;font-size:var(--fs-sm)">${count} video${count === 1 ? '' : 's'}</b>
+        <button type="button" class="am-round" aria-label="More" onClick=${() => setCount(Math.min(40, count + 1))}>+</button>
+      </div>`}
+    </section>
+    <section class="panel am-card">
+      <div class="am-step"><span class="am-num done">5</span><h4>How they're edited</h4><span class="am-sub">${editName(kind)}${bare ? '' : ` · ${styleName}`}</span></div>
+      <div class="am-opts">${edits.map((e) => html`<button type="button" key=${e.id} class=${`am-opt${kind === e.id ? ' on' : ''}`} aria-pressed=${kind === e.id} onClick=${() => { setKind(e.id); setSw({}); }}>
+        <span class="am-ph">${[...(EDIT_PARTS[e.id] || '')].map((c) => html`<u class=${c} />`)}</span><b>${e.name}</b><span>${e.about}</span></button>`)}</div>
+      <div class="am-switches">
+        ${SWITCHES.map(([k, label]) => html`<label key=${k} class="am-switch"><${Toggle} on=${isOn(k)} label=${label} onChange=${(v) => setSw({ ...sw, [k]: v })} /><span>${label}</span></label>`)}
+        <label class="am-switch"><${Toggle} on=${wide} label="Horizontal too" onChange=${setWide} /><span>Horizontal too</span></label>
+      </div>
+      ${bare ? html`<span class="am-help">A straight cut ignores the style: it is their footage, full screen, cut on natural pauses with even sound. Open it in the Studio from the Videos tab to finish it by hand.</span>` : html`
+      <div class="am-sec"><span class="am-label">Style</span>
+        <div class="row wrap" style="gap:8px;align-items:center"><${Seg} value=${['mix', 'own'].includes(style) ? style : 'one'} onChange=${(v) => { if (v === 'one') setPickStyle(true); else { setStyle(v); setPickStyle(false); } }} options=${[{ value: 'mix', label: 'Mix of styles' }, { value: 'own', label: 'Their own' }, { value: 'one', label: ['mix', 'own'].includes(style) ? 'Pick one…' : styleName }]} />
+          ${!['mix', 'own'].includes(style) ? html`<button class="am-link" onClick=${() => setPickStyle(!pickStyle)}>${pickStyle ? 'Close' : 'Change'}</button>` : null}</div>
+        <span class="am-help">${style === 'mix' ? 'Each video takes the next of Bold blocks, Street vlog, Pastel blocks, On location and To camera, so a month of posts does not look the same.' : style === 'own' ? `Every video in ${first}'s own look (${curLook}).` : `Every video in ${styleName}.`}</span>
+        ${pickStyle ? html`<div style="max-height:330px;overflow:auto;padding-right:4px"><${LookPicker} presets=${looks?.presets || []} sel=${['mix', 'own'].includes(style) ? null : style} onSel=${(id) => { if (id) { setStyle(id); setPickStyle(false); } }} /></div>` : null}
+      </div>`}
+      ${foldBtn('cut', 'Cuts and sound', [punch === 'on' ? 'punch-ins on' : punch === 'off' ? 'no punch-ins' : '', hard ? 'hard cuts' : '', sounds ? `sounds ${sounds}` : ''].filter(Boolean).join(' · ') || 'the style\'s own')}
+      ${fold === 'cut' ? html`<div class="am-sec">
+        <div class="row wrap" style="gap:8px;align-items:center"><span class="am-help" style="width:110px">Punch-in cuts</span><${Seg} value=${punch} onChange=${setPunch} options=${[{ value: '', label: 'Style\'s own' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]} /></div>
+        <span class="am-help">One take cut like several cameras: a new framing on each sentence, centred on their face. Only on full-screen looks, and only when a face is found.</span>
+        <div class="row wrap" style="gap:8px;align-items:center"><span class="am-help" style="width:110px">Sound effects</span><${Seg} value=${sounds} onChange=${setSounds} options=${[{ value: '', label: 'Usual' }, { value: 'full', label: 'Full' }, { value: 'light', label: 'Light' }, { value: 'off', label: 'Off' }]} /></div>
+        <label class="am-switch"><${Toggle} on=${hard} label="Hard cuts only" onChange=${setHard} /><span>Hard cuts only (no wipes, slides or flashes)</span></label>
+      </div>` : null}
+      ${foldBtn('text', 'Text', [font, tsize !== 1 ? (tsize < 1 ? 'smaller' : 'bigger') : '', outline === 'on' ? 'outline' : outline === 'off' ? 'soft shadow' : ''].filter(Boolean).join(' · ') || 'the style\'s own')}
+      ${fold === 'text' ? html`<div class="am-sec">
         <div class="row wrap" style="gap:8px;align-items:center">
           <select class="input" style="max-width:200px" value=${font} onChange=${(e) => setFont(e.target.value)}><option value="">The style's own font</option>${(opts?.fonts || []).map((f) => html`<option value=${f}>${f}</option>`)}</select>
           <${Seg} value=${String(tsize)} onChange=${(v) => setTsize(Number(v))} options=${[{ value: '0.85', label: 'Smaller' }, { value: '1', label: 'Normal' }, { value: '1.2', label: 'Bigger' }, { value: '1.4', label: 'Biggest' }]} />
           <${Seg} value=${outline} onChange=${setOutline} options=${[{ value: '', label: 'Style\'s own edge' }, { value: 'on', label: 'Outline' }, { value: 'off', label: 'Soft shadow' }]} />
         </div>
-        ${font ? html`<span style=${`font-family:'${font}', sans-serif;font-size:26px;line-height:1.2`}>${p ? p.name : 'Sample'} · The quick brown fox</span>` : null}</div>
-      <input class="input" id="am-note" placeholder="A note for every video, e.g. keep it upbeat, end on the district" value=${note} onInput=${(e) => setNote(e.target.value)} />
-    </div>` : null}
-    <div class="row wrap" style="gap:8px;align-items:center">
-      <button type="button" class="ghost" disabled=${!list.length} onClick=${() => setOthers(true)} style="border:0;background:none;cursor:pointer;font-size:var(--fs-xs);color:var(--ink-2, inherit);text-decoration:underline">Same order for several politicians…</button>
-      <span class="grow" />
-      <${Button} kind="primary" icon="sparkle" disabled=${!p || busy || !!up} title=${!p ? 'Pick or add the candidate first' : busy ? 'Already working on this candidate: see the progress below' : up ? 'Wait for the upload to finish' : ''} onClick=${go}>${busy ? 'Making…' : up ? 'Uploading…' : `Make ${n} video${n === 1 ? '' : 's'}`}</${Button}>
+        ${font ? html`<span style=${`font-family:'${font}', sans-serif;font-size:26px;line-height:1.2`}>${p ? p.name : 'Sample'} · The quick brown fox</span>` : null}</div>` : null}
+      ${foldBtn('for', 'What it\'s for', (purpose || opts?.purpose || 'social') === 'social' ? 'social content' : 'campaign ad')}
+      ${fold === 'for' ? html`<div class="am-sec"><${Seg} value=${purpose || opts?.purpose || 'social'} onChange=${setPurpose} options=${[{ value: 'social', label: 'Social content' }, { value: 'campaign', label: 'Campaign ad' }]} /><span class="am-help">${(purpose || opts?.purpose || 'social') === 'social' ? 'For people in office, any week of the year: ends on Follow, with no race or vote language.' : 'For a race: ends on Vote, with "for the 35th" under the name.'}</span>
+        <input class="input" id="am-note" placeholder="A note for every video, e.g. keep it upbeat, end on the district" value=${note} onInput=${(e) => setNote(e.target.value)} /></div>` : null}
+    </section>
+    <div class="am-bar">
+      ${job ? html`<div class="col grow" style="gap:4px;min-width:200px"><${Progress} value=${job.progress || 0} /><span class="am-help">${Math.round((job.progress || 0) * 100)}% · ${job.note || (job.status === 'queued' ? 'waiting its turn' : 'working')}</span></div>`
+      : html`<span class="sum">${p ? html`<b>${n} video${n === 1 ? '' : 's'} for ${p.name}</b><br />${editName(kind)}${bare ? '' : ` · ${styleName}`}${wide ? ' · vertical and horizontal' : ' · vertical'}` : html`<b>Pick who it's for</b>`}</span>`}
+      <button type="button" class="am-link" disabled=${!list.length} onClick=${() => setOthers(true)}>Several politicians…</button>
+      <${Button} kind="primary" icon="sparkle" disabled=${!p || busy || !!up} title=${!p ? 'Pick or add the candidate first' : busy ? 'Already working on this candidate' : up ? 'Wait for the upload to finish' : ''} onClick=${go}>${busy ? 'Making…' : up ? 'Uploading…' : `Make ${n} video${n === 1 ? '' : 's'}`}</${Button}>
     </div>
     ${others ? html`<${Modal} title="Same order for several politicians" onClose=${() => setOthers(false)} footer=${html`<${Button} kind="ghost" onClick=${() => setOthers(false)}>Cancel</${Button}><${Button} kind="primary" disabled=${!names.trim()} onClick=${goMany}>Start</${Button}>`}>
       <div class="col" style="gap:10px"><span style="font-size:var(--fs-sm)">One name per line. Add the office after a comma for anyone new. Each uses the footage uploaded for them, or their public videos when there is none.</span>
-        <textarea class="input" rows="7" id="am-names" placeholder=${'Anna Kelles, Assembly AD-125, NY\nLarinda Hooks, Assembly AD-35, NY'} value=${names} onInput=${(e) => setNames(e.target.value)} />
-        <div class="row wrap" style="gap:6px">${list.slice(0, 30).map((x) => html`<button type="button" class="chip" onClick=${() => setNames((cur) => (cur.split(/\r?\n/).some((l) => l.trim().toLowerCase().startsWith(x.name.toLowerCase())) ? cur : `${cur.trim() ? `${cur.trim()}\n` : ''}${x.name}`))} style="cursor:pointer;font-size:var(--fs-xs);padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2, var(--surface))">+ ${x.name}</button>`)}</div>
-        <span class="faint" style="font-size:var(--fs-xs)">${preview.length ? `${preview.length} video${preview.length === 1 ? '' : 's'} each, as typed.` : `${count} videos each, planned from their own footage.`} One politician is made at a time, in order.</span></div>
-    </${Modal}>` : null}
-  </div>`;
+        <textarea class="am-orders" rows="7" id="am-names" placeholder=${'Anna Kelles, Assembly AD-125, NY\nLarinda Hooks, Assembly AD-35, NY'} value=${names} onInput=${(e) => setNames(e.target.value)} />
+        <div class="am-chips">${list.slice(0, 30).map((x) => html`<button type="button" class="am-chip" onClick=${() => setNames((cur) => (cur.split(/\r?\n/).some((l) => l.trim().toLowerCase().startsWith(x.name.toLowerCase())) ? cur : `${cur.trim() ? `${cur.trim()}\n` : ''}${x.name}`))}>+ ${x.name}</button>`)}</div>
+        <span class="am-help">${preview.length ? `${preview.length} video${preview.length === 1 ? '' : 's'} each, as typed.` : `${count} videos each, planned from their own footage.`} One politician is made at a time, in order.</span></div>
+    </${Modal}>` : null}`;
 }
 
 /** Every batch video for a candidate: posters to click, the check, what was skipped and why. */
@@ -648,7 +745,7 @@ function VideosTab({ list, pid, setPid, jobs, reload, onMake }) {
       <div class="row wrap" style="gap:16px;align-items:flex-start">
         <video key=${v.id} src=${url(v, 'file')} poster=${url(v, 'poster')} controls autoplay playsinline style="width:270px;max-width:100%;aspect-ratio:9/16;border-radius:14px;background:#000" />
         <div class="col grow" style="gap:10px;min-width:240px;font-size:var(--fs-sm)">
-          <div class="row wrap" style="gap:6px">${[v.styleName, v.density === 'minimal' ? 'Captions only' : v.density === 'light' ? 'Fewer graphics' : 'All graphics', `${v.duration} s`].map((t) => html`<span class="badge">${t}</span>`)}</div>
+          <div class="row wrap" style="gap:6px">${[v.styleName, ({ raw: 'Straight cut', captions: 'Captions only', clean: 'Clean edit', light: 'Fewer graphics' })[v.edit] || (v.density === 'minimal' ? 'Clean edit' : v.density === 'light' ? 'Fewer graphics' : 'All graphics'), `${v.duration} s`].map((t) => html`<span class="badge">${t}</span>`)}</div>
           <div class="col" style="gap:4px"><b style="font-size:var(--fs-xs)">You asked for</b><span>${v.ask}</span></div>
           <div class="col" style="gap:4px"><b style="font-size:var(--fs-xs)">Their words, in order</b>${v.lines.map((l, i) => html`<span key=${i} class=${i === 0 || i === v.lines.length - 1 ? '' : 'faint'}>${i === 0 ? 'Hook: ' : i === v.lines.length - 1 ? 'Closing: ' : ''}${l}</span>`)}</div>
           ${v.graphics?.length ? html`<div class="col" style="gap:4px"><b style="font-size:var(--fs-xs)">Graphics in it</b><span class="faint">${v.graphics.map((g) => ({ stat: 'number badge', credential: 'credential card', quote: 'quote attribution', callout: 'callout', bill: 'bill card', map: 'district map', checklist: 'checklist', compare: 'before / after bars', timeline: 'timeline', clip: 'press clipping' }[g] || g)).join(', ')}</span></div>` : null}
