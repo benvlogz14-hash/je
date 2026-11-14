@@ -7,8 +7,9 @@ import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { ago } from '../lib/format.js';
 
-const CONN_LABEL = { api: 'API key', cli: 'On this computer', herdr: 'Herdr terminal', local: 'Local / network', connector: 'Claude app (no key)', account: 'Your login (no key)', grokbot: 'Your GrokBot (email)', ollama: 'Free on this PC', bot: 'Euclidean bot' };
+const CONN_LABEL = { hal: 'Built in', api: 'API key', cli: 'On this computer', herdr: 'Herdr terminal', local: 'Local / network', connector: 'Claude app (no key)', account: 'Your login (no key)', grokbot: 'Your GrokBot (email)', ollama: 'Free on this PC', bot: 'Euclidean bot' };
 const CONN_HINT = {
+  hal: 'HAL is part of Euclidean: nothing to set up. What he would do that needs a person waits for a Confirm in his panel.',
   connector: 'No key needed: messages wait for the Claude app on this computer, which answers through the Euclidean connector. With your Claude login open on the AI apps page, it answers at once instead.',
   account: 'No key needed: uses your own login from the AI apps page (sign in there once). Limited per hour to protect your account.',
   grokbot: 'No key needed: emails your GrokBot (Bots page → GrokBots by email) and posts its reply here. Counts against the weekly GrokBot limit.',
@@ -22,7 +23,26 @@ const CONN_HINT = {
 const HEALTH = { connected: ['moss', 'Connected'], not_connected: ['', 'Not connected'], needs_attention: ['gold', 'Needs attention'] };
 const TYPE_LABEL = { message: 'Message', reply: 'Reply', question: 'Question', critique_request: 'Critique request', task_request: 'Task request', context: 'Context / files', join: 'Joined', action_request: 'Needs approval', system: 'Note' };
 const TYPE_TONE = { question: 'sky', critique_request: 'lav', task_request: 'teal', action_request: 'gold', system: 'slate', join: 'slate', context: 'moss' };
-const DELIVERY = { waiting: ['gold', 'Will answer soon'], queued: ['slate', 'Waiting'], running: ['teal', 'Thinking'], replied: ['moss', 'Answered'], delivered: ['', 'In inbox'], read: ['', 'Read'], held: ['gold', 'Paused'], failed: ['coral', 'Failed'] };
+const DELIVERY = { next: ['slate', 'Up next'], waiting: ['gold', 'Will answer soon'], queued: ['slate', 'Waiting'], running: ['teal', 'Thinking'], replied: ['moss', 'Answered'], delivered: ['', 'In inbox'], read: ['', 'Read'], held: ['gold', 'Paused'], failed: ['coral', 'Failed'] };
+
+// What to do when an agent can't answer yet, by how it's connected.
+const FIX = { account: ['Sign in on AI apps', '/bridge'], grokbot: ['Add your GrokBot', '/bots'], ollama: ['Set up the free AI', '/settings?tab=ai'], bot: ['Open Bots', '/bots'] };
+function fixFor(a) { return FIX[a.connection] || ['Set it up', '/settings?tab=agents']; }
+
+/** Links clickable, @names highlighted. */
+function richText(t) {
+  return String(t || '').split(/(https?:\/\/[^\s)\]>"']+|@[A-Za-z][\w.-]{1,30})/g).map((p, i) => (i % 2
+    ? (p.startsWith('@') ? html`<b style="color:var(--teal-ink)">${p}</b>` : html`<a href=${p} target="_blank" rel="noopener">${p.replace(/^https?:\/\/(www\.)?/, '').slice(0, 60)}${p.length > 70 ? '…' : ''}</a>`)
+    : p));
+}
+
+// Ready-made teams for a new conversation (names are matched to the agents you have).
+const TEAMS = [
+  { label: 'Research desk', names: ['Scout', 'Corbin', 'Llama'], mode: 'turns', hint: 'Scout digs, Corbin checks, Llama weighs in' },
+  { label: 'Outreach desk', names: ['Juno', 'Corbin', 'Claude'], mode: 'turns', hint: 'Juno drafts, Corbin and Claude critique' },
+  { label: 'Second opinion', names: ['Llama', 'Claude', 'Grok', 'GPT / Codex'], mode: 'all', hint: 'The same question to several AIs side by side' },
+  { label: 'Ask HAL and the bots', names: ['HAL', 'Corbin', 'Juno', 'Scout', 'Data Bot'], mode: 'all', hint: 'HAL plus the whole bot team' },
+];
 
 function Health({ h }) { const [tone, label] = HEALTH[h?.state] || HEALTH.not_connected; return html`<span class=${'badge ' + tone}><span class="led" style=${{ background: tone ? `var(--${tone})` : 'var(--ink-3)' }} />${label}</span>`; }
 const resultToast = (r, ok) => { if (r && r.ok === false) { toast(r.error || 'That didn\'t work', { kind: 'error', title: 'Not connected yet' }); throw Object.assign(new Error(r.error), { shown: true }); } if (ok) toast(typeof ok === 'function' ? ok(r) : ok, { kind: 'ok' }); return r; };
@@ -184,14 +204,14 @@ export function AgentConversations() {
   const shown = (threads || []).filter((t) => (filter === 'all' ? true : filter === 'attention' ? t.failed || t.approvals || t.paused : t.status === 'active'));
   return html`<div class="col" style="gap:12px">
     <div class="row wrap" style="gap:8px">
-      <div class="row wrap grow" style="gap:6px">${agents.filter((a) => a.config.enabled).map((a) => html`<span class="badge" title=${a.health.reason} style=${{ background: `var(--${a.tone}-soft)`, color: `var(--${a.tone}-ink)` }}><span class=${'led ' + (st?.busy?.[a.id] ? 'live' : a.health.state === 'connected' ? 'ok' : a.health.state === 'needs_attention' ? 'warn' : '')} />${a.name}${st?.busy?.[a.id] ? ' · thinking' : st?.queued?.[a.id] ? ` · ${st.queued[a.id]} waiting` : ''}</span>`)}
+      <div class="row wrap grow" style="gap:6px;min-width:min(100%, 420px)">${agents.filter((a) => a.config.enabled).map((a) => html`<span class="badge" title=${a.health.reason} style=${{ background: `var(--${a.tone}-soft)`, color: `var(--${a.tone}-ink)` }}><span class=${'led ' + (st?.busy?.[a.id] ? 'live' : a.health.state === 'connected' ? 'ok' : a.health.state === 'needs_attention' ? 'warn' : '')} />${a.name}${st?.busy?.[a.id] ? ' · thinking' : st?.queued?.[a.id] ? ` · ${st.queued[a.id]} waiting` : ''}</span>`)}
         ${!agents.length ? null : html`<${Button} size="sm" kind="ghost" icon="settings" onClick=${() => navigate('/settings?tab=agents')}>Agent Connections</${Button}>`}</div>
       ${st?.paused ? html`<${Button} kind="moss" icon="play" onClick=${() => act(() => api.post('/api/agentnet/pause', { paused: false }), { ok: 'Agents can talk again' })}>Resume all agents</${Button}>`
         : html`<${HoldButton} kind="coral" icon="pause" title="Hold to pause every agent conversation" onConfirm=${() => act(() => api.post('/api/agentnet/pause', { paused: true }), { ok: 'All agent conversations paused' })}>Pause all agents</${HoldButton}>`}
       <${Button} kind="primary" icon="plus" onClick=${() => setCreating(true)}>New conversation</${Button}>
     </div>
     ${st?.paused ? html`<div class="notice gold"><${Icon} name="pause" size=${16} />All agent conversations are paused. Messages wait until you resume.</div>` : null}
-    <div style="display:grid;grid-template-columns:minmax(220px, 280px) minmax(0, 1fr) minmax(260px, 320px);gap:12px;min-height:560px">
+    <div class="agc-grid">
       <div class="panel" style="display:flex;flex-direction:column;min-height:0">
         <div class="panel-head"><${Seg} value=${filter} onChange=${setFilter} options=${[{ value: 'active', label: 'Active' }, { value: 'attention', label: 'Attention' }, { value: 'all', label: 'All' }]} /></div>
         <div class="list" style="overflow:auto;flex:1">${!threads ? html`<${Loading} rows=${3} />` : !shown.length ? html`<div class="faint" style="padding:16px;font-size:var(--fs-sm)">${filter === 'active' ? 'No conversations yet. Start one and pick which agents join.' : 'Nothing here.'}</div>` : shown.map((t) => html`
@@ -211,16 +231,19 @@ export function AgentConversations() {
 function NewThread({ agents, onClose, onDone }) {
   const { data: clients } = useApi('/api/clients');
   const usable = agents.filter((a) => a.config.enabled);
-  const [f, setF] = useState({ title: '', workspaceId: 'internal', participants: usable.filter((a) => a.health.state === 'connected').map((a) => a.id).slice(0, 3), type: 'message', body: '' });
+  const [f, setF] = useState({ title: '', workspaceId: 'internal', participants: usable.filter((a) => a.health.state === 'connected').map((a) => a.id).slice(0, 3), type: 'message', body: '', mode: 'all' });
+  const idOf = (n) => usable.find((a) => a.name.toLowerCase() === n.toLowerCase())?.id;
+  const teams = TEAMS.map((tm) => ({ ...tm, ids: tm.names.map(idOf).filter(Boolean) })).filter((tm) => tm.ids.length >= 2);
   const allowed = (a) => a.config.workspaces === 'all' || (Array.isArray(a.config.workspaces) && a.config.workspaces.includes(f.workspaceId));
   const start = () => act(() => api.post('/api/agentnet/threads', { ...f, participants: f.participants.filter((x) => allowed(agents.find((a) => a.id === x))), title: f.title || f.body.slice(0, 60) || 'New conversation' }), { ok: 'Conversation started' }).then(onDone);
   return html`<${Modal} wide title="New agent conversation" icon="messages" onClose=${onClose} footer=${html`<${Button} kind="ghost" onClick=${onClose}>Cancel</${Button}><${Button} kind="primary" icon="send" disabled=${!f.participants.length} onClick=${start}>Start conversation</${Button}>`}>
     <div class="col" style="gap:14px">
       <div class="form-grid"><${Field} label="Topic" id="nt-t"><input id="nt-t" class="input" value=${f.title} onInput=${(e) => setF({ ...f, title: e.target.value })} placeholder="Hook ideas for Stringer's next short" autofocus /></${Field}>
         <${Field} label="Workspace" hint="Agents only see this workspace's information." id="nt-w"><select id="nt-w" class="select" value=${f.workspaceId} onChange=${(e) => setF({ ...f, workspaceId: e.target.value })}><option value="internal">Euclidean (internal, no client data)</option>${(clients || []).map((c) => html`<option value=${c.id}>${c.name}</option>`)}</select></${Field}></div>
+      ${teams.length ? html`<div class="field"><span class="label">Ready-made teams</span><div class="row wrap" style="gap:8px">${teams.map((tm) => html`<button class="chip" title=${tm.hint} onClick=${() => setF({ ...f, participants: tm.ids, mode: tm.mode })}><${Icon} name="robot" size=${13} />${tm.label} <span class="faint">(${tm.ids.length})</span></button>`)}</div></div>` : null}
       <div class="field"><span class="label">Agents in this conversation</span><div class="chips">${usable.map((a) => html`<button class=${'chip' + (f.participants.includes(a.id) ? ' on' : '')} disabled=${!allowed(a)} title=${!allowed(a) ? `${a.name} isn't allowed in this workspace` : a.health.reason} onClick=${() => setF({ ...f, participants: f.participants.includes(a.id) ? f.participants.filter((x) => x !== a.id) : [...f.participants, a.id] })}>${f.participants.includes(a.id) ? html`<${Icon} name="check" size=${13} />` : null}${a.name}${a.health.state !== 'connected' ? html` <span class="faint">(${a.health.state === 'needs_attention' ? 'needs attention' : 'not set up'})</span>` : null}</button>`)}</div>
         ${!usable.length ? html`<div class="hint">No agents are turned on yet. Set them up in Settings → Agent Connections.</div>` : null}</div>
-      <div class="row" style="gap:10px;align-items:flex-start"><${Field} label="First message type" id="nt-ty"><select id="nt-ty" class="select" value=${f.type} onChange=${(e) => setF({ ...f, type: e.target.value })}>${['message', 'question', 'critique_request', 'task_request'].map((t) => html`<option value=${t}>${TYPE_LABEL[t]}</option>`)}</select></${Field}></div>
+      <div class="row wrap" style="gap:14px;align-items:flex-start"><div class="field"><span class="label">How they answer</span><${Seg} value=${f.mode} onChange=${(v) => setF({ ...f, mode: v })} options=${[{ value: 'all', label: 'All at once' }, { value: 'turns', label: 'Take turns' }]} /><div class="hint">${f.mode === 'turns' ? 'One at a time, each reading the answers before it: better for building on ideas and debate.' : 'Everyone answers side by side: quickest, good for second opinions.'}</div></div><${Field} label="First message type" id="nt-ty"><select id="nt-ty" class="select" value=${f.type} onChange=${(e) => setF({ ...f, type: e.target.value })}>${['message', 'question', 'critique_request', 'task_request'].map((t) => html`<option value=${t}>${TYPE_LABEL[t]}</option>`)}</select></${Field}></div>
       <${Field} label="First message (optional)" id="nt-b"><textarea id="nt-b" class="textarea" rows="4" value=${f.body} onInput=${(e) => setF({ ...f, body: e.target.value })} placeholder="Give the agents the task or question. They'll answer and can ask each other for help." /></${Field}>
     </div></${Modal}>`;
 }
@@ -234,20 +257,37 @@ function ThreadView({ t, agents, reload }) {
   const scroller = useRef(null); const input = useRef(null);
   useEffect(() => { setTo(['*']); setCtxFiles([]); }, [t.id]);
   useEffect(() => { if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight; }, [msgs?.length, t.id]);
-  const send = () => { if (!body.trim() && !ctxFiles.length) return; return act(() => api.post(`/api/agentnet/threads/${t.id}/messages`, { to, type: ctxFiles.length && !body.trim() ? 'context' : type, body: body.trim() || `Sharing ${ctxFiles.map((c) => c.name).join(', ')}`, context: ctxFiles }), { sound: 'send' }).then(() => { setBody(''); setCtxFiles([]); setType('message'); }); };
+  const send = () => {
+    if (!body.trim() && !ctxFiles.length) return;
+    // A message that starts with @names goes to those agents (they join if they aren't in it yet).
+    let dest = to;
+    const lead = /^((?:@[\w.-]+[,\s]+)+)/.exec(body.trim() + ' ');
+    if (lead && to.includes('*')) { const ids = [...lead[1].matchAll(/@([\w.-]+)/g)].map((x) => agents.find((a) => a.name.toLowerCase() === x[1].toLowerCase() || a.name.toLowerCase().split(/[\s/]+/)[0] === x[1].toLowerCase() || a.id === x[1].toLowerCase())?.id).filter(Boolean); if (ids.length) dest = ids; }
+    return act(() => api.post(`/api/agentnet/threads/${t.id}/messages`, { to: dest, type: ctxFiles.length && !body.trim() ? 'context' : type, body: body.trim() || `Sharing ${ctxFiles.map((c) => c.name).join(', ')}`, context: ctxFiles }), { sound: 'send' }).then(() => { setBody(''); setCtxFiles([]); setType('message'); }); };
   const attach = () => act(() => api.post(`/api/agentnet/threads/${t.id}/attach`, {})).then((files) => setCtxFiles([...ctxFiles, ...files]));
   const intervene = async () => { if (!t.paused) await act(() => api.post(`/api/agentnet/threads/${t.id}/pause`, { paused: true }), { ok: 'Paused: write your instructions, then resume' }); input.current?.focus(); };
   const others = agents.filter((a) => !t.participants.includes(a.id) && a.config.enabled);
   const nameOf = (id) => agents.find((a) => a.id === id)?.name || id;
+  const [summing, setSumming] = useState(false);
+  const sumUp = async () => { setSumming(true); try { await act(() => api.post(`/api/agentnet/threads/${t.id}/summary`, { save: true }), { ok: (r) => (r.saved ? 'Summed up and kept in the notebook' : 'Summed up') }); } finally { setSumming(false); } };
+  const notReady = t.participants.map((id) => agents.find((a) => a.id === id)).filter((a) => a && a.health.state !== 'connected');
+  // "@Na" before the cursor: suggest names; picking one finishes it.
+  const at = (/(?:^|\s)@([\w.-]*)$/.exec(body) || [])[1];
+  const suggest = at == null ? [] : agents.filter((a) => a.config.enabled && (a.name.toLowerCase().startsWith(at.toLowerCase()) || a.id.startsWith(at.toLowerCase()))).slice(0, 6);
+  const pickName = (a) => { setBody(body.replace(/@([\w.-]*)$/, `@${a.name.split(/[\s/]+/)[0]} `)); input.current?.focus(); };
   return html`<div class="panel" style="display:flex;flex-direction:column;min-height:0;min-width:0">
     <div class="panel-head" style="flex-wrap:wrap;gap:8px">
-      <div class="grow" style="min-width:0"><h4 class="ellipsis">${t.title}</h4><div class="faint" style="font-size:var(--fs-xs)">${t.workspaceLabel}</div></div>
+      <div class="grow" style="min-width:min(100%, 220px)"><h4 class="ellipsis">${t.title}</h4><div class="faint" style="font-size:var(--fs-xs)">${t.workspaceLabel}</div></div>
       ${others.length ? html`<select class="select sm" style="width:auto" value="" onChange=${(e) => e.target.value && act(() => api.post(`/api/agentnet/threads/${t.id}/join`, { agentId: e.target.value }), { ok: 'Agent joined' }).then(reload)} aria-label="Add an agent"><option value="">+ Add agent</option>${others.map((a) => html`<option value=${a.id}>${a.name}</option>`)}</select>` : null}
       <${Button} size="sm" kind="gold" icon="hand" onClick=${intervene} title="Pause the agents and write instructions">Intervene</${Button}>
       ${t.paused ? html`<${Button} size="sm" kind="moss" icon="play" onClick=${() => act(() => api.post(`/api/agentnet/threads/${t.id}/pause`, { paused: false }), { ok: 'Resumed' })}>Resume</${Button}>` : html`<${Button} size="sm" kind="ghost" icon="pause" onClick=${() => act(() => api.post(`/api/agentnet/threads/${t.id}/pause`, { paused: true }), { ok: 'Paused' })}>Pause</${Button}>`}
       <${Button} size="sm" kind="ghost" icon="archive" title=${t.status === 'archived' ? 'Unarchive' : 'Archive'} onClick=${() => act(() => api.post(`/api/agentnet/threads/${t.id}/archive`, { archived: t.status !== 'archived' })).then(reload)} />
     </div>
-    <div class="row wrap" style="gap:6px;padding:8px 16px;border-bottom:1px solid var(--line)">${t.participants.map((id) => { const a = agents.find((x) => x.id === id); return html`<span class="badge" style=${a ? { background: `var(--${a.tone}-soft)`, color: `var(--${a.tone}-ink)` } : {}}>${nameOf(id)}</span>`; })}${t.paused ? html`<span class="badge gold">Paused</span>` : null}</div>
+    <div class="row wrap" style="gap:6px;padding:8px 16px;border-bottom:1px solid var(--line);align-items:center">${t.participants.map((id) => { const a = agents.find((x) => x.id === id); return html`<span class="badge" style=${a ? { background: `var(--${a.tone}-soft)`, color: `var(--${a.tone}-ink)` } : {}}>${nameOf(id)}</span>`; })}${t.paused ? html`<span class="badge gold">Paused</span>` : null}
+      <div class="grow" />
+      <${Seg} value=${t.mode || 'all'} onChange=${(v) => act(() => api.post(`/api/agentnet/threads/${t.id}/mode`, { mode: v }), { ok: v === 'turns' ? 'They take turns now' : 'They answer all at once now' }).then(reload)} options=${[{ value: 'all', label: 'All at once' }, { value: 'turns', label: 'Take turns' }]} />
+      <${Button} size="sm" kind="soft" icon="book" busy=${summing} onClick=${sumUp} title="What was decided, what's open, next steps (kept in the notebook)">Sum up</${Button}></div>
+    ${notReady.length ? html`<div class="col" style="gap:6px;padding:8px 16px;border-bottom:1px solid var(--line)">${notReady.map((a) => { const [label, to] = fixFor(a); return html`<div class="notice gold" style="align-items:center;padding:6px 10px"><${Icon} name="info" size=${14} /><span class="grow" style="font-size:var(--fs-sm)"><b>${a.name}</b> can't answer yet: ${a.health.reason}</span><${Button} size="sm" kind="soft" onClick=${() => navigate(to)}>${label}</${Button}></div>`; })}</div>` : null}
     <div ref=${scroller} style="flex:1;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-height:260px;max-height:62vh">
       ${!msgs ? html`<${Loading} rows=${3} />` : !msgs.length ? html`<div class="faint" style="font-size:var(--fs-sm)">No messages yet. Write the first one below.</div>` : msgs.map((m) => html`<${Bubble} key=${m.id} m=${m} agents=${agents} />`)}
     </div>
@@ -256,9 +296,10 @@ function ThreadView({ t, agents, reload }) {
         <button class=${'chip' + (to.includes('*') ? ' on' : '')} onClick=${() => setTo(['*'])}>Everyone</button>
         ${t.participants.map((id) => html`<button class=${'chip' + (!to.includes('*') && to.includes(id) ? ' on' : '')} onClick=${() => { const base = to.includes('*') ? [] : to; const next = base.includes(id) ? base.filter((x) => x !== id) : [...base, id]; setTo(next.length ? next : ['*']); }}>${nameOf(id)}</button>`)}
         <div class="grow" /><select class="select sm" style="width:auto" value=${type} onChange=${(e) => setType(e.target.value)} aria-label="Message type">${['message', 'question', 'critique_request', 'task_request'].map((x) => html`<option value=${x}>${TYPE_LABEL[x]}</option>`)}</select></div>
+      ${suggest.length ? html`<div class="row wrap" style="gap:6px"><span class="faint" style="font-size:var(--fs-xs)">Ask</span>${suggest.map((a) => html`<button class="chip" onMouseDown=${(e) => { e.preventDefault(); pickName(a); }}>@${a.name}${t.participants.includes(a.id) ? '' : html` <span class="faint">(joins)</span>`}</button>`)}</div>` : null}
       ${ctxFiles.length ? html`<div class="row wrap" style="gap:6px">${ctxFiles.map((c, i) => html`<span class="chip on"><${Icon} name="paperclip" size=${12} />${c.name}<span class="x" style="cursor:pointer" onClick=${() => setCtxFiles(ctxFiles.filter((_, j) => j !== i))}>×</span></span>`)}</div>` : null}
       <div class="row" style="gap:8px;align-items:flex-end">
-        <textarea ref=${input} class="textarea grow" rows="2" placeholder=${t.paused ? 'Paused. Write instructions, then Send and Resume.' : 'Message the agents… (Ctrl+Enter to send)'} value=${body} onInput=${(e) => setBody(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } }} />
+        <textarea ref=${input} class="textarea grow" rows="2" placeholder=${t.paused ? 'Paused. Write instructions, then Send and Resume.' : 'Message the agents… type @ to ask one of them (Ctrl+Enter to send)'} value=${body} onInput=${(e) => setBody(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } }} />
         <${Button} kind="ghost" icon="paperclip" title="Attach files (copied into this workspace)" onClick=${attach} />
         <${Button} kind="primary" icon="send" onClick=${send}>Send</${Button}>
       </div>
@@ -269,12 +310,13 @@ function ThreadView({ t, agents, reload }) {
 function Bubble({ m, agents }) {
   const human = m.from.startsWith('human:'); const sys = m.from === 'system';
   const a = agents.find((x) => x.id === m.from);
+  if (m.summary) return html`<div class="panel pad col" style="gap:6px;background:var(--lav-soft);border-color:var(--lav-line, var(--line));align-self:stretch"><div class="row" style="gap:6px"><${Icon} name="book" size=${15} /><b class="grow">Summary</b>${m.noteId ? html`<span class="badge moss">In the notebook</span>` : null}<span class="faint" style="font-size:var(--fs-xs)">${ago(m.createdAt)}</span></div><div style="white-space:pre-wrap;font-size:var(--fs-sm);user-select:text">${m.body}</div></div>`;
   if (sys || m.type === 'join') return html`<div class="faint" style="align-self:center;font-size:var(--fs-xs);text-align:center;white-space:pre-wrap;max-width:85%">${m.body}</div>`;
   const deliveries = Object.entries(m.deliveries || {});
   return html`<div style=${{ alignSelf: human ? 'flex-end' : 'flex-start', maxWidth: '88%' }} class="col">
     <div class="row" style="gap:6px;font-size:var(--fs-xs)">${!human ? html`<span class="avatar sm" style=${{ background: `var(--${a?.tone || 'slate'}-soft)`, color: `var(--${a?.tone || 'slate'}-ink)`, width: '20px', height: '20px', fontSize: '10px' }}>${(m.fromName || '?').slice(0, 2)}</span>` : null}
       <b>${m.fromName}</b><span class="faint">→ ${m.toNames.join(', ')}</span>${m.type !== 'message' && m.type !== 'reply' ? html`<span class=${'badge ' + (TYPE_TONE[m.type] || '')}>${TYPE_LABEL[m.type] || m.type}</span>` : null}<span class="faint">${ago(m.createdAt)}</span></div>
-    <div style=${{ background: human ? 'var(--bubble-out)' : m.type === 'action_request' ? 'var(--gold-soft)' : 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: '12px', padding: '9px 12px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', userSelect: 'text' }}>${m.body}
+    <div style=${{ background: human ? 'var(--bubble-out)' : m.type === 'action_request' ? 'var(--gold-soft)' : 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: '12px', padding: '9px 12px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', userSelect: 'text' }}>${richText(m.body)}
       ${m.action ? html`<div class="notice gold" style="margin-top:8px"><${Icon} name="lock" size=${14} />Needs your approval (${m.action.kind}): ${m.action.summary}</div>` : null}
       ${(m.context || []).length ? html`<div class="row wrap" style="gap:6px;margin-top:6px">${m.context.map((c) => html`<span class="chip"><${Icon} name="paperclip" size=${12} />${c.name}</span>`)}</div>` : null}</div>
     ${deliveries.length ? html`<div class="row wrap" style="gap:4px;margin-top:3px">${deliveries.map(([id, d]) => { const [tone, label] = DELIVERY[d.status] || ['', d.status]; return html`<span class=${'badge ' + tone} title=${d.error || ''}>${agents.find((x) => x.id === id)?.name || id}: ${label}${d.status === 'failed' ? html` <span style="cursor:pointer;text-decoration:underline" onClick=${() => act(() => api.post(`/api/agentnet/messages/${m.id}/retry`, { agentId: id }), { ok: 'Trying again' })}>retry</span>` : null}</span>`; })}</div>` : null}

@@ -131,22 +131,26 @@ module.exports = function mount(r) {
   r.post('/api/agentnet/pause', (req, b) => broker.setGlobalPause(!!b.paused, actorOf(req)), { roles: STAFF });
   r.get('/api/agentnet/threads', (req) => broker.threads({ workspaceId: req.query.workspaceId, status: req.query.status }), { roles: STAFF });
   r.post('/api/agentnet/threads', (req, b) => {
-    const t = broker.createThread({ title: b.title, workspaceId: b.workspaceId, participants: b.participants || [], createdBy: actorOf(req) });
+    const t = broker.createThread({ title: b.title, workspaceId: b.workspaceId, participants: b.participants || [], createdBy: actorOf(req), mode: b.mode });
     if (b.body) broker.send({ threadId: t.id, from: human(req), to: b.to || ['*'], type: b.type || 'message', body: b.body, context: b.context || [] });
     return t;
   }, { roles: STAFF });
   // Claude through the Euclidean connector (no API key): what's waiting for it, and its answers / new messages.
-  r.get('/api/agentnet/claude/inbox', () => ({ waiting: broker.waitingFor('claude') }), { roles: STAFF });
+  r.get('/api/agentnet/claude/inbox', (req) => ({ waiting: broker.waitingFor('claude'), answers: broker.answersFor('claude', { mark: req.query.mark === '1' }) }), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/claude', (req, b, p) => {
     if (!String(b.body || '').trim()) throw new HttpError(400, 'Write the message.');
     return broker.lateReply({ threadId: p.id, agentId: 'claude', body: String(b.body), to: Array.isArray(b.to) ? b.to.map((x) => registry.findId(x) || x) : null, inReplyTo: b.inReplyTo || null, type: b.type || 'reply' });
   }, { roles: STAFF });
   r.post('/api/agentnet/claude/start', (req, b) => {
     const ids = [...new Set(['claude', ...(Array.isArray(b.agents) ? b.agents : []).map((x) => registry.findId(x)).filter(Boolean)])];
-    const t = broker.createThread({ title: b.title || String(b.body || '').slice(0, 60) || 'Conversation from Claude', workspaceId: b.workspaceId || 'internal', participants: ids, createdBy: 'claude' });
+    const t = broker.createThread({ title: b.title || String(b.body || '').slice(0, 60) || 'Conversation from Claude', workspaceId: b.workspaceId || 'internal', participants: ids, createdBy: 'claude', mode: b.mode });
     if (b.body) broker.send({ threadId: t.id, from: 'claude', to: b.to ? (Array.isArray(b.to) ? b.to : [b.to]).map((x) => registry.findId(x) || x) : ['*'], type: b.type || 'message', body: String(b.body) });
     return { thread: t, messages: broker.messages(t.id) };
   }, { roles: STAFF });
+  // All at once | take turns.
+  r.post('/api/agentnet/threads/:id/mode', (req, b, p) => broker.setMode(p.id, b.mode, human(req)), { roles: STAFF });
+  // Sum up a conversation (decided / still open / next steps); save = keep it in the notebook.
+  r.post('/api/agentnet/threads/:id/summary', (req, b, p) => broker.summarize(p.id, { save: !!b.save, actor: actorOf(req) }), { roles: STAFF });
   r.get('/api/agentnet/threads/:id/messages', (req, b, p) => broker.messages(p.id), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/messages', (req, b, p) => broker.send({ ...b, threadId: p.id, from: human(req) }, { actor: human(req) }), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/join', (req, b, p) => broker.join(p.id, b.agentId, human(req)), { roles: STAFF });
