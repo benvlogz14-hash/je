@@ -102,7 +102,38 @@ function colTag(hex) { const h = String(hex).replace('#', '').padEnd(6, '0'); re
 
 function transDur(t) { return t && t.type ? Math.max(0.04, t.duration || 1) : 0; }
 
-// Studio transition types → FFmpeg xfade names (types 1–3 are Velo's and use the plain fade filter).
+// Studio transition types → FFmpeg xfade names. Types 1-2 are plain fades and 3-4 dips (the picture fades to black /
+// white; on titles they're fades); the rest are made with xfade against a see-through copy of the clip itself.
+// The preview draws the same (renderer/js/lib/transitions.js).
+const DIP = { 3: 'black', 4: 'white' };
+const shaped = (type) => !!type && type > 4 && !!XFADE[type];
+const isPush = (type) => /^slide/.test(XFADE[type] || '');
+/**
+ * Cuts with a transition: clip A ends where clip B starts on the same video track and B has an In transition (or A an
+ * Out one). B's transition plays over A, which carries on under it for that long (more of its footage, or its last
+ * frame held), like Premiere's handles; A's own Out is not used. Same as the preview's cutPairs.
+ */
+function cutPairs(seq) {
+  const inOf = new Map(); const tailOf = new Map(); const half = 0.5 / (seq.fps || 30);
+  for (const tr of seq.videoTracks || []) {
+    if (tr.muted) continue;
+    const cs = tr.clips.filter((c) => c.enabled !== false && (c.type === 0 || c.type === 2)).sort((a, b) => a.start - b.start);
+    for (let k = 1; k < cs.length; k++) {
+      const A = cs[k - 1], B = cs[k];
+      if (Math.abs(A.start + A.duration - B.start) > half) continue;
+      const t = B.transIn?.type ? B.transIn : A.transOut?.type ? A.transOut : null; if (!t) continue;
+      const d = Math.min(transDur(t), B.duration); if (d < 0.04) continue;
+      inOf.set(B.id, { type: t.type, duration: d });
+      tailOf.set(A.id, { type: t.type, duration: d, ext: DIP[t.type] ? d / 2 : d });
+    }
+  }
+  return { inOf, tailOf };
+}
+/** A title's transition frame: its box plus room for outlines, shadows and the Slide up / Drop in moves (as the preview). */
+function titleFrame(boxW, boxH, size, scale) {
+  const w = boxW + 2 * Math.max(0.25 * size, 12 * scale), h = boxH + 2 * Math.max(0.25 * size, 76 * scale);
+  return { w: Math.ceil(w / 2) * 2, h: Math.ceil(h / 2) * 2 };
+}
 const XFADE = {
   4: 'fadewhite', 5: 'dissolve', 6: 'fadegrays', 7: 'hblur', 8: 'pixelize',
   10: 'wipeleft', 11: 'wiperight', 12: 'wipeup', 13: 'wipedown', 14: 'smoothleft', 15: 'smoothright', 16: 'smoothup', 17: 'smoothdown',
@@ -209,18 +240,26 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
   const all = [...seq.videoTracks, ...seq.audioTracks].flatMap((t) => t.clips);
   const dur = Math.max(0.5, ...all.map((c) => c.start + c.duration));
   const warnings = new Set();
+  const scratch = []; // title and typing-sound files made for this export, removed when it's done
+  const scratchFile = (name) => { const f = path.join(path.dirname(outPath), `${path.basename(outPath, '.mp4')}.${name}`); scratch.push(f); return f; };
   const args = ['-f', 'lavfi', '-i', `color=c=black:s=${W}x${H}:r=${fps}:d=${num(dur)}`, '-f', 'lavfi', '-t', num(dur), '-i', 'anullsrc=r=48000:cl=stereo'];
   let idx = 2; const f = []; let last = '0:v'; const audio = ['1:a']; const texts = []; const typeSounds = [];
   const xf = await xfadeSupport();
-  /** xfade against a transparent frame: an In edge brings the clip in, an Out edge takes it out. */
-  const xfadeEdge = (label, trans, d, cdur, isOut, w, h, n) => {
-    let name = XFADE[trans.type];
+  /**
+   * xfade against a see-through copy of the clip itself (the same frames, alpha 0): an In edge brings the clip in, an
+   * Out edge takes it out, and only how much of it shows changes. (Against see-through black, soft edges, dissolves and
+   * the gray fade went dark.) cdur = the stream's length; the Out copy is cut from the same moment so colours line up.
+   */
+  const xfadeEdge = (label, type, d, cdur, isOut, n) => {
+    let name = XFADE[type];
     if (!xf.has(name)) { warnings.add(`Transition "${name}" needs a newer FFmpeg; exported as a dissolve`); name = 'fade'; }
-    const z = `z${n}`; const outL = `${label}${isOut ? 'o' : 'i'}`;
-    f.push(`color=c=black@0.0:s=${w}x${h}:r=${fps}:d=${num(d + 0.1)},format=yuva420p,settb=AVTB[${z}]`);
-    f.push(isOut ? `[${label}][${z}]xfade=transition=${name}:duration=${num(d)}:offset=${num(Math.max(0, cdur - d))}[${outL}]` : `[${z}][${label}]xfade=transition=${name}:duration=${num(d)}:offset=0[${outL}]`);
+    const a = `x${n}a`, z0 = `x${n}b`, z = `x${n}z`; const outL = `${label}${isOut ? 'o' : 'i'}`;
+    f.push(`[${label}]split[${a}][${z0}]`);
+    f.push(isOut ? `[${z0}]trim=start=${num(Math.max(0, cdur - d))},setpts=PTS-STARTPTS,lutyuv=a=0[${z}]` : `[${z0}]trim=duration=${num(d)},lutyuv=a=0[${z}]`);
+    f.push(isOut ? `[${a}][${z}]xfade=transition=${name}:duration=${num(d)}:offset=${num(Math.max(0, cdur - d))}[${outL}]` : `[${z}][${a}]xfade=transition=${name}:duration=${num(d)}:offset=0[${outL}]`);
     return outL;
   };
+  const pairs = cutPairs(seq);
 
   // Effect layers (like Premiere's adjustment layer): the picture built so far (every track below) is copied for the
   // layer's time, run through its effects, and laid back over the top at the layer's opacity (times each retro look's
@@ -240,7 +279,8 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
   };
   seq.videoTracks.forEach((track, ti) => {
     if (track.muted) return; // hidden track
-    for (const c of track.clips) {
+    // In time order, so the clip before a cut is laid down before the clip whose transition plays over it.
+    for (const c of [...track.clips].sort((a, b) => a.start - b.start)) {
       if (c.enabled === false) continue;
       if (c.type === 3) { texts.push({ c, layer: ti }); continue; }
       if (c.type === 5) { fxLayer(c); continue; }
@@ -248,24 +288,32 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       const m = media[c.mediaId];
       if (!m || !fs.existsSync(m.path)) { warnings.add(`Missing media: ${m ? m.name : c.mediaId}`); continue; }
       const speed = c.speed || 1;
-      if (c.type === 2 || m.kind === 2 || m.kind === 3) args.push('-loop', '1', '-t', num(c.duration), '-i', m.path);
-      else args.push('-ss', num(c.in || 0), '-t', num(c.duration * Math.abs(speed) + 0.1), '-i', m.path);
+      // Transitions: B's In at a cut (pin) plays over A, which carries on for `tail.ext` (its Out then isn't used).
+      const pin = pairs.inOf.get(c.id), tail = pairs.tailOf.get(c.id);
+      const tin = pin || (c.transIn?.type ? c.transIn : null), tout = tail ? null : (c.transOut?.type ? c.transOut : null);
+      const dIn = tin ? Math.min(transDur(tin), c.duration) : 0, dOut = tout ? Math.min(transDur(tout), c.duration) : 0;
+      const ext = tail ? tail.ext : 0; const total = c.duration + ext; // how long this clip is on screen
+      const still = c.type === 2 || m.kind === 2 || m.kind === 3;
+      if (still) args.push('-loop', '1', '-t', num(total), '-i', m.path);
+      else args.push('-ss', num(c.in || 0), '-t', num(total * Math.abs(speed) + 0.1), '-i', m.path);
+      // Footage that runs out during a tail holds its last frame.
+      const hold = ext && !still ? [`tpad=stop_mode=clone:stop_duration=${num(ext + 0.1)}`] : [];
       const i = idx++;
       const keyed = { scale: hasKeys(c.scaleX) || (c.uniformScale === false && hasKeys(c.scaleY)), pos: hasKeys(c.posX) || hasKeys(c.posY), rot: hasKeys(c.rotation), op: hasKeys(c.opacity) };
       // Keyframed scale renders at its largest size, then shrinks frame by frame (sharp at every size).
       const sx = keyed.scale ? maxAbs(c.scaleX, 1) : base(c.scaleX, 1); const sy = c.uniformScale === false ? (keyed.scale ? maxAbs(c.scaleY, 1) : base(c.scaleY, 1)) : sx;
       const nw = Math.max(2, Math.round(((m.width || W) * Math.abs(sx)) / 2) * 2), nh = Math.max(2, Math.round(((m.height || H) * Math.abs(sy)) / 2) * 2);
       // xfade transitions work in the clip's own frame, right after scaling (the preview does the same).
-      const xin = c.transIn?.type && XFADE[c.transIn.type], xout = c.transOut?.type && XFADE[c.transOut.type];
+      const xin = tin && shaped(tin.type), xout = (tout && shaped(tout.type)) || (tail && isPush(tail.type)); // a push moves A out too
       let src = `${i}:v`;
       if (xin || xout) {
-        f.push(`[${i}:v]setpts=(PTS-STARTPTS)/${num(Math.abs(speed))},fps=${fps},scale=${nw}:${nh},format=yuva420p,settb=AVTB,trim=duration=${num(c.duration)}[p${i}]`);
+        f.push(`[${i}:v]setpts=(PTS-STARTPTS)/${num(Math.abs(speed))},fps=${fps},${hold.map((x) => x + ',').join('')}scale=${nw}:${nh},format=yuva420p,settb=AVTB,trim=duration=${num(total)}[p${i}]`);
         src = `p${i}`;
-        if (xin) src = xfadeEdge(src, c.transIn, Math.min(transDur(c.transIn), c.duration), c.duration, false, nw, nh, `${i}a`);
-        if (xout) src = xfadeEdge(src, c.transOut, Math.min(transDur(c.transOut), c.duration), c.duration, true, nw, nh, `${i}b`);
+        if (xin) src = xfadeEdge(src, tin.type, dIn, total, false, `${i}a`);
+        if (xout) src = tail ? xfadeEdge(src, tail.type, tail.duration, total, true, `${i}b`) : xfadeEdge(src, tout.type, dOut, total, true, `${i}b`);
       }
       // Effects; a retro look below 100% intensity is made on a copy and blended over the untouched picture.
-      let chain = [...(src === `${i}:v` ? [`setpts=(PTS-STARTPTS)/${num(Math.abs(speed))}`, `fps=${fps}`, `scale=${nw}:${nh}`] : [])];
+      let chain = [...(src === `${i}:v` ? [`setpts=(PTS-STARTPTS)/${num(Math.abs(speed))}`, `fps=${fps}`, ...hold, `scale=${nw}:${nh}`] : [])];
       effectFilters(c.effects, warnings, nw, nh, onScreen(nw, nh, base(c.posX, 0), base(c.posY, 0), W, H)).forEach((x, n) => {
         if (typeof x === 'string') { chain.push(x); return; }
         const L = `${i}m${n}`;
@@ -286,27 +334,35 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
         const fx = kexpr(c.scaleX, 1, 't', { mul: 1 / (Math.abs(sx) || 1) }), fy = c.uniformScale === false ? kexpr(c.scaleY, 1, 't', { mul: 1 / (Math.abs(sy) || 1) }) : fx;
         chain.push(`scale=w='max(2,trunc(iw*abs(${fx})/2)*2)':h='max(2,trunc(ih*abs(${fy})/2)*2)':eval=frame`);
       }
-      const ti_ = transDur(c.transIn), to = transDur(c.transOut);
-      if (ti_ && !xin) chain.push(`fade=t=in:st=0:d=${num(ti_)}:alpha=${c.transIn.type === 3 ? 0 : 1}`);
-      if (to && !xout) chain.push(`fade=t=out:st=${num(Math.max(0, c.duration - to))}:d=${num(to)}:alpha=${c.transOut.type === 3 ? 0 : 1}`);
-      chain.push(`trim=duration=${num(c.duration)}`, `setpts=PTS+${num(c.start)}/TB`);
+      // Fades see through to what's below; dips fade the picture to black or white. At a cut, a dip takes A to the
+      // colour in the first half (its tail) and brings B out of it in the second (B starts showing half way).
+      if (tin && !xin) chain.push(DIP[tin.type] ? (pin ? `fade=t=in:st=${num(dIn / 2)}:d=${num(dIn / 2)}:color=${DIP[tin.type]}` : `fade=t=in:st=0:d=${num(dIn)}:color=${DIP[tin.type]}`) : `fade=t=in:st=0:d=${num(dIn)}:alpha=1`);
+      if (tail && DIP[tail.type]) chain.push(`fade=t=out:st=${num(c.duration)}:d=${num(ext)}:color=${DIP[tail.type]}`);
+      if (tout && !shaped(tout.type)) chain.push(DIP[tout.type] ? `fade=t=out:st=${num(c.duration - dOut)}:d=${num(dOut)}:color=${DIP[tout.type]}` : `fade=t=out:st=${num(c.duration - dOut)}:d=${num(dOut)}:alpha=1`);
+      chain.push(`trim=duration=${num(total)}`, `setpts=PTS+${num(c.start)}/TB`);
       f.push(`[${src}]${chain.join(',')}[c${i}]`);
       // Overlay positions run on the sequence clock, so keyframes (clip-local) are offset by the clip start.
       const lt = `(t-${num(c.start)})`;
       const x = `(W-w)/2+${keyed.pos ? kexpr(c.posX, 0, lt) : num(base(c.posX, 0))}`, y = `(H-h)/2+${keyed.pos ? kexpr(c.posY, 0, lt) : num(base(c.posY, 0))}`;
-      f.push(`[${last}][c${i}]overlay=x='${x}':y='${y}':enable='between(t,${num(c.start)},${num(c.start + c.duration)})':eof_action=pass[o${i}]`);
+      const from = pin && DIP[pin.type] ? c.start + dIn / 2 : c.start;
+      f.push(`[${last}][c${i}]overlay=x='${x}':y='${y}':enable='between(t,${num(from)},${num(c.start + total)})':eof_action=pass[o${i}]`);
       last = `o${i}`;
     }
   });
 
   // Text clips → one ASS layer composited on top.
   if (texts.length) {
-    const assFile = path.join(path.dirname(outPath), `${path.basename(outPath, '.mp4')}.titles.ass`);
-    const lines = ['[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${W}`, `PlayResY: ${H}`, 'WrapStyle: 2', 'ScaledBorderAndShadow: yes', '', '[V4+ Styles]',
+    const assFile = scratchFile('titles.ass');
+    const header = (pw, ph) => ['[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${pw}`, `PlayResY: ${ph}`, 'WrapStyle: 2', 'ScaledBorderAndShadow: yes', '', '[V4+ Styles]',
       'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
       'Style: T,Montserrat,96,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1',
       // B = titles with a background box (BorderStyle 3: the outline colour fills an opaque box, \\bord is the padding)
       'Style: B,Montserrat,96,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,3,0,0,5,0,0,0,1', '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'];
+    const lines = header(W, H); const head = lines.length;
+    // Titles with a wipe, slide, iris... (not a fade) each get their own see-through layer: drawn by libass on a canvas
+    // the size of the title's transition frame (its box, or the whole picture when it's keyframed), given the
+    // transition like a picture clip, turned, and laid on top before the other titles.
+    const own = [];
     const t2 = (t) => { const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = Math.floor(t % 60), cs = Math.floor((t * 100) % 100); return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`; };
     const argb = (s, d) => { const h = String(s || d).replace('#', ''); return h.length === 8 ? { a: 255 - parseInt(h.slice(0, 2), 16), rgb: '#' + h.slice(2) } : { a: 0, rgb: '#' + h }; };
     const easeOut = (f) => 1 - (1 - f) ** 3;
@@ -322,6 +378,22 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       const box = st.box && !round ? argb(st.boxColor, 'cc000000') : null;
       const shad = st.shadow ? argb(st.shadowColor, 'b3000000') : null;
       const raw = (st.uppercase ? String(st.text || '').toUpperCase() : String(st.text || '')).replace(/[{}\\]/g, '');
+      const shIn = shaped(c.transIn?.type) ? c.transIn : null, shOut = shaped(c.transOut?.type) ? c.transOut : null;
+      const fadeIn = shIn ? 0 : transDur(c.transIn), fadeOut = shOut ? 0 : transDur(c.transOut); // types 1-4 fade a title
+      let frame = null; // a title with its own layer: { w, h, ox, oy } (ox/oy move its positions onto that canvas)
+      if (shIn || shOut) {
+        if (keyed) frame = { w: W, h: H, ox: 0, oy: 0, full: true };
+        else {
+          const sc = base(c.scaleX, 1); const size = Math.max(1, (st.pixelSize || 96) * sc); const tl = raw.split('\n');
+          const m = require('./fontnames').measure(st.family || 'Montserrat', heavy, size * fit.k, tl);
+          const ls = (st.letterSpacing || 0) * sc; const pad = st.box ? (st.boxPad ?? 18) * sc : (st.outlineWidth || 0) * sc;
+          const bw = Math.max(size, ...tl.map((l, i) => (m.widths[i] || 0) + ls * [...l].length)) + pad * 2, bh = tl.length * size * 1.15 + pad * 1.2;
+          const tf = titleFrame(bw, bh, size, sc); const px0 = W / 2 + base(c.posX, 0), py0 = H / 2 + base(c.posY, 0);
+          frame = { ...tf, ox: tf.w / 2 - px0, oy: tf.h / 2 - py0, px0, py0 };
+        }
+      }
+      const out = frame ? [] : lines; const shift = frame ? c.start : 0; const OX = frame ? frame.ox : 0, OY = frame ? frame.oy : 0;
+      if (frame) own.push({ c, frame, events: out, shIn, shOut, rot: frame.full ? 0 : base(c.rotation, 0) });
       // Highlight: the word being said ('word', timed by st.words) or chosen keywords, in the highlight colour.
       const mode = ['word', 'keywords'].includes(st.hlMode) ? st.hlMode : null; const hl = argb(st.hlColor, 'fff2c14e');
       const flat = raw.split(/\s+/).filter(Boolean); const times = hlTimes(st, flat, c.duration);
@@ -341,7 +413,7 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       // The typing sound (on unless switched off in the title designer), mixed in with the rest of the sound below.
       if (typing && st.typeSound !== false) {
         const chars = [...raw.replace(/\n/g, '')]; const hits = typeHits(st, c.duration, nChars, cps, chars);
-        if (hits.length) typeSounds.push({ file: typingTrack(hits, c.duration, path.join(path.dirname(outPath), `${path.basename(outPath, '.mp4')}.type${typeSounds.length}.wav`)), start: c.start, vol: Math.max(0, Math.min(2, st.typeVol ?? 0.7)) });
+        if (hits.length) typeSounds.push({ file: typingTrack(hits, c.duration, scratchFile(`type${typeSounds.length}.wav`)), start: c.start, vol: Math.max(0, Math.min(2, st.typeVol ?? 0.7)) });
       }
       const shownAt = (lt) => Math.max(0, Math.min(nChars, st.animIn === 'type' ? Math.floor(lt * cps + 1e-6) : nChars, st.animOut === 'untype' ? Math.floor((c.duration - lt) * cps + 1e-6) : nChars));
       /** One line of the body with only its first n letters showing; returns [text, letters left for the next lines]. */
@@ -367,23 +439,23 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
         const off = (i - (parts.length - 1) / 2) * lh + fit.dy * size;
         const at = place ? place.replace(/\\move\(([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)/, (_, a, b, c2, d) => `\\move(${a},${Math.round(+b + off)},${c2},${Math.round(+d + off)}`) : `\\pos(${Math.round(px)},${Math.round(py + off)})`;
         const tags = `{\\an5${at}\\org(${Math.round(px)},${Math.round(py)})\\fn${fc.name.replace(/[{}\\,]/g, '')}\\fs${Math.max(1, Math.round(size * fit.k))}\\fsp${Math.round((st.letterSpacing || 0) * sc)}\\b${fc.bold ? 1 : 0}\\i${st.italic ? 1 : 0}\\c${colTag(col.rgb)}${pass === 'box' ? `\\1a&HFF&\\3a&H${box.a.toString(16).padStart(2, '0').toUpperCase()}&` : `\\alpha&H${alpha.toUpperCase()}&`}${pass === 'box' ? look : box ? '\\bord0' : look}${shad ? `\\shad${Math.round(st.shadow * sc)}\\4c${colTag(shad.rgb)}\\4a&H${shad.a.toString(16).padStart(2, '0').toUpperCase()}&` : '\\shad0'}\\frz${-rot}${pop}${fad}}`;
-        lines.push(`Dialogue: ${layer},${t2(from)},${t2(to)},${pass === 'box' ? 'B' : 'T'},,0,0,0,,${tags}${part}`);
+        out.push(`Dialogue: ${layer},${t2(from - shift)},${t2(to - shift)},${pass === 'box' ? 'B' : 'T'},,0,0,0,,${tags}${part}`);
         }); }
       };
       if (round) {
         // Same geometry as the preview (drawText): rounded = one box per line, square = one box around all lines.
-        const sc = base(c.scaleX, 1); const px = W / 2 + base(c.posX, 0), py = H / 2 + base(c.posY, 0); const size = Math.max(1, (st.pixelSize || 96) * sc);
+        const sc = base(c.scaleX, 1); const px = W / 2 + base(c.posX, 0) + OX, py = H / 2 + base(c.posY, 0) + OY; const size = Math.max(1, (st.pixelSize || 96) * sc);
         const tl = raw.split('\n'); const m = require('./fontnames').measure(st.family || 'Montserrat', heavy, size * fit.k, tl);
         const ls = (st.letterSpacing || 0) * sc; const wOf = (i) => m.widths[i] + ls * [...tl[i]].length;
         const lh = size * 1.15; const pad = (st.boxPad ?? 18) * sc; const bc = argb(st.boxColor, (st.boxRadius || 0) > 0 ? 'ffffffff' : 'cc000000');
         const shapes = (st.boxRadius || 0) > 0
           ? tl.map((l, i) => { const y = py + (i - (tl.length - 1) / 2) * lh; return require('./captions').roundRect(px - wOf(i) / 2 - pad, y - lh / 2, px + wOf(i) / 2 + pad, y + lh / 2, st.boxRadius * sc); }).join(' ')
           : (() => { const w = Math.max(...tl.map((l, i) => wOf(i))); const hh = (tl.length * lh) / 2 + pad * 0.6; const r = (v) => Math.round(v); return `m ${r(px - w / 2 - pad)} ${r(py - hh)} l ${r(px + w / 2 + pad)} ${r(py - hh)} ${r(px + w / 2 + pad)} ${r(py + hh)} ${r(px - w / 2 - pad)} ${r(py + hh)}`; })();
-        const fi = transDur(c.transIn), fo = transDur(c.transOut);
-        lines.push(`Dialogue: ${layer},${t2(c.start)},${t2(c.start + c.duration)},T,,0,0,0,,{\\an7\\pos(0,0)\\org(${Math.round(px)},${Math.round(py)})\\frz${-base(c.rotation, 0)}${fi || fo ? `\\fad(${Math.round(fi * 1000)},${Math.round(fo * 1000)})` : ''}\\bord0\\shad0\\1c${colTag(bc.rgb)}\\1a&H${bc.a.toString(16).padStart(2, '0').toUpperCase()}&\\p1}${shapes}{\\p0}`);
+        const fi = fadeIn, fo = fadeOut;
+        out.push(`Dialogue: ${layer},${t2(c.start - shift)},${t2(c.start + c.duration - shift)},T,,0,0,0,,{\\an7\\pos(0,0)\\org(${Math.round(px)},${Math.round(py)})\\frz${-(frame ? 0 : base(c.rotation, 0))}${fi || fo ? `\\fad(${Math.round(fi * 1000)},${Math.round(fo * 1000)})` : ''}\\bord0\\shad0\\1c${colTag(bc.rgb)}\\1a&H${bc.a.toString(16).padStart(2, '0').toUpperCase()}&\\p1}${shapes}{\\p0}`);
       }
       if (!keyed) {
-        const sc = base(c.scaleX, 1); const px = Math.round(W / 2 + base(c.posX, 0)), py = Math.round(H / 2 + base(c.posY, 0));
+        const sc = base(c.scaleX, 1); const px = Math.round(W / 2 + base(c.posX, 0) + OX), py = Math.round(H / 2 + base(c.posY, 0) + OY);
         // Spoken-word highlight: one piece per word (the coloured word moves on as it is said); the entrance plays on the first piece, the fade-out on the last.
         // (and with the typewriter, one piece per letter typed)
         const typeCuts = typing ? Array.from({ length: nChars }, (_, k) => [st.animIn === 'type' ? (k + 1) / cps : -1, st.animOut === 'untype' ? c.duration - (k + 1) / cps : -1]).flat() : [];
@@ -394,8 +466,8 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
         for (let k = 0; k < edges.length - 1; k++) {
           const first = k === 0, last = k === edges.length - 2;
           const an = animTags(st, first, last, Math.round((edges[k + 1] - edges[k]) * 1000), px, py, sc);
-          const fi = first ? Math.max(transDur(c.transIn), an.fi) : 0, fo = last ? Math.max(transDur(c.transOut), an.fo) : 0;
-          event({ from: c.start + edges[k], to: c.start + edges[k + 1], px, py, sc, op: base(c.opacity, 1), rot: base(c.rotation, 0),
+          const fi = first ? Math.max(fadeIn, an.fi) : 0, fo = last ? Math.max(fadeOut, an.fo) : 0;
+          event({ from: c.start + edges[k], to: c.start + edges[k + 1], px, py, sc, op: base(c.opacity, 1), rot: frame ? 0 : base(c.rotation, 0),
             place: an.place, pop: an.tags,
             fad: (fi || fo) ? `\\fad(${Math.round(fi * 1000)},${Math.round(fo * 1000)})` : '',
             body: bodyAt(mode === 'word' ? activeAt(edges[k] + 0.001) : -1), shown: typing ? shownAt(edges[k] + 0.001) : null });
@@ -403,7 +475,7 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
         continue;
       }
       // Keyframed title: written frame by frame with the same easing as the preview (subtitles can't ease on their own).
-      const n = Math.max(1, Math.round(c.duration * fps)); const ti = transDur(c.transIn), to = transDur(c.transOut);
+      const n = Math.max(1, Math.round(c.duration * fps)); const ti = fadeIn, to = fadeOut;
       for (let fr = 0; fr < n; fr++) {
         const lt = fr / fps;
         let sc = keyAt(c.scaleX, lt, 1), op = keyAt(c.opacity, lt, 1); let py = H / 2 + keyAt(c.posY, lt, 0);
@@ -412,9 +484,27 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
         event({ from: c.start + lt, to: c.start + (fr + 1) / fps, px: W / 2 + keyAt(c.posX, lt, 0), py, sc, op, rot: Math.round(keyAt(c.rotation, lt, 0) * 10) / 10, body: bodyAt(activeAt(lt)), shown: typing ? shownAt(lt) : null });
       }
     }
-    fs.writeFileSync(assFile, lines.join('\n') + '\n');
-    f.push(`[${last}]subtitles=filename='${path.relative(paths.root, assFile).split(path.sep).join('/')}':fontsdir='fonts'[vt]`);
-    last = 'vt';
+    const rel = (file) => path.relative(paths.root, file).split(path.sep).join('/');
+    own.forEach(({ c, frame, events: ev, shIn, shOut, rot }, n) => {
+      const file = scratchFile(`title${n}.ass`);
+      fs.writeFileSync(file, [...header(frame.w, frame.h), ...ev].join('\n') + '\n');
+      let s = `tt${n}`;
+      f.push(`color=c=black@0.0:s=${frame.w}x${frame.h}:r=${fps}:d=${num(c.duration)},format=yuva420p,subtitles=filename='${rel(file)}':fontsdir='fonts':alpha=1,settb=AVTB[${s}]`);
+      if (shIn) s = xfadeEdge(s, shIn.type, Math.min(transDur(shIn), c.duration), c.duration, false, `t${n}a`);
+      if (shOut) s = xfadeEdge(s, shOut.type, Math.min(transDur(shOut), c.duration), c.duration, true, `t${n}b`);
+      const r = (rot * Math.PI) / 180; const ch = [];
+      if (Math.abs(rot) > 0.01) ch.push(`rotate=${num(r)}:c=none:ow=rotw(${num(r)}):oh=roth(${num(r)})`);
+      ch.push(`trim=duration=${num(c.duration)}`, `setpts=PTS+${num(c.start)}/TB`);
+      f.push(`[${s}]${ch.join(',')}[tc${n}]`);
+      const x = frame.full ? '0' : `${num(frame.px0)}-w/2`, y = frame.full ? '0' : `${num(frame.py0)}-h/2`;
+      f.push(`[${last}][tc${n}]overlay=x='${x}':y='${y}':enable='between(t,${num(c.start)},${num(c.start + c.duration)})':eof_action=pass[to${n}]`);
+      last = `to${n}`;
+    });
+    if (lines.length > head) {
+      fs.writeFileSync(assFile, lines.join('\n') + '\n');
+      f.push(`[${last}]subtitles=filename='${rel(assFile)}':fontsdir='fonts'[vt]`);
+      last = 'vt';
+    }
   }
   f.push(`[${last}]format=yuv420p[vout]`);
 
@@ -447,13 +537,15 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
 
   const enc = ff.pickEncoder();
   const run = (e) => ff.ffmpegWithProgress([...args, '-filter_complex', f.join(';'), '-map', '[vout]', '-map', '[aout]', '-t', num(dur), '-r', String(fps), ...ff.encoderArgs(e, 18), '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', outPath], { totalSec: dur, onProgress, cwd: paths.root, signal });
-  try { await run(enc); } catch (err) {
-    // The graphics card's encoder (NVENC/QSV/AMF) can refuse a job now and then (busy with a render, a driver hiccup).
-    // Only then is the export made again on the computer's own encoder; exports that work are unchanged.
-    if (enc === 'libx264' || signal?.aborted || err.canceled) throw err;
-    warnings.add(`The graphics card's encoder stopped (${require('../jobs/queue').ffmpegReason(err.message).slice(0, 140)}), so this export was made with the computer's own encoder.`);
-    await run('libx264');
-  }
+  try {
+    try { await run(enc); } catch (err) {
+      // The graphics card's encoder (NVENC/QSV/AMF) can refuse a job now and then (busy with a render, a driver hiccup).
+      // Only then is the export made again on the computer's own encoder; exports that work are unchanged.
+      if (enc === 'libx264' || signal?.aborted || err.canceled) throw err;
+      warnings.add(`The graphics card's encoder stopped (${require('../jobs/queue').ffmpegReason(err.message).slice(0, 140)}), so this export was made with the computer's own encoder.`);
+      await run('libx264');
+    }
+  } finally { for (const x of scratch) fs.rm(x, { force: true }, () => {}); }
   return { outPath, duration: dur, warnings: [...warnings] };
 }
 
