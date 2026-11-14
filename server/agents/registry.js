@@ -46,6 +46,8 @@ const BUILT_IN = [
 
 // Free and always there: the local Llama (Ollama) as its own agent.
 BUILT_IN.push({ id: 'llama', name: 'Llama', vendor: 'Ollama (free, on this PC)', tone: 'moss', connections: ['ollama'], defaultConnection: 'ollama', blurb: 'The free AI running on this computer. No key, no limits; quickest for everyday questions.' });
+// HAL, Euclidean's own assistant, can sit in on conversations too.
+BUILT_IN.push({ id: 'hal', name: 'HAL', vendor: 'Euclidean\'s assistant', tone: 'slate', connections: ['hal'], defaultConnection: 'hal', blurb: 'HAL from the corner of every page: his news watch, the calendar, the outreach guide, app commands and what he has noted. Anything that needs a person waits for a Confirm in his panel.' });
 
 const BOT_TONE = { sky: 'sky', coral: 'coral', gold: 'gold', lav: 'lav', moss: 'moss', teal: 'teal', rose: 'coral' };
 /** Euclidean's own bots (Corbin, Juno, Scout, Data Bot, ...) as agents: they bring their tools, web and Data tab. */

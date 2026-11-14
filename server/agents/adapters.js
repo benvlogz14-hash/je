@@ -327,7 +327,29 @@ class GrokBotAdapter extends AgentAdapter {
   }
 }
 
-const KINDS = { api: ApiAdapter, cli: CliAdapter, herdr: HerdrAdapter, local: LocalAdapter, ollama: OllamaAdapter, bot: BotAdapter, account: AccountAdapter, connector: ConnectorAdapter, grokbot: GrokBotAdapter };
+/**
+ * HAL, Euclidean's own assistant: he answers the newest message with his usual routing (news watch, calendar,
+ * the outreach guide, app commands, his notebook). What he'd do that needs a person comes back as a Confirm button
+ * in his panel, for a founder to press. The exchange is also copied into HAL's chat.
+ */
+class HalAdapter extends AgentAdapter {
+  get kind() { return 'hal'; }
+  async detect() { return { installed: true, ready: true, note: 'Euclidean\'s own assistant (his brain: Settings → HAL)' }; }
+  async test() { return { ok: true, message: 'HAL is ready.' }; }
+  async deliver({ thread, message, history = [] }) {
+    const text = String(message?.body || '').trim().slice(0, 4000); if (!text) throw new Error('Nothing to answer.');
+    const ev = require('../core/events');
+    const who = registry().name(message?.from);
+    const mine = ctx.store.insert('halMessages', { who: 'bot', bot: `${who} (agent chat)`, text, by: `Agent conversation: ${thread?.title || ''}` }); ev.publish('hal', { id: mine.id });
+    const past = history.slice(-10).map((x) => ({ who: x.from === 'hal' ? 'hal' : 'you', text: String(x.body || '').slice(0, 1500) }));
+    const res = await require('../hal').handle(text, { history: past, context: {}, actor: 'bot:Agent conversations' });
+    const saved = ctx.store.insert('halMessages', { who: 'hal', text: res.text || '', by: res.by || null, draft: res.draft || null, confirm: res.confirm || null, forBot: 'the agent conversation' }); ev.publish('hal', { id: saved.id });
+    const draft = res.draft ? `\n\nDraft:\n${typeof res.draft === 'string' ? res.draft : JSON.stringify(res.draft, null, 1)}` : '';
+    return `${res.text || '(HAL had nothing to add.)'}${draft}${res.confirm ? '\n\n(This needs a founder: press Confirm in HAL\'s panel.)' : ''}`;
+  }
+}
+
+const KINDS = { api: ApiAdapter, cli: CliAdapter, herdr: HerdrAdapter, local: LocalAdapter, ollama: OllamaAdapter, bot: BotAdapter, account: AccountAdapter, connector: ConnectorAdapter, grokbot: GrokBotAdapter, hal: HalAdapter };
 
 function create(def, conf) {
   const kind = conf?.connection || def.defaultConnection;
@@ -336,4 +358,4 @@ function create(def, conf) {
   return new C(def, conf);
 }
 
-module.exports = { OllamaAdapter, BotAdapter, AccountAdapter, ConnectorAdapter, GrokBotAdapter, AgentAdapter, ApiAdapter, CliAdapter, HerdrAdapter, LocalAdapter, create, customKeyName, stripAnsi };
+module.exports = { HalAdapter, OllamaAdapter, BotAdapter, AccountAdapter, ConnectorAdapter, GrokBotAdapter, AgentAdapter, ApiAdapter, CliAdapter, HerdrAdapter, LocalAdapter, create, customKeyName, stripAnsi };

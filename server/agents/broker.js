@@ -28,6 +28,7 @@ const { HttpError, now } = require('../core/util');
 const protocol = require('./protocol');
 const registry = require('./registry');
 
+const LATE = new Set(['connector', 'grokbot']); // answer later, from outside the app
 const RESPOND_TYPES = new Set(['message', 'question', 'critique_request', 'task_request', 'context']);
 const queues = new Map();   // agentId -> [messageId]
 const running = new Set();  // agentIds currently answering
@@ -50,14 +51,14 @@ function assertWorkspace(ws) {
 function workspaceDir(ws) { return ws === 'internal' ? path.join(paths.root, 'agent-files') : paths.clientDir(ws); }
 
 // ------------------------------------------------------------ threads
-function createThread({ title, workspaceId, participants = [], createdBy }) {
+function createThread({ title, workspaceId, participants = [], createdBy, mode = 'all' }) {
   const ws = assertWorkspace(workspaceId || 'internal');
   const ids = [...new Set(participants.map((x) => registry.findId(x) || String(x).toLowerCase()))];
   for (const a of ids) {
     if (!registry.def(a)) throw new HttpError(400, `There's no agent called "${a}".`);
     if (!registry.allowedIn(a, ws)) throw new HttpError(403, `${registry.name(a)} isn't allowed in ${workspaceLabel(ws)}. Change that under its "Show advanced" options.`);
   }
-  const t = ctx.store.insert('agentThreads', { title: String(title || 'New conversation').slice(0, 120), workspaceId: ws, participants: ids, status: 'active', paused: false, autoTurns: 0, createdBy, lastAt: now() });
+  const t = ctx.store.insert('agentThreads', { title: String(title || 'New conversation').slice(0, 120), workspaceId: ws, participants: ids, mode: mode === 'turns' ? 'turns' : 'all', status: 'active', paused: false, autoTurns: 0, createdBy, lastAt: now() });
   audit.log(createdBy, 'agentnet.thread_started', { threadId: t.id, workspaceId: ws, clientId: ws === 'internal' ? null : ws, participants: ids });
   publish('thread', { threadId: t.id });
   return t;
@@ -150,10 +151,20 @@ function send(raw, { actor } = {}) {
   if (m.type === 'action_request') { requestApproval(msg, t); return ctx.store.get('agentMessages', msg.id); }
 
   const deliveries = {};
+  const responders = [];
   for (const a of to) {
     const conf = registry.conf(a);
     const willRespond = RESPOND_TYPES.has(m.type) && conf.autoReply !== false && conf.enabled !== false && !(conf.connection === 'local' && conf.mailbox && !conf.url);
     deliveries[a] = { status: willRespond ? 'queued' : 'delivered', at: now() };
+    // Claude and GrokBots read their answers later: a reply to them is flagged so it shows in their inbox.
+    if (!willRespond && !m.to.includes('*') && LATE.has(registry.connectionOf(a))) deliveries[a].unseen = true;
+    if (willRespond) responders.push(a);
+  }
+  // Take turns: one agent at a time, in order, each seeing the answers before it. Quick agents go first,
+  // the ones that answer later (the Claude app, a GrokBot by email) last.
+  if (t.mode === 'turns' && responders.length > 1) {
+    const order = [...responders].sort((x, y) => Number(LATE.has(registry.connectionOf(x))) - Number(LATE.has(registry.connectionOf(y))));
+    order.forEach((a, i) => { deliveries[a] = { status: i ? 'next' : 'queued', turn: i + 1, at: now() }; });
   }
   ctx.store.update('agentMessages', msg.id, { deliveries });
   for (const [a, d] of Object.entries(deliveries)) if (d.status === 'queued') enqueue(a, msg.id);
@@ -199,8 +210,17 @@ async function pump(agentId) {
       const paused = settings().paused || ctx.store.get('agentThreads', t.id)?.paused;
       setDelivery(msgId, agentId, paused && ac.signal.aborted ? { status: 'held' } : { status: 'failed', error: plain(e, agentId) });
       if (!(paused && ac.signal.aborted)) audit.log(`agent:${agentId}`, 'agentnet.delivery_failed', { threadId: t.id, messageId: msgId, clientId: t.workspaceId === 'internal' ? null : t.workspaceId, error: e.message }, 'warn');
-    } finally { running.delete(agentId); aborts.delete(agentId); }
+    } finally { running.delete(agentId); aborts.delete(agentId); nextTurn(msgId); }
   }
+}
+
+/** Take-turns threads: when one agent is done with a message (answered, failed, or will answer later), the next goes. */
+function nextTurn(msgId) {
+  const m = ctx.store.get('agentMessages', msgId); if (!m) return;
+  const ds = Object.entries(m.deliveries || {});
+  if (ds.some(([, d]) => d.status === 'queued' || d.status === 'running' || d.status === 'held')) return;
+  const nx = ds.filter(([, d]) => d.status === 'next').sort((x, y) => (x[1].turn || 0) - (y[1].turn || 0))[0];
+  if (nx) { setDelivery(msgId, nx[0], { status: 'queued' }); enqueue(nx[0], msgId); }
 }
 
 function plain(e, agentId) {
@@ -226,7 +246,9 @@ async function answer(agentId, m, t, signal) {
   if (!registry.allowedIn(agentId, t.workspaceId)) throw new Error(`${def.name} isn't allowed in this workspace.`);
   const adapter = registry.adapter(agentId);
   const peers = t.participants.filter((a) => a !== agentId).map((a) => ({ id: a, name: registry.name(a) }));
-  const history = ctx.store.all('agentMessages', (x) => x.threadId === t.id && x.createdAt <= m.createdAt && x.type !== 'join').slice(-30);
+  // The conversation so far, including answers given since this message (in take-turns threads, the earlier turns).
+  const history = ctx.store.all('agentMessages', (x) => x.threadId === t.id && x.type !== 'join').slice(-30);
+  const turn = m.deliveries?.[agentId]?.turn;
   // Studio projects in this workspace (client threads only ever see that client's projects).
   const editOps = require('../video/edit-ops');
   const wsProjects = ctx.store.all('projects', (pr) => (t.workspaceId === 'internal' ? !pr.clientId : pr.clientId === t.workspaceId)).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 12);
@@ -234,8 +256,8 @@ async function answer(agentId, m, t, signal) {
   const projInfo = wsProjects.map((pr) => ({ id: pr.id, name: pr.name, summary: wsProjects.length === 1 || said.includes(String(pr.name || '').toLowerCase()) || said.includes(pr.id) ? editOps.summarize(pr) : null }));
   const system = [protocol.systemPrompt({ self: { id: agentId, name: def.name }, peers, workspaceLabel: workspaceLabel(t.workspaceId) }), registry.conf(agentId).note || '',
     t.workspaceId !== 'internal' ? require('../integrations/ai').clientContext(t.workspaceId) : '', protocol.studioPrompt(projInfo, editOps.OPS_DOC)].filter(Boolean).join('\n\n');
-  const prompt = `Conversation "${t.title}" so far:\n\n${protocol.transcript(history, registry.name)}\n\n---\nRespond to the latest message from ${registry.name(m.from)} (${protocol.TYPES[m.type]}).`;
-  const raw = await adapter.deliver({ system, prompt, message: m, thread: { id: t.id, title: t.title, workspaceId: t.workspaceId }, clientId: t.workspaceId === 'internal' ? null : t.workspaceId, signal });
+  const prompt = `Conversation "${t.title}" so far:\n\n${protocol.transcript(history, registry.name)}\n\n---\nRespond to ${m.id === history[history.length - 1]?.id ? 'the latest message' : `this message`} from ${registry.name(m.from)} (${protocol.TYPES[m.type]}): "${String(m.body || '').slice(0, 600)}"${turn > 1 ? `\n\nThe agents are taking turns and ${turn - 1} answered before you (above). Build on what they said: agree, disagree or add what's missing. Don't repeat them.` : ''}`;
+  const raw = await adapter.deliver({ system, prompt, history, message: m, thread: { id: t.id, title: t.title, workspaceId: t.workspaceId }, clientId: t.workspaceId === 'internal' ? null : t.workspaceId, signal });
   if (raw == null) {
     // Mailbox agents fetch the message themselves; the Claude app and GrokBots answer later.
     const kind = registry.connectionOf(agentId);
@@ -354,6 +376,45 @@ function status() {
 /** On startup: anything that was mid-delivery when the app closed goes back in line (or stays held). */
 function start() {
   for (const m of ctx.store.all('agentMessages')) for (const [a, d] of Object.entries(m.deliveries || {})) if (d.status === 'running' || d.status === 'queued') { setDelivery(m.id, a, { status: 'queued' }); enqueue(a, m.id); }
+  for (const m of ctx.store.all('agentMessages', (x) => Object.values(x.deliveries || {}).some((d) => d.status === 'next'))) nextTurn(m.id);
 }
 
-module.exports = { lateReply, waitingFor, createThread, join, send, setPaused, setGlobalPause, retry, cancel, decide, threads, messages, inbox, outbox, failed, approvals, status, start, workspaceLabel, workspaceDir };
+/** Answers and messages addressed to an agent that reads them later (Claude, a GrokBot); `mark` = they've been read. */
+function answersFor(agentId, { mark = false } = {}) {
+  const a = String(agentId).toLowerCase();
+  const list = ctx.store.all('agentMessages', (m) => m.deliveries?.[a]?.unseen);
+  if (mark) for (const m of list) ctx.store.update('agentMessages', m.id, (x) => ({ deliveries: { ...x.deliveries, [a]: { ...x.deliveries[a], unseen: false, status: 'read' } } }));
+  return list.map((m) => { const t = ctx.store.get('agentThreads', m.threadId); return { ...view(m), threadTitle: t?.title || '' }; });
+}
+
+/** All at once (everyone answers a message side by side) or take turns (one after another, each seeing the others). */
+function setMode(threadId, mode, actor) {
+  const t = thread(threadId); const md = mode === 'turns' ? 'turns' : 'all';
+  if (t.mode === md) return t;
+  ctx.store.update('agentThreads', t.id, { mode: md });
+  record({ threadId: t.id, workspaceId: t.workspaceId, from: 'system', to: ['*'], type: 'system', body: md === 'turns' ? `${registry.name(actor)} set the agents to take turns: one answers at a time and each sees the answers before it.` : `${registry.name(actor)} set the agents to answer all at once.` });
+  return ctx.store.get('agentThreads', t.id);
+}
+
+/**
+ * Sum up a conversation: what was decided, open questions, next steps (who does what). Written by the AI in the
+ * usual cost order (free first), posted in the thread, and (with save) kept in the notebook.
+ */
+async function summarize(threadId, { save = false, actor = 'system' } = {}) {
+  const t = thread(threadId);
+  const msgs = ctx.store.all('agentMessages', (m) => m.threadId === t.id && !['join'].includes(m.type) && !m.summary);
+  if (msgs.filter((m) => m.from !== 'system').length < 2) throw new HttpError(400, 'There isn\'t enough said yet to sum up.');
+  const ai = require('../integrations/ai');
+  const r = await ai.ask({ role: 'operations', maxTokens: 900,
+    system: 'You sum up a group chat between a company\'s founders and AI agents. Plain English, short. Use only what was said; never add facts. Sections, each a few short lines: "Decided", "Still open", "Next steps" (each step with who does it). No em dashes.',
+    prompt: `Conversation "${t.title}":\n\n${protocol.transcript(msgs.slice(-60), registry.name).slice(-24000)}` });
+  const text = String(r.text || '').replace(/\u2014/g, ',').trim();
+  if (!text) throw new HttpError(502, 'The summary came back empty. Try again.');
+  let noteId = null;
+  if (save) { try { noteId = require('../hal/memory').add({ text: `Agent conversation "${t.title}" (${new Date().toISOString().slice(0, 10)}): ${text}`.slice(0, 3000), kind: 'note', source: 'Agent conversation', by: actor, key: `agentthread:${t.id}`, about: t.participants.map(registry.name) })?.id || null; } catch { /* notebook off */ } }
+  const msg = record({ threadId: t.id, workspaceId: t.workspaceId, from: 'system', to: ['*'], type: 'system', summary: true, body: text, noteId });
+  audit.log(actor, 'agentnet.summary', { threadId: t.id, saved: !!noteId });
+  return { text, id: msg.id, saved: !!noteId };
+}
+
+module.exports = { answersFor, setMode, summarize, lateReply, waitingFor, createThread, join, send, setPaused, setGlobalPause, retry, cancel, decide, threads, messages, inbox, outbox, failed, approvals, status, start, workspaceLabel, workspaceDir };
