@@ -103,17 +103,19 @@ function createBrollClip(asset) {
  * Story text edits for one video (client video style "story"): n edits, each drawing its shots from its own part of the
  * video in order (so the six edits tell six different stretches and never share shots), with its own text lines.
  */
-function createStoryClips(asset, n) {
+function createStoryClips(asset, n, look = 'story') {
+  if (!(n > 0)) return [];
   const client = ctx.store.get('clients', asset.clientId); const prod = client?.production || {};
-  const len = Math.max(15, Math.min(90, Number(prod.storySeconds) || 45)); const dur = asset.info?.duration || 0;
+  const swag = look === 'swag'; // 2swag: ~64 s, its own text look and pacing (story.js swagLines)
+  const len = swag ? Math.max(30, Math.min(90, Number(prod.swagSeconds) || 64)) : Math.max(15, Math.min(90, Number(prod.storySeconds) || 45)); const dur = asset.info?.duration || 0;
   const have = ctx.store.all('clips', (c) => c.assetId === asset.id && c.kind === 'story').length;
   const total = have + n; const out = [];
   for (let i = have; i < total; i++) {
     const a = dur ? (dur * i) / total : 0, b = dur ? (dur * (i + 1)) / total : 0;
     out.push(ctx.store.insert('clips', {
-      ref: nextRef(), clientId: asset.clientId, assetId: asset.id, kind: 'story', start: 0, end: len, window: dur ? [Math.round(a * 10) / 10, Math.round(b * 10) / 10] : null, part: i + 1,
-      title: `Story ${i + 1}: ${String(asset.name || 'video').replace(/\.[^.]+$/, '')}`.slice(0, 80), hook: '', caption: '', hashtags: [],
-      method: 'story', reason: 'Text lines tell the story over the best shots of this part of the video, to intense music', music: prod.storyMood || 'suspense', status: 'queued', versions: [], currentVersion: 0, feedback: [], approvalId: null, postId: null,
+      ref: nextRef(), clientId: asset.clientId, assetId: asset.id, kind: 'story', ...(swag ? { storyLook: 'swag', videoStyle: 'swag' } : {}), start: 0, end: len, window: dur ? [Math.round(a * 10) / 10, Math.round(b * 10) / 10] : null, part: i + 1,
+      title: `${swag ? '2swag' : 'Story'} ${i + 1}: ${String(asset.name || 'video').replace(/\.[^.]+$/, '')}`.slice(0, 80), hook: '', caption: '', hashtags: [],
+      method: 'story', reason: swag ? 'A lowercase line for every shot tells the visit as a story (2swag format), to music' : 'Text lines tell the story over the best shots of this part of the video, to intense music', music: (swag && prod.swagMood) || prod.storyMood || 'suspense', status: 'queued', versions: [], currentVersion: 0, feedback: [], approvalId: null, postId: null,
     }));
     requestRender(out[out.length - 1], { reason: 'initial' });
   }

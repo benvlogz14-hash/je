@@ -95,14 +95,16 @@ function musicClips(music, dur, nid) {
  * Studio project for a B-roll or Story text edit: its shots in order on V1 (as cut), the music on its own track,
  * and (story edits) each text line as a title in TikTok's plain look, at the times it showed.
  */
-function toVeloEdit({ name, source, info, segs = [], cuts = null, total = 0, music = null, lines = [], when = [] }) {
+function toVeloEdit({ name, source, info, segs = [], cuts = null, total = 0, music = null, lines = [], when = [], look = null }) {
+  // 2swag lines sit just below the middle, lowercase, slightly smaller (story.SWAG_LOOK); Story text's in the upper third.
+  const tl = look === 'swag' ? { y: 0.622, size: 70, lower: true } : { y: 0.27, size: 64, lower: false };
   const mediaId = 'm1'; let nextId = 1;
   const scale = info.height ? Math.max(W / info.width, H / info.height) : 1;
   const ends = segs.map((sg, i) => (cuts && cuts[i] != null ? cuts[i] : null));
   let t = 0; const v1 = segs.map((sg, i) => { const start = t; const end = ends[i] ?? (i === segs.length - 1 && total ? total : start + sg.dur); t = end; return veloClip({ id: nextId++, type: 0, mediaId, name: `Shot ${i + 1}`, start, duration: Math.max(0.1, end - start), in: sg.src, scale }); });
   const dur = total || t;
-  const titles = lines.map((l, i) => veloClip({ id: nextId++, type: 3, name: l, start: when[i]?.start ?? (i * dur) / lines.length, duration: Math.max(0.3, (when[i]?.end ?? ((i + 1) * dur) / lines.length) - (when[i]?.start ?? (i * dur) / lines.length)), posY: Math.round(H * 0.27 - H / 2),
-    text: { text: String(l), family: 'TikTok Sans', pixelSize: 64, bold: false, italic: false, color: '#ffffffff', outlineColor: '#ff000000', outlineWidth: 0, shadow: 3, shadowColor: '#90000000' } }));
+  const titles = lines.map((l, i) => veloClip({ id: nextId++, type: 3, name: l, start: when[i]?.start ?? (i * dur) / lines.length, duration: Math.max(0.3, (when[i]?.end ?? ((i + 1) * dur) / lines.length) - (when[i]?.start ?? (i * dur) / lines.length)), posY: Math.round(H * tl.y - H / 2),
+    text: { text: tl.lower ? String(l).toLowerCase() : String(l), family: 'TikTok Sans', pixelSize: tl.size, bold: false, italic: false, color: '#ffffffff', outlineColor: '#ff000000', outlineWidth: 0, shadow: 3, shadowColor: '#90000000' } }));
   const mu = musicClips(music, dur, () => nextId++);
   const track = (type, nm, clips) => ({ type, name: nm, muted: false, locked: false, volume: animated(1), clips });
   return {

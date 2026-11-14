@@ -230,6 +230,7 @@ function StyleSwitch({ client }) {
     explorer: { color: '#F07C5A', sample: html`<span style="font:800 13px Montserrat;color:#fff;text-shadow:0 2px 6px rgba(0,0,0,.9)">they left it <span style="color:#FFD60A">all</span>...</span>` },
     walkthrough: { color: '#E9A23B', sample: html`<span style="font:800 13px Montserrat;color:#fff;text-shadow:0 1px 3px #000">it's just <span style="color:#F5B850">crazy</span> how</span>` },
     highlights: { color: '#3FA796', sample: html`<span class="row" style="gap:3px;align-items:center">${[26, 18, 22].map((w) => html`<i style=${`display:block;width:${w}px;height:8px;border-radius:3px;background:#7fd8c8`} />`)}<span style="font:700 13px 'TikTok Sans Bold', 'TikTok Sans', Inter, sans-serif;color:#fff;margin-left:4px;text-shadow:0 1px 3px #000">the <span style="color:#FFE14D">door</span>?</span></span>` },
+    swag: { color: '#2E9BE6', sample: html`<span style="font:600 11px 'TikTok Sans', Inter, sans-serif;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.85);text-align:center;line-height:1.2">we found a tiny building<br />nobody could explain...</span>` },
     story: { color: '#8B6FD6', sample: html`<span style="font:600 13px 'TikTok Sans', Inter, sans-serif;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.8)">You find something…</span>` },
     custom: { color: '#8A9099', sample: html`<span style=${`font:800 14px '${cs.font || 'Montserrat'}', Montserrat;color:${cs.primary || '#fff'};text-shadow:0 0 2px ${cs.outline || '#000'}`}>${(cs.uppercase !== false ? 'YOUR ' : 'your ')}<span style=${`color:${cs.highlight || '#F2C14E'}`}>${cs.uppercase !== false ? 'LOOK' : 'look'}</span></span>` },
   };
@@ -254,6 +255,10 @@ function StyleSwitch({ client }) {
         ${o.id === 'story' && n ? html`<div class="row wrap" style="gap:6px;font-size:var(--fs-xs);align-items:center">
           <select class="select" style="height:28px;font-size:var(--fs-xs);width:auto" value=${String(p.storySeconds || 45)} onChange=${(e) => save({ storySeconds: Number(e.target.value) }, `Story edits: about ${e.target.value} seconds`)} aria-label="Story length">${[20, 30, 45, 60].map((x) => html`<option value=${x}>${x} seconds</option>`)}</select>
           <select class="select" style="height:28px;font-size:var(--fs-xs);width:auto" value=${p.storyMood || 'suspense'} onChange=${(e) => save({ storyMood: e.target.value }, `Story music: ${e.target.selectedOptions[0].text}`)} aria-label="Story music">${[['suspense', 'Suspense'], ['intense', 'Intense'], ['darkbeat', 'Dark beat'], ['scary', 'Scary'], ['creepy', 'Creepy']].map(([v, l]) => html`<option value=${v}>${l} music</option>`)}</select>
+        </div>` : null}
+        ${o.id === 'swag' && n ? html`<div class="row wrap" style="gap:6px;font-size:var(--fs-xs);align-items:center">
+          <select class="select" style="height:28px;font-size:var(--fs-xs);width:auto" value=${String(p.swagSeconds || 64)} onChange=${(e) => save({ swagSeconds: Number(e.target.value) }, `2swag edits: about ${e.target.value} seconds`)} aria-label="2swag length">${[45, 55, 64, 75, 90].map((x) => html`<option value=${x}>${x} seconds</option>`)}</select>
+          <select class="select" style="height:28px;font-size:var(--fs-xs);width:auto" value=${p.swagMood || p.storyMood || 'suspense'} onChange=${(e) => save({ swagMood: e.target.value }, `2swag music: ${e.target.selectedOptions[0].text}`)} aria-label="2swag music">${[['suspense', 'Suspense'], ['intense', 'Intense'], ['darkbeat', 'Dark beat'], ['scary', 'Scary'], ['creepy', 'Creepy']].map(([v, l]) => html`<option value=${v}>${l} music</option>`)}</select>
         </div>` : null}
       </div>`; })}
     </div>

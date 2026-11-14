@@ -651,7 +651,7 @@ r.post('/api/clips/:id/studio', async (req, b, p) => {
     // A B-roll or Story edit opens as its real cut: its shots, its music on its own track, its text lines as titles.
     const file = v.broll.musicFile && fs.existsSync(v.broll.musicFile) ? v.broll.musicFile : null; const total = v.broll.total || v.duration;
     const music = file ? { volume: Number(c.musicVol ?? 0.9), cues: [{ file, start: 0, end: total, offset: v.broll.musicStart || 0, vol: 1 }], durations: await durOf([file]) } : null;
-    data = exporters.toVeloEdit({ name: c.title, source: a.path, info: a.info, segs: v.broll.segs, cuts: v.broll.cuts, total, music, lines: v.story?.lines || [], when: v.story?.when || [] });
+    data = exporters.toVeloEdit({ name: c.title, source: a.path, info: a.info, segs: v.broll.segs, cuts: v.broll.cuts, total, music, lines: v.story?.lines || [], when: v.story?.when || [], look: c.storyLook || null });
   } else {
     const words = require('./jobs/handlers').loadTranscript(a)?.words || [];
     // The clip's cut: saved with the render; for clips rendered before that, worked out the same way the render does

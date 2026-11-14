@@ -299,20 +299,21 @@ queue.register('discover', {
     const styles = require('../video/styles');
     const mix = Object.fromEntries(Object.entries(ownMix || client.production?.styleMix || {}).map(([k, v]) => [k, Math.max(0, Math.min(10, Math.round(Number(v) || 0)))]).filter(([k, v]) => v > 0 && (styles.PRESETS[k] || k === 'custom')));
     const mixTotal = Object.values(mix).reduce((a, b) => a + b, 0);
-    let looks = null; let storyCount = 0;
+    let looks = null; let storyCount = 0; let swagCount = 0;
     if (mixTotal > 0) {
       storyCount = asset.info?.hasVideo !== false ? mix.story || 0 : 0;
-      const order = Object.entries(mix).filter(([k]) => k !== 'story'); looks = [];
+      swagCount = asset.info?.hasVideo !== false ? mix.swag || 0 : 0;
+      const order = Object.entries(mix).filter(([k]) => k !== 'story' && k !== 'swag'); looks = [];
       for (let round = 0; looks.length < order.reduce((a, [, v]) => a + v, 0); round++) for (const [k, v] of order) if (round < v) looks.push(k);
       if (!looks.length) {
-        const made = pipeline.createStoryClips(asset, storyCount);
+        const made = [...pipeline.createStoryClips(asset, storyCount), ...pipeline.createStoryClips(asset, swagCount, 'swag')];
         ctx.store.update('assets', asset.id, { discoveredAt: now(), discoveryMethod: 'story' });
         return { clips: made.length, method: 'story' };
       }
     }
     // Story text style: no talking clips; each edit tells one part of the video in text lines over its best shots.
-    if (!looks && client.production?.videoStyle === 'story' && asset.info?.hasVideo !== false) {
-      const made = pipeline.createStoryClips(asset, count);
+    if (!looks && ['story', 'swag'].includes(client.production?.videoStyle) && asset.info?.hasVideo !== false) {
+      const made = pipeline.createStoryClips(asset, count, client.production.videoStyle);
       ctx.store.update('assets', asset.id, { discoveredAt: now(), discoveryMethod: 'story' });
       audit.log('system', 'clips.discovered', { clientId: asset.clientId, assetId: asset.id, count: made.length, method: 'story' });
       return { clips: made.length, method: 'story' };
@@ -369,9 +370,10 @@ queue.register('discover', {
       result.clips = [...result.clips, ...hl];
     }
     if (storyCount) { try { pipeline.createStoryClips(asset, storyCount); } catch (e) { h.log(`Story edits skipped: ${e.message}`); } }
+    if (swagCount) { try { pipeline.createStoryClips(asset, swagCount, 'swag'); } catch (e) { h.log(`2swag edits skipped: ${e.message}`); } }
     if (!result.clips.length) {
       const short = (asset.info?.duration || 0) < 45;
-      ctx.store.update('assets', asset.id, { exhausted: true, discoveredAt: now(), error: storyCount ? null : short ? 'No clips: this video is shorter than the clip length the styles need (about 30 s). Try Custom with a shorter clip length.' : 'No new moments left to clip with these settings. Re-clip footage → Best moments, made again, or try other styles or clip lengths.' });
+      ctx.store.update('assets', asset.id, { exhausted: true, discoveredAt: now(), error: storyCount || swagCount ? null : short ? 'No clips: this video is shorter than the clip length the styles need (about 30 s). Try Custom with a shorter clip length.' : 'No new moments left to clip with these settings. Re-clip footage → Best moments, made again, or try other styles or clip lengths.' });
       events.publish('assets', { id: asset.id });
       return { clips: 0, note: 'No further usable moments found' };
     }
@@ -396,7 +398,7 @@ async function renderBroll(job, h, clip) {
   let black = []; try { black = await require('../video/montage').blackIntervals(asset.path, asset.workDir); } catch { /* none */ }
   const be = require('../video/brolledit');
   h.progress(0.15, 'Choosing the music');
-  const music = require('../video/music'); const mood = clip.music && !['auto', 'off'].includes(clip.music) ? clip.music : (clip.kind === 'story' ? client?.production?.storyMood || 'suspense' : client?.production?.brollMood || 'darkbeat');
+  const music = require('../video/music'); const mood = clip.music && !['auto', 'off'].includes(clip.music) ? clip.music : (clip.kind === 'story' ? (clip.storyLook === 'swag' ? client?.production?.swagMood : null) || client?.production?.storyMood || 'suspense' : client?.production?.brollMood || 'darkbeat');
   const track = clip.musicTrack ? { file: await music.resolve(clip.musicTrack) } : await music.pick(mood);
   // Shots used by this footage's earlier B-roll edits are skipped when there are enough others (so daily edits differ).
   const story = clip.kind === 'story';
@@ -405,17 +407,22 @@ async function renderBroll(job, h, clip) {
   const avoid = others.flatMap((c) => (story ? (c.versions || []).slice(-1) : c.versions || []).flatMap((v) => (v.broll?.segs || []).map((s) => [s.src, s.src + s.dur])));
   // Story edits: text lines written for this part of the video, shown on the cuts (story.js).
   let lines = null;
-  const texts = story ? async (grid) => {
+  // 2swag (story edits with storyLook 'swag'): ~4 s shots, a lowercase line every ~4.5 s that says what that shot shows.
+  const swag = story && clip.storyLook === 'swag';
+  const texts = story ? async (grid, segs = []) => {
     const st = require('../video/story');
     h.progress(0.3, 'Writing the story lines');
-    const count = Math.max(4, Math.min(10, Math.round(grid.total / 6)));
+    const count = swag ? Math.max(5, Math.min(18, Math.round(grid.total / 4.6))) : Math.max(4, Math.min(10, Math.round(grid.total / 6)));
     const used = others.flatMap((c) => c.versions?.[c.versions.length - 1]?.story?.lines || []);
-    lines = clip.storyLines?.length ? { lines: clip.storyLines, by: 'edited' } : await st.lines({ shots: vis?.shots || [], words: loadTranscript(asset)?.words || [], window: clip.window, count, title: asset.name, clientId: clip.clientId, jobId: job.id, avoid: used, part: Math.max(0, (clip.part || 1) - 1) });
-    const w = st.writeAss({ lines: lines.lines, grid, file: path.join(outDir, `v${n}.story.ass`) }); lines.when = w.when; return w.file;
+    // The picture when each line starts: the shot playing then, and what Look through says it shows.
+    const when = swag ? st.timing(grid, count) : null;
+    const beats = swag ? when.map((w) => { const cuts = [0, ...(grid.cuts || [])]; let i = 0; while (i + 1 < cuts.length && cuts[i + 1] <= w.start + 0.3) i++; const seg = segs[Math.min(i, segs.length - 1)]; const src = seg ? seg.src + (w.start - cuts[i]) + 0.3 : null; const shot = src != null ? (vis?.shots || []).find((x) => src >= x.s && src <= x.e) : null; return { ...w, what: shot?.what || '' }; }) : null;
+    lines = clip.storyLines?.length ? { lines: clip.storyLines, by: 'edited' } : await st.lines({ shots: vis?.shots || [], words: loadTranscript(asset)?.words || [], window: clip.window, count, title: asset.name, clientId: clip.clientId, jobId: job.id, avoid: used, part: Math.max(0, (clip.part || 1) - 1), look: swag ? 'swag' : 'story', beats });
+    const w = st.writeAss({ lines: lines.lines, grid, file: path.join(outDir, `v${n}.story.ass`), look: swag ? st.SWAG_LOOK : {}, when: swag && lines.lines.length === when.length ? when : null }); lines.when = w.when; return w.file;
   } : null;
   h.progress(0.2, 'Finding the beat and cutting the shots to it');
   const r = await be.make({ source: asset.path, duration: asset.info?.duration || 0, shots: vis?.shots || [], scenes: an?.scenes || [], black, avoid, music: track?.file || null, length: clip.end - clip.start, out: outPath, volume: Number(clip.musicVol ?? 0.9), signal: h.signal,
-    ...(story ? { raw: true, window: clip.window || null, cutBeats: 2.6, texts, strict: true } : {}) });
+    ...(story ? { raw: true, window: clip.window || null, cutBeats: swag ? 4 : 2.6, texts, strict: true, fill: swag } : {}) });
   const segs = r.segs;
   const qc = await ff.qualityCheck(outPath, { expectWidth: 1080, expectHeight: 1920, minSec: 3, maxSec: 180 });
   const thumb = path.join(outDir, `v${n}.jpg`); await ff.thumbnail(outPath, thumb, Math.min(1.5, r.duration / 2), 405);
