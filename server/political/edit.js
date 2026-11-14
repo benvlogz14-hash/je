@@ -175,6 +175,8 @@ async function pitches(file, ranges) {
 
 /** The speaker's face in a shot: { x, y, h } as fractions of the picture (centre and height), or null. */
 async function faceBox(c, times, work) {
+  // For tests and the built-in style samples (drawn stand-in footage has no real face to find): EUCLIDEAN_FACE_AT="x,y,h".
+  if (process.env.EUCLIDEAN_FACE_AT) { const [x, y, h] = process.env.EUCLIDEAN_FACE_AT.split(',').map(Number); if (x > 0 && y > 0) return { x, y, h: h || 0.2 }; }
   try {
     const ft = require('../video/facetrack');
     if (!(await ft.available())) return null;

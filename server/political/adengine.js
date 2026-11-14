@@ -291,7 +291,8 @@ function basePlan(bites, { broll, map, place = '', look = null, news = [] }) {
   const placeWords = String(place).toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 3);
   const local = (b) => /\b(district|community|neighbo|town|city|county|borough|state|street|home|here)/i.test(b.text) || placeWords.some((w) => b.text.toLowerCase().includes(w)) || (map?.number && new RegExp(`\\b${map.number}`).test(b.text));
   // A line that carries its own graphic card (a checklist, bars, a timeline, a clipping) keeps it: the map goes elsewhere.
-  const free = (b, k) => !(b.gfx && ['checklist', 'compare', 'timeline'].includes(b.gfx.kind)) && !clips.has(k);
+  const CARDS = ['checklist', 'compare', 'timeline', 'poll', 'endorse'];
+  const free = (b, k) => !(b.gfx && CARDS.includes(b.gfx.kind)) && !clips.has(k) && !b.voice;
   const placeBeat = bites.findIndex((b, k) => k >= 1 && b.role === 'place' && b.e - b.s >= 2.6 && free(b, k));
   const mapAt = !map ? -1 : placeBeat >= 0 ? placeBeat : (bites.findIndex((b, k) => k >= 1 && b.e - b.s >= 3.4 && local(b) && free(b, k)) + 1 || bites.findIndex((b, k) => k >= 1 && b.e - b.s >= 3.4 && free(b, k)) + 1) - 1;
   return bites.map((b, k) => {
@@ -303,8 +304,8 @@ function basePlan(bites, { broll, map, place = '', look = null, news = [] }) {
     // or a press clipping (a real headline from the research that this line is about).
     const g = b.gfx; const clip = clips ? clips.get(k) : null;
     if (k === mapAt) p.map = { at: Math.min(1.2, dur * 0.3), dur: Math.min(3.0, dur * 0.6) };
-    else if (k >= 1 && g && ['checklist', 'compare', 'timeline'].includes(g.kind) && dur >= 2.8) {
-      const first = g.kind === 'checklist' ? g.items[0].split(' ')[0] : g.kind === 'compare' ? g.a : g.from;
+    else if (k >= 1 && g && CARDS.includes(g.kind) && dur >= 2.8 && !b.voice) {
+      const first = g.kind === 'checklist' ? g.items[0].split(' ')[0] : g.kind === 'compare' ? g.a : g.kind === 'poll' ? g.bars[0].value : g.kind === 'endorse' ? 'endorsed' : g.from;
       const wi = Math.max(0, b.words.findIndex((w) => norm(w.w) === norm(first) || w.w.replace(/[^\d]/g, '') === String(first).replace(/[^\d]/g, '')));
       const at = Math.max(0.5, b.words[wi].s - b.s - 0.3);
       p.card = { at, dur: Math.max(1.8, Math.min(5, dur - at)), card: { ...g } }; p.gfx = null;
@@ -411,6 +412,7 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
     });
     return out;
   };
+  const firstOwn = Math.max(0, bites.findIndex((b) => !b.voice)); // the name plate goes on the candidate, never on a guest or an opponent
   let t = 0;
   plan.forEach((p, k) => {
     const cut = cuts[k]; const b = bites[k];
@@ -423,8 +425,8 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
     const keyset = new Set((p.keys || []).map(norm));
     const head = { words: hw.map((w, i) => ({ w, key: keyset.has(norm(w)), t: at >= 0 ? Math.max(t, t + mapT(cut, b.words[at + i].s) - 0.05) : t + 0.08 + i * 0.07 })) };
     const angles = anglesFor(b, cut, t);
-    const speaker = (from, to) => ({ kind: 'video', src: cut.url, from: from - t, fx: cut.fx ?? 0.5, fy: 0.3, face: cut.face || null, ar: cut.ar || null, fit: !!cut.fit, angles: cut.face ? angles : null, pushAt: t, pushLen: cut.dur, jumps: (cut.jumps || []).map((j) => t + j) });
-    const base = { line: k, bg: p.bg || 'navy', head: dens === 'minimal' || off.head ? null : head, tilt: tilts[k % tilts.length], label: b.label || null, icons: dens === 'full' ? (p.icons || []).slice(0, 2) : [], role: p.role || null, hook: k === 0, rally: k === plan.length - 1 && plan.length > 1 };
+    const speaker = (from, to) => ({ kind: 'video', src: cut.url, from: from - t, fx: cut.fx ?? 0.5, fy: 0.3, face: cut.face || null, ar: cut.ar || null, fit: !!cut.fit, tone: b.voice?.kind === 'opponent' ? 'opponent' : null, angles: cut.face ? angles : null, pushAt: t, pushLen: cut.dur, jumps: (cut.jumps || []).map((j) => t + j) });
+    const base = { line: k, voice: b.voice || null, bg: p.bg || 'navy', head: dens === 'minimal' || off.head || b.voice ? null : head, tilt: tilts[k % tilts.length], label: b.label || null, icons: dens === 'full' ? (p.icons || []).slice(0, 2) : [], role: p.role || null, hook: k === 0, rally: k === plan.length - 1 && plan.length > 1 };
     const parts = [];
     let ins = p.map ? { kind: 'map', ...p.map } : p.card ? { kind: 'card', ...p.card } : p.cover && brollFiles[p.cover.broll] ? { kind: 'broll', ...p.cover } : null;
     if (ins && ins.kind === 'card' && ((dens === 'minimal' && ins.card.kind !== 'clip') || off.tags)) ins = null;
@@ -447,17 +449,19 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
         const c = { ...ins.card };
         // A checklist ticks each item as they say it.
         if (c.kind === 'checklist') c.items = c.items.map((text) => { const i = findRun(b.words, text.split(' ')); return { text, t: i >= 0 ? t + mapT(cut, b.words[i].s) : a + 0.3 }; });
-        parts.push({ ...base, at: a, dur: e - a, tilt: -base.tilt, card: c, tag: null, icons: [], noCaptions: ['checklist', 'clip'].includes(c.kind) });
+        parts.push({ ...base, at: a, dur: e - a, tilt: -base.tilt, card: c, tag: null, icons: [], noCaptions: ['checklist', 'clip', 'endorse'].includes(c.kind) });
       } else {
-        const bf = brollFiles[ins.broll];
-        parts.push({ ...base, at: a, dur: e - a, card: { kind: 'video', src: bf.url, from: 0, fx: 0.5, fy: 0.45, broll: true }, pill: dens === 'full' || look.pill === 'title' ? place || null : null });
+        const bf = brollFiles[ins.broll]; const bcard = { kind: 'video', src: bf.url, from: 0, fx: 0.5, fy: 0.45, broll: true };
+        // Split screen (look.split): the B-roll plays beside the speaker instead of covering them.
+        parts.push({ ...base, at: a, dur: e - a, card: look.split ? { kind: 'split', a: speaker(a), b: bcard } : bcard, pill: dens === 'full' || look.pill === 'title' ? place || null : null });
       }
       if (e < t + cut.dur - 0.01) parts.push({ ...base, at: e, dur: t + cut.dur - e, card: speaker(e) });
     } else parts.push({ ...base, at: t, dur: cut.dur, card: speaker(t) });
-    if (k === 0) { parts[0].enter = true; parts.forEach((x) => { if (x.card.kind === 'video' && x.card.src === cut.url) x.plate = true; }); }
+    if (k === 0) parts[0].enter = true;
+    if (k === firstOwn) { parts.forEach((x) => { if (x.card.kind === 'video' && x.card.src === cut.url) x.plate = true; }); }
     if (dens === 'full' && k >= 2 && k % 2 === 0 && !(p.icons || []).length) parts.forEach((x) => { if (x.card.kind === 'video' && x.card.src === cut.url) x.badge = true; });
     // The line's graphic (credential, stat, quote, callout) on its first speaker part.
-    if (p.gfx && !off.tags && (dens === 'full' || ['stat', 'credential', 'quote', 'bill'].includes(p.gfx.kind))) { const first = parts.find((x) => x.card.kind === 'video'); if (first) first.tag = p.gfx; }
+    if (p.gfx && !off.tags && !b.voice && (dens === 'full' || ['stat', 'credential', 'quote', 'bill'].includes(p.gfx.kind))) { const first = parts.find((x) => x.card.kind === 'video'); if (first) first.tag = p.gfx; }
     segs.push(...parts.filter((x) => x.dur > 0.02));
     t += cut.dur;
   });
@@ -471,7 +475,7 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
   const headWhole = lastWords.length >= 3 && lastWords.length <= 10 && /[.!]$/.test(lastWords[lastWords.length - 1]) && findRun(bites[plan.length - 1].words, lastWords) === 0;
   const outro = plan.length < 2 ? '' : whole ? lastLine : headWhole ? cap1(lastWords.join(' ')) : '';
   // The end card's portrait: the speaker from the WHO line (else the first), mid-line, in a ring.
-  const pk = Math.max(0, plan.findIndex((p) => p.role === 'who')); const pc = cuts[pk];
+  const who = plan.findIndex((p, k) => p.role === 'who' && !bites[k].voice); const pk = who >= 0 ? who : firstOwn; const pc = cuts[pk];
   const portrait = pc ? { src: pc.url, from: Math.max(0, Math.min(pc.dur * 0.45, pc.dur - 3.2)), fx: pc.fx ?? 0.5 } : null; // the clip must last the whole end card
   // Plain edits can leave the end card off: the video then ends with their last word.
   const end = off.end ? null : { at: t, dur: endDur, bg: 'navy', cta, name, sub: office || '', site: site || '', tag: tag || '', portrait, line: outro, for: endFor || '', date: endDate || '' };

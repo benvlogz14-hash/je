@@ -52,6 +52,9 @@ const TEMPLATES = [
   { id: 'vote', name: 'Why I voted', formula: '[the bill or vote] · [what it does] · [why they voted that way] · [closing line]', about: 'One vote or bill explained in their own words.', beats: ['action', 'result', 'promise', 'rally'], sec: 24, openWith: 'action' },
   { id: 'help', name: 'How we can help', formula: '[a problem people bring to the office] · [what the office does] · [how to reach them] · [closing line]', about: 'Constituent services: what their office can do for people.', beats: ['problem', 'action', 'place', 'rally'], sec: 22, openWith: 'problem' },
   { id: 'myth', name: 'Setting it straight', formula: '[what people get wrong] · [the fact or number] · [what it means] · [closing line]', about: 'A claim corrected with their own facts.', beats: ['contrast', 'proof', 'result', 'rally'], sec: 22, openWith: 'contrast' },
+  // Other people's words, from footage marked on the footage bank (Who is speaking).
+  { id: 'voices', name: 'What people say', formula: '[their opening line] · [a constituent] · [a constituent] · [their closing line]', about: 'Testimonials: people in their own words, labelled, between the candidate\'s opening and closing lines. Mark the videos of other people on the footage bank first.', beats: ['hook', 'story', 'story', 'rally'], sec: 26, guest: 'voter', starter: 'what people say about ' },
+  { id: 'rebuttal', name: 'They said, we say', formula: '[the opponent, in black and white] · [the cost to people] · [what the candidate did] · [closing line]', about: 'One line from their opponent, labelled, then the candidate\'s answer in their own words. Mark the opponent\'s video on the footage bank first. Always check this one yourself.', beats: ['contrast', 'problem', 'action', 'rally'], sec: 24, guest: 'opponent', review: true, starter: 'they said, we say about ' },
   { id: 'clip', name: 'One strong moment', formula: '[the moment, uncut] · [closing line]', about: 'Their single best stretch, kept together, for a daily post.', beats: ['hook', 'proof', 'rally'], sec: 18 },
   { id: 'best', name: 'Best of the footage', formula: '[hook] · [who] · [proof] · [place] · [story] · [closing line]', about: 'The strongest story the footage can tell, picked automatically.', beats: ['hook', 'who', 'proof', 'place', 'story', 'rally'], sec: 26 },
 ];
@@ -59,6 +62,8 @@ const byId = (id) => TEMPLATES.find((t) => t.id === id) || null;
 
 // Words in a typed order that name a baseline, a length, a shape or how much graphics.
 const TEMPLATE_WORDS = {
+  voices: /\b(what people say|testimonials?|voters? say|constituents? say|in their words|people'?s voices)\b/i,
+  rebuttal: /\b(they said,? we say|rebuttal|respond(ing)? to (the|their|his|her) opponent|opponent said|answer(ing)? (the|their) opponent)\b/i,
   quick: /\b(quick|short|fast|snappy|daily|15.?sec(ond)?s?|10.?sec(ond)?s?|teaser|bite)\b/i,
   intro: /\b(intro(duction)?|meet (him|her|them)|who (he|she|they) (is|are)|about (him|her|them)|bio|introduc(e|ing))\b/i,
   delivered: /\b(deliver(ed|s)?|results?|wins?|accomplish(ed|ments?)?|record|what (he|she|they)('?ve| has| have)? (done|won|passed)|track record)\b/i,
@@ -80,7 +85,7 @@ const TEMPLATE_WORDS = {
   clip: /\b(one moment|strong moment|single clip|best moment|uncut)\b/i,
   best: /\b(best of|best lines?|highlights?|anything|whatever|surprise me|strongest)\b/i,
 };
-const FILLER = /\b(what|she|he|they|has|have|had|done|did|does|do|make|made|give|want|need|some|this|an?|the|video|videos|ad|ads|clip|reel|short|one|make|me|us|please|about|on|for|of|with|in|style|look|vertical|horizontal|wide|landscape|portrait|and|that|is|it|a quick|quick|second|seconds|sec|long|their|his|her)\b/gi;
+const FILLER = /\b(footage|people say|say|said|we|what|she|he|they|has|have|had|done|did|does|do|make|made|give|want|need|some|this|an?|the|video|videos|ad|ads|clip|reel|short|one|make|me|us|please|about|on|for|of|with|in|style|look|vertical|horizontal|wide|landscape|portrait|and|that|is|it|a quick|quick|second|seconds|sec|long|their|his|her)\b/gi;
 
 /**
  * One typed line → what to make. looks = server/political/looks (passed in to avoid a circular load).
@@ -148,6 +153,6 @@ function parseOrders(text, looks) {
 }
 
 /** The baselines as the UI and the connector list them. */
-const list = () => TEMPLATES.map(({ id, name, formula, about, sec, needsTopic, review, starter }) => ({ id, name, formula, about, seconds: sec, needsTopic: !!needsTopic, review: !!review, starter: starter || '' }));
+const list = () => TEMPLATES.map(({ id, name, formula, about, sec, needsTopic, review, starter, guest }) => ({ id, name, formula, about, seconds: sec, needsTopic: !!needsTopic, review: !!review, starter: starter || '', guest: guest || '' }));
 
 module.exports = { TEMPLATES, BEATS, byId, list, parseAsk, parseOrders };

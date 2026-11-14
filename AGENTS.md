@@ -126,6 +126,27 @@ that run two videos opened on lines that read as closers ("I will never stop fig
 now takes `outroScore` off, and the same orders pick "We delivered for childcare...", "I wrote the Good Cause Eviction
 Act..." and "Rents in our district..." as openings (checked on the picks, not re-rendered).
 
+## 2d. Three tiers, guest speakers and the newer graphics
+
+The page offers three tiers, not a wall of styles: **Basic edit** (five presets marked `basic` in `looks.PRESETS`, listed in
+`looks.BASIC`), **More graphics** (any main style at `density: 'light'`) and **Full graphics** (mix, their own, a picked
+style, or a described one through `lookPrompt`), with the founders' own colours on top (`looks.withColors`). When you add
+a preset, decide which tier it belongs to; a basic one must work with no headline and no colour sections.
+
+Someone else's words only ever come from a video a person marked on the footage bank (`upload.who`: `voter` or
+`opponent`, with a label). `batch.read` puts `voice` on those sentences and `other: true`, so every ordinary picker skips
+them; only `footage.voiceStory` uses them, and the renderer labels them (`VoiceBug`) and never puts the candidate's name
+plate or portrait on them (`firstOwn` in `buildSpec`). An opponent line is drawn in black and white and the video is
+marked for review. Never guess who is speaking; `chyronOwner` only reads name bars the look-through already transcribed.
+
+New card kinds (`poll`, `endorse`) follow the same rule as the others: `codeGfx` finds them in the line's own words,
+`basePlan` cuts them in when the first word is said, and `CardContent` draws them. `split` is a card with two halves
+(`a` the speaker, `b` the B-roll), used when `look.split` is on.
+
+Style samples (`renderer/assets/looks/<id>.mp4` and `.jpg`): 360x640, muted, about 13 s. Make them with the engine from
+footage you are allowed to ship; the eight newer ones use a drawn stand-in figure. `EUCLIDEAN_FACE_AT="x,y,h"` tells
+`edit.faceBox` where the face is for footage with none to find (tests and samples only).
+
 ## 3. Styles
 
 Ten main styles (shown first; eight more under "More styles", Clean and Grassroots among them), each in 9:16 and 16:9:

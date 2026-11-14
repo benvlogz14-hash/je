@@ -324,6 +324,8 @@ function shapeStory(picks) {
   // Outro: the rally line last; when nothing was marked, the best closer among the last lines.
   let ri = out.findIndex((x, i) => i > 0 && x.role === 'rally');
   if (ri < 0) { const tail = out.map((x, i) => ({ i, sc: outroScore(x) })).filter((c) => c.i >= Math.max(1, out.length - 3)).sort((a, b) => b.sc - a.sc)[0]; if (tail && tail.sc >= 2) ri = tail.i; }
+  // A line that closes clearly better than the one marked ("I will never stop fighting" against a plain fact) takes the close.
+  if (ri > 0) { const better = out.map((x, i) => ({ i, sc: outroScore(x) })).filter((c) => c.i > 0 && c.i !== ri && !out[c.i].voice && c.sc >= outroScore(out[ri]) + 2).sort((a, b) => b.sc - a.sc)[0]; if (better) { out[ri] = { ...out[ri], role: 'proof' }; ri = better.i; } }
   if (ri > 0) { const [x] = out.splice(ri, 1); out.push({ ...x, role: 'rally' }); }
   return out;
 }
@@ -406,6 +408,12 @@ function codeGfx(x) {
   // A list of three ("childcare, housing and healthcare") → a checklist that ticks as each is said.
   m = t.match(/((?:[\w$%'’-]+ ){0,3}[\w$%'’-]+), ((?:[\w$%'’-]+ ){0,3}[\w$%'’-]+),? and ((?:[\w$%'’-]+ ){0,3}[\w$%'’-]+)[.!]?$/);
   if (m) { const lead = /^(?:.*\b(?:for|on|like|including|of|to|with|is|are|means|deliver(?:ed)?|fund(?:ed)?|protect(?:ed)?|expand(?:ed)?)\s+)((?:[\w$%'’-]+ ?){1,4})$/i.exec(m[1]); const items = [lead ? lead[1] : m[1].split(' ').slice(-2).join(' '), m[2], m[3]].map((y) => y.trim()); if (items.every((y) => y.length >= 3 && y.split(' ').length <= 4)) return { kind: 'checklist', items }; }
+  // A share they state ("62 percent of New Yorkers support...") → a poll bar; a second share in the line → a second bar.
+  m = t.match(/\b(\d{1,2}(?:\.\d)?) ?(?:%|percent) of ((?:[\w'’-]+ ){0,4}[\w'’-]+?) (support|oppose|agree|want|say|favor|back|approve|believe|think|cannot|can'?t|struggle|live|are|have)\b((?: [\w'’$-]+){0,5})/i);
+  if (m) { const bars = [{ value: Number(m[1]), label: `of ${m[2]} ${m[3]}${m[4] || ''}`.replace(/[,.;:]+$/, '').slice(0, 60) }]; const m2 = t.slice(m.index + m[0].length).match(/\b(\d{1,2}(?:\.\d)?) ?(?:%|percent)\b((?: [\w'’-]+){0,4})/i); if (m2) bars.push({ value: Number(m2[1]), label: (m2[2] || '').trim().slice(0, 40) }); return { kind: 'poll', bars }; }
+  // An endorsement they name ("endorsed by the Working Families Party").
+  m = t.match(/\bendors(?:ed|ement)s?\b[^.]{0,40}?\b(?:by|of|from) ((?:the )?[A-Z][\w&'’.-]*(?: (?:of|for|and|&|the|[A-Z0-9][\w&'’.-]*)){0,6})/);
+  if (m) { const by = m[1].replace(/(?:\s+(?:of|for|and|&|the))+$/i, '').replace(/[.,;:]+$/, '').trim(); if (by.replace(/^the /i, '').length >= 3) return { kind: 'endorse', by: by.slice(0, 60) }; }
   m = t.match(/\b(?:PhD|Ph\.D\.?|doctorate|master'?s degree|law degree)(?: in ([a-z ]{4,40}?))?(?=[,.!]|$| and )/i);
   if (m) return { kind: 'credential', title: m[0].split(/\s+in\s+/i)[0].replace(/^ph\.?d\.?$/i, 'PhD'), sub: m[1] ? m[1].trim() : '' };
   m = t.match(/\b(?:I am|I'm|as) an? ((?:[a-z]+ ){0,3}(?:scientist|teacher|nurse|doctor|lawyer|veteran|mother|mom|father|dad|organizer|engineer|firefighter|officer|social worker|small business owner|union member))\b/i);
@@ -467,7 +475,7 @@ Return JSON {"theme":"the one idea, 3-6 words","lines":[{"id":12,"role":"hook","
   while (total > target + 5 && picks.length > (target <= 14 ? 3 : 4)) { const k = picks.findIndex((x, i) => i > 0 && i < picks.length - 1 && x.role !== 'who'); if (k < 0) break; total -= picks[k].e - picks[k].s; picks.splice(k, 1); }
   // Code adds what it can prove: the office as a credential on the WHO line when nothing else is there; a number said in a proof line as a stat.
   for (const x of picks) {
-    const cg = codeGfx(x); if (!x.gfx || (cg && ['bill', 'timeline', 'compare', 'checklist'].includes(cg.kind) && ['callout', 'stat'].includes(x.gfx.kind))) x.gfx = cg;
+    const cg = codeGfx(x); if (!x.gfx || (cg && ['bill', 'timeline', 'compare', 'checklist', 'poll', 'endorse'].includes(cg.kind) && ['callout', 'stat'].includes(x.gfx.kind))) x.gfx = cg;
     x.icons = iconsFor(x.text);
   }
   return { picks, agent, tagline, onTopic, weak };
@@ -520,11 +528,50 @@ function insight(list) {
   const talk = clear.reduce((a, x) => a + (x.e - x.s), 0);
   return {
     sentences: list.length, statements: clear.length, talkSeconds: Math.round(talk),
+    guests: { voters: list.filter((x) => x.voice?.kind === 'voter').length, opponent: list.filter((x) => x.voice?.kind === 'opponent').length }, namesRead: list.filter((x) => x.chyron).length,
     left: { procedure: mine.filter((x) => procedural(x.text)).length, otherSpeakers: mine.filter((x) => x.other).length, questions: mine.filter((x) => /\?$/.test(x.text)).length, greetings: mine.filter((x) => GREETING.test(x.text)).length },
     topics, hooks: hooks(list, 12), closers,
     // A video uses 4-6 lines and no two videos should share most of them.
     room: clear.length < 4 ? 0 : Math.max(1, Math.min(40, Math.floor(clear.length / 4))),
   };
+}
+
+/**
+ * A video with someone else's words in it, from footage the founders marked on the footage bank:
+ *  kind 'voter'    = "What people say": their opening line, up to three people in their own words, their closing line;
+ *  kind 'opponent' = "They said, we say": one line of the opponent's (shown in black and white with a red label), then
+ *                    the candidate's own lines on that subject. Always checked by a person before it goes anywhere.
+ * Returns { picks, why } (why = the reason when it can't be made).
+ */
+function voiceStory(list, { kind = 'voter', focus = '', name = '', office = '', targetSec = 26 } = {}) {
+  const tt = topicTest(focus);
+  const guests = list.filter((x) => x.voice?.kind === kind && x.shot?.usable !== false && !procedural(x.text) && !GREETING.test(x.text) && !/\?$/.test(x.text))
+    .map((x) => clauseTrim(x, 6.5)).filter((x) => x && x.e - x.s >= 1.6)
+    .map((x) => ({ x, sc: substance({ ...x, other: false }) + (tt ? tt(x.text) * 2 : 0) })).filter((y) => y.sc > 0).sort((a, b) => b.sc - a.sc || a.x.id - b.x.id); // on the topic first, but a testimonial about them still counts
+  if (!guests.length) return { picks: [], why: kind === 'opponent' ? 'No footage is marked as their opponent yet (or it says nothing clear on this). On the footage bank, set a video to "Their opponent".' : 'No footage is marked as other people speaking yet (or it says nothing clear on this). On the footage bank, set a video to "Someone else".' };
+  const mine = list.filter((x) => !x.voice);
+  if (kind === 'opponent') {
+    const g = guests[0].x; const topic = focus || topicName(g.text);
+    const rest = shapeStory(heuristicStory(mine, { name, office, targetSec: Math.max(10, targetSec - (g.e - g.s)), focus: topic, beats: ['problem', 'action', 'rally'] }));
+    if (rest.length < 2) return { picks: [], why: `Their own footage has too little on ${topic || 'this'} to answer the opponent's line.` };
+    return { picks: [{ ...g, role: 'contrast', gfx: null, icons: [] }, ...rest.map((x) => ({ ...x, gfx: codeGfx(x), icons: iconsFor(x.text) }))] };
+  }
+  const gs = []; for (const { x } of guests) { if (gs.length >= 3) break; if (gs.some((y) => y.clip === x.clip && Math.abs(y.s - x.s) < 8)) continue; gs.push(x); }
+  const h = hooks(mine, 3, focus)[0] || hooks(mine, 1)[0]; const h0 = h && mine.find((x) => x.id === h.id); const hx = h0 && (asOpening(clauseTrim(h0, 6.5) || h0) || h0);
+  const closer = mine.filter((x) => theirs(x) && x.id !== h?.id && !/\?$/.test(x.text)).map((x) => clauseTrim(x, 6)).filter((x) => x && substance(x) > 0 && outroScore(x) >= 2).sort((a, b) => (outroScore(b) + (tt ? tt(b.text) : 0)) - (outroScore(a) + (tt ? tt(a.text) : 0)))[0];
+  const picks = [hx && { ...hx, role: 'hook' }, ...gs.map((x) => ({ ...x, role: 'story' })), closer && { ...closer, role: 'rally' }].filter(Boolean).map((x) => ({ ...x, gfx: x.voice ? null : codeGfx(x), icons: x.voice ? [] : iconsFor(x.text) }));
+  return picks.filter((x) => !x.voice).length ? { picks } : { picks: [], why: 'Their own footage has no line to open or close this with.' };
+}
+
+/**
+ * Whose name is on screen (the chyron or name bar the look-through read off the shot): 'own' when it's the candidate's,
+ * 'other' when it names someone else with a title, null when there's nothing to go on.
+ */
+function chyronOwner(text, name) {
+  const t = String(text || ''); if (t.length < 4) return null;
+  const last = String(name || '').trim().split(/\s+/).slice(-1)[0].toLowerCase();
+  if (last.length >= 3 && t.toLowerCase().includes(last)) return 'own';
+  return /\b(hon\.?|assembly ?(?:member|woman|man)|senator|sen\.|rep\.|representative|council ?(?:member|woman|man)|mayor|commissioner|chair(?:man|woman)?|director|president|dr\.|witness|testif)/i.test(t) && /[A-Z][a-z]+ [A-Z][a-z]+|[A-Z]{3,} [A-Z]{3,}/.test(t) ? 'other' : null;
 }
 
 /** Three story options from what the candidate actually says (Ryan: "3 topic options"), each with the lines that carry it. */
@@ -765,4 +812,4 @@ async function renderSpeechAd({ bites, footage, info, vertical, out, work, music
 }
 function assT(t) { t = Math.max(0, t); const h = Math.floor(t / 3600); const m = Math.floor((t % 3600) / 60); const s = Math.floor(t % 60); const cs = Math.floor((t * 100) % 100); return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`; }
 
-module.exports = { hooks, insight, findLine, TOPIC_NAMES, procedural, substance, matchScript, topicTest, codeGfx, heuristicStory, ICONS, asOpening, hookScore, outroScore, shapeStory, topics, repick, pickStory, clauseTrim, iconsFor, groundGfx, find, download, prepare, pickBites, sentences, punctuate, quietWindows, renderSpeechAd, FB_VIDEO, platformOf };
+module.exports = { voiceStory, chyronOwner, hooks, insight, findLine, TOPIC_NAMES, procedural, substance, matchScript, topicTest, codeGfx, heuristicStory, ICONS, asOpening, hookScore, outroScore, shapeStory, topics, repick, pickStory, clauseTrim, iconsFor, groundGfx, find, download, prepare, pickBites, sentences, punctuate, quietWindows, renderSpeechAd, FB_VIDEO, platformOf };

@@ -278,7 +278,7 @@ function CardContent({ seg, fps, w, h, look, keyTimes }) {
         </AbsoluteFill>
       );
     }
-    const style = { width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${(px * 100).toFixed(1)}% ${Math.round((c.fy ?? 0.35) * 100)}%`, transform: `translateY(${(-lift * h).toFixed(1)}px) ${shake}scale(${push})`, transformOrigin: `${(ox * 100).toFixed(1)}% ${oy.toFixed(1)}%`, filter: GRADE[look.grade] || 'none' };
+    const style = { width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${(px * 100).toFixed(1)}% ${Math.round((c.fy ?? 0.35) * 100)}%`, transform: `translateY(${(-lift * h).toFixed(1)}px) ${shake}scale(${push})`, transformOrigin: `${(ox * 100).toFixed(1)}% ${oy.toFixed(1)}%`, filter: c.tone === 'opponent' ? 'grayscale(1) contrast(1.12) brightness(0.92)' : GRADE[look.grade] || 'none' };
     return c.kind === 'photo' ? <Img src={c.src} style={style} /> : <OffthreadVideo src={c.src} muted startFrom={Math.round((c.from || 0) * fps)} style={style} />;
   }
   if (c.kind === 'map') return <MapCard c={c} w={w} h={h} fps={fps} look={look} />;
@@ -287,6 +287,21 @@ function CardContent({ seg, fps, w, h, look, keyTimes }) {
   if (c.kind === 'compare') return <CompareCard c={c} w={w} h={h} fps={fps} look={look} />;
   if (c.kind === 'timeline') return <TimelineCard c={c} w={w} h={h} fps={fps} look={look} />;
   if (c.kind === 'clip') return <ClipCard c={c} w={w} h={h} fps={fps} look={look} />;
+  if (c.kind === 'poll') return <PollCard c={c} w={w} h={h} fps={fps} look={look} />;
+  if (c.kind === 'endorse') return <EndorseCard c={c} w={w} h={h} fps={fps} look={look} />;
+  if (c.kind === 'split') {
+    // Split screen: the speaker keeps talking in one half while the B-roll plays in the other.
+    const tall = h > w; const gap = Math.max(6, Math.round(Math.min(w, h) * 0.012));
+    const hw = tall ? w : (w - gap) / 2; const hh = tall ? (h - gap) / 2 : h;
+    const s = sp(frame, fps, 0, { damping: 16, stiffness: 170 });
+    const box = (i) => ({ position: 'absolute', left: tall ? 0 : i * (hw + gap), top: tall ? i * (hh + gap) : 0, width: hw, height: hh, overflow: 'hidden' });
+    return (
+      <AbsoluteFill style={{ background: look.accent }}>
+        <div style={box(0)}><CardContent seg={{ ...seg, card: { ...c.a, angles: null } }} fps={fps} w={hw} h={hh} look={{ ...look, layout: 'frame' }} keyTimes={keyTimes} /></div>
+        <div style={{ ...box(1), transform: tall ? `translateY(${(1 - s) * hh}px)` : `translateX(${(1 - s) * hw}px)` }}><CardContent seg={{ ...seg, card: c.b }} fps={fps} w={hw} h={hh} look={{ ...look, layout: 'frame' }} keyTimes={keyTimes} /></div>
+      </AbsoluteFill>
+    );
+  }
   return <AbsoluteFill style={{ background: look.dark }} />;
 }
 
@@ -364,7 +379,7 @@ function Captions({ words, L, look, fps, seg, offset, inCard }) {
   const pos = inCard ? { position: 'absolute', left: 0, right: 0, bottom: L.card.h * 0.07 } : { position: 'absolute', left: (W - capW) / 2 - 10, width: capW + 20, top: L.capY - size * 0.6 };
   const soft = look.cap.shadow && onFootageOf(look, inCard);
   return (
-    <div style={{ ...pos, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: size * 0.22, fontFamily: look.fonts.cap, fontSize: size, lineHeight: 1.12, textTransform: look.cap.case === 'upper' ? 'uppercase' : 'none', textShadow: soft ? '0 3px 14px rgba(0,0,0,0.75), 0 1px 3px rgba(0,0,0,0.8)' : 'none', opacity: phrase && k > 0 ? clamp(s * 2.2, 0, 1) : 1, transform: `scale(${interpolate(s, [0, 1], [phrase ? 0.97 : 0.86, 1])})` }}>
+    <div style={{ ...pos, fontStyle: seg?.voice?.kind === 'voter' ? 'italic' : 'normal', display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: size * 0.22, fontFamily: look.fonts.cap, fontSize: size, lineHeight: 1.12, textTransform: look.cap.case === 'upper' ? 'uppercase' : 'none', textShadow: soft ? '0 3px 14px rgba(0,0,0,0.75), 0 1px 3px rgba(0,0,0,0.8)' : 'none', opacity: phrase && k > 0 ? clamp(s * 2.2, 0, 1) : 1, transform: `scale(${interpolate(s, [0, 1], [phrase ? 0.97 : 0.86, 1])})` }}>
       {c.map((x, i) => {
         const on = look.cap.style !== 'plain' && t >= x.s - 0.03 && (i === c.length - 1 || t < c[i + 1].s - 0.03);
         const pop = on ? sp(frame, fps, Math.round((x.s - 0.03) * fps), M.pop) : 1;
@@ -714,6 +729,62 @@ function TimelineCard({ c, w, h, fps, look }) {
   );
 }
 
+/** A poll or share they state ("62 percent of New Yorkers support..."): a bar that fills to the number, counting up. */
+function PollCard({ c, w, h, fps, look }) {
+  const frame = useCurrentFrame(); const A = panel(look);
+  const bars = (c.bars || []).slice(0, 2); const big = Math.round(Math.min(w * 0.2, h * (bars.length > 1 ? 0.16 : 0.24)));
+  return (
+    <AbsoluteFill style={{ background: A.bg, justifyContent: 'center', padding: `0 ${w * 0.09}px`, gap: big * 0.5 }}>
+      {bars.map((b, i) => {
+        const g = interpolate(frame, [(0.15 + i * 0.5) * fps, (1.05 + i * 0.5) * fps], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.bezier(0.2, 0.7, 0.2, 1) });
+        const v = Math.max(0, Math.min(100, Number(b.value) || 0)); const col = i === 0 ? A.accent : mix(A.bg, A.text, 0.5);
+        const size = fitWords(String(b.label || '').split(/\s+/), look.fonts.body, Math.round(big * 0.3), w * 0.8, big * 0.9, { maxLines: 2, min: 20, lh: 1.15 });
+        return (
+          <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: big * 0.12 }}>
+            <div style={{ fontFamily: look.fonts.head, fontSize: big, lineHeight: 0.95, color: A.text }}>{Math.round(v * g)}%</div>
+            <div style={{ height: big * 0.3, borderRadius: big * 0.15, background: mix(A.bg, A.text, 0.16), overflow: 'hidden' }}><div style={{ width: `${v * g}%`, height: '100%', background: col, borderRadius: big * 0.15 }} /></div>
+            {b.label ? <div style={{ fontFamily: look.fonts.body, fontWeight: 700, fontSize: size, lineHeight: 1.15, color: A.text, opacity: 0.92 }}>{b.label}</div> : null}
+          </div>
+        );
+      })}
+    </AbsoluteFill>
+  );
+}
+
+/** An endorsement they name ("endorsed by the Working Families Party"): a seal that stamps in, then who. */
+function EndorseCard({ c, w, h, fps, look }) {
+  const frame = useCurrentFrame(); const A = panel(look);
+  const s = sp(frame, fps, 3, { damping: 9, stiffness: 210 }); const n = sp(frame, fps, 10, { damping: 14, stiffness: 150 });
+  const seal = Math.round(Math.min(w, h) * 0.26);
+  const size = fitWords(String(c.by).split(/\s+/), look.fonts.head, Math.round(Math.min(w * 0.13, h * 0.13)), w * 0.82, h * 0.34, { upper: true, maxLines: 3, min: 30, lh: 1.02 });
+  return (
+    <AbsoluteFill style={{ background: A.bg, alignItems: 'center', justifyContent: 'center', gap: seal * 0.16, padding: `0 ${w * 0.08}px` }}>
+      <div style={{ width: seal, height: seal, borderRadius: '50%', background: A.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', transform: `scale(${interpolate(s, [0, 1], [2.2, 1])}) rotate(${interpolate(s, [0, 1], [-25, -6])}deg)`, opacity: clamp(s * 2, 0, 1), boxShadow: `0 0 0 ${seal * 0.05}px ${A.bg}, 0 0 0 ${seal * 0.08}px ${A.accent}` }}>
+        <svg viewBox="0 0 100 100" width="62%" height="62%"><path d="M20 53 L42 74 L82 28" fill="none" stroke="#fff" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      </div>
+      <div style={{ fontFamily: look.fonts.body, fontWeight: 800, fontSize: size * 0.34, letterSpacing: '0.16em', textTransform: 'uppercase', color: A.accent, opacity: clamp(n * 1.5, 0, 1) }}>Endorsed by</div>
+      <div style={{ fontFamily: look.fonts.head, fontSize: size, lineHeight: 1.02, textTransform: 'uppercase', textAlign: 'center', color: A.text, transform: `translateY(${(1 - n) * 40}px)`, opacity: clamp(n * 1.5, 0, 1) }}>{c.by}</div>
+    </AbsoluteFill>
+  );
+}
+
+/** Whose words these are when it isn't the candidate: a constituent's testimonial, or a clip of their opponent. */
+function VoiceBug({ voice, L, look, fps }) {
+  const frame = useCurrentFrame(); const s = sp(frame, fps, 2, { damping: 13, stiffness: 190 });
+  const opp = voice.kind === 'opponent'; const u = L.v ? 1.5 : 1.1; const full = look.layout === 'full';
+  const x = full ? (L.v ? 60 : 90) : L.card.x + 26; const y = full ? Math.round(L.card.h * (L.v ? 0.13 : 0.1)) : L.card.y + 26;
+  const bg = opp ? '#c81e1e' : look.light; const ink = opp ? '#ffffff' : look.dark;
+  return (
+    <div style={{ position: 'absolute', left: x, top: y, display: 'flex', alignItems: 'center', gap: 14 * u, background: bg, color: ink, padding: `${12 * u}px ${22 * u}px`, borderRadius: opp ? 6 : 999, transform: `translateX(${(1 - s) * -80}px)`, opacity: clamp(s * 1.6, 0, 1), boxShadow: '0 8px 24px rgba(0,0,0,0.3)' }}>
+      {opp ? <div style={{ width: 16 * u, height: 16 * u, borderRadius: '50%', background: '#fff', opacity: 0.55 + 0.45 * Math.abs(Math.sin(frame / fps * 3)) }} /> : <div style={{ fontFamily: 'Georgia, serif', fontWeight: 700, fontSize: 60 * u, lineHeight: 0.6, marginTop: 22 * u, color: look.accent }}>“</div>}
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <div style={{ fontFamily: look.fonts.body, fontWeight: 800, fontSize: 22 * u, letterSpacing: '0.12em', textTransform: 'uppercase', opacity: 0.8 }}>{opp ? 'Their opponent' : 'In their words'}</div>
+        {voice.label ? <div style={{ fontFamily: look.fonts.body, fontWeight: 800, fontSize: 34 * u, lineHeight: 1.1 }}>{voice.label}</div> : null}
+      </div>
+    </div>
+  );
+}
+
 /** A press clipping: a real headline from the research, as a paper cut-out with the outlet's name and date. */
 function ClipCard({ c, w, h, fps, look }) {
   const frame = useCurrentFrame(); const A = panel(look);
@@ -805,6 +876,7 @@ export const PoliticalAd = ({ spec }) => {
           {seg.badge && look.badge ? <Badge L={L} look={look} fps={fps} /> : null}
           {seg.icons?.length && seg.card?.kind === 'video' && look.layout !== 'full' && dens === 'full' && (i === 0 || segs[i - 1].icons?.join() !== seg.icons.join() || segs[i - 1].card?.kind !== 'video') ? <Icons icons={seg.icons} L={L} look={look} fps={fps} seg={seg} /> : null}
           {seg.tag ? <Tag tag={seg.tag} L={L} look={look} fps={fps} seg={seg} /> : null}
+          {seg.voice ? <VoiceBug voice={seg.voice} L={L} look={look} fps={fps} /> : null}
         </Sequence>
       ))}
       {!capsInCard && now && !now.noCaptions ? <Captions words={spec.words} L={L} look={look} fps={fps} seg={now} offset={0} /> : null}

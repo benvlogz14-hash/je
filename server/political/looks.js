@@ -128,6 +128,42 @@ const PRESETS = {
     cap: { style: 'plain', pos: 'center', case: 'none', scale: 0.7, chunk: 'phrase', shadow: true }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false },
     transition: 'cut', grade: 'none', texture: 'none', plate: 'none', pill: 'none', badge: false, end: 'brand', motion: 'calm', punch: false,
   },
+  // ---- The five basic edits: their footage full screen, captions, and one way of cutting. No headlines or colour sections.
+  cut: {
+    basic: true, flair: 'none', name: 'Clean cut', about: 'Hard cuts on natural pauses, small clean captions. The plainest, safest edit',
+    layout: 'full', density: 'minimal', angles: false, colors: { a: '#14161c', b: '#2b2f3a', c: '#f2f2f2' }, light: '#ffffff', dark: '#0f1014', accent: '#ffd23f',
+    fonts: { head: 'Inter', body: 'Inter', cap: 'Inter' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'fade', scale: 0.66 },
+    cap: { style: 'plain', pos: 'center', case: 'none', scale: 0.72, chunk: 'phrase', shadow: true }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false },
+    transition: 'cut', grade: 'none', texture: 'none', plate: 'minimal', pill: 'none', badge: false, end: 'brand', motion: 'calm', punch: false,
+  },
+  punch: {
+    basic: true, flair: 'none', name: 'Punch-in', about: 'One take cut like three cameras: a closer or wider framing on every sentence, centred on their face',
+    layout: 'full', density: 'minimal', angles: true, colors: { a: '#1d2bd8', b: '#0f1014', c: '#f2f2f2' }, light: '#ffffff', dark: '#0f1014', accent: '#ffd23f',
+    fonts: { head: 'Inter', body: 'Inter', cap: 'Inter' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'fade', scale: 0.66 },
+    cap: { style: 'color', pos: 'center', case: 'none', scale: 0.8, chunk: 'phrase', shadow: true }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false },
+    transition: 'cut', grade: 'none', texture: 'none', plate: 'minimal', pill: 'none', badge: false, end: 'brand', motion: 'calm', punch: false,
+  },
+  flash: {
+    basic: true, flair: 'none', name: 'Flash cut', about: 'A white flash and a quick push on every cut, big bold captions two or three words at a time. Fast and loud',
+    layout: 'full', density: 'minimal', angles: true, colors: { a: '#101114', b: '#ff3b30', c: '#ffd60a' }, light: '#ffffff', dark: '#0b0b0d', accent: '#ffd60a',
+    fonts: { head: 'Anton', body: 'Inter', cap: 'Anton' }, head: { pos: 'top', case: 'upper', align: 'center', keyStyle: 'color', reveal: 'word', scale: 0.8 },
+    cap: { style: 'color', pos: 'center', case: 'upper', scale: 1.1, chunk: 'words', shadow: false }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false },
+    transition: 'flash', grade: 'punchy', texture: 'none', plate: 'minimal', pill: 'none', badge: false, end: 'solid', motion: 'snappy', punch: true,
+  },
+  smooth: {
+    basic: true, flair: 'none', name: 'Smooth', about: 'Soft dips between lines, a gentle film grade and serif captions. Calm and serious',
+    layout: 'full', density: 'minimal', angles: false, colors: { a: '#16181d', b: '#2a2d35', c: '#e9e4d8' }, light: '#f7f3ea', dark: '#101114', accent: '#d9b25f',
+    fonts: { head: 'DM Serif Display', body: 'Inter', cap: 'DM Serif Display' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'fade', scale: 0.7 },
+    cap: { style: 'plain', pos: 'center', case: 'none', scale: 0.9, chunk: 'phrase', shadow: true }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false },
+    transition: 'fade', grade: 'film', texture: 'none', plate: 'minimal', pill: 'none', badge: false, end: 'brand', motion: 'calm', punch: false,
+  },
+  slide: {
+    basic: true, flair: 'none', name: 'Swipe', about: 'Each new line slides in from the side with a whoosh, bold captions with the spoken word in colour',
+    layout: 'full', density: 'minimal', angles: false, colors: { a: '#0f172a', b: '#2563eb', c: '#f8fafc' }, light: '#ffffff', dark: '#0b1020', accent: '#38bdf8',
+    fonts: { head: 'Montserrat', body: 'Inter', cap: 'Montserrat' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'fade', scale: 0.7 },
+    cap: { style: 'color', pos: 'center', case: 'none', scale: 0.95, chunk: 'words', shadow: true }, card: { tilt: false, border: 0, radius: 0, block: false, shadow: false },
+    transition: 'slide', grade: 'none', texture: 'none', plate: 'minimal', pill: 'none', badge: false, end: 'brand', motion: 'smooth', punch: false,
+  },
   poster: {
     flair: 'poster', name: 'Retro poster', about: 'Old cinema poster: marigold, magenta and teal, a turning sunburst, 3D stacked type, halftone', layout: 'card', colors: { a: '#b8126b', b: '#ffb21c', c: '#0f7c7a' }, light: '#fff4dc', dark: '#2a0b1f',
     fonts: { head: 'Shrikhand', body: 'Righteous', cap: 'Bowlby One' }, head: { pos: 'top', case: 'none', align: 'center', keyStyle: 'color', reveal: 'word', scale: 0.9 },
@@ -210,6 +246,7 @@ function normalize(x = {}, base = BOLD) {
     // Parts switched off for plain edits (Ad machine → Edit type): captions, name tag, progress bar, fact tags and cards, headlines, end card.
     off: Object.fromEntries(['caps', 'plate', 'progress', 'tags', 'head', 'end'].map((k) => [k, !!(x.off || B.off || {})[k]])),
     angles: x.angles != null ? !!x.angles : !!B.angles, // one take cut like several cameras (full-screen looks)
+    split: x.split != null ? !!x.split : !!B.split, // B-roll beside the speaker (a split screen) instead of over them
   };
   // Full-screen and letterbox footage can't tilt or sit on a block; the cap position must exist in that layout.
   if (L.layout === 'full' || L.layout === 'letterbox') { L.card = { ...L.card, tilt: false, block: false, border: 0, radius: 0 }; L.badge = false; }
@@ -255,10 +292,11 @@ function withEdit(look, edit = {}) {
   x.off = off;
   if (K.bare) Object.assign(x, { layout: 'full', transition: 'cut', grade: 'none', texture: 'none', flair: 'none', ticker: false, punch: false });
   if (e.hardCuts) x.transition = 'cut';
+  if (e.split != null) x.split = !!e.split;
   if (e.punchIns != null) { x.angles = !!e.punchIns; if (!e.punchIns) x.punch = false; }
   return { look: normalize(x, look), music: e.music != null ? !!e.music : K.music !== false, sfx: ['full', 'light', 'off'].includes(e.sounds) ? e.sounds : K.sfx || null };
 }
-const cleanEdit = (e) => { if (!e || typeof e !== 'object') return null; const o = {}; if (EDITS[e.kind]) o.kind = e.kind; for (const k of ['captions', 'name', 'progress', 'endCard', 'music', 'punchIns', 'hardCuts']) if (e[k] != null) o[k] = !!e[k]; if (['full', 'light', 'off'].includes(e.sounds)) o.sounds = e.sounds; return Object.keys(o).length ? o : null; };
+const cleanEdit = (e) => { if (!e || typeof e !== 'object') return null; const o = {}; if (EDITS[e.kind]) o.kind = e.kind; for (const k of ['captions', 'name', 'progress', 'endCard', 'music', 'punchIns', 'hardCuts', 'split']) if (e[k] != null) o[k] = !!e[k]; if (['full', 'light', 'off'].includes(e.sounds)) o.sounds = e.sounds; return Object.keys(o).length ? o : null; };
 
 /**
  * The founders' own text choices laid over any look: { font, capFont, size: 0.7-1.5, outline: true | false, upper: true | false }.
@@ -275,7 +313,7 @@ function withText(look, t = {}) {
   return normalize(x, look);
 }
 /** Every preset, the ten main styles first. */
-const list = () => [...MAIN, ...Object.keys(PRESETS).filter((id) => !MAIN.includes(id))].map((id) => { const L = preset(id); return { id, name: L.name, about: L.about, colors: [L.colors.a, L.colors.b, L.colors.c, L.accent], font: L.fonts.head, layout: L.layout, main: MAIN.includes(id) }; });
+const list = () => [...MAIN, ...Object.keys(PRESETS).filter((id) => !MAIN.includes(id))].map((id) => { const L = preset(id); return { id, name: L.name, about: L.about, colors: [L.colors.a, L.colors.b, L.colors.c, L.accent], font: L.fonts.head, layout: L.layout, main: MAIN.includes(id), basic: !!PRESETS[id].basic }; });
 
 // ------------------------------------------------------------------ from a prompt
 
@@ -350,4 +388,9 @@ function strip(L) { const { sections: _s, ...rest } = L || {}; return rest; }
 /** Font files the renderer must load for a look. */
 function fontFiles(L) { return [...new Set([L.fonts.head, L.fonts.body, L.fonts.cap])].map((family) => ({ family, url: `/f/${FONTS[family]}` })); }
 
-module.exports = { EDITS, withEdit, cleanEdit, withText, PRESETS, FONTS, OPTIONS, MAIN, DENSITY, withDensity, preset, list, normalize, fromPrompt, fromWords, fontFiles, strip, contrast, guess };
+/** The three tiers the Ad machine offers: basic edits, the same with a headline and facts, and full motion graphics. */
+const BASIC = ['cut', 'punch', 'flash', 'smooth', 'slide'];
+/** A look in the founders' own colours and fonts: { a, b, c, accent } hex colours, font = any bundled font. */
+function withColors(look, c = {}) { if (!c || typeof c !== 'object') return look; const x = strip(look); x.colors = { a: hex(c.a, x.colors.a), b: hex(c.b, x.colors.b), c: hex(c.c, x.colors.c) }; if (c.accent) x.accent = hex(c.accent, x.accent); return normalize(x, look); }
+
+module.exports = { BASIC, withColors, EDITS, withEdit, cleanEdit, withText, PRESETS, FONTS, OPTIONS, MAIN, DENSITY, withDensity, preset, list, normalize, fromPrompt, fromWords, fontFiles, strip, contrast, guess };
