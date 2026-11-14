@@ -814,7 +814,7 @@ export const PoliticalAd = ({ spec }) => {
         </Sequence>
       ) : null)}
       {now ? <Headline seg={now} L={L} look={look} fps={fps} /> : null}
-      {!look.ticker ? <Progress look={look} fps={fps} total={spec.total} until={spec.end ? spec.end.at : spec.total} /> : null}
+      {!look.ticker && !look.off?.progress ? <Progress look={look} fps={fps} total={spec.total} until={spec.end ? spec.end.at : spec.total} /> : null}
       {look.ticker && spec.ticker ? <Ticker text={spec.ticker} look={look} fps={fps} until={spec.end ? spec.end.at : spec.total} /> : null}
       {dens === 'full' ? <FlairOver segs={segs} look={look} L={L} fps={fps} spec={spec} /> : null}
       {spec.end ? (

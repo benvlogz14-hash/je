@@ -315,7 +315,7 @@ function shapeStory(picks) {
   if (out.length < 2) return out;
   // Hook: the line picked as the hook when it stands alone; else the line that grabs best (not one that reads as a closer).
   let hi = out.findIndex((x) => x.role === 'hook'); if (hi < 0) hi = 0;
-  let open = asOpening(out[hi]);
+  let open = asOpening(out[hi]) || (out[hi].forced ? out[hi] : null); // a hook the founders picked is kept as it is
   if (!open) {
     const c = out.map((x, i) => ({ i, o: asOpening(x), sc: hookScore(x) - Math.max(0, outroScore(x) - 2) - i * 0.3 })).filter((y) => y.o && out[y.i].role !== 'rally').sort((p, q) => q.sc - p.sc)[0];
     if (c) { hi = c.i; open = c.o; }
@@ -349,13 +349,17 @@ function matchScript(list, script) {
 }
 
 /** Code-only story (no AI): one line per beat, found by what each line says, in story order. */
-function heuristicStory(list, { name, office, targetSec, focus = '', beats = null, avoid = null }) {
-  const T = require('./templates'); const typed = topicTest(focus); const topic = typed || mainTheme(list); const soft = !typed; // no topic typed: lean to the footage's main subject
+function heuristicStory(list, { name, office, targetSec, focus = '', beats = null, avoid = null, seed = null }) {
+  const T = require('./templates'); const typed = topicTest(focus);
+  // A chosen opening line: the video is built around it (its subject, and the lines said near it).
+  const seed0 = seed != null ? list.find((x) => x.id === seed) : null; const seedX = seed0 ? (clauseTrim(seed0) || seed0) : null;
+  const seedFam = seedX ? ICONS.filter(([, rx]) => rx.test(seedX.text)).map(([, rx]) => rx) : [];
+  const topic = typed || (seedFam.length ? (text) => (seedFam.some((rx) => rx.test(text)) ? 1 : 0) : null) || mainTheme(list); const soft = !typed; // no topic typed: lean to the footage's main subject
   const first = String(name).split(/\s+/)[0]; const last = String(name).split(/\s+/).slice(-1)[0];
   const fw = String(focus).toLowerCase().split(/[^a-z]+/).filter((y) => y.length > 3);
   const on = (x) => (topic ? topic(x.text) : fw.length ? fw.filter((y) => x.text.toLowerCase().includes(y)).length : 0) - (avoid?.body?.has(x.id) ? 0.8 : 0);
   const tests = {
-    hook: (x) => (asOpening(x) ? hookScore(x) : -9),
+    hook: (x) => (asOpening(x) ? hookScore(x) - Math.max(0, outroScore(x) - 2) * 1.2 : -9), // a closer is not an opening
     who: (x) => (new RegExp(`\\bI(?:'m| am) (?:${first}|${last})|\\bI represent|\\bI(?:'ve| have) (?:served|been)|\\bmy (?:name|district)`, 'i').test(x.text) ? 6 : 0) + (/\b(I|my)\b/.test(x.text) ? 1 : 0),
     proof: (x) => (/\b(passed|wrote|bill|law|fought|delivered|secured|won|led|built|carried|introduced|funding)\b/i.test(x.text) ? 4 : 0) + (/\d/.test(x.text) ? 2 : 0),
     place: (x) => (/\b(district|community|neighbo|our streets|our town|our city|county|borough|here in|home)\b/i.test(x.text) ? 4 : 0) + (office && String(office).split(/\W+/).some((y) => y.length > 4 && x.text.includes(y)) ? 2 : 0),
@@ -370,9 +374,11 @@ function heuristicStory(list, { name, office, targetSec, focus = '', beats = nul
   const near = (x) => (out.some((y) => y.clip === x.clip && Math.abs(y.s - x.s) < 40) ? 1.5 : 0);
   const order = beats && beats.length ? beats : ROLES; const firstBeat = order[0]; const lastBeat = order[order.length - 1];
   const used = new Set(); const out = []; let total = 0;
+  if (seedX) { used.add(seedX.id); out.push({ ...(asOpening(seedX) || seedX), role: 'hook', forced: true }); total += seedX.e - seedX.s; }
   for (const role of order) {
+    if (seedX && role === firstBeat) continue;
     // The first blank is the opening (it must stand alone) and the last is the closing line, whatever their beat is.
-    const edge = (x) => (role === firstBeat ? (asOpening(x) ? hookScore(x) * 0.6 : -9) - (avoid?.open?.has(x.id) ? 7 : 0) : role === lastBeat && order.length > 1 ? (outroScore(x) - 1) * 0.6 - (avoid?.close?.has(x.id) ? 7 : 0) : 0);
+    const edge = (x) => (role === firstBeat ? (asOpening(x) ? (hookScore(x) - Math.max(0, outroScore(x) - 2) * 1.5) * 0.6 : -9) - (avoid?.open?.has(x.id) ? 7 : 0) : role === lastBeat && order.length > 1 ? (outroScore(x) - 1) * 0.6 - (avoid?.close?.has(x.id) ? 7 : 0) : 0);
     const cand = pool.filter((x) => !used.has(x.id)).map((x) => ({ x, sc: (tests[role] || (() => 0))(x) + on(x) * 2 + edge(x) + off(x) + near(x) + (substance(x) > 0 ? 0 : -4) })).filter((y) => y.sc >= 2).sort((a, b) => b.sc - a.sc)[0];
     if (!cand || total + (cand.x.e - cand.x.s) > targetSec + 3) continue;
     used.add(cand.x.id); out.push({ ...cand.x, role }); total += cand.x.e - cand.x.s;
@@ -423,7 +429,7 @@ function groundGfx(g, x, facts) {
 
 /** The story picker: the AI builds the beats from the sentences (in the founders' brief or chosen topic when given), and
  *  every pick is checked; without an AI the beats are found in code. Returns bites with role, graphics and icons. */
-async function pickStory({ name, office, sentences: list, story = {}, notes = '', facts = '', long = false, template = null, seconds = null, avoid = null }) {
+async function pickStory({ name, office, sentences: list, story = {}, notes = '', facts = '', long = false, template = null, seconds = null, avoid = null, hookId = null }) {
   const target = seconds || template?.sec || (long ? STORY_SEC.long : STORY_SEC.short);
   const ALL = [...new Set([...ROLES, 'problem', 'action', 'result', 'contrast', 'promise'])];
   const byId = new Map(list.map((x) => [x.id, x]));
@@ -436,7 +442,7 @@ async function pickStory({ name, office, sentences: list, story = {}, notes = ''
         system: `You are the story editor of a 30-second political ad cut from a candidate's own speeches. Build a NARRATIVE in beats, in this order: hook (what's at stake, a line that grabs), who (who they are), proof (what they did or fight for), place (their district / the people they serve), story (a moment, image or bit of history; optional), rally (the closing line that lands the theme). THE HOOK decides whether anyone watches: it plays from the first frame, must make sense with nothing before it (never a greeting, a thank-you, or a line that leans on an earlier one with "it", "that" or "they"), names a stake, a contrast or a surprising claim, and is under 5 seconds. THE RALLY is the outro hook: a short, complete, quotable line (under 5 seconds) that lands the theme and makes people want to follow or share; it stays on screen over the end card, so it must read well on its own. Read the whole transcript first and choose lines that follow from one another, ideally from the same stretch of the same speech, so the cut sounds like one continuous thought and never like random sentences. Never use hearing or floor procedure (introducing guests, yielding, motions, 'my next question'), and never a line by a witness, host or other member. Each line should hand over to the next (the proof answers the hook, the place makes it local), and cuts must sound natural: only whole sentences. ${template ? `THIS VIDEO'S SHAPE ("${template.name}"): ${template.formula}. Fill each blank with one line, in that order, using these beat names for "role": ${template.beats.join(', ')}. ` : ''}Use ${target <= 14 ? '3' : target <= 22 ? '4 to 5' : '5 to 7'} lines in total, about ${target} seconds of talk; each line 2 to 7 seconds; one idea per line; every line serves ONE theme so the ad feels like one story. Use only whole sentences the candidate ${name} says themselves, never an interviewer's, never questions. You may never change words.
 For each line you may add ONE graphic, only from that line's own words or the FACTS given: {"kind":"credential","title":"...","sub":"..."} (who they are: a job, degree or title), {"kind":"stat","value":"2021","label":"Serving since"} (a number they said or in the facts), {"kind":"quote","by":"Dr. Martin Luther King Jr."} (only when the line quotes someone named in it), {"kind":"callout","text":"up to 6 words copied from the line"}. Graphics on most lines, but never invented.
 Return JSON {"theme":"the one idea, 3-6 words","lines":[{"id":12,"role":"hook","gfx":null}, ...],"tagline":"a short opening title in their spirit, 3-6 words, 1-2 words in *stars*"}`,
-        prompt: `CANDIDATE: ${name}${office ? `, ${office}` : ''}\nFACTS (usable for graphics): ${String(facts || '').slice(0, 1500) || 'none'}\n${focus ? `THE STORY THE FOUNDERS WANT: ${focus}\n` : 'Pick the strongest story the footage can tell.\n'}${avoid?.open?.size ? `Other videos already open with lines ${[...avoid.open].map((n) => `#${n}`).join(', ')} and close with ${[...(avoid.close || [])].map((n) => `#${n}`).join(', ') || 'none'}: open and close this one with different lines.\n` : ''}${notes ? `FOUNDER NOTES: ${notes}\n` : ''}\nSENTENCES\n${lines}` });
+        prompt: `CANDIDATE: ${name}${office ? `, ${office}` : ''}\nFACTS (usable for graphics): ${String(facts || '').slice(0, 1500) || 'none'}\n${focus ? `THE STORY THE FOUNDERS WANT: ${focus}\n` : 'Pick the strongest story the footage can tell.\n'}${avoid?.open?.size ? `Other videos already open with lines ${[...avoid.open].map((n) => `#${n}`).join(', ')} and close with ${[...(avoid.close || [])].map((n) => `#${n}`).join(', ') || 'none'}: open and close this one with different lines.\n` : ''}${notes ? `FOUNDER NOTES: ${notes}\n` : ''}${hookId != null && byId.has(hookId) ? `THE OPENING IS CHOSEN: line #${hookId} is the hook. Start with it, then pick the lines that answer it and belong to the same thought.\n` : ''}\nSENTENCES\n${lines}` });
       const j = r.json || {}; agent = `${r.provider}:${r.model} story`;
       for (const l of [].concat(j.lines || [])) {
         const x0 = byId.get(Number(l.id)); if (!x0 || picks.some((y) => y.id === x0.id) || /\?$/.test(x0.text) || procedural(x0.text) || x0.other) continue;
@@ -446,7 +452,9 @@ Return JSON {"theme":"the one idea, 3-6 words","lines":[{"id":12,"role":"hook","
       tagline = String(j.tagline || '').replace(/[—–]/g, '-').replace(/\d+/g, '').slice(0, 60);
     } catch { picks = []; }
   }
-  if (picks.length < (target <= 14 ? 2 : 3)) { picks = heuristicStory(list, { name, office, targetSec: target, focus, beats: template?.beats || null, avoid }); agent = 'built-in story'; }
+  if (picks.length < (target <= 14 ? 2 : 3)) { picks = heuristicStory(list, { name, office, targetSec: target, focus, beats: template?.beats || null, avoid, seed: hookId }); agent = 'built-in story'; }
+  // A chosen opening line always opens the video, whoever picked the rest.
+  if (hookId != null && byId.has(hookId)) { const h0 = byId.get(hookId); const hx = clauseTrim(h0) || h0; picks = [{ ...(asOpening(hx) || hx), role: 'hook', forced: true, gfx: null }, ...picks.filter((x) => x.id !== hookId).map((x) => (x.role === 'hook' ? { ...x, role: 'proof' } : x))]; }
   // A topic was asked for: how much of what was picked is actually about it.
   const tt = topicTest(focus); const onTopic = tt ? picks.filter((x) => tt(x.text) > 0).length : null;
   picks = shapeStory(picks.filter((x) => !procedural(x.text) && !x.other));
@@ -463,6 +471,60 @@ Return JSON {"theme":"the one idea, 3-6 words","lines":[{"id":12,"role":"hook","
     x.icons = iconsFor(x.text);
   }
   return { picks, agent, tagline, onTopic, weak };
+}
+
+// ------------------------------------------------------------------ what's in their footage, and the hook finder
+const TOPIC_NAMES = { health: 'health care', school: 'schools', house: 'housing', money: 'taxes and costs', work: 'jobs', shield: 'public safety', leaf: 'climate', bus: 'transit', scales: 'rights', people: 'families', science: 'science', star: 'history and service', capitol: 'their bills', child: 'childcare', senior: 'seniors', drop: 'water', wheat: 'food and farms', wifi: 'internet access', bolt: 'utility bills', ballot: 'voting' };
+const theirs = (x) => x.shot?.usable !== false && !x.other && !procedural(x.text) && !GREETING.test(x.text);
+const SPECIFIC = ['child', 'senior', 'wheat', 'wifi', 'bolt', 'ballot', 'drop', 'bus', 'house', 'health'];
+/** The one topic a line is about, by its most specific family ("childcare", not "schools"). */
+function topicName(text) { const hit = ICONS.filter(([, rx]) => rx.test(text)).map(([k]) => k); const k = SPECIFIC.find((s) => hit.includes(s)) || hit[0]; return TOPIC_NAMES[k] || ''; }
+/** Why a line works as an opening, in plain words (shown beside it). */
+function hookWhy(x) {
+  const t = x.text; const out = [];
+  if (/\b(most|never|every|no one|nobody|enough|crisis|can'?t afford|under attack|not for sale|wealthiest|billionaire|corporat)\b/i.test(t)) out.push('names what is at stake');
+  if (/\b(but|not|while|instead)\b/i.test(t)) out.push('a contrast');
+  if (/\d/.test(t)) out.push('a number');
+  if (x.e - x.s <= 4) out.push('short');
+  return out.slice(0, 2).join(', ') || 'stands on its own';
+}
+/**
+ * The hook finder: the lines in their footage that work best as the first seconds of a video. Each stands alone (no
+ * "it" or "that" leaning on an earlier line, never a greeting or procedure), says something, and is under 6.5 seconds.
+ * topic (optional words) keeps only openings about it. Best first.
+ */
+function hooks(list, n = 12, topic = '') {
+  const tt = topicTest(topic); const seen = new Set();
+  return list.filter((x) => theirs(x) && !/\?$/.test(x.text))
+    .map((x) => { const c = clauseTrim(x, 6.5); const o = c && asOpening(c); if (!o) return null; const d = o.e - o.s; if (d < 1.4 || d > 6.5 || substance(o) <= 0 || (tt && tt(o.text) <= 0)) return null; return { x: o, sc: hookScore(o) + Math.min(3, substance(o)) * 0.5 - Math.max(0, outroScore(o) - 2) * 1.2 }; }) // a line that reads as a closer is not an opening
+    .filter(Boolean).sort((a, b) => b.sc - a.sc || a.x.id - b.x.id)
+    .filter(({ x }) => { const k = x.text.toLowerCase().replace(/[^a-z ]/g, '').slice(0, 36); if (seen.has(k)) return false; seen.add(k); return true; })
+    .slice(0, n).map(({ x, sc }) => ({ id: x.id, text: x.text, seconds: Math.round((x.e - x.s) * 10) / 10, score: Math.round(sc * 10) / 10, why: hookWhy(x), clip: x.clip, at: Math.round(x.s * 10) / 10, topic: topicName(x.text) }));
+}
+/** The sentence in their footage closest to some typed words (for "hook: ..." orders). */
+function findLine(list, text) {
+  const key = (t) => String(t).toLowerCase().replace(/[^a-z0-9$%' ]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !/^(the|and|for|that|this|with|are|was|will|have|has|our|you|your|they|their|but|not)$/.test(w));
+  const want = key(text); if (!want.length) return null; let best = null;
+  for (const x of list) { if (!theirs(x)) continue; const have = new Set(key(x.text)); const shared = want.filter((w) => have.has(w)).length; const sc = shared / want.length - Math.max(0, have.size - want.length) * 0.02; if (shared >= Math.min(2, want.length) && sc >= 0.4 && (!best || sc > best.sc)) best = { x, sc }; }
+  return best ? best.x : null;
+}
+/**
+ * What their footage holds, before anything is made: how many clear statements, what they talk about (and whether
+ * there's enough of each for a video), the best openings and closing lines, and what was left out and why.
+ */
+function insight(list) {
+  const mine = list.filter((x) => x.shot?.usable !== false);
+  const clear = mine.filter((x) => theirs(x) && !/\?$/.test(x.text) && substance(x) > 0);
+  const topics = ICONS.map(([k, rx]) => ({ id: k, name: TOPIC_NAMES[k], n: clear.filter((x) => rx.test(x.text)).length })).filter((t) => t.name && t.n >= 2).sort((a, b) => b.n - a.n).slice(0, 10).map((t) => ({ ...t, enough: t.n >= 3 }));
+  const closers = clear.map((x) => clauseTrim(x, 6) || null).filter((x) => x && outroScore(x) >= 3 && /[.!]["”']?$/.test(x.text)).sort((a, b) => outroScore(b) - outroScore(a)).slice(0, 6).map((x) => ({ id: x.id, text: x.text, seconds: Math.round((x.e - x.s) * 10) / 10 }));
+  const talk = clear.reduce((a, x) => a + (x.e - x.s), 0);
+  return {
+    sentences: list.length, statements: clear.length, talkSeconds: Math.round(talk),
+    left: { procedure: mine.filter((x) => procedural(x.text)).length, otherSpeakers: mine.filter((x) => x.other).length, questions: mine.filter((x) => /\?$/.test(x.text)).length, greetings: mine.filter((x) => GREETING.test(x.text)).length },
+    topics, hooks: hooks(list, 12), closers,
+    // A video uses 4-6 lines and no two videos should share most of them.
+    room: clear.length < 4 ? 0 : Math.max(1, Math.min(40, Math.floor(clear.length / 4))),
+  };
 }
 
 /** Three story options from what the candidate actually says (Ryan: "3 topic options"), each with the lines that carry it. */
@@ -703,4 +765,4 @@ async function renderSpeechAd({ bites, footage, info, vertical, out, work, music
 }
 function assT(t) { t = Math.max(0, t); const h = Math.floor(t / 3600); const m = Math.floor((t % 3600) / 60); const s = Math.floor(t % 60); const cs = Math.floor((t * 100) % 100); return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`; }
 
-module.exports = { procedural, substance, matchScript, topicTest, codeGfx, heuristicStory, ICONS, asOpening, hookScore, outroScore, shapeStory, topics, repick, pickStory, clauseTrim, iconsFor, groundGfx, find, download, prepare, pickBites, sentences, punctuate, quietWindows, renderSpeechAd, FB_VIDEO, platformOf };
+module.exports = { hooks, insight, findLine, TOPIC_NAMES, procedural, substance, matchScript, topicTest, codeGfx, heuristicStory, ICONS, asOpening, hookScore, outroScore, shapeStory, topics, repick, pickStory, clauseTrim, iconsFor, groundGfx, find, download, prepare, pickBites, sentences, punctuate, quietWindows, renderSpeechAd, FB_VIDEO, platformOf };
