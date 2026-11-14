@@ -422,7 +422,7 @@ async function renderBroll(job, h, clip) {
   } : null;
   h.progress(0.2, 'Finding the beat and cutting the shots to it');
   const r = await be.make({ source: asset.path, duration: asset.info?.duration || 0, shots: vis?.shots || [], scenes: an?.scenes || [], black, avoid, music: track?.file || null, length: clip.end - clip.start, out: outPath, volume: Number(clip.musicVol ?? 0.9), signal: h.signal,
-    ...(story ? { raw: true, window: clip.window || null, cutBeats: swag ? 4 : 2.6, texts, strict: true } : {}) });
+    ...(story ? { raw: true, window: clip.window || null, cutBeats: swag ? 4 : 2.6, texts, strict: true, fill: swag } : {}) });
   const segs = r.segs;
   const qc = await ff.qualityCheck(outPath, { expectWidth: 1080, expectHeight: 1920, minSec: 3, maxSec: 180 });
   const thumb = path.join(outDir, `v${n}.jpg`); await ff.thumbnail(outPath, thumb, Math.min(1.5, r.duration / 2), 405);
@@ -512,7 +512,7 @@ queue.register('render.short', {
     const pauses = (await pausesFor(asset)) || [];
     const renderArgs = () => ({ facePath: src.facePath, graphics: client.graphics,
       source: src.source, info: src.info, range: src.range, words: src.words, style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, keywords: clip.keywords || null,
-      reframe: clip.reframe, focusX: clip.focusX, plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: !!clip.tightCuts, silences: pauses.map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns, voiceClean: clip.voiceClean || client.production?.voiceClean || 'clean' }, logo: client.production?.logoPath || null,
+      reframe: clip.reframe, focusX: clip.focusX, plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: !!clip.tightCuts, silences: clip.cutByWords ? [] : pauses.map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns, voiceClean: clip.voiceClean || client.production?.voiceClean || 'clean' }, logo: client.production?.logoPath || null,
       outPath, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal,
       onProgress: (p) => { h.progress(0.12 + p * 0.7, `Rendering v${n}`); const pct = Math.round((0.12 + p * 0.7) * 100); if (pct - (ctx.store.get('clips', clip.id)?.renderProgress || 0) >= 4) { ctx.store.update('clips', clip.id, { renderProgress: pct }); events.publish('clips', { id: clip.id }); } },
     });
@@ -564,7 +564,7 @@ queue.register('render.short', {
         h.progress(0.84, 'Rendering the full-frame version');
         wideOut = outPath.replace(/\.mp4$/, '-wide.mp4');
         const rw = await render.renderShort({ graphics: client.graphics, source: src.source, info: src.info, range: src.range, words: src.words, style: { ...(client.style || {}), ...(clip.style || {}) }, hook: clip.hook, keywords: clip.keywords || null, wide: true,
-          plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: !!clip.tightCuts, silences: ((await pausesFor(asset)) || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns, voiceClean: clip.voiceClean || client.production?.voiceClean || 'clean' }, logo: client.production?.logoPath || null,
+          plan: { keep: (clip.keep || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), silenceCut: clip.silenceCut !== false, tight: !!clip.tightCuts, silences: clip.cutByWords ? [] : ((await pausesFor(asset)) || []).map(([a, b]) => (assembled ? [a - clip.start, b - clip.start] : [a, b])), retakeCut: client.production?.retakeCut !== false && clip.retakeCut !== false, punchIns: clip.punchIns, voiceClean: clip.voiceClean || client.production?.voiceClean || 'clean' }, logo: client.production?.logoPath || null,
           outPath: wideOut, crf: ctx.setting('production.crf', 20), loudness: ctx.setting('production.loudnessLufs', -14), signal: h.signal });
         if (musicSheet?.cues.some((c) => c.file) || Math.abs(voiceGain - 1) > 0.01) {
           const tmp = wideOut.replace(/\.mp4$/, '.music.mp4');
@@ -950,8 +950,19 @@ queue.register('political.batch', {
   heavy: true, maxAttempts: 1,
   async run(job, h) {
     if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
-    const { prospectId, text, orders, count, styles, density, wide, prompt, textStyle, purpose } = job.payload;
-    return require('../political/batch').make(prospectId, { text, orders, count, styles, density, wide, prompt, textStyle, purpose, actor: job.createdBy }, h);
+    const { prospectId, text, orders, count, styles, density, wide, prompt, textStyle, purpose, edit } = job.payload;
+    return require('../political/batch').make(prospectId, { text, orders, count, styles, density, wide, prompt, textStyle, purpose, edit, actor: job.createdBy }, h);
+  },
+});
+
+// Read a candidate's footage without making anything (so the Ad machine can show what's in it).
+queue.register('political.read', {
+  title: (p) => `Read footage: ${p.name || 'candidate'}`,
+  heavy: true, maxAttempts: 1,
+  async run(job, h) {
+    if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
+    const r = await require('../political/batch').read(job.payload.prospectId, h, job.createdBy);
+    return { sentences: r.sentences.length };
   },
 });
 

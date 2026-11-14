@@ -207,6 +207,8 @@ function normalize(x = {}, base = BOLD) {
     plate: pick(x.plate, OPTIONS.plate, B.plate), pill: pick(x.pill, OPTIONS.pill, B.pill), badge: x.badge != null ? !!x.badge : !!B.badge, end: pick(x.end, OPTIONS.end, B.end),
     motion: pick(x.motion, OPTIONS.motion, B.motion), flair: pick(x.flair, OPTIONS.flair, B.flair || 'none'), punch: x.punch != null ? !!x.punch : !!B.punch, ticker: x.ticker != null ? !!x.ticker : !!B.ticker,
     density: pick(x.density, OPTIONS.density, B.density || 'full'),
+    // Parts switched off for plain edits (Ad machine → Edit type): captions, name tag, progress bar, fact tags and cards, headlines, end card.
+    off: Object.fromEntries(['caps', 'plate', 'progress', 'tags', 'head', 'end'].map((k) => [k, !!(x.off || B.off || {})[k]])),
     angles: x.angles != null ? !!x.angles : !!B.angles, // one take cut like several cameras (full-screen looks)
   };
   // Full-screen and letterbox footage can't tilt or sit on a block; the cap position must exist in that layout.
@@ -215,7 +217,10 @@ function normalize(x = {}, base = BOLD) {
   if (L.layout !== 'full') L.angles = false;
   if (!L.accent) L.accent = L.colors.c;
   // Captions only: the captions carry the ad, so they are always on and sit low (under the face on full-screen looks).
-  if (L.density === 'minimal') { if (L.cap.style === 'none') L.cap.style = 'color'; L.ticker = false; L.badge = false; }
+  if (L.density === 'minimal') { if (L.cap.style === 'none' && !L.off.caps) L.cap.style = 'color'; L.ticker = false; L.badge = false; }
+  if (L.off.caps) L.cap.style = 'none';
+  if (L.off.plate) L.plate = 'none';
+  if (L.off.tags) { L.pill = 'none'; L.badge = false; L.ticker = false; }
   L.sections = sections(L);
   // A headline colour of its own (pastel: orange with a dark outline) and its own key-word box, where they stay readable.
   if (L.head.color) for (const k of ['a', 'b', 'c']) { const S = L.sections[k]; if (L.head.outline || contrast(L.head.color, S.bg) >= 2.2) S.text = L.head.color; }
@@ -226,6 +231,35 @@ function normalize(x = {}, base = BOLD) {
 const preset = (id, density = null) => { const P = PRESETS[id] || PRESETS.bold; return normalize(density ? { ...P, density } : P, P); };
 /** A look with another amount of graphics. */
 const withDensity = (look, density) => (OPTIONS.density.includes(density) ? normalize({ ...strip(look), density }, look) : look);
+/** Kinds of edit, from a full motion-graphics video down to nothing but the cuts. */
+const EDITS = {
+  graphics: { name: 'Motion graphics', about: 'Headlines, captions, fact cards, icons, maps and an end card, in the style you pick.' },
+  light: { name: 'Fewer graphics', about: 'The headline, captions, their name and proven facts only.', density: 'light' },
+  clean: { name: 'Clean edit', about: 'Their footage with captions, their name and small fact tags. No headlines or colour sections.', density: 'minimal' },
+  captions: { name: 'Captions only', about: 'Just the cut and the captions, then a short end card. No name tag, tags or sounds.', density: 'minimal', off: { plate: true, tags: true, progress: true, head: true }, sfx: 'off' },
+  raw: { name: 'Straight cut', about: 'Only the cuts: no captions, text, music, sounds or end card. Even sound, ready to post or to finish in the Studio.', density: 'minimal', off: { caps: true, plate: true, tags: true, progress: true, head: true, end: true }, sfx: 'off', music: false, bare: true },
+};
+/**
+ * An edit type and the founders' own switches laid over a look.
+ * edit = { kind, captions, name, progress, endCard, music, sounds: full | light | off, punchIns, hardCuts } (each optional).
+ * Returns { look, music: true | false, sfx: level or null (null = the setting) }.
+ */
+function withEdit(look, edit = {}) {
+  const e = edit && typeof edit === 'object' ? edit : {}; const K = EDITS[e.kind] || EDITS.graphics; const x = strip(look);
+  if (K.density) x.density = K.density;
+  const off = { ...(x.off || {}), ...(K.off || {}) };
+  if (e.captions != null) off.caps = !e.captions;
+  if (e.name != null) off.plate = !e.name;
+  if (e.progress != null) off.progress = !e.progress;
+  if (e.endCard != null) off.end = !e.endCard;
+  x.off = off;
+  if (K.bare) Object.assign(x, { layout: 'full', transition: 'cut', grade: 'none', texture: 'none', flair: 'none', ticker: false, punch: false });
+  if (e.hardCuts) x.transition = 'cut';
+  if (e.punchIns != null) { x.angles = !!e.punchIns; if (!e.punchIns) x.punch = false; }
+  return { look: normalize(x, look), music: e.music != null ? !!e.music : K.music !== false, sfx: ['full', 'light', 'off'].includes(e.sounds) ? e.sounds : K.sfx || null };
+}
+const cleanEdit = (e) => { if (!e || typeof e !== 'object') return null; const o = {}; if (EDITS[e.kind]) o.kind = e.kind; for (const k of ['captions', 'name', 'progress', 'endCard', 'music', 'punchIns', 'hardCuts']) if (e[k] != null) o[k] = !!e[k]; if (['full', 'light', 'off'].includes(e.sounds)) o.sounds = e.sounds; return Object.keys(o).length ? o : null; };
+
 /**
  * The founders' own text choices laid over any look: { font, capFont, size: 0.7-1.5, outline: true | false, upper: true | false }.
  * font = headlines (and captions unless capFont is given); outline true = a dark outline round captions on footage,
@@ -316,4 +350,4 @@ function strip(L) { const { sections: _s, ...rest } = L || {}; return rest; }
 /** Font files the renderer must load for a look. */
 function fontFiles(L) { return [...new Set([L.fonts.head, L.fonts.body, L.fonts.cap])].map((family) => ({ family, url: `/f/${FONTS[family]}` })); }
 
-module.exports = { withText, PRESETS, FONTS, OPTIONS, MAIN, DENSITY, withDensity, preset, list, normalize, fromPrompt, fromWords, fontFiles, strip, contrast, guess };
+module.exports = { EDITS, withEdit, cleanEdit, withText, PRESETS, FONTS, OPTIONS, MAIN, DENSITY, withDensity, preset, list, normalize, fromPrompt, fromWords, fontFiles, strip, contrast, guess };

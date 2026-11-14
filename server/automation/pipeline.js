@@ -140,16 +140,21 @@ function requestRender(clip, { reason = 'render', changes = null } = {}) {
 /** Called after QC. Opens the right approval or auto-approves for creator clients on autopilot. */
 function afterQc(clipId, qc) {
   const clip = ctx.store.get('clips', clipId); const client = ctx.store.get('clients', clip.clientId);
+  // Polish (server/video/polish.js): checked once before review (or auto-approval); when something's off it's rendered again with the fix
+  // and review waits for that version.
+  try { if (qc.passed && require('../video/polish').maybe(clipId)) return null; } catch (e) { audit.log('system', 'clip.polish_error', { clipId, error: e.message }, 'warn'); }
   const mode = client.type === 'political' && client.approval.mode === 'auto' ? 'founder+client' : client.approval.mode;
   if (mode === 'auto' && qc.passed) {
     ctx.store.update('clips', clipId, { status: 'approved', approvedBy: 'auto-qc', approvedAt: now() });
     audit.log('system', 'clip.auto_approved', { clipId, clientId: client.id });
     return scheduleClip(clipId);
   }
+  const polished = ctx.store.get('clips', clipId).polish;
+  const note = polished?.notes?.length ? `Polished before review: ${polished.notes.join('; ')}.` : null;
   const existing = clip.approvalId && ctx.store.get('approvals', clip.approvalId);
-  if (existing && existing.status === 'pending') ctx.store.update('approvals', existing.id, { version: clip.currentVersion, qc: { passed: qc.passed, issues: qc.issues } });
+  if (existing && existing.status === 'pending') ctx.store.update('approvals', existing.id, { version: clip.currentVersion, qc: { passed: qc.passed, issues: qc.issues }, ...(note ? { note } : {}) });
   else {
-    const a = ctx.store.insert('approvals', { kind: 'clip', refId: clipId, clientId: client.id, title: clip.title, summary: clip.hook || clip.caption, status: 'pending', stage: 'internal', version: clip.currentVersion, qc: { passed: qc.passed, issues: qc.issues }, createdBy: 'system' });
+    const a = ctx.store.insert('approvals', { kind: 'clip', refId: clipId, clientId: client.id, title: clip.title, summary: clip.hook || clip.caption, status: 'pending', stage: 'internal', version: clip.currentVersion, qc: { passed: qc.passed, issues: qc.issues }, ...(note ? { note } : {}), createdBy: 'system' });
     ctx.store.update('clips', clipId, { approvalId: a.id });
     events.publish('approval', a);
   }

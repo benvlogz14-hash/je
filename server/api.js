@@ -370,6 +370,24 @@ r.post('/api/clients/:id/upload', async (req, b, p) => {
   }
   return out;
 }, { raw: true });
+// The client's YouTube channel as a footage source (server/automation/channel.js) and the polish pass (video/polish.js).
+r.get('/api/clients/:id/channel', async (req, b, p) => require('./automation/channel').status(must(ctx.store.get('clients', p.id)), { refresh: req.query.refresh === '1' }));
+r.post('/api/clients/:id/channel', async (req, b, p) => {
+  const c = must(ctx.store.get('clients', p.id)); const prod = { ...(c.production || {}) };
+  if (b.url !== undefined) { const u = String(b.url || '').trim(); if (u && !/^https?:\/\/(www\.|m\.)?youtube\.com\/|^https?:\/\/youtube\.com\//i.test(u)) throw new HttpError(400, 'Paste the channel link from YouTube, e.g. https://www.youtube.com/@stringer'); if (u !== prod.channelUrl) { prod.channelUrl = u; delete prod._channel; delete prod._channelSince; delete prod._channelEmpty; } }
+  if (b.on !== undefined) prod.channelOn = !!b.on;
+  if (b.perDay !== undefined) prod.channelBackfillPerDay = Math.max(0, Math.min(10, Number(b.perDay) || 0));
+  if (b.minMinutes !== undefined) prod.channelMinMinutes = Math.max(1, Math.min(120, Number(b.minMinutes) || 4));
+  ctx.store.update('clients', c.id, { production: prod }); audit.log(actorOf(req), 'channel.set', { clientId: c.id, url: prod.channelUrl || null });
+  return require('./automation/channel').status(ctx.store.get('clients', c.id), { refresh: true });
+});
+r.post('/api/clients/:id/channel/pull', async (req, b, p) => {
+  const c = must(ctx.store.get('clients', p.id)); const ch = require('./automation/channel');
+  const videos = await ch.list(c); const v = b.id ? videos.find((x) => x.id === b.id) : ch.nextOld(c, videos);
+  if (!v) throw new HttpError(400, 'Every long video on the channel has been pulled already.');
+  return { job: ch.pull(c, v, 'pulled by hand').id, title: v.title };
+});
+r.post('/api/clients/:id/polish', (req, b, p) => { must(ctx.store.get('clients', p.id)); return require('./video/polish').sweep(p.id); });
 r.post('/api/clients/:id/autopilot-now', async (req, b, p) => {
   const c = must(ctx.store.get('clients', p.id));
   const h = await require('./setup/production').health(c.id);
@@ -377,7 +395,7 @@ r.post('/api/clients/:id/autopilot-now', async (req, b, p) => {
   if (block) throw new HttpError(400, block.text);
   const r = require('./automation/scheduler').feedClient(c);
   const importing = ctx.store.all('assets', (a) => a.clientId === c.id && a.status === 'importing').length;
-  r.message = r.action === 'transcribe' ? 'Turning the newest footage into text, then finding clips.' : r.action === 'discover' ? 'Finding new clips in your footage.' : r.waiting ? 'Already working on footage. Watch the Footage list.' : r.need === 0 ? 'Nothing to do: the next days are already filled with clips.' : importing ? `Waiting for ${importing} video${importing === 1 ? '' : 's'} to finish importing.` : 'Out of footage. Upload a video or paste a link first.';
+  r.message = r.action === 'channel' ? r.message : r.action === 'transcribe' ? 'Turning the newest footage into text, then finding clips.' : r.action === 'discover' ? 'Finding new clips in your footage.' : r.waiting ? 'Already working on footage. Watch the Footage list.' : r.need === 0 ? 'Nothing to do: the next days are already filled with clips.' : importing ? `Waiting for ${importing} video${importing === 1 ? '' : 's'} to finish importing.` : 'Out of footage. Upload a video or paste a link first.';
   return r;
 });
 
@@ -1793,14 +1811,18 @@ r.patch('/api/prospects/:id/videos', (req, b, p) => { const pr = must(ctx.store.
 // Hands-off ads: for each lead, find their videos on Google (if nothing was uploaded) and make the whole package.
 // ---- Batches of videos (Ad machine → Videos): baseline templates, typed orders, many politicians at once.
 // The baselines ("About a topic", "Quick video", "Meet them"...), the styles and the graphics levels, for the order box.
-r.get('/api/political/templates', () => { const looks = require('./political/looks'); return { templates: require('./political/templates').list(), styles: looks.list(), density: Object.entries(looks.DENSITY).map(([id, name]) => ({ id, name })), mix: require('./political/batch').MIX, fonts: Object.keys(looks.FONTS), purpose: ctx.setting('political.purpose', 'social') }; });
+r.get('/api/political/templates', () => { const looks = require('./political/looks'); return { templates: require('./political/templates').list(), styles: looks.list(), density: Object.entries(looks.DENSITY).map(([id, name]) => ({ id, name })), mix: require('./political/batch').MIX, edits: Object.entries(looks.EDITS).map(([id, e]) => ({ id, name: e.name, about: e.about })), fonts: Object.keys(looks.FONTS), purpose: ctx.setting('political.purpose', 'social') }; });
 // How a typed box of orders will be read (one video per line), before anything is made.
 r.post('/api/political/orders/preview', (req, b) => { const looks = require('./political/looks'); const T = require('./political/templates'); return { orders: T.parseOrders(String(b.text || ''), looks).map((o) => ({ ...o, templateName: T.byId(o.template)?.name || o.template, styleName: o.style ? looks.PRESETS[o.style]?.name : null })) }; });
-const batchOpts = (b) => { const looks = require('./political/looks'); return { text: String(b.text || '').slice(0, 6000), orders: Array.isArray(b.orders) ? b.orders.slice(0, 40).map(String) : null, count: Math.max(0, Math.min(40, Number(b.count) || 0)), styles: b.styles === 'mix' ? 'mix' : Array.isArray(b.styles) ? b.styles.filter((x) => x === 'mix' || looks.PRESETS[x]) : null, density: looks.OPTIONS.density.includes(b.density) ? b.density : null, wide: !!b.wide, prompt: String(b.prompt || '').slice(0, 1500), purpose: ['social', 'campaign'].includes(b.purpose) ? b.purpose : null, textStyle: b.textStyle && typeof b.textStyle === 'object' ? { font: String(b.textStyle.font || '').slice(0, 40), capFont: String(b.textStyle.capFont || '').slice(0, 40), size: Number(b.textStyle.size) || 1, ...(b.textStyle.outline != null ? { outline: !!b.textStyle.outline } : {}), ...(b.textStyle.upper != null ? { upper: !!b.textStyle.upper } : {}) } : null }; };
+const batchOpts = (b) => { const looks = require('./political/looks'); return { text: String(b.text || '').slice(0, 6000), orders: Array.isArray(b.orders) ? b.orders.slice(0, 40).map(String) : null, count: Math.max(0, Math.min(40, Number(b.count) || 0)), styles: b.styles === 'mix' ? 'mix' : Array.isArray(b.styles) ? b.styles.filter((x) => x === 'mix' || looks.PRESETS[x]) : null, density: looks.OPTIONS.density.includes(b.density) ? b.density : null, wide: !!b.wide, prompt: String(b.prompt || '').slice(0, 1500), purpose: ['social', 'campaign'].includes(b.purpose) ? b.purpose : null, textStyle: b.textStyle && typeof b.textStyle === 'object' ? { font: String(b.textStyle.font || '').slice(0, 40), capFont: String(b.textStyle.capFont || '').slice(0, 40), size: Number(b.textStyle.size) || 1, ...(b.textStyle.outline != null ? { outline: !!b.textStyle.outline } : {}), ...(b.textStyle.upper != null ? { upper: !!b.textStyle.upper } : {}) } : null, edit: looks.cleanEdit(b.edit) }; };
 // Make a batch of videos for one candidate from their footage (job political.batch). Nothing is sent or posted.
 r.post('/api/prospects/:id/videos', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); return queue.enqueue('political.batch', { prospectId: pr.id, name: pr.name, ...batchOpts(b) }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}`, title: `Videos for ${pr.name}` }); });
 // The same for several politicians by name or id; a name not on the board is added as a political lead first.
 r.post('/api/political/videos', botErr((req, b) => require('./political/batch').start({ ids: Array.isArray(b.ids) ? b.ids : [], names: Array.isArray(b.names) ? b.names.map(String) : [], actor: actorOf(req), ...batchOpts(b) })));
+// What's in a candidate's footage: topics, the best opening lines (the hook finder), closing lines, what was left out.
+r.get('/api/prospects/:id/insight', (req, b, p) => { must(ctx.store.get('prospects', p.id)); const r = require('./political/batch').insight(p.id); if (r.ready && req.query.topic) r.hooks = require('./political/footage').hooks(JSON.parse(fs.readFileSync(path.join(require('./political/package').dirFor(ctx.store.get('prospects', p.id)), 'footage', 'sentences.json'), 'utf8')).sentences, 12, String(req.query.topic)); return r; });
+// Read their footage now (find, transcribe, look through) without making anything.
+r.post('/api/prospects/:id/insight', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); return queue.enqueue('political.read', { prospectId: pr.id, name: pr.name }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}`, title: `Read ${pr.name}'s footage` }); });
 // A candidate's finished batch videos, newest first, and the last batch's result (what was skipped and why).
 r.get('/api/prospects/:id/videos', (req, b, p) => { must(ctx.store.get('prospects', p.id)); return require('./political/batch').list(p.id); });
 r.get('/api/prospects/:id/videos/:vid/:what', (req, res, p) => {
