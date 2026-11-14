@@ -950,8 +950,8 @@ queue.register('political.batch', {
   heavy: true, maxAttempts: 1,
   async run(job, h) {
     if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
-    const { prospectId, text, orders, count, styles, density, wide, prompt, textStyle, purpose, edit, lookPrompt, colors } = job.payload;
-    return require('../political/batch').make(prospectId, { text, orders, count, styles, density, wide, prompt, textStyle, purpose, edit, lookPrompt, colors, actor: job.createdBy }, h);
+    const { prospectId, text, orders, count, styles, density, wide, prompt, textStyle, purpose, edit, lookPrompt, colors, end, remake } = job.payload;
+    return require('../political/batch').make(prospectId, { text, orders, count, styles, density, wide, prompt, textStyle, purpose, edit, lookPrompt, colors, end, remake, actor: job.createdBy }, h);
   },
 });
 

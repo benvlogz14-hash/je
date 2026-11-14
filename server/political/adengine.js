@@ -291,7 +291,7 @@ function basePlan(bites, { broll, map, place = '', look = null, news = [] }) {
   const placeWords = String(place).toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 3);
   const local = (b) => /\b(district|community|neighbo|town|city|county|borough|state|street|home|here)/i.test(b.text) || placeWords.some((w) => b.text.toLowerCase().includes(w)) || (map?.number && new RegExp(`\\b${map.number}`).test(b.text));
   // A line that carries its own graphic card (a checklist, bars, a timeline, a clipping) keeps it: the map goes elsewhere.
-  const CARDS = ['checklist', 'compare', 'timeline', 'poll', 'endorse'];
+  const CARDS = ['checklist', 'compare', 'timeline', 'poll', 'endorse', 'tally'];
   const free = (b, k) => !(b.gfx && CARDS.includes(b.gfx.kind)) && !clips.has(k) && !b.voice;
   const placeBeat = bites.findIndex((b, k) => k >= 1 && b.role === 'place' && b.e - b.s >= 2.6 && free(b, k));
   const mapAt = !map ? -1 : placeBeat >= 0 ? placeBeat : (bites.findIndex((b, k) => k >= 1 && b.e - b.s >= 3.4 && local(b) && free(b, k)) + 1 || bites.findIndex((b, k) => k >= 1 && b.e - b.s >= 3.4 && free(b, k)) + 1) - 1;
@@ -305,7 +305,7 @@ function basePlan(bites, { broll, map, place = '', look = null, news = [] }) {
     const g = b.gfx; const clip = clips ? clips.get(k) : null;
     if (k === mapAt) p.map = { at: Math.min(1.2, dur * 0.3), dur: Math.min(3.0, dur * 0.6) };
     else if (k >= 1 && g && CARDS.includes(g.kind) && dur >= 2.8 && !b.voice) {
-      const first = g.kind === 'checklist' ? g.items[0].split(' ')[0] : g.kind === 'compare' ? g.a : g.kind === 'poll' ? g.bars[0].value : g.kind === 'endorse' ? 'endorsed' : g.from;
+      const first = g.kind === 'checklist' ? g.items[0].split(' ')[0] : g.kind === 'compare' ? g.a : g.kind === 'poll' ? g.bars[0].value : g.kind === 'endorse' ? 'endorsed' : g.kind === 'tally' ? g.verb || 'passed' : g.from;
       const wi = Math.max(0, b.words.findIndex((w) => norm(w.w) === norm(first) || w.w.replace(/[^\d]/g, '') === String(first).replace(/[^\d]/g, '')));
       const at = Math.max(0.5, b.words[wi].s - b.s - 0.3);
       p.card = { at, dur: Math.max(1.8, Math.min(5, dur - at)), card: { ...g } }; p.gfx = null;
@@ -389,7 +389,7 @@ async function faceX(c, start, end) {
 
 // ------------------------------------------------------------------ build the spec from the plan
 
-function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office, place, cta, site, tag, look, endFor = '', endDate = '' }) {
+function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office, place, cta, site, tag, paid = '', look, endFor = '', endDate = '' }) {
   look = look || looks.preset('bold');
   // How much is drawn (look.density): full = everything; light = headline, captions, name and proven facts only;
   // minimal = captions, the name and small fact tags (the full-screen vertical look with almost no graphics).
@@ -478,7 +478,7 @@ function buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office,
   const who = plan.findIndex((p, k) => p.role === 'who' && !bites[k].voice); const pk = who >= 0 ? who : firstOwn; const pc = cuts[pk];
   const portrait = pc ? { src: pc.url, from: Math.max(0, Math.min(pc.dur * 0.45, pc.dur - 3.2)), fx: pc.fx ?? 0.5 } : null; // the clip must last the whole end card
   // Plain edits can leave the end card off: the video then ends with their last word.
-  const end = off.end ? null : { at: t, dur: endDur, bg: 'navy', cta, name, sub: office || '', site: site || '', tag: tag || '', portrait, line: outro, for: endFor || '', date: endDate || '' };
+  const end = off.end ? null : { at: t, dur: endDur, bg: 'navy', cta, name, sub: office || '', site: site || '', tag: tag || '', paid: String(paid || '').slice(0, 90), portrait, line: outro, for: endFor || '', date: endDate || '' };
   return {
     w: W, h: H, fps: FPS, total: t + (end ? endDur : 0), voiceEnd: t, segs, words, voice, end, name, office: [office, place].filter(Boolean).join(', ').slice(0, 70),
     bug: map ? (map.number ? `${map.stateName} · District ${map.number}` : map.stateName) : String(office || '').slice(0, 30),
@@ -497,7 +497,7 @@ function withBase(spec, base) {
  * Make one ad. bites = the picked lines ({clip, s, e, text, words}); footage = prospect.pkg.footage (clips, broll).
  * Returns { file, duration, spec, plan, agent }.
  */
-async function make({ bites, footage, vertical, out, work, music, name, office, place, state, cta = 'Vote', site = '', tag = '', notes = '', prev = null, look = null, sound = 'full', news = [], endFor = null, endDate = '', crf = 18, onProgress = () => {} }) {
+async function make({ bites, footage, vertical, out, work, music, name, office, place, state, cta = 'Vote', site = '', tag = '', paid = '', notes = '', prev = null, look = null, sound = 'full', news = [], endFor = null, endDate = '', crf = 18, onProgress = () => {} }) {
   if (!available()) throw new Error('The pro ad designer is still installing. Restart Euclidean once to finish the update.');
   fs.mkdirSync(work, { recursive: true });
   const clips = footage.clips;
@@ -539,7 +539,7 @@ async function make({ bites, footage, vertical, out, work, music, name, office, 
   // "<Name> for <place>" under the name on the end card: their district when we know it, else the place.
   const ord = (n) => { const v = Number(n) % 100; return `${n}${v >= 11 && v <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][Number(n) % 10] || 'th'}`; };
   const forLine = endFor != null ? endFor : map?.number ? `for the ${ord(map.number)}` : place ? `for ${place}` : '';
-  const spec = buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office, place, cta, site, tag, look: lookN, endFor: forLine, endDate });
+  const spec = buildSpec({ plan, bites, cuts, brollFiles, map, vertical, name, office, place, cta, site, tag, paid, look: lookN, endFor: forLine, endDate });
 
   // Render with Remotion.
   const srv = await serve({ m: work, f: FONTS });
@@ -559,7 +559,7 @@ async function make({ bites, footage, vertical, out, work, music, name, office, 
   await mixSound(silent, music, out, spec, events);
   onProgress(0.97, 'Checking the finished ad');
   let qa = null;
-  try { qa = await edit.qa(out, { total: spec.total, voiceEnd: spec.voiceEnd, cuts: { clean: cleanCuts, total: bites.length * 2 } }); } catch { /* the ad is still made */ }
+  try { qa = await edit.qa(out, { total: spec.total, voiceEnd: spec.voiceEnd, cuts: { clean: cleanCuts, total: bites.length * 2 }, ignore: spec.segs.filter((s) => s.card && s.card.kind !== 'video' && s.card.kind !== 'split').map((s) => [s.at, s.at + s.dur]) }); } catch { /* the ad is still made */ }
   const layers = { lines: bites.map((b, k) => ({ file: clips[b.clip].file, keep: cuts[k].keep, fx: cuts[k].fx })), words: spec.words.map((w) => ({ w: w.w, s: +w.s.toFixed(3), e: +w.e.toFixed(3) })), music: music && fs.existsSync(music) ? music : null, voiceEnd: spec.voiceEnd, fonts: lookN.fonts };
   return { file: out, duration: spec.total, spec, plan, agent, qa, layers, sounds: events.length, tightened: cuts.reduce((a, c) => a + (c.tightened || 0), 0) };
 }

@@ -519,7 +519,7 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
           ${job ? html`<div class="col grow" style="gap:4px;min-width:200px"><${Progress} value=${job.progress || 0} /><span class="am-help">${Math.round((job.progress || 0) * 100)}% · ${job.note || 'working'}</span></div>` : html`<span class="sum">${p ? html`<b>${p.name}</b><br />${nUp ? `${nOn} of ${nUp} videos ticked` : 'no footage yet (it will look for public videos)'} · ${modeName(pm, looks?.presets, curLook)}` : 'Pick who it\'s for'}</span>`}
           <${Button} kind="primary" icon="sparkle" disabled=${!p || busy || !!up} title=${!p ? 'Pick or add the candidate first' : busy ? 'Already making this candidate\'s ads: see the progress below' : up ? 'Wait for the upload to finish' : ''} onClick=${make}>${busy ? 'Making the ads…' : up ? 'Uploading…' : 'Make the sample package'}</${Button}>
         </div>`}
-        ${p ? html`<${RunStatus} key=${p.id} p=${p} onWatch=${() => setViewing(p.id)} />` : null}
+        ${p && (mode === 'package' || busy) ? html`<${RunStatus} key=${p.id} p=${p} onWatch=${() => setViewing(p.id)} />` : null}
         ${made.length ? html`<section class="panel am-card"><span class="am-label">Sample ads made recently</span><div class="row wrap" style="gap:8px">${made.map((x) => html`<button class="ghost" title=${`Show ${x.name}'s ads`} onClick=${() => setViewing(x.id)} style="padding:0;border:0;background:none;cursor:pointer;display:flex;flex-direction:column;gap:3px;align-items:center"><img src=${api.url(`/api/prospects/${x.id}/file/posterV?at=${encodeURIComponent(x.pkg?.steps?.video_v?.at || '')}`)} alt="" style="height:96px;border-radius:10px;border:1px solid var(--line)" onError=${(e) => { e.target.closest('button').style.display = 'none'; }} /><span class="faint ellipsis" style="font-size:10px;max-width:70px">${x.name.split(' ').slice(-1)[0]}</span></button>`)}</div></section>` : null}
       </div>
     </div>`}
@@ -621,9 +621,11 @@ function ModePicker({ mode: m, onChange, presets, curLook, single }) {
   const picked = !['mix', 'own', 'describe'].includes(m.full) ? fulls.find((x) => x.id === m.full) : null;
   const cols = m.colors || {}; const base = (m.tier === 'more' ? fulls.find((x) => x.id === m.theme) : picked)?.colors || ['#1f2b6e', '#f6c431', '#ef5a3a', '#ef5a3a'];
   const colour = (k, i, label) => html`<label class="am-colour" title=${label}><input type="color" value=${cols[k] || base[i] || '#000000'} onInput=${(e) => set({ colors: { ...cols, [k]: e.target.value } })} /><span>${label}</span></label>`;
+  const sampleId = m.tier === 'basic' ? m.basic : m.tier === 'more' ? m.theme : picked?.id || null;
   return html`<div class="am-sec" style="gap:14px">
     <div class="am-tiers" role="tablist">${TIERS.map(([id, name, about], i) => html`<button type="button" key=${id} role="tab" aria-selected=${m.tier === id} class=${`am-tier${m.tier === id ? ' on' : ''}`} onClick=${() => set({ tier: id })}>
       <span class="am-bars">${[0, 1, 2].map((k) => html`<i class=${k <= i ? 'f' : ''} />`)}</span><b>${name}</b><span>${about}</span></button>`)}</div>
+    <div class="am-pick"><div class="am-sec grow" style="gap:14px;min-width:0">
     ${m.tier === 'basic' ? html`<div class="am-opts">${basics.map((x) => html`<button type="button" key=${x.id} class=${`am-opt${m.basic === x.id ? ' on' : ''}`} aria-pressed=${m.basic === x.id} onClick=${() => set({ basic: x.id })}>
       <span class=${`am-ph am-anim-${x.id}`}><i /><u class="c" /></span><b>${x.name}</b><span>${x.about}</span></button>`)}</div>` : null}
     ${m.tier === 'more' ? html`<div class="am-sec"><span class="am-label">Colours and type from</span>
@@ -633,10 +635,12 @@ function ModePicker({ mode: m, onChange, presets, curLook, single }) {
         ${picked ? html`<button class="am-link" onClick=${() => setGallery(true)}>Change</button>` : null}</div>
       ${m.full === 'mix' ? html`<span class="am-help">Each video takes the next of Bold blocks, Street vlog, Pastel blocks, On location and To camera, so a month of posts does not all look the same.</span>` : null}
       ${m.full === 'own' ? html`<span class="am-help">Every video in their own look (${curLook}).</span>` : null}
-      ${picked ? html`<div class="am-picked"><img src=${lookPoster(picked.id)} alt="" onError=${(e) => { e.target.style.visibility = 'hidden'; }} /><div class="col" style="gap:2px;min-width:0"><b>${picked.name}</b><span class="am-help">${picked.about}</span></div></div>` : null}
+      ${picked ? html`<div class="am-picked"><div class="col" style="gap:2px;min-width:0"><b>${picked.name}</b><span class="am-help">${picked.about}</span></div></div>` : null}
       ${m.full === 'describe' ? html`<textarea class="am-orders" style="min-height:70px" rows="2" id="am-describe" placeholder="Say how it should look and it designs the style: colours, fonts, pace, how the text behaves" value=${m.prompt} onInput=${(e) => set({ prompt: e.target.value })} />
         <div class="am-chips">${DESCRIBE.map((d) => html`<button type="button" class="am-chip" onClick=${() => set({ prompt: d })}>${d}</button>`)}</div>` : null}
     </div>` : null}
+    </div>
+    ${sampleId ? html`<div class="am-sample" title="A sample of this look (stand-in footage)"><video key=${sampleId} src=${lookVideo(sampleId)} poster=${lookPoster(sampleId)} muted loop autoplay playsinline preload="metadata" /><span>${m.tier === 'more' ? 'Full version shown' : 'Sample'}</span></div>` : null}</div>
     ${m.tier !== 'basic' && m.full !== 'mix' || m.tier === 'more' ? html`<div class="row wrap" style="gap:10px;align-items:center"><span class="am-label">Your colours</span>${colour('a', 0, 'Main')}${colour('b', 1, 'Second')}${colour('c', 2, 'Third')}${colour('accent', 3, 'Highlight')}${m.colors ? html`<button class="am-link" onClick=${() => set({ colors: null })}>Back to the style's own</button>` : null}</div>` : null}
     ${gallery ? html`<${Modal} wide title="Pick a style" onClose=${() => setGallery(false)}><${LookPicker} presets=${fulls} sel=${picked?.id || null} onSel=${(id) => { if (id) { set({ full: id, colors: null }); setGallery(false); } }} /></${Modal}>` : null}
   </div>`;
@@ -656,9 +660,10 @@ function BatchMaker({ p, list, busy, job, up, looks, curLook, reload }) {
   const [wide, setWide] = useState(!!o0.wide); const [note, setNote] = useState(''); const [fold, setFold] = useState(o0.fold || '');
   // Text: the font, how big, and an outline or a soft shadow round captions. Purpose: everyday social content or a race ad.
   const [font, setFont] = useState(o0.font || ''); const [tsize, setTsize] = useState(o0.tsize || 1); const [outline, setOutline] = useState(o0.outline || ''); const [purpose, setPurpose] = useState(o0.purpose || '');
+  const [endCta, setEndCta] = useState(o0.endCta || ''); const [endSite, setEndSite] = useState(o0.endSite || ''); const [paidFor, setPaidFor] = useState(o0.paidFor || '');
   const [preview, setPreview] = useState([]); const [others, setOthers] = useState(false); const [names, setNames] = useState(''); const [group, setGroup] = useState(0);
   const box = useRef(null);
-  useEffect(() => { try { localStorage.setItem('eu.amOpts', JSON.stringify({ count, mode, sw, sounds, split, punch, hard, wide, fold, font, tsize, outline, purpose })); } catch { /* private window */ } }, [count, mode, sw, sounds, split, punch, hard, wide, fold, font, tsize, outline, purpose]);
+  useEffect(() => { try { localStorage.setItem('eu.amOpts', JSON.stringify({ count, mode, sw, sounds, split, punch, hard, wide, fold, font, tsize, outline, purpose, endCta, endSite, paidFor })); } catch { /* private window */ } }, [count, mode, sw, sounds, split, punch, hard, wide, fold, font, tsize, outline, purpose, endCta, endSite, paidFor]);
   // How each line will be read, a moment after typing stops.
   useEffect(() => {
     if (!text.trim()) { setPreview([]); return undefined; }
@@ -672,7 +677,7 @@ function BatchMaker({ p, list, busy, job, up, looks, curLook, reload }) {
   const DEF = { captions: true, name: true, endCard: true, music: true, progress: mode.tier !== 'basic' }; const isOn = (k) => (sw[k] != null ? sw[k] : DEF[k]);
   const mb = modeBody(mode); const bare = false;
   const edit = () => ({ kind: mb.kind, ...Object.fromEntries(SWITCHES.map(([k]) => [k, isOn(k)])), ...(sounds ? { sounds } : {}), ...(split ? { split: true } : {}), ...(punch ? { punchIns: punch === 'on' } : {}), ...(hard ? { hardCuts: true } : {}) });
-  const body = () => ({ text, count: text.trim() ? 0 : count, styles: mb.styles, lookPrompt: mb.lookPrompt || '', colors: mb.colors || null, edit: edit(), wide, prompt: note.trim(), purpose: purpose || null, textStyle: font || tsize !== 1 || outline ? { font, size: tsize, ...(outline ? { outline: outline === 'on' } : {}) } : null });
+  const body = () => ({ text, count: text.trim() ? 0 : count, styles: mb.styles, lookPrompt: mb.lookPrompt || '', colors: mb.colors || null, edit: edit(), wide, prompt: note.trim(), purpose: purpose || null, end: endCta.trim() || endSite.trim() || paidFor.trim() ? { cta: endCta.trim(), site: endSite.trim(), paidFor: paidFor.trim() } : null, textStyle: font || tsize !== 1 || outline ? { font, size: tsize, ...(outline ? { outline: outline === 'on' } : {}) } : null });
   const go = () => act(() => api.post(`/api/prospects/${p.id}/videos`, body()), { ok: `Making ${n} video${n === 1 ? '' : 's'} for ${p.name}. They appear in the Videos tab as each one finishes.` }).then(() => reload());
   const goMany = () => { const who = names.split(/\r?\n/).map((x) => x.trim()).filter(Boolean); if (!who.length) return; act(() => api.post('/api/political/videos', { names: who, ...body() }), { ok: (r) => `Started for ${r.started.length}${r.skipped.length ? `; left out: ${r.skipped.join(', ')}` : ''}. One politician is made at a time.` }).then(() => { setOthers(false); setNames(''); reload(); }); };
   const styleName = modeName(mode, looks?.presets, curLook); const style = mode.tier === 'full' ? mode.full : 'one';
@@ -729,6 +734,12 @@ function BatchMaker({ p, list, busy, job, up, looks, curLook, reload }) {
         ${font ? html`<span style=${`font-family:'${font}', sans-serif;font-size:26px;line-height:1.2`}>${p ? p.name : 'Sample'} · The quick brown fox</span>` : null}</div>` : null}
       ${foldBtn('for', 'What it\'s for', (purpose || opts?.purpose || 'social') === 'social' ? 'social content' : 'campaign ad')}
       ${fold === 'for' ? html`<div class="am-sec"><${Seg} value=${purpose || opts?.purpose || 'social'} onChange=${setPurpose} options=${[{ value: 'social', label: 'Social content' }, { value: 'campaign', label: 'Campaign ad' }]} /><span class="am-help">${(purpose || opts?.purpose || 'social') === 'social' ? 'For people in office, any week of the year: ends on Follow, with no race or vote language.' : 'For a race: ends on Vote, with "for the 35th" under the name.'}</span>
+        <span class="am-label" style="margin-top:4px">The end card says</span>
+        <div class="am-chips">${[['', (purpose || opts?.purpose || 'social') === 'social' ? 'Follow (usual)' : 'Vote (usual)'], ['Follow', 'Follow'], ['Vote', 'Vote'], ['Donate', 'Donate'], ['Volunteer', 'Volunteer'], ['Join us', 'Join us'], ['Call our office', 'Call our office']].filter(([v], i) => i === 0 || v !== ((purpose || opts?.purpose || 'social') === 'social' ? 'Follow' : 'Vote')).map(([v, l]) => html`<button type="button" class=${`am-chip${endCta === v ? ' on' : ''}`} onClick=${() => setEndCta(v)}>${l}</button>`)}
+          <input class="input" style="max-width:170px;height:30px" id="am-cta" placeholder="or your own words" maxlength="24" value=${['', 'Follow', 'Vote', 'Donate', 'Volunteer', 'Join us', 'Call our office'].includes(endCta) ? '' : endCta} onInput=${(e) => setEndCta(e.target.value)} /></div>
+        <div class="row wrap" style="gap:8px"><input class="input" style="max-width:240px" id="am-site" placeholder="Website or handle on the end card" value=${endSite} onInput=${(e) => setEndSite(e.target.value)} />
+          <input class="input grow" style="min-width:200px" id="am-paid" placeholder="Paid for by (campaign ads: the committee's name)" value=${paidFor} onInput=${(e) => setPaidFor(e.target.value)} /></div>
+        <span class="am-help">Leave the website empty to use theirs from the research. "Paid for by" shows in a box at the bottom of the end card; whether one is needed is the campaign's call, so ask them.</span>
         <input class="input" id="am-note" placeholder="A note for every video, e.g. keep it upbeat, end on the district" value=${note} onInput=${(e) => setNote(e.target.value)} /></div>` : null}
     </section>
     <div class="am-bar">
@@ -749,13 +760,15 @@ function BatchMaker({ p, list, busy, job, up, looks, curLook, reload }) {
 function VideosTab({ list, pid, setPid, jobs, reload, onMake }) {
   const withVideos = list.filter((x) => (x.videos || []).length);
   const p = list.find((x) => x.id === pid) || withVideos[withVideos.length - 1] || list[0];
-  const { data, reload: again } = useApi(p ? `/api/prospects/${p.id}/videos` : null, ['prospects', 'jobs']);
-  const [open, setOpen] = useState(null);
+  const { data, reload: again2 } = useApi(p ? `/api/prospects/${p.id}/videos` : null, ['prospects', 'job']);
+  const [open, setOpen] = useState(null); const [again, setAgain] = useState(null); const [am, setAm] = useState({ ...MODE0 });
+  const { data: lk } = useApi('/api/political/looks');
+  const remake = (x) => { const mb = modeBody(am); return act(() => api.post(`/api/prospects/${p.id}/videos/${x.id}/remake`, { styles: mb.styles, lookPrompt: mb.lookPrompt || '', colors: mb.colors || null, edit: { kind: mb.kind, ...(am.tier === 'basic' ? { progress: false } : {}) } }), { ok: `Making "${x.title}" again as ${modeName(am, lk?.presets, 'their own look')}. It appears here beside the first one.` }).then(() => { setAgain(null); setOpen(null); again2(); }); };
   const job = p && (jobs || []).find((j) => j.type === 'political.batch' && j.payload?.prospectId === p.id);
   const desktop = !!(window.euclidean || store.get().boot?.electron);
   const vids = data?.videos || []; const last = data?.last; const v = open && vids.find((x) => x.id === open);
   const url = (x, what, extra = '') => api.url(`/api/prospects/${p.id}/videos/${x.id}/${what}?at=${encodeURIComponent(x.at)}${extra}`);
-  const del = async (x) => { if (!(await confirmDialog({ title: 'Delete this video?', body: `"${x.title}" is removed from the list and from the folder.`, confirm: 'Delete' }))) return; await act(() => api.del(`/api/prospects/${p.id}/videos/${x.id}`), { ok: 'Deleted' }); setOpen(null); again(); reload(); };
+  const del = async (x) => { if (!(await confirmDialog({ title: 'Delete this video?', body: `"${x.title}" is removed from the list and from the folder.`, confirm: 'Delete' }))) return; await act(() => api.del(`/api/prospects/${p.id}/videos/${x.id}`), { ok: 'Deleted' }); setOpen(null); again2(); reload(); };
   if (!list.length) return html`<div class="faint pad">Add a politician on the Make tab first.</div>`;
   return html`<div class="col" style="gap:12px">
     <div class="row wrap" style="gap:10px;align-items:center">
@@ -777,7 +790,9 @@ function VideosTab({ list, pid, setPid, jobs, reload, onMake }) {
         <span style=${`font-size:10px;color:${x.qa?.ok ? 'var(--moss-ink, #2f7d4f)' : 'var(--coral-ink, #b4532a)'}`}>${x.qa ? (x.qa.ok ? 'Checked: sound and cuts fine' : `Check: ${x.qa.notes[0]}`) : ''}</span>
       </button>`)}
     </div>
-    ${v ? html`<${Modal} wide title=${`${p.name}: ${v.title}`} onClose=${() => setOpen(null)} footer=${html`<${Button} kind="ghost" onClick=${() => del(v)}>Delete</${Button}>${v.canEdit ? html`<${Button} kind="slate" icon="studio" title="Opens their footage cut by cut, the captions and the music as separate layers you can change" onClick=${() => act(() => api.post(`/api/prospects/${p.id}/videos/${v.id}/studio`), { sound: 'open' }).then((r) => { if (r?.id) { setOpen(null); navigate(`/studio/${r.id}`); } })}>Edit in Studio</${Button}>` : null}<a class="btn" href=${url(v, 'file', '&download=1')}>Download</a>${v.hasWide ? html`<a class="btn" href=${url(v, 'wide', '&download=1')}>Download horizontal</a>` : null}<${Button} kind="primary" onClick=${() => setOpen(null)}>Done</${Button}>`}>
+    ${again && vids.find((x) => x.id === again) ? html`<${Modal} wide title="Make it again in another look" onClose=${() => setAgain(null)} footer=${html`<${Button} kind="ghost" onClick=${() => setAgain(null)}>Cancel</${Button}><${Button} kind="primary" icon="sparkle" disabled=${!!job} onClick=${() => remake(vids.find((x) => x.id === again))}>${job ? 'Busy with another batch' : 'Make it'}</${Button}>`}>
+      <div class="col" style="gap:12px"><span class="am-help">The same lines in the same order, cut again in the look you pick. The first video stays in the list, so you can compare.</span><${ModePicker} mode=${am} onChange=${setAm} presets=${lk?.presets || []} curLook="their own look" single /></div></${Modal}>` : null}
+    ${v ? html`<${Modal} wide title=${`${p.name}: ${v.title}`} onClose=${() => setOpen(null)} footer=${html`<${Button} kind="ghost" onClick=${() => del(v)}>Delete</${Button}>${v.canRemake ? html`<${Button} kind="ghost" icon="sparkle" title="The same lines, in another look. The first one stays." onClick=${() => { setAgain(v.id); setOpen(null); }}>Make it again…</${Button}>` : null}${v.canEdit ? html`<${Button} kind="slate" icon="studio" title="Opens their footage cut by cut, the captions and the music as separate layers you can change" onClick=${() => act(() => api.post(`/api/prospects/${p.id}/videos/${v.id}/studio`), { sound: 'open' }).then((r) => { if (r?.id) { setOpen(null); navigate(`/studio/${r.id}`); } })}>Edit in Studio</${Button}>` : null}<a class="btn" href=${url(v, 'file', '&download=1')}>Download</a>${v.hasWide ? html`<a class="btn" href=${url(v, 'wide', '&download=1')}>Download horizontal</a>` : null}<${Button} kind="primary" onClick=${() => setOpen(null)}>Done</${Button}>`}>
       <div class="row wrap" style="gap:16px;align-items:flex-start">
         <video key=${v.id} src=${url(v, 'file')} poster=${url(v, 'poster')} controls autoplay playsinline style="width:270px;max-width:100%;aspect-ratio:9/16;border-radius:14px;background:#000" />
         <div class="col grow" style="gap:10px;min-width:240px;font-size:var(--fs-sm)">

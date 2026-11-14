@@ -411,6 +411,9 @@ function codeGfx(x) {
   // A share they state ("62 percent of New Yorkers support...") → a poll bar; a second share in the line → a second bar.
   m = t.match(/\b(\d{1,2}(?:\.\d)?) ?(?:%|percent) of ((?:[\w'’-]+ ){0,4}[\w'’-]+?) (support|oppose|agree|want|say|favor|back|approve|believe|think|cannot|can'?t|struggle|live|are|have)\b((?: [\w'’$-]+){0,5})/i);
   if (m) { const bars = [{ value: Number(m[1]), label: `of ${m[2]} ${m[3]}${m[4] || ''}`.replace(/[,.;:]+$/, '').slice(0, 60) }]; const m2 = t.slice(m.index + m[0].length).match(/\b(\d{1,2}(?:\.\d)?) ?(?:%|percent)\b((?: [\w'’-]+){0,4})/i); if (m2) bars.push({ value: Number(m2[1]), label: (m2[2] || '').trim().slice(0, 40) }); return { kind: 'poll', bars }; }
+  // A vote they state ("it passed 98 to 47", "by a vote of 5 to 2") → the tally.
+  m = t.match(/\b(passed|approved|adopted|voted|vote of|a vote|defeated|failed)\b[^.]{0,40}?\b(\d{1,3}) (?:to|-) (\d{1,3})\b/i);
+  if (m && Number(m[2]) + Number(m[3]) >= 3 && Number(m[2]) < 1000) return { kind: 'tally', yes: Number(m[2]), no: Number(m[3]), verb: m[1].split(' ')[0], label: /defeated|failed/i.test(m[1]) ? 'The vote' : /passed|approved|adopted/i.test(t) ? 'Passed' : 'The vote' };
   // An endorsement they name ("endorsed by the Working Families Party").
   m = t.match(/\bendors(?:ed|ement)s?\b[^.]{0,40}?\b(?:by|of|from) ((?:the )?[A-Z][\w&'’.-]*(?: (?:of|for|and|&|the|[A-Z0-9][\w&'’.-]*)){0,6})/);
   if (m) { const by = m[1].replace(/(?:\s+(?:of|for|and|&|the))+$/i, '').replace(/[.,;:]+$/, '').trim(); if (by.replace(/^the /i, '').length >= 3) return { kind: 'endorse', by: by.slice(0, 60) }; }
@@ -475,7 +478,7 @@ Return JSON {"theme":"the one idea, 3-6 words","lines":[{"id":12,"role":"hook","
   while (total > target + 5 && picks.length > (target <= 14 ? 3 : 4)) { const k = picks.findIndex((x, i) => i > 0 && i < picks.length - 1 && x.role !== 'who'); if (k < 0) break; total -= picks[k].e - picks[k].s; picks.splice(k, 1); }
   // Code adds what it can prove: the office as a credential on the WHO line when nothing else is there; a number said in a proof line as a stat.
   for (const x of picks) {
-    const cg = codeGfx(x); if (!x.gfx || (cg && ['bill', 'timeline', 'compare', 'checklist', 'poll', 'endorse'].includes(cg.kind) && ['callout', 'stat'].includes(x.gfx.kind))) x.gfx = cg;
+    const cg = codeGfx(x); if (!x.gfx || (cg && ['bill', 'timeline', 'compare', 'checklist', 'poll', 'endorse', 'tally'].includes(cg.kind) && ['callout', 'stat'].includes(x.gfx.kind))) x.gfx = cg;
     x.icons = iconsFor(x.text);
   }
   return { picks, agent, tagline, onTopic, weak };

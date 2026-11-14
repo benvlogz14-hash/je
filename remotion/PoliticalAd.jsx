@@ -288,6 +288,7 @@ function CardContent({ seg, fps, w, h, look, keyTimes }) {
   if (c.kind === 'timeline') return <TimelineCard c={c} w={w} h={h} fps={fps} look={look} />;
   if (c.kind === 'clip') return <ClipCard c={c} w={w} h={h} fps={fps} look={look} />;
   if (c.kind === 'poll') return <PollCard c={c} w={w} h={h} fps={fps} look={look} />;
+  if (c.kind === 'tally') return <TallyCard c={c} w={w} h={h} fps={fps} look={look} />;
   if (c.kind === 'endorse') return <EndorseCard c={c} w={w} h={h} fps={fps} look={look} />;
   if (c.kind === 'split') {
     // Split screen: the speaker keeps talking in one half while the B-roll plays in the other.
@@ -751,6 +752,28 @@ function PollCard({ c, w, h, fps, look }) {
   );
 }
 
+/** A vote they state ("passed 98 to 47"): the two counts land one after the other over a bar split in that proportion. */
+function TallyCard({ c, w, h, fps, look }) {
+  const frame = useCurrentFrame(); const A = panel(look);
+  const yes = Number(c.yes) || 0; const no = Number(c.no) || 0; const tot = Math.max(1, yes + no);
+  const s1 = sp(frame, fps, 3, { damping: 10, stiffness: 190 }); const s2 = sp(frame, fps, Math.round(0.45 * fps), { damping: 10, stiffness: 190 });
+  const g = interpolate(frame, [0.2 * fps, 1.1 * fps], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.bezier(0.2, 0.7, 0.2, 1) });
+  const big = Math.round(Math.min(w * 0.26, h * 0.3)); const muted = mix(A.bg, A.text, 0.55);
+  const num = (v, s, col, label) => (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: `scale(${s})`, opacity: clamp(s * 1.6, 0, 1) }}>
+      <div style={{ fontFamily: look.fonts.head, fontSize: big, lineHeight: 0.95, color: col }}>{Math.round(v * clamp(g * 1.4, 0, 1))}</div>
+      <div style={{ fontFamily: look.fonts.body, fontWeight: 800, fontSize: big * 0.16, letterSpacing: '0.14em', textTransform: 'uppercase', color: col }}>{label}</div>
+    </div>
+  );
+  return (
+    <AbsoluteFill style={{ background: A.bg, alignItems: 'center', justifyContent: 'center', gap: big * 0.2, padding: `0 ${w * 0.08}px` }}>
+      {c.label ? <div style={{ fontFamily: look.fonts.body, fontWeight: 800, fontSize: big * 0.2, letterSpacing: '0.16em', textTransform: 'uppercase', color: A.accent }}>{c.label}</div> : null}
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: big * 0.35 }}>{num(yes, s1, A.text, 'Yes')}<div style={{ fontFamily: look.fonts.head, fontSize: big * 0.5, color: muted, paddingBottom: big * 0.3 }}>to</div>{num(no, s2, muted, 'No')}</div>
+      <div style={{ width: '100%', height: big * 0.16, borderRadius: big * 0.08, background: mix(A.bg, A.text, 0.2), overflow: 'hidden' }}><div style={{ width: `${(yes / tot) * 100 * g}%`, height: '100%', background: A.accent }} /></div>
+    </AbsoluteFill>
+  );
+}
+
 /** An endorsement they name ("endorsed by the Working Families Party"): a seal that stamps in, then who. */
 function EndorseCard({ c, w, h, fps, look }) {
   const frame = useCurrentFrame(); const A = panel(look);
@@ -833,6 +856,7 @@ function EndCard({ e, look, fps, L }) {
             <OffthreadVideo src={e.portrait.src} muted startFrom={Math.round((e.portrait.from || 0) * fps)} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${Math.round((e.portrait.fx ?? 0.5) * 100)}% 30%`, filter: GRADE[look.grade] || 'none' }} />
           </div>
         ) : null}
+        {e.cta && brand ? <div style={{ fontFamily: look.fonts.body, fontWeight: 800, fontSize: big * 0.2, letterSpacing: '0.16em', textTransform: 'uppercase', color: A.text, opacity: 0.85 * at(0) }}>{e.cta}</div> : null}
         {e.cta && !brand ? <div style={{ fontFamily: look.fonts.head, fontSize: big * 0.42, color: A.keyText, background: A.key, padding: `0 ${big * 0.12}px`, borderRadius: look.card.radius ? 12 : 0, transform: `rotate(${-2 * M.rot}deg) scale(${at(0)})`, textTransform: up ? 'uppercase' : 'none' }}>{e.cta}</div> : null}
         <div style={{ fontFamily: look.fonts.head, fontSize: nameSize, color: nameColor, textTransform: up ? 'uppercase' : 'none', lineHeight: 0.98, textAlign: 'center', maxWidth: W * 0.9, transform: `translateY(${(1 - at(1)) * 80}px)`, opacity: clamp(at(1) * 1.5, 0, 1) }}>
           {look.end === 'split' ? <Outlined stroke={look.dark} width={10} color={nameColor}>{e.name}</Outlined> : e.name}
@@ -843,6 +867,7 @@ function EndCard({ e, look, fps, L }) {
         {e.date ? <div style={{ fontFamily: look.fonts.body, fontWeight: 800, fontSize: big * 0.2, color: A.text, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: big * 0.06, opacity: at(4) }}>{e.date}</div> : null}
         {e.site ? <div style={{ fontFamily: look.fonts.body, fontSize: big * 0.17, color: A.text, marginTop: big * 0.06, opacity: at(3) }}>{e.site}</div> : null}
       </AbsoluteFill>
+      {e.paid ? <div style={{ position: 'absolute', bottom: L.v ? 124 : 60, left: '50%', transform: 'translateX(-50%)', maxWidth: W * 0.86, textAlign: 'center', fontFamily: look.fonts.body, fontWeight: 700, fontSize: L.v ? 34 : 22, lineHeight: 1.2, color: A.text, border: `3px solid ${A.text}`, padding: L.v ? '10px 22px' : '6px 16px', opacity: at(3) }}>{e.paid}</div> : null}
       {e.tag ? <div style={{ position: 'absolute', bottom: L.v ? 70 : 26, width: '100%', textAlign: 'center', fontFamily: look.fonts.body, fontSize: L.v ? 22 : 18, color: A.text, opacity: 0.8 * at(4) }}>{e.tag}</div> : null}
     </AbsoluteFill>
   );

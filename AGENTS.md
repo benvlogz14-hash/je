@@ -147,6 +147,15 @@ Style samples (`renderer/assets/looks/<id>.mp4` and `.jpg`): 360x640, muted, abo
 footage you are allowed to ship; the eight newer ones use a drawn stand-in figure. `EUCLIDEAN_FACE_AT="x,y,h"` tells
 `edit.faceBox` where the face is for footage with none to find (tests and samples only).
 
+## 2e. Making a video again, end cards
+
+Every video record keeps `cut` (each line's sentence id, start, end and role). `batch.make({ remake: videoId })` rebuilds
+exactly those lines from `sentences.json` and renders them in the look passed with the call, as a new record. Keep `cut`
+on anything new you add to a record; without it a video cannot be made again line for line.
+
+The end card's words are the founders' to choose (`end.cta`, `end.site`, `end.paidFor`), within length limits. A "Paid
+for by" line is a legal matter for the campaign: the app offers the box and never invents or assumes the wording.
+
 ## 3. Styles
 
 Ten main styles (shown first; eight more under "More styles", Clean and Grassroots among them), each in 9:16 and 16:9:

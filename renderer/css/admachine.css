@@ -112,6 +112,11 @@
 .am-colour input { width: 28px; height: 28px; padding: 0; border: 1px solid var(--line-strong); border-radius: 50%; background: none; cursor: pointer; overflow: hidden; }
 .am-colour input::-webkit-color-swatch-wrapper { padding: 0; } .am-colour input::-webkit-color-swatch { border: 0; border-radius: 50%; }
 .am-who-sel { width: 100%; height: 24px; font-size: 11px; padding: 0 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink-2); }
+.am-pick { display: flex; gap: 14px; align-items: flex-start; }
+.am-sample { flex: none; width: 124px; display: flex; flex-direction: column; gap: 4px; align-items: center; }
+.am-sample video { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 14px; background: var(--surface-3); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14); }
+.am-sample span { font-size: 10px; color: var(--ink-3); }
+@media (max-width: 640px) { .am-sample { display: none; } }
 /* The little phone shows how each basic edit cuts */
 .am-ph > i { position: absolute; inset: 0; background: linear-gradient(160deg, var(--sky-soft), var(--sky)); }
 .am-anim-cut > i { animation: am-cut 2s steps(1) infinite; }
