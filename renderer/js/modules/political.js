@@ -431,7 +431,9 @@ function StoryPicker({ p, jobs, reload }) {
 const MAKING = ['political.package', 'political.restyle', 'political.batch', 'political.read'];
 export function AdMachine({ list, jobs, onOpen, reload }) {
   const { data: looks } = useApi('/api/political/looks');
-  const [pid, setPid] = useState(() => list[0]?.id || '');
+  const [pid, setPidRaw] = useState(() => { try { const id = localStorage.getItem('eu.amPid') || ''; return list.some((x) => x.id === id) ? id : ''; } catch { return ''; } });
+  // Picking someone is remembered (they open first next time) and goes on the recent row.
+  const setPid = (id) => { setPidRaw(id); try { localStorage.setItem('eu.amPid', id || ''); if (id) localStorage.setItem('eu.amRecent', JSON.stringify([id, ...saved('eu.amRecent', []).filter((x) => x !== id)].slice(0, 8))); } catch { /* private window */ } };
   const [newName, setNewName] = useState(''); const [newOffice, setNewOffice] = useState('');
   const [pm, setPm] = useState({ ...MODE0, tier: 'full', full: 'own' }); const sel = ['mix', 'own', 'describe'].includes(pm.full) ? null : pm.full; const setSel = (id) => setPm((c) => ({ ...c, tier: 'full', full: id || 'own' })); const setPrompt = () => {};
   const [dens, setDens] = useState(''); // how much graphics: '' = the style's own, full | light | minimal
@@ -441,7 +443,7 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
   const [up, setUp] = useState(null); const [over, setOver] = useState(false);
   // Make ads | Finished: every finished ad as a card; click one to open it (`viewing`).
   const [tab, setTab] = useState('make'); const [viewing, setViewing] = useState(null);
-  useEffect(() => { if (list.length && !list.some((x) => x.id === pid)) setPid(list[list.length - 1].id); }, [list.length]);
+  useEffect(() => { if (pid && list.length && !list.some((x) => x.id === pid)) setPidRaw(''); else if (!pid && list.length) { const id = saved('eu.amPid', null) || (() => { try { return localStorage.getItem('eu.amPid'); } catch { return ''; } })(); if (id && list.some((x) => x.id === id)) setPidRaw(id); } }, [list.length]);
   const p = list.find((x) => x.id === pid);
   const busy = p && (jobs || []).some((j) => MAKING.includes(j.type) && j.payload?.prospectId === p.id);
   const job = p && (jobs || []).find((j) => MAKING.includes(j.type) && j.payload?.prospectId === p.id);
@@ -484,11 +486,8 @@ export function AdMachine({ list, jobs, onOpen, reload }) {
     : tab === 'finished' ? html`<section class="panel am-card"><${FinishedGallery} list=${list} jobs=${jobs} onOpen=${setViewing} /></section>` : html`<div class="am-grid">
       <div class="am-col">
         <section class="panel am-card">
-          ${step(1, 'Who it\'s for', `${list.length} on your list`, !!p)}
-          ${p ? html`<div class="am-who"><span class="am-ini">${p.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase()}</span>
-            <div class="col grow" style="gap:1px;min-width:0"><b class="ellipsis">${p.name}</b><span class="am-help ellipsis">${office || 'No office noted yet'}${(p.videos || []).length ? ` · ${(p.videos || []).length} videos made` : ''}</span></div>
-            <${Button} kind="ghost" size="sm" onClick=${() => onOpen(p.id)}>Open</${Button}></div>` : null}
-          <${CandidatePicker} list=${list} pid=${pid} setPid=${setPid} reload=${reload} />
+          ${step(1, 'Who it\'s for', p ? '' : `${list.length} on your list`, !!p)}
+          <${WhoPicker} list=${list} p=${p} setPid=${setPid} reload=${reload} onOpen=${onOpen} />
         </section>
         <section class="panel am-card">
           ${step(2, 'Their footage', p ? (nUp ? `${nOn} of ${nUp} uploads in use` : nFound ? `${nFound} public videos picked` : 'none yet') : '', nOn > 0 || nFound > 0)}
@@ -566,33 +565,86 @@ function Insight({ p, jobs }) {
   </div>`;
 }
 
+/** Two-letter state from an office or place line ("CT House · HD59", "Assembly AD-35, NY"). */
+const STATES = 'AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC'.split(' ');
+const officeOf = (x) => x.pkg?.profile?.office || x.office || x.location || '';
+const stateOf = (x) => { const t = `${x.pkg?.profile?.state || ''} ${officeOf(x)} ${x.location || ''}`; const m = t.match(/\b([A-Z]{2})\b/g) || []; return m.find((c) => STATES.includes(c)) || ''; };
+const initials = (name) => String(name || '?').split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+
 /**
- * Find a politician fast: type any part of a name or office, click one. Not on the list? Add them from the same box
- * ("Name, office"), or send the words to the scout to find more people like that.
+ * Who the videos are for. The card shows the person picked (or two clear ways to start), the people used lately as
+ * one-click chips, and opens a chooser: search and filter the list, add someone new from scratch, or scout for more.
  */
-function CandidatePicker({ list, pid, setPid, reload }) {
-  const [q, setQ] = useState(''); const [open, setOpen] = useState(false);
-  const cur = list.find((x) => x.id === pid);
-  const officeOf = (x) => x.pkg?.profile?.office || x.office || x.location || '';
-  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const hits = (words.length ? list.filter((x) => { const t = `${x.name} ${officeOf(x)} ${x.stage || ''}`.toLowerCase(); return words.every((w) => t.includes(w)); }) : list.slice().reverse()).slice(0, 8);
-  const exact = list.some((x) => x.name.toLowerCase() === q.trim().split(',')[0].trim().toLowerCase());
-  const add = () => { const [name, ...rest] = q.split(','); return act(() => api.post('/api/prospects', { name: name.trim(), type: 'political', location: rest.join(',').trim() }), { ok: `${name.trim()} added` }).then((r) => { if (r?.id) { setPid(r.id); setQ(''); setOpen(false); reload(); } }); };
-  const scout = () => act(() => api.post('/api/political/scout', { query: q.trim(), count: 10 }), { ok: 'Scouting. New people show up under New prospects further down this page.' }).then(() => { setQ(''); setOpen(false); });
-  return html`<div class="col" style="gap:6px;position:relative">
-    <input class="input" id="am-search" autocomplete="off" placeholder=${cur ? `${cur.name}${officeOf(cur) ? ` · ${officeOf(cur)}` : ''}  (type to search ${list.length} people)` : 'Search by name or office, or type a new name'} value=${q}
-      onFocus=${() => setOpen(true)} onInput=${(e) => { setQ(e.target.value); setOpen(true); }} onKeyDown=${(e) => { if (e.key === 'Enter' && hits[0]) { setPid(hits[0].id); setQ(''); setOpen(false); } if (e.key === 'Escape') setOpen(false); }} />
-    ${open ? html`<div class="col" style="gap:2px;padding:6px;border-radius:12px;border:1px solid var(--line);background:var(--surface);max-height:300px;overflow:auto">
-      ${hits.map((x) => html`<button key=${x.id} type="button" onClick=${() => { setPid(x.id); setQ(''); setOpen(false); }} style=${`display:flex;gap:8px;align-items:baseline;text-align:left;padding:7px 9px;border:0;border-radius:8px;cursor:pointer;background:${x.id === pid ? 'var(--surface-2, #f1f1f1)' : 'transparent'}`}>
-        <b style="font-size:var(--fs-sm)">${x.name}</b><span class="faint grow ellipsis" style="font-size:var(--fs-xs)">${officeOf(x)}</span>
-        <span class="faint" style="font-size:10px">${(x.videos || []).length ? `${(x.videos || []).length} videos` : (x.footageUploads || []).length ? `${(x.footageUploads || []).length} uploads` : ''}</span></button>`)}
-      ${!hits.length ? html`<span class="faint" style="font-size:var(--fs-xs);padding:6px 9px">Nobody on the list matches.</span>` : null}
-      ${q.trim().length >= 3 ? html`<div class="row wrap" style="gap:6px;padding:6px 4px 2px;border-top:1px solid var(--line);margin-top:4px">
-        ${!exact ? html`<${Button} size="sm" kind="ghost" icon="plus" onClick=${add}>Add “${q.trim().slice(0, 40)}”</${Button}>` : null}
-        <${Button} size="sm" kind="ghost" icon="search" onClick=${scout} title="Sends these words to the scout, e.g. Queens assembly members, or Connecticut state senators">Scout for more: “${q.trim().slice(0, 30)}”</${Button}>
-        <${Button} size="sm" kind="ghost" onClick=${() => setOpen(false)}>Close</${Button}></div>` : html`<span class="faint" style="font-size:10px;padding:4px 9px">To add someone new, type their name, a comma, then the office: Jane Rivera, State Senate SD-12, NY</span>`}
-    </div>` : null}
+function WhoPicker({ list, p, setPid, reload, onOpen }) {
+  const [open, setOpen] = useState(null); // null | 'list' | 'new' | 'scout'
+  const recent = saved('eu.amRecent', []).map((id) => list.find((x) => x.id === id)).filter((x) => x && x.id !== p?.id).slice(0, 5);
+  const pick = (id) => { setPid(id); setOpen(null); };
+  return html`<div class="am-sec" style="gap:12px">
+    ${p ? html`<div class="am-who"><span class="am-ini">${initials(p.name)}</span>
+      <div class="col grow" style="gap:1px;min-width:0"><b class="ellipsis">${p.name}</b><span class="am-help ellipsis">${officeOf(p) || 'No office noted yet'}${(p.videos || []).length ? ` · ${(p.videos || []).length} videos made` : ''}${(p.footageUploads || []).length ? ` · ${(p.footageUploads || []).length} uploads` : ''}</span></div>
+      <${Button} kind="ghost" size="sm" onClick=${() => onOpen(p.id)} title="Their lead page: research, emails, calls">Open</${Button}>
+      <${Button} size="sm" icon="search" onClick=${() => setOpen('list')}>Change</${Button}></div>`
+    : html`<div class="am-start">
+      <button type="button" class="am-startbtn" onClick=${() => setOpen('list')} disabled=${!list.length}><${Icon} name="search" size=${20} /><b>Pick from your list</b><span>${list.length ? `${list.length} people. Search by name, office or state.` : 'Nobody on your list yet.'}</span></button>
+      <button type="button" class="am-startbtn" onClick=${() => setOpen('new')}><${Icon} name="plus" size=${20} /><b>Start from scratch</b><span>Someone new: type their name, add their footage, make videos.</span></button>
+    </div>`}
+    ${recent.length ? html`<div class="row wrap" style="gap:6px;align-items:center"><span class="am-label">Recent</span>${recent.map((x) => html`<button type="button" key=${x.id} class="am-chip" title=${officeOf(x)} onClick=${() => pick(x.id)}><span class="am-dot">${initials(x.name)}</span>${x.name}</button>`)}</div>` : null}
+    ${p ? html`<div class="row" style="gap:14px"><button class="am-link" onClick=${() => setOpen('new')}>+ Someone new</button><button class="am-link" onClick=${() => setOpen('scout')}>Scout for more people</button></div>` : null}
+    ${open ? html`<${WhoChooser} list=${list} cur=${p?.id} tab=${open} setTab=${setOpen} onPick=${pick} onClose=${() => setOpen(null)} reload=${reload} />` : null}
   </div>`;
+}
+
+function WhoChooser({ list, cur, tab, setTab, onPick, onClose, reload }) {
+  const [q, setQ] = useState(''); const [filter, setFilter] = useState('all'); const [st, setSt] = useState(''); const [n, setN] = useState(40);
+  const [name, setName] = useState(''); const [office, setOffice] = useState(''); const [state, setState] = useState(''); const [scoutQ, setScoutQ] = useState('');
+  const box = useRef(null);
+  useEffect(() => { setTimeout(() => box.current?.focus(), 60); }, [tab]);
+  const recentIds = saved('eu.amRecent', []);
+  const FILTERS = [['all', 'Everyone', () => true], ['footage', 'Have footage', (x) => (x.footageUploads || []).length || (x.footageFound || []).length], ['videos', 'Have videos', (x) => (x.videos || []).length || x.pkg?.files?.posterV], ['talking', 'In conversation', (x) => ['contacted', 'replied', 'meeting', 'won'].includes(x.stage)], ['recent', 'Recent', (x) => recentIds.includes(x.id)]];
+  const counts = Object.fromEntries(FILTERS.map(([id, , fn]) => [id, list.filter(fn).length]));
+  const states = [...new Set(list.map(stateOf).filter(Boolean))].sort();
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const rank = (x) => (recentIds.includes(x.id) ? 0 : 100) + recentIds.indexOf(x.id);
+  const hits = list.filter(FILTERS.find((f) => f[0] === filter)[2]).filter((x) => !st || stateOf(x) === st).filter((x) => { const toks = `${x.name} ${officeOf(x)} ${x.location || ''}`.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); return words.every((w) => toks.some((t) => t.startsWith(w))); }) // the start of a word, so "ct" finds CT and not "district"
+    .sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(String(b.name)));
+  const same = name.trim().length >= 3 ? list.find((x) => String(x.name).toLowerCase() === name.trim().toLowerCase()) : null;
+  const add = () => act(() => api.post('/api/prospects', { name: name.trim(), type: 'political', location: [office.trim(), state].filter(Boolean).join(', ') }), { ok: `${name.trim()} added. Now add their footage.` }).then((r) => { if (r?.id) { reload(); onPick(r.id); } });
+  const scout = () => act(() => api.post('/api/political/scout', { query: scoutQ.trim(), count: 10 }), { ok: 'Scouting. New people show up under New prospects further down this page; approve the ones you want and they join your list.' }).then(() => onClose());
+  const badge = (x) => [(x.videos || []).length ? `${(x.videos || []).length} videos` : '', (x.footageUploads || []).length ? `${(x.footageUploads || []).length} uploads` : (x.footageFound || []).length ? 'public videos found' : '', x.stage && x.stage !== 'new' ? x.stage : ''].filter(Boolean);
+  return html`<${Modal} wide title="Who is it for?" onClose=${onClose}>
+    <div class="col" style="gap:14px;min-height:420px">
+      <${Seg} value=${tab} onChange=${setTab} options=${[{ value: 'list', label: `Your list (${list.length})` }, { value: 'new', label: 'Someone new' }, { value: 'scout', label: 'Scout for more' }]} />
+      ${tab === 'list' ? html`
+        <input class="am-search" ref=${box} autocomplete="off" placeholder="Search by name, office or place" value=${q} onInput=${(e) => { setQ(e.target.value); setN(40); }} onKeyDown=${(e) => { if (e.key === 'Enter' && hits[0]) onPick(hits[0].id); }} />
+        <div class="row wrap" style="gap:6px;align-items:center">
+          ${FILTERS.filter(([id]) => id === 'all' || counts[id]).map(([id, label]) => html`<button type="button" key=${id} class=${`am-chip${filter === id ? ' on' : ''}`} onClick=${() => { setFilter(id); setN(40); }}>${label} <i>${counts[id]}</i></button>`)}
+          ${states.length > 1 ? html`<select class="input" style="max-width:120px;height:30px" value=${st} onChange=${(e) => setSt(e.target.value)}><option value="">Any state</option>${states.map((c) => html`<option value=${c}>${c}</option>`)}</select>` : null}
+          <span class="grow" /><span class="am-help">${hits.length} ${hits.length === 1 ? 'person' : 'people'}${q ? ' · Enter picks the first' : ''}</span>
+        </div>
+        <div class="am-people">${hits.slice(0, n).map((x) => html`<button type="button" key=${x.id} class=${`am-person${x.id === cur ? ' on' : ''}`} onClick=${() => onPick(x.id)}>
+          <span class="am-ini">${initials(x.name)}</span>
+          <span class="col grow" style="gap:1px;min-width:0;text-align:left"><b class="ellipsis">${x.name}</b><span class="am-help ellipsis">${officeOf(x) || 'No office noted'}</span></span>
+          ${badge(x).map((t) => html`<span class="badge">${t}</span>`)}</button>`)}
+          ${!hits.length ? html`<div class="am-help" style="padding:18px;text-align:center">Nobody matches${q ? ` “${q}”` : ''}. <button class="am-link" onClick=${() => { setName(q); setTab('new'); }}>Add ${q ? `“${q}”` : 'someone'} as a new person</button></div>` : null}
+          ${hits.length > n ? html`<button class="am-link" style="align-self:center;padding:8px" onClick=${() => setN(n + 80)}>Show more (${hits.length - n} left)</button>` : null}
+        </div>` : null}
+      ${tab === 'new' ? html`<div class="col" style="gap:12px;max-width:560px">
+        <span class="am-help">Add anyone, whether or not they are a lead. Only the name is needed; the office helps the graphics (name tag, district map) and the research.</span>
+        <${Field} label="Name"><input class="input" ref=${box} placeholder="Jane Rivera" value=${name} onInput=${(e) => setName(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && name.trim().length >= 3 && !same) add(); }} /></${Field}>
+        <div class="row wrap" style="gap:10px"><div class="grow" style="min-width:220px"><${Field} label="Office (optional)"><input class="input" placeholder="State Senate, District 12" value=${office} onInput=${(e) => setOffice(e.target.value)} /></${Field}></div>
+          <div style="width:130px"><${Field} label="State (optional)"><select class="input" value=${state} onChange=${(e) => setState(e.target.value)}><option value="">-</option>${STATES.map((c) => html`<option value=${c}>${c}</option>`)}</select></${Field}></div></div>
+        ${same ? html`<div class="am-help" style="color:var(--gold-ink)">${same.name} is already on your list (${officeOf(same) || 'no office noted'}). <button class="am-link" onClick=${() => onPick(same.id)}>Use them</button></div>` : null}
+        <div><${Button} kind="primary" icon="plus" disabled=${name.trim().length < 3 || !!same} onClick=${add}>Add and use ${name.trim() ? name.trim().split(' ')[0] : 'them'}</${Button}></div>
+        <span class="am-help">Next: drop their videos into step 2, or press Find their videos to look for public ones.</span>
+      </div>` : null}
+      ${tab === 'scout' ? html`<div class="col" style="gap:12px;max-width:620px">
+        <span class="am-help">Describe who to look for and the scout searches public sources. What it finds waits under New prospects on this page until you approve it.</span>
+        <input class="am-search" ref=${box} placeholder="e.g. Queens assembly members, Connecticut state senators elected in 2026" value=${scoutQ} onInput=${(e) => setScoutQ(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Enter' && scoutQ.trim().length >= 4) scout(); }} />
+        <div class="am-chips">${['Connecticut state representatives', 'New York Assembly members from Queens', 'Newly elected state senators in New York', 'City council members in Hartford'].map((t) => html`<button type="button" class="am-chip" onClick=${() => setScoutQ(t)}>${t}</button>`)}</div>
+        <div><${Button} kind="primary" icon="search" disabled=${scoutQ.trim().length < 4} onClick=${scout}>Scout</${Button}></div>
+      </div>` : null}
+    </div>
+  </${Modal}>`;
 }
 
 /** A short list of what to type, shown as the order box's placeholder. */
