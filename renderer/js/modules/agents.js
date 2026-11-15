@@ -10,8 +10,8 @@ import { ago } from '../lib/format.js';
 const CONN_LABEL = { hal: 'Built in', api: 'API key', cli: 'On this computer', herdr: 'Herdr terminal', local: 'Local / network', connector: 'Claude app (no key)', account: 'Your login (no key)', grokbot: 'Your GrokBot (email)', ollama: 'Free on this PC', bot: 'Euclidean bot' };
 const CONN_HINT = {
   hal: 'HAL is part of Euclidean: nothing to set up. What he would do that needs a person waits for a Confirm in his panel.',
-  connector: 'No key needed: messages wait for the Claude app on this computer, which answers through the Euclidean connector. With your Claude login open on the AI apps page, it answers at once instead.',
-  account: 'No key needed: uses your own login from the AI apps page (sign in there once). Limited per hour to protect your account.',
+  connector: 'No key needed: messages wait for the Claude app on this computer, which answers through the Euclidean connector. With your Claude login open on the Connections page, it answers at once instead.',
+  account: 'No key needed: uses your own login from the Connections page (sign in there once). Limited per hour to protect your account.',
   grokbot: 'No key needed: emails your GrokBot (Bots page → GrokBots by email) and posts its reply here. Counts against the weekly GrokBot limit.',
   ollama: 'The free AI on this computer. No key, no limits.',
   bot: 'One of your Euclidean bots. It answers with its own tools: the live web, the Data tab, leads and documents.',
@@ -26,7 +26,7 @@ const TYPE_TONE = { question: 'sky', critique_request: 'lav', task_request: 'tea
 const DELIVERY = { next: ['slate', 'Up next'], waiting: ['gold', 'Will answer soon'], queued: ['slate', 'Waiting'], running: ['teal', 'Thinking'], replied: ['moss', 'Answered'], delivered: ['', 'In inbox'], read: ['', 'Read'], held: ['gold', 'Paused'], failed: ['coral', 'Failed'] };
 
 // What to do when an agent can't answer yet, by how it's connected.
-const FIX = { account: ['Sign in on AI apps', '/bridge'], grokbot: ['Add your GrokBot', '/bots'], ollama: ['Set up the free AI', '/settings?tab=ai'], bot: ['Open Bots', '/bots'] };
+const FIX = { account: ['Sign in on Connections', '/bridge'], grokbot: ['Add your GrokBot', '/bots'], ollama: ['Set up the free AI', '/settings?tab=ai'], bot: ['Open Bots', '/bots'] };
 function fixFor(a) { return FIX[a.connection] || ['Set it up', '/settings?tab=agents']; }
 
 /** Links clickable, @names highlighted. */

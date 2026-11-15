@@ -316,7 +316,7 @@ function BotSettings({ id, brains, desktop, onClose, onDeleted }) {
       <div class="row wrap" style="gap:6px">${COLORS.map((c) => html`<button type="button" title=${c} class=${`bot-av c-${c}` + (b.color === c ? ' picked' : '')} style="width:26px;height:26px;font-size:12px" onClick=${() => set('color', c)}>${b.color === c ? '✓' : ''}</button>`)}</div>
       <${Field} label="Its job" hint="One or two sentences: what this bot is for."><textarea class="input" rows="2" style="height:64px;font-family:inherit" value=${b.role} onInput=${(e) => set('role', e.target.value)} /></${Field}>
       <${Field} label="How it should work" hint="Rules, tone, what to always or never do."><textarea class="input" rows="4" style="height:110px;font-family:inherit" value=${b.instructions} onInput=${(e) => set('instructions', e.target.value)} /></${Field}>
-      <${Field} label="Its brain" hint="Automatic follows Settings → AI (the free Llama first). Grok, Claude and ChatGPT need their key; Your AI account uses your own login (AI apps page).">
+      <${Field} label="Its brain" hint="Automatic follows Settings → AI (the free Llama first). Grok, Claude and ChatGPT need their key; Your AI account uses your own login (Connections page).">
         <select class="input" value=${b.brain || 'auto'} onChange=${(e) => set('brain', e.target.value)}>${Object.entries(brains || {}).map(([k, v]) => html`<option value=${k}>${v.label}${v.ready ? '' : ' (not connected)'}</option>`)}</select></${Field}>
       <${Field} label="Its computer">
         <${Seg} value=${b.computer} onChange=${(v) => set('computer', v)} options=${[{ value: 'none', label: 'Web reader' }, { value: 'browser', label: 'Own browser' }, { value: 'vm', label: 'Own computer (VM)' }]} />

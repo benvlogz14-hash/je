@@ -272,14 +272,14 @@ class BotAdapter extends AgentAdapter {
 
 const registry = () => require('./registry');
 const SITE_LABEL = { grok: 'Grok', claude: 'Claude', chatgpt: 'ChatGPT' };
-/** Your own Grok / Claude / ChatGPT login (AI apps page), driven like a person typing. */
+/** Your own Grok / Claude / ChatGPT login (Connections page), driven like a person typing. */
 class AccountAdapter extends AgentAdapter {
   get kind() { return 'account'; }
   site() { return this.def.site; }
   async detect() {
     const br = require('../integrations/bridge');
     if (!br.available()) return { installed: false, note: 'Works in the Euclidean desktop app.' };
-    if (!br.siteKnown(this.site())) return { installed: false, note: `Sign in to ${SITE_LABEL[this.site()]} once on the AI apps page.` };
+    if (!br.siteKnown(this.site())) return { installed: false, note: `Sign in to ${SITE_LABEL[this.site()]} once on the Connections page.` };
     return { installed: true, ready: br.siteReady(this.site()), note: br.siteReady(this.site()) ? `Your ${SITE_LABEL[this.site()]} login (no key)` : 'Hourly limit reached for your login; try again soon.' };
   }
   async test() { const d = await this.detect(); return d.installed ? { ok: true, message: d.note } : { ok: false, error: d.note }; }
@@ -292,7 +292,7 @@ class AccountAdapter extends AgentAdapter {
 
 /**
  * Claude through the Claude app on this PC (Euclidean's connector), no key: the message waits for Claude, who reads
- * it with the connector's agent_inbox and answers with agent_reply. When your Claude login is open on the AI apps
+ * it with the connector's agent_inbox and answers with agent_reply. When your Claude login is open on the Connections
  * page, it answers at once through that instead.
  */
 class ConnectorAdapter extends AgentAdapter {
