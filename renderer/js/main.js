@@ -177,6 +177,14 @@ if (!HTMLMediaElement.prototype._euPlay) {
     if (scr) mediaOwner.set(this, scr); playingMedia.add(this);
     return orig.apply(this, a);
   };
+  // Players started by the person (a video's own play button, autoplay) never go through play() above, so a clip
+  // playing in Approvals kept talking after a tab switch. Every media element on the page that starts playing is
+  // noticed here too (media events don't bubble, so this listens on the way down).
+  document.addEventListener('play', (e) => {
+    const m = e.target; if (!(m instanceof HTMLMediaElement)) return;
+    const scr = m.closest?.('.screen') || document.querySelector('.screen.on');
+    if (scr && !mediaOwner.has(m)) mediaOwner.set(m, scr); playingMedia.add(m);
+  }, true);
 }
 function quietHiddenScreens() {
   for (const m of [...playingMedia]) {
@@ -184,6 +192,8 @@ function quietHiddenScreens() {
     const scr = m.isConnected ? m.closest('.screen') || mediaOwner.get(m) : mediaOwner.get(m);
     if (scr && !scr.classList.contains('on')) { try { m.pause(); } catch { /* gone */ } playingMedia.delete(m); }
   }
+  // And anything still playing inside a hidden screen, however it was started.
+  for (const m of document.querySelectorAll('.screen:not(.on) video, .screen:not(.on) audio')) if (!m.paused) { try { m.pause(); } catch { /* gone */ } }
   window.dispatchEvent(new Event('eu:screens'));
 }
 

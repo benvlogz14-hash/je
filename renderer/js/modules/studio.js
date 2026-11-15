@@ -9,7 +9,7 @@ import { FONT_GROUPS, HEAVY } from '../lib/fonts.js';
 import { FormatFields, useFormats } from './compress.js';
 import { LOOKS } from './clip.js';
 import { RETRO_EFFECTS, RETRO_IDS, retroLook, retroOverlay } from '../lib/retro.js';
-import { TRANSITIONS, transitionFx, cutPairs, titleFrame, fxCanvas, needsOffscreen, shaped, isPush, DIPS, transDur } from '../lib/transitions.js';
+import { TRANSITIONS, transitionFx, cutPairs, titleFrame, fxCanvas, needsOffscreen, shaped, isPush, DIPS, transDur, fitTrans } from '../lib/transitions.js';
 
 // ------------------------------------------------------------ Velo effect registry (mirrors src/effects/Effects.cpp)
 const EFFECTS = [
@@ -133,9 +133,23 @@ const HEAD_W = 132;
  * seek(t) moves playback while it runs (both set by the monitor).
  */
 const PB = { playing: false, t: 0, subs: new Set(), stop: null, seek: null, editorT: null };
+/**
+ * The last picture each video showed (kept while paused): when a video is still seeking after a pause or a scrub, its own
+ * last frame is drawn in its place and the titles over it are drawn fresh. (Holding the whole preview instead showed an
+ * old screenshot, old caption text included, for up to a second on footage that seeks slowly.)
+ */
+const FROZEN = new WeakMap();
+function freezeFrame(el) {
+  if (!(el instanceof HTMLVideoElement) || el.readyState < 2 || el.seeking || !el.videoWidth) return;
+  let f = FROZEN.get(el); const k = Math.min(1, 1280 / Math.max(el.videoWidth, el.videoHeight));
+  const w = Math.max(1, Math.round(el.videoWidth * k)), h = Math.max(1, Math.round(el.videoHeight * k));
+  if (!f) { f = { cv: document.createElement('canvas') }; FROZEN.set(el, f); }
+  if (f.cv.width !== w || f.cv.height !== h) { f.cv.width = w; f.cv.height = h; }
+  try { f.cv.getContext('2d').drawImage(el, 0, 0, w, h); f.ok = true; } catch { f.ok = false; }
+}
 const onPlayhead = (fn) => { PB.subs.add(fn); return () => PB.subs.delete(fn); };
 const livePlayhead = (t) => { PB.t = t; PB.editorT?.(t); for (const f of PB.subs) { try { f(t); } catch { /* a closed panel */ } } };
-const SNAP_BACK_TIP = (on) => (on ? 'Snap back is on: when you delete, everything after it slides back to fill the space (and to 0:00), on every track so captions stay in sync. Click to turn off.' : 'Snap back: turn on and anything you delete leaves no empty space; everything after it slides back to fill it. Turning it on also closes the gaps already there.');
+const SNAP_BACK_TIP = (on) => (on ? 'Snap back is on: cut a chunk out of the main video (Ctrl+B on both sides, select it, Delete) and that stretch leaves every track, so the rest of the video, captions, B-roll and music slide back with no gap. Click to turn off.' : 'Snap back: turn on and anything you delete leaves no empty space. Deleting a chunk of the main video takes that stretch out of every track, so the rest slides back with captions in sync. Turning it on also closes the gaps already there.');
 
 export function Studio() {
   const route = useRoute();
@@ -324,11 +338,52 @@ function Editor({ id }) {
     }
     setSel([]); if (side === 'before') setT(0); sfx('press');
   });
-  const remove = (ripple) => edit((d, s) => {
+  /**
+   * Take the stretch a..b out of the whole edit (Snap back / ripple delete of the main footage): on every unlocked track
+   * what's inside goes, footage, sound and captions crossing an edge are cut there (a caption keeps only its own words),
+   * titles and effect layers crossing it get shorter instead of being cut in two, and everything after slides back.
+   */
+  const cutSpan = (d, s, a, b) => {
+    const len = b - a; if (len <= 1e-3) return;
+    const splittable = (c) => c.type !== 5 && (c.type !== 3 || isCaption(c));
+    splitAt(d, s, a, splittable); splitAt(d, s, b, splittable);
+    const r6 = (x) => Math.round(x * 1e6) / 1e6;
+    for (const tr of [...s.videoTracks, ...s.audioTracks]) {
+      if (tr.locked) continue;
+      tr.clips = tr.clips.filter((c) => !(c.start >= a - 1e-3 && c.start + c.duration <= b + 1e-3));
+      for (const c of tr.clips) {
+        const e = c.start + c.duration;
+        if (c.start >= b - 1e-3) { c.start = r6(Math.max(a, c.start - len)); continue; }
+        if (e <= a + 1e-3) continue;
+        if (splittable(c)) { if (c.start < a) c.duration = r6(a - c.start); else { const cut = b - c.start; c.start = a; c.duration = r6(Math.max(0.04, c.duration - cut)); c.in = (c.in || 0) + cut * (c.speed || 1); } continue; }
+        const ov = Math.min(e, b) - Math.max(c.start, a); if (c.start > a) c.start = a; c.duration = r6(Math.max(0.1, c.duration - ov));
+      }
+      tr.clips.sort((x, y) => x.start - y.start);
+    }
+  };
+  /** The selection is the main footage (V1, or the sound that goes with it), so deleting it should take its time out of the edit. */
+  const mainFootage = (s, c) => {
+    if (c.type === 3 || c.type === 5) return false;
+    if (s.videoTracks[0]?.clips.includes(c)) return true;
+    const v1 = s.videoTracks[0]?.clips || [];
+    if (c.type === 1 && c.linkId && c.linkId !== '0') return v1.some((x) => x.linkId === c.linkId);
+    return c.type === 1 && !s.videoTracks.some((tr) => tr.clips.some((x) => x.type === 0 || x.type === 2)) && s.audioTracks[0]?.clips.includes(c);
+  };
+  const remove = (ripple, snap = false) => edit((d, s) => {
     const ids = new Set(sel.flatMap((cid) => { const f = findClip(s, cid); return f ? linked(s, f.c).map((x) => x.id) : []; }));
     const tracks = [...s.videoTracks, ...s.audioTracks];
     const all = tracks.flatMap((tr) => tr.clips.filter((c) => ids.has(c.id))); if (!all.length) return;
     const a = Math.min(...all.map((c) => c.start)), b = Math.max(...all.map((c) => c.start + c.duration));
+    const main = all.filter((c) => mainFootage(s, c));
+    if ((ripple || snap) && main.length) {
+      // Cutting a chunk out of the main video: its time leaves every track, so the rest snaps back with captions in sync.
+      const spans = []; for (const c of [...main].sort((x, y) => x.start - y.start)) { const e = c.start + c.duration; const last = spans[spans.length - 1]; if (last && c.start <= last[1] + 1e-3) last[1] = Math.max(last[1], e); else spans.push([c.start, e]); }
+      for (const tr of tracks) tr.clips = tr.clips.filter((c) => !ids.has(c.id));
+      for (const [x, y] of spans.reverse()) cutSpan(d, s, x, y);
+      const rest = tracks.flatMap((tr) => tr.clips); const first = rest.length ? Math.min(...rest.map((c) => c.start)) : 0;
+      if (first > 1e-3 && spans[spans.length - 1][0] <= 1e-3) for (const tr of tracks) for (const c of tr.clips) c.start = Math.round((c.start - first) * 1e6) / 1e6;
+      let nt = t; for (const [x, y] of spans) if (t > x) nt -= Math.min(t, y) - x; if (nt !== t) setT(Math.max(0, nt)); setSel([]); return;
+    }
     // A selected block with nothing else in its time span (e.g. everything before a Ctrl+B cut): ripple closes that whole
     // span on every track at once, so video, audio and captions stay in sync.
     const whole = !tracks.some((tr) => tr.clips.some((c) => !ids.has(c.id) && c.start < b - 1e-6 && c.start + c.duration > a + 1e-6));
@@ -461,7 +516,7 @@ function Editor({ id }) {
       { label: 'Rename…', icon: 'edit', onClick: () => renameClip(c) },
       m && window.euclidean ? { label: 'Reveal in Explorer', icon: 'folder', onClick: () => reveal(c) } : null,
       'sep',
-      { label: 'Delete', icon: 'trash', hint: 'Del', danger: true, onClick: () => { setSel(ids); setTimeout(() => { remove(false); if (closeGapsOn) setTimeout(() => closeGaps(true), 0); }, 0); } },
+      { label: 'Delete', icon: 'trash', hint: 'Del', danger: true, onClick: () => { setSel(ids); setTimeout(() => { remove(false, closeGapsOn); if (closeGapsOn) setTimeout(() => closeGaps(true), 0); }, 0); } },
       { label: 'Ripple delete', icon: 'trash', hint: 'Alt+Del', danger: true, onClick: () => { setSel(ids); setTimeout(() => remove(true), 0); } },
     ]);
   };
@@ -621,7 +676,7 @@ function Editor({ id }) {
       else if (key === 'c') setTool('razor');
       else if (key === 'f2' && sel.length) { e.preventDefault(); const f = findClip(seq, sel[0]); if (f) renameClip(f.c); }
       else if (key === 't' && !mod) addText();
-      else if ((key === 'delete' || key === 'backspace') && sel.length) { e.preventDefault(); remove(e.altKey || e.shiftKey); if (closeGapsOn) setTimeout(() => closeGaps(true), 0); }
+      else if ((key === 'delete' || key === 'backspace') && sel.length) { e.preventDefault(); remove(e.altKey || e.shiftKey, closeGapsOn); if (closeGapsOn) setTimeout(() => closeGaps(true), 0); }
       else if (key === 'arrowleft') { e.preventDefault(); setT((x) => Math.max(0, x - (e.shiftKey ? 1 : 1 / (seq?.fps || 30)))); }
       else if (key === 'arrowright') { e.preventDefault(); setT((x) => x + (e.shiftKey ? 1 : 1 / (seq?.fps || 30))); }
       else if (key === 'home') setT(0);
@@ -979,10 +1034,16 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
     if (k === 'type' || k === 'untype') typeClick();
     sfx('success'); toast(`${label} on ${Math.max(1, selIds.length)} title${selIds.length > 1 ? 's' : ''}.${k === 'type' ? ' Typing sound is on; change it in Edit title.' : ''}`, { kind: 'success' });
   };
+  /** A transition from the Effects list: on every selected clip, title or caption. */
   const applyTransition = (tt, edge) => {
-    if (!selected) return toast('Select a clip first', { kind: 'warn' });
-    edit((d, s) => { for (const tr of [...s.videoTracks, ...s.audioTracks]) { const c = tr.clips.find((x) => x.id === selected.c.id); if (c) c[edge] = { type: tt.type, duration: Math.min(1, c.duration / 3) }; } });
-    sfx('success');
+    if (!selected) return toast('Select a clip, title or captions on the timeline first (Shift-click for several, or "Select all captions").', { kind: 'warn' });
+    const ids = new Set([...selIds, selected.c.id]); let n = 0;
+    edit((d, s) => { for (const tr of [...s.videoTracks, ...s.audioTracks]) for (const c of tr.clips) if (ids.has(c.id) && c.type !== 5) {
+      for (const e of edge === 'both' ? ['transIn', 'transOut'] : [edge]) c[e] = { type: tt.type, duration: c[e]?.type ? Math.min(c[e].duration, c.duration / 2) : Math.round(Math.min(c.type === 3 ? 0.4 : 0.5, Math.max(0.1, c.duration / 3)) * 100) / 100 };
+      if (c.type === 3 && c.text) { if (edge !== 'transOut' && c.text.animIn === 'fade') c.text.animIn = 'none'; }
+      n++;
+    } });
+    sfx('success'); toast(`${tt.name} ${edge === 'both' ? 'in and out' : edge === 'transIn' ? 'in' : 'out'} on ${n} clip${n === 1 ? '' : 's'}. Set its length in Effect controls.`, { kind: 'success' });
   };
   return html`<div style="display:flex;flex-direction:column;min-height:0;background:var(--ed-panel);border-right:1px solid var(--line)">
     <div class="row" style="padding:8px 10px;border-bottom:1px solid var(--line)"><${Seg} value=${tab} onChange=${setTab} options=${[{ value: 'media', label: 'Project' }, { value: 'broll', label: 'B-roll' }, { value: 'effects', label: 'Effects' }, { value: 'ai', label: 'AI' }]} /><div class="spacer" />${tab === 'media' ? html`<${Button} size="sm" kind="soft" icon="plus" busy=${busy} title="Import media" onClick=${importDisk} />` : null}</div>
@@ -998,7 +1059,7 @@ function LeftPanel({ tab, setTab, data, onAdd, selected, edit, importFiles, impo
         <div class="eyebrow" style="padding:8px 6px 4px">Text animations · in</div>${TEXT_IN.filter(([k]) => k !== 'none').map(([k, l]) => html`<div class="review-item" onClick=${() => applyText('animIn', k, l)} title="Apply to the selected titles"><${Icon} name="type" size=${15} /><span style="font-size:var(--fs-sm)">${l}${k === 'type' ? ' (with typing sound)' : ''}</span></div>`)}
         <div class="eyebrow" style="padding:8px 6px 4px">Text animations · out</div>${TEXT_OUT.filter(([k]) => k !== 'none').map(([k, l]) => html`<div class="review-item" onClick=${() => applyText('animOut', k, l)} title="Apply to the selected titles"><${Icon} name="type" size=${15} /><span style="font-size:var(--fs-sm)">${l}</span></div>`)}
         ${['Retro', 'Blur', 'Color', 'Transform', 'Stylize'].map((cat) => html`<div class="eyebrow" style="padding:8px 6px 4px">${cat}</div>${EFFECTS.filter((f) => f.cat === cat).map((f) => html`<div class="review-item" onDblClick=${() => applyEffect(f)} onClick=${() => applyEffect(f)} title="Apply to the selected clip"><${Icon} name="wand" size=${15} /><span style="font-size:var(--fs-sm)">${f.name}</span></div>`)}`)}
-        ${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<div class="eyebrow" style="padding:12px 6px 4px">${cat === 'Dissolve' ? 'Transitions · ' : ''}${cat}</div>${TRANSITIONS.filter((x) => x.cat === cat).map((tt) => html`<div class="review-item" style="cursor:default"><${Icon} name="layers" size=${15} /><span class="grow" style="font-size:var(--fs-sm)">${tt.name}</span><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transIn')}>In</${Button}><${Button} size="sm" kind="ghost" onClick=${() => applyTransition(tt, 'transOut')}>Out</${Button}></div>`)}`)}`}
+        ${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<div class="eyebrow" style="padding:12px 6px 4px">${cat === 'Dissolve' ? 'Transitions · ' : ''}${cat}</div>${TRANSITIONS.filter((x) => x.cat === cat).map((tt) => html`<div class="review-item" style="cursor:default"><${Icon} name="layers" size=${15} /><span class="grow" style="font-size:var(--fs-sm)">${tt.name}</span><${Button} size="sm" kind="ghost" title="Start of the selected clips" onClick=${() => applyTransition(tt, 'transIn')}>In</${Button}><${Button} size="sm" kind="ghost" title="End of the selected clips" onClick=${() => applyTransition(tt, 'transOut')}>Out</${Button}><${Button} size="sm" kind="ghost" title="Both ends" onClick=${() => applyTransition(tt, 'both')}>Both</${Button}></div>`)}`)}`}
     </div></div>`;
 }
 
@@ -1223,11 +1284,14 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       return el instanceof HTMLVideoElement && (el.readyState < 2 || el.seeking || Math.abs(el.currentTime - wantAt(c, time, el)) > tol);
     });
     const now = performance.now();
-    if (waiting && hold.current.drawn && cv.width === W && cv.height === H) {
+    if (waiting && PB.playing && hold.current.drawn && cv.width === W && cv.height === H) {
       if (!hold.current.since) hold.current.since = now;
-      if (now - hold.current.since < (PB.playing ? 1200 : 700)) { clearTimeout(hold.current.retry); hold.current.retry = setTimeout(() => draw(), 40); return; }
+      if (now - hold.current.since < 1200) { clearTimeout(hold.current.retry); hold.current.retry = setTimeout(() => draw(), 40); return; }
     }
-    hold.current.since = 0; hold.current.drawn = true;
+    // Paused: draw now (titles as they are now), with a seeking video's own last picture standing in, and again when it lands.
+    if (waiting && !PB.playing) { if (!hold.current.since) hold.current.since = now; if (now - hold.current.since < 4000) { clearTimeout(hold.current.retry); hold.current.retry = setTimeout(() => draw(), 40); } }
+    else hold.current.since = 0;
+    hold.current.drawn = true;
     const g = cv.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
     hits.current = [];
     for (const { c, tail: inTail } of v) {
@@ -1239,7 +1303,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       // Transitions (lib/transitions.js; the export makes the same). At a cut, B's transition plays over A (pairs).
       const pin = c.type === 3 ? null : pairs.inOf.get(c.id), ptail = c.type === 3 ? null : pairs.tailOf.get(c.id);
       const tin = pin || (c.transIn?.type ? c.transIn : null), tout = ptail ? null : (c.transOut?.type ? c.transOut : null);
-      const ti = tin ? Math.min(transDur(tin), c.duration) : 0, to = tout ? Math.min(transDur(tout), c.duration) : 0;
+      const [ti, to] = fitTrans(tin ? transDur(tin) : 0, tout ? transDur(tout) : 0, c.duration, !!pin);
       const e01 = (x) => Math.max(0, Math.min(1, x));
       // Titles: fades and dips fade them; the rest are made inside the title's box (or the whole picture when it's keyframed).
       const tfx = [];
@@ -1290,9 +1354,13 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
         const el = getEl(c); const m = media[c.mediaId];
         // A player still on the wrong spot (catching up after a jump) is skipped, so the layer underneath shows instead of a wrong or black frame.
         const onSpot = !(el instanceof HTMLVideoElement) || Math.abs(el.currentTime - wantAt(c, time, el)) < tol;
-        if (el && onSpot && ((el instanceof HTMLVideoElement && el.readyState >= 2) || (el instanceof HTMLImageElement && el.complete && el.naturalWidth))) {
+        const ready = el && onSpot && ((el instanceof HTMLVideoElement && el.readyState >= 2 && !(!PB.playing && el.seeking)) || (el instanceof HTMLImageElement && el.complete && el.naturalWidth));
+        if (ready && !PB.playing) freezeFrame(el);
+        const fz = !ready && !PB.playing && el instanceof HTMLVideoElement ? FROZEN.get(el) : null;
+        const src = ready ? el : fz?.ok ? fz.cv : null;
+        if (src) {
           const nw = (m.width || el.videoWidth || el.naturalWidth) * sx * quality, nh = (m.height || el.videoHeight || el.naturalHeight) * sy * quality;
-          const iw = el.videoWidth || el.naturalWidth, ih = el.videoHeight || el.naturalHeight;
+          const iw = src === el ? el.videoWidth || el.naturalWidth : src.width, ih = src === el ? el.videoHeight || el.naturalHeight : src.height;
           let sxp = 0, syp = 0, sw = iw, sh = ih, dx = -nw / 2, dy = -nh / 2, dw = nw, dh = nh;
           if (crop) { sxp = iw * crop.left / 100; syp = ih * crop.top / 100; sw = iw * (1 - (crop.left + crop.right) / 100); sh = ih * (1 - (crop.top + crop.bottom) / 100); dx += nw * crop.left / 100; dy += nh * crop.top / 100; dw = nw * sw / iw; dh = nh * sh / ih; }
           const fxs = [];
@@ -1317,12 +1385,12 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
             const lookFilter = g.filter;
             const paint = (ctx) => {
               const aBefore = ctx.globalAlpha; ctx.filter = lookFilter;
-              if (lookMix < 0.995) { ctx.filter = plainFilter; ctx.drawImage(el, sxp, syp, sw, sh, dx, dy, dw, dh); ctx.filter = lookFilter; ctx.globalAlpha = aBefore * lookMix; }
+              if (lookMix < 0.995) { ctx.filter = plainFilter; ctx.drawImage(src, sxp, syp, sw, sh, dx, dy, dw, dh); ctx.filter = lookFilter; ctx.globalAlpha = aBefore * lookMix; }
               if (pixel > 1) {
                 const off = document.createElement('canvas'); off.width = Math.max(1, Math.round(dw / pixel)); off.height = Math.max(1, Math.round(dh / pixel));
-                off.getContext('2d').drawImage(el, sxp, syp, sw, sh, 0, 0, off.width, off.height);
+                off.getContext('2d').drawImage(src, sxp, syp, sw, sh, 0, 0, off.width, off.height);
                 ctx.imageSmoothingEnabled = false; ctx.drawImage(off, dx, dy, dw, dh); ctx.imageSmoothingEnabled = true;
-              } else ctx.drawImage(el, sxp, syp, sw, sh, dx, dy, dw, dh);
+              } else ctx.drawImage(src, sxp, syp, sw, sh, dx, dy, dw, dh);
               ctx.globalAlpha = aBefore;
             };
             // Soft wipes, irises, slats, dissolves and the blur go through a mask drawn offscreen.
@@ -1358,7 +1426,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       cancelAnimationFrame(raf.current);
       if (PB.playing) { const mt = masterTime(); if (mt != null && playedTo.current != null && Math.abs(mt - playedTo.current) < 0.3) { playedTo.current = mt; tRef.current = mt; } }
       PB.playing = false;
-      for (const el of els.current.values()) if (el instanceof HTMLMediaElement && !el.paused) el.pause();
+      for (const el of els.current.values()) if (el instanceof HTMLMediaElement && !el.paused) { el.pause(); freezeFrame(el); }
     };
     PB.seek = (x) => { clock.current = { wall: performance.now(), t0: x }; tRef.current = x; playedTo.current = x; ms.current.id = null; ms.current.bad.clear(); livePlayhead(x); };
   }
@@ -1544,16 +1612,26 @@ function hlLines(st, text, local, dur) {
   return lines.map((ws) => ws.map((w) => { const i = k++; return { w, hl: mode === 'word' ? i === active : mode === 'keywords' && kw.has(normWord(w)) }; }));
 }
 
-/** Title entrances and exits (same numbers as the export, server/video/studio.js textAnim). */
+/**
+ * Title entrances and exits (same numbers as the export, server/video/studio.js textAnim). Adjustable per title:
+ * animInDur / animOutDur (seconds; fitted so in + out never take more than the title's length), animDist (px a slide
+ * moves, default 70) and animAmt (strength of pop / zoom / blur, 1 = the usual).
+ */
 const IN_S = { pop: 0.25, slide: 0.35, drop: 0.35, zoom: 0.3, blur: 0.35 }; const OUT_S = 0.3;
+function animLens(st, dur) {
+  const ai = IN_S[st.animIn] ? Math.max(0.05, Number(st.animInDur) || IN_S[st.animIn]) : 0;
+  const ao = st.animOut && st.animOut !== 'none' && st.animOut !== 'untype' ? Math.max(0.05, Number(st.animOutDur) || OUT_S) : 0;
+  const k = dur && ai + ao > dur ? dur / (ai + ao) : 1; return [ai * k, ao * k];
+}
 function textAnim(st, lt, dur) {
-  const r = { sc: 1, dy: 0, op: 1, blur: 0 };
-  const ai = st.animIn; const pi = IN_S[ai] ? easeOut(Math.min(1, Math.max(0, lt) / IN_S[ai])) : 1;
-  if (ai === 'pop') r.sc *= 0.6 + 0.4 * pi; if (ai === 'slide') r.dy += 70 * (1 - pi); if (ai === 'drop') r.dy -= 70 * (1 - pi);
-  if (ai === 'zoom') { r.sc *= 1.6 - 0.6 * pi; r.op *= pi; } if (ai === 'blur') { r.blur += 18 * (1 - pi); r.op *= pi; }
-  const ao = st.animOut; if (ao && ao !== 'none' && ao !== 'untype' && dur) {
-    const po = Math.min(1, Math.max(0, (lt - (dur - OUT_S)) / OUT_S)); const e = po * po;
-    if (ao === 'popout') r.sc *= 1 - 0.7 * e; if (ao === 'zoomout') r.sc *= 1 + 0.7 * e; if (ao === 'slideout') r.dy += 70 * e; if (ao === 'blurout') r.blur += 18 * e;
+  const r = { sc: 1, dy: 0, op: 1, blur: 0 }; const [li, lo] = animLens(st, dur);
+  const dist = Number.isFinite(Number(st.animDist)) && st.animDist !== '' && st.animDist != null ? Number(st.animDist) : 70; const amt = Number(st.animAmt) > 0 ? Number(st.animAmt) : 1;
+  const ai = st.animIn; const pi = li ? easeOut(Math.min(1, Math.max(0, lt) / li)) : 1;
+  if (ai === 'pop') r.sc *= Math.max(0.02, 1 - 0.4 * amt) + Math.min(0.98, 0.4 * amt) * pi; if (ai === 'slide') r.dy += dist * (1 - pi); if (ai === 'drop') r.dy -= dist * (1 - pi);
+  if (ai === 'zoom') { r.sc *= 1 + 0.6 * amt * (1 - pi); r.op *= pi; } if (ai === 'blur') { r.blur += 18 * amt * (1 - pi); r.op *= pi; }
+  const ao = st.animOut; if (lo && dur) {
+    const po = Math.min(1, Math.max(0, (lt - (dur - lo)) / lo)); const e = po * po;
+    if (ao === 'popout') r.sc *= 1 - Math.min(0.98, 0.7 * amt) * e; if (ao === 'zoomout') r.sc *= 1 + 0.7 * amt * e; if (ao === 'slideout') r.dy += dist * e; if (ao === 'blurout') r.blur += 18 * amt * e;
     r.op *= 1 - po;
   }
   return r;
@@ -1639,7 +1717,7 @@ const POS_Y = { top: -0.32, center: 0, lower: 0.26, bottom: 0.36 };
 /** Every font (bundled and Windows ones), grouped like the clip panel's picker. */
 const fontOptions = () => FONT_GROUPS.map(([g, list]) => html`<optgroup label=${g}>${list.map((f) => html`<option value=${f} style=${{ fontFamily: `'${f}'` }}>${f}</option>`)}</optgroup>`);
 /** The look of a title (not its words, timing or highlight), copied when one style is applied to many titles/captions. */
-const STYLE_KEYS = ['family', 'pixelSize', 'bold', 'italic', 'uppercase', 'color', 'outlineColor', 'outlineWidth', 'shadow', 'shadowColor', 'box', 'boxColor', 'boxPad', 'boxRadius', 'letterSpacing', 'animIn', 'animOut', 'typeSpeed', 'typeSound', 'typeVol', 'hlColor'];
+const STYLE_KEYS = ['family', 'pixelSize', 'bold', 'italic', 'uppercase', 'color', 'outlineColor', 'outlineWidth', 'shadow', 'shadowColor', 'box', 'boxColor', 'boxPad', 'boxRadius', 'letterSpacing', 'animIn', 'animOut', 'animInDur', 'animOutDur', 'animDist', 'animAmt', 'typeSpeed', 'typeSound', 'typeVol', 'hlColor'];
 const TEXT_IN = [['none', 'None'], ['fade', 'Fade in'], ['pop', 'Pop'], ['slide', 'Slide up'], ['drop', 'Drop in'], ['zoom', 'Zoom in'], ['blur', 'Blur in'], ['type', 'Typewriter']];
 const TEXT_OUT = [['none', 'None'], ['fadeout', 'Fade out'], ['popout', 'Pop out'], ['slideout', 'Slide down'], ['zoomout', 'Zoom out'], ['blurout', 'Blur out'], ['untype', 'Type away']];
 const hex6 = (c, d) => '#' + String(c || d).replace('#', '').slice(-6);
@@ -1785,7 +1863,53 @@ function MultiTextControls({ texts, seq, edit, onEditTitle }) {
         ${st.box ? col('boxColor', 'Box colour', 'ffffff') : null}
       </div>
       ${st.box ? slider('boxRadius', 'Rounded corners', 0, 80, 0) : null}
-    </div></div>`;
+    </div>
+    <${TextMotion} clips=${texts} edit=${edit} seq=${seq} /></div>`;
+}
+
+/**
+ * Transitions and text animations for one or many titles / captions in one place (Effect controls), with how long each
+ * takes, how far a slide moves and how strong a pop / zoom / blur is. Changes go to every clip in `clips`; "Use on every
+ * caption" copies them to all captions.
+ */
+const MOTION_KEYS = ['animIn', 'animOut', 'animInDur', 'animOutDur', 'animDist', 'animAmt', 'typeSpeed'];
+function TextMotion({ clips, edit, seq }) {
+  const c = clips[0]; const st = c.text || {}; const ids = clips.map((x) => x.id);
+  const setAll = (fn) => edit((d, s) => { for (const tr of s.videoTracks) for (const x of tr.clips) if (ids.includes(x.id) && x.text) fn(x, x.text); });
+  const live = (fn) => { for (const x of clips) if (x.text) fn(x, x.text); redraw(); };
+  const minDur = Math.max(0.1, Math.min(...clips.map((x) => x.duration)));
+  const defLen = (x) => Math.round(Math.min(0.5, Math.max(0.1, x.duration / 3)) * 100) / 100;
+  const field = (label, val, min, max, unit, apply, o = {}) => html`<${ParamField} label=${label} p=${val} animatable=${false} min=${min} max=${max} smin=${min} smax=${max} step=${o.step ?? 0.05} digits=${o.digits ?? 2} unit=${unit} dflt=${o.dflt}
+    onLive=${(v) => live((x, t) => apply(x, t, v.base))} onCommit=${(v) => setAll((x, t) => apply(x, t, v.base))} />`;
+  const lenMax = Math.max(0.1, Math.min(3, minDur));
+  const trRow = (edge) => { const cur = c[edge]?.type ? c[edge] : null; return html`
+    <div class="row" style="padding:4px 0"><span class="muted" style="width:34px;font-size:var(--fs-sm)">${edge === 'transIn' ? 'In' : 'Out'}</span>
+      <select class="select sm" style="flex:1" value=${cur?.type || 0} aria-label=${edge === 'transIn' ? 'Transition in' : 'Transition out'}
+        onChange=${(e) => { const ty = Number(e.target.value); setAll((x) => { x[edge] = ty ? { type: ty, duration: x[edge]?.type ? x[edge].duration : defLen(x) } : { type: 0, duration: x[edge]?.duration || 0.5 }; }); }}>
+        <option value="0">None</option>${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<optgroup label=${cat}>${TRANSITIONS.filter((tt) => tt.cat === cat).map((tt) => html`<option value=${tt.type}>${tt.name}</option>`)}</optgroup>`)}</select></div>
+    ${cur ? field(`${edge === 'transIn' ? 'In' : 'Out'} length`, Math.min(cur.duration || 0.5, lenMax), 0.04, lenMax, 's', (x, t, v) => { if (x[edge]?.type) x[edge] = { ...x[edge], duration: Math.max(0.04, v) }; }) : null}`; };
+  const ai = st.animIn || 'none', ao = st.animOut || 'none';
+  const setIn = (k) => setAll((x, t) => { const was = t.animIn; t.animIn = k; if (k === 'fade') x.transIn = { type: 2, duration: x.transIn?.type ? x.transIn.duration : Math.min(0.3, defLen(x)) }; else if (was === 'fade' && x.transIn?.type === 2) x.transIn = { type: 0, duration: 0.5 }; if (k === 'type' && t.typeSound === undefined) t.typeSound = true; });
+  const setOut = (k) => setAll((x, t) => { t.animOut = k; if (k !== 'none' && x.transOut?.type && !shaped(x.transOut.type)) x.transOut = { type: 0, duration: 0.5 }; if (k === 'untype' && t.typeSound === undefined) t.typeSound = true; });
+  const moves = ['slide', 'drop'].includes(ai) || ao === 'slideout'; const strong = ['pop', 'zoom', 'blur'].includes(ai) || ['popout', 'zoomout', 'blurout'].includes(ao);
+  const typing = ai === 'type' || ao === 'untype';
+  const caps = [...seq.videoTracks].flatMap((tr) => tr.clips.filter(isCaption));
+  const copyCaps = () => { const src = { transIn: clone(c.transIn || { type: 0, duration: 0.5 }), transOut: clone(c.transOut || { type: 0, duration: 0.5 }), anim: Object.fromEntries(MOTION_KEYS.map((k) => [k, st[k]])) };
+    edit((d, s) => { for (const tr of s.videoTracks) for (const x of tr.clips) if (isCaption(x)) { x.transIn = clone(src.transIn); x.transOut = clone(src.transOut); for (const k of MOTION_KEYS) { if (src.anim[k] === undefined) delete x.text[k]; else x.text[k] = src.anim[k]; } } });
+    toast(`Same transitions and animations on all ${caps.length} captions.`, { kind: 'success' }); };
+  return html`<div class="divider" /><div class="eyebrow">Text animation</div>
+    <div class="faint" style="font-size:var(--fs-xs);margin:2px 0 4px">How the words move in and out.${clips.length > 1 ? ` Applies to all ${clips.length}.` : ''}</div>
+    <div class="row" style="padding:4px 0"><span class="muted" style="width:34px;font-size:var(--fs-sm)">In</span><select class="select sm" style="flex:1" value=${ai} onChange=${(e) => setIn(e.target.value)} aria-label="Text animation in">${TEXT_IN.map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></div>
+    ${IN_S[ai] ? field('In length', Math.min(Number(st.animInDur) || IN_S[ai], lenMax), 0.05, lenMax, 's', (x, t, v) => { t.animInDur = Math.max(0.05, v); }, { dflt: IN_S[ai] }) : null}
+    <div class="row" style="padding:4px 0"><span class="muted" style="width:34px;font-size:var(--fs-sm)">Out</span><select class="select sm" style="flex:1" value=${ao} onChange=${(e) => setOut(e.target.value)} aria-label="Text animation out">${TEXT_OUT.map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></div>
+    ${ao !== 'none' && ao !== 'untype' ? field('Out length', Math.min(Number(st.animOutDur) || OUT_S, lenMax), 0.05, lenMax, 's', (x, t, v) => { t.animOutDur = Math.max(0.05, v); }, { dflt: OUT_S }) : null}
+    ${moves ? field('Move distance', st.animDist ?? 70, 0, 800, 'px', (x, t, v) => { t.animDist = Math.round(v); }, { step: 1, digits: 0, dflt: 70 }) : null}
+    ${strong ? field('Strength', Math.round((Number(st.animAmt) || 1) * 100), 10, 300, '%', (x, t, v) => { t.animAmt = Math.max(0.1, v / 100); }, { step: 1, digits: 0, dflt: 100 }) : null}
+    ${typing ? field('Typing speed', Number(st.typeSpeed) || 18, 4, 60, 'letters/s', (x, t, v) => { t.typeSpeed = Math.round(v); }, { step: 1, digits: 0, dflt: 18 }) : null}
+    <div class="divider" /><div class="eyebrow">Transitions</div>
+    <div class="faint" style="font-size:var(--fs-xs);margin:2px 0 4px">Wipes, slides and irises play inside the text's own box; fades and dips fade it. In and out always fit inside the ${clips.length > 1 ? 'shortest one' : 'clip'} (${minDur.toFixed(2)} s).</div>
+    ${trRow('transIn')}${trRow('transOut')}
+    ${caps.length > 1 && clips.some(isCaption) && clips.length < caps.length ? html`<${Button} size="sm" kind="soft" icon="layers" style="margin-top:8px" onClick=${copyCaps}>Use on every caption (${caps.length})</${Button}>` : null}`;
 }
 
 function EffectControls({ selected, sel = [], findClip, seq, edit, media, t, setT, onEditTitle }) {
@@ -1834,10 +1958,10 @@ function EffectControls({ selected, sel = [], findClip, seq, edit, media, t, set
     ${(c.effects || []).map((e, i) => { const def = EFFECTS.find((f) => f.id === e.effectId); return html`<div class="divider" /><div class="row"><${Toggle} on=${e.enabled !== false} label="Enable effect" onChange=${(on) => setRaw((x) => { x.effects[i].enabled = on; })} /><b class="grow" style="font-size:var(--fs-sm)">${def?.name || e.effectId}</b><${Button} size="sm" kind="ghost" icon="trash" title="Remove effect" onClick=${() => setRaw((x) => { x.effects.splice(i, 1); })} /></div>
       ${(def?.params || []).map(([k, label, mn, mx, dflt, stp]) => html`<${ParamField} label=${label} p=${e.params?.[k]} d=${dflt} lt=${lt} inClip=${inClip} onJump=${jump} min=${mn} max=${mx} step=${stp || (mx - mn > 50 ? 1 : 0.05)} digits=${stp && stp < 1 ? 2 : 0} dflt=${dflt}
         onLive=${(v) => liveSet(e.params, k, v, c.id + 'fx' + i + k)} onCommit=${(v) => setRaw((x) => { x.effects[i].params[k] = v; })} />`)}`; })}
-    ${c.type === FX_LAYER ? null : html`<div class="divider" /><div class="eyebrow">Transitions</div>
-    ${(() => { if (c.type === 3) return html`<div class="faint" style="font-size:var(--fs-xs);margin:2px 0 4px">On a title, wipes, slides and irises play inside its own box; fades and dips fade it.</div>`; const pr = cutPairs(seq); const pin = pr.inOf.get(c.id), tl = pr.tailOf.get(c.id); return pin || tl ? html`<div class="faint" style="font-size:var(--fs-xs);margin:2px 0 4px">${pin ? 'This clip starts at a cut: its In plays over the clip before, which carries on underneath. ' : ''}${tl ? 'The next clip\'s transition plays over the end of this one (this one carries on under it), so its Out isn\'t used.' : ''}</div>` : null; })()}
+    ${c.type === 3 ? html`<${TextMotion} clips=${[c]} edit=${edit} seq=${seq} />` : c.type === FX_LAYER ? null : html`<div class="divider" /><div class="eyebrow">Transitions</div>
+    ${(() => { const pr = cutPairs(seq); const pin = pr.inOf.get(c.id), tl = pr.tailOf.get(c.id); return pin || tl ? html`<div class="faint" style="font-size:var(--fs-xs);margin:2px 0 4px">${pin ? 'This clip starts at a cut: its In plays over the clip before, which carries on underneath. ' : ''}${tl ? 'The next clip\'s transition plays over the end of this one (this one carries on under it), so its Out isn\'t used.' : ''}</div>` : null; })()}
     ${['transIn', 'transOut'].map((edge) => html`<div class="row" style="padding:4px 0"><span class="muted" style="width:34px;font-size:var(--fs-sm)">${edge === 'transIn' ? 'In' : 'Out'}</span>
-      <select class="select sm" style="flex:1" value=${c[edge]?.type || 0} onChange=${(e) => setRaw((x) => { x[edge] = { type: Number(e.target.value), duration: x[edge]?.duration || 0.5 }; })} aria-label=${edge}><option value="0">None</option>${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<optgroup label=${cat}>${TRANSITIONS.filter((tt) => tt.cat === cat).map((tt) => html`<option value=${tt.type}>${tt.name}</option>`)}</optgroup>`)}</select>
+      <select class="select sm" style="flex:1" value=${c[edge]?.type || 0} onChange=${(e) => setRaw((x) => { const ty = Number(e.target.value); x[edge] = { type: ty, duration: x[edge]?.type ? x[edge].duration : ty ? Math.round(Math.min(0.5, Math.max(0.1, x.duration / 3)) * 100) / 100 : x[edge]?.duration || 0.5 }; })} aria-label=${edge}><option value="0">None</option>${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<optgroup label=${cat}>${TRANSITIONS.filter((tt) => tt.cat === cat).map((tt) => html`<option value=${tt.type}>${tt.name}</option>`)}</optgroup>`)}</select>
       <input class="input sm tnum" style="width:62px" inputmode="decimal" value=${c[edge]?.duration || 0.5} onChange=${(e) => { const v = Number(e.target.value); if (v > 0) setRaw((x) => { x[edge] = { ...(x[edge] || { type: 0 }), duration: Math.max(0.04, v) }; }); }} aria-label="Duration" /><span class="faint" style="font-size:var(--fs-xs)">s</span></div>`)}`}
   </div>`;
 }

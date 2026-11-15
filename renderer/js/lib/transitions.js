@@ -28,6 +28,13 @@ export const DIPS = { 3: '#000000', 4: '#ffffff' };
 export const shaped = (type) => !!type && !!TRANS_BY_TYPE[type] && type > 4;
 export const isPush = (type) => /^slide/.test(TRANS_BY_TYPE[type]?.x || '');
 export const transDur = (t) => (t && t.type ? Math.max(0.04, t.duration || 1) : 0);
+/** In and Out lengths that fit inside a clip (a 1 s In and Out on a half-second caption used to overlap and hide it):
+ *  shared out in proportion, or, when the In is a cut's (keepIn, it's tied to the clip before), the Out gets what's left. */
+export const fitTrans = (dIn, dOut, dur, keepIn = false) => {
+  let a = Math.min(dIn, dur), b = Math.min(dOut, dur);
+  if (a + b > dur) { if (keepIn) b = Math.max(0, dur - a); else { const k = dur / (a + b); a *= k; b *= k; } }
+  return [a, b];
+};
 
 const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const fract = (a) => a - Math.floor(a);

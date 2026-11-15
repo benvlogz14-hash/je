@@ -101,6 +101,12 @@ function atempoChain(speed) {
 function colTag(hex) { const h = String(hex).replace('#', '').padEnd(6, '0'); return `&H${h.slice(4, 6)}${h.slice(2, 4)}${h.slice(0, 2)}&`.toUpperCase(); }
 
 function transDur(t) { return t && t.type ? Math.max(0.04, t.duration || 1) : 0; }
+/** In and Out lengths that fit inside a clip (the preview's fitTrans in renderer/js/lib/transitions.js). */
+function fitTrans(dIn, dOut, dur, keepIn = false) {
+  let a = Math.min(dIn, dur), b = Math.min(dOut, dur);
+  if (a + b > dur) { if (keepIn) b = Math.max(0, dur - a); else { const k = dur / (a + b); a *= k; b *= k; } }
+  return [a, b];
+}
 
 // Studio transition types → FFmpeg xfade names. Types 1-2 are plain fades and 3-4 dips (the picture fades to black /
 // white; on titles they're fades); the rest are made with xfade against a see-through copy of the clip itself.
@@ -191,34 +197,43 @@ function typingTrack(hits, dur, file) {
  * In: pop, slide (up), drop (down), zoom, blur, type (fade in is the title's fade).  Out: fadeout, popout, slideout, zoomout, blurout, untype.
  */
 const IN_S = { pop: 0.25, slide: 0.35, drop: 0.35, zoom: 0.3, blur: 0.35 }; const OUT_S = 0.3;
+/** How long the entrance and exit take (animInDur / animOutDur, fitted so both fit in the title's length). */
+function animLens(st, dur) {
+  const ai = IN_S[st.animIn] ? Math.max(0.05, Number(st.animInDur) || IN_S[st.animIn]) : 0;
+  const ao = st.animOut && st.animOut !== 'none' && st.animOut !== 'untype' ? Math.max(0.05, Number(st.animOutDur) || OUT_S) : 0;
+  const k = dur && ai + ao > dur ? dur / (ai + ao) : 1; return [ai * k, ao * k];
+}
+const animDist = (st) => (st.animDist != null && st.animDist !== '' && Number.isFinite(Number(st.animDist)) ? Number(st.animDist) : 70);
+const animAmt = (st) => (Number(st.animAmt) > 0 ? Number(st.animAmt) : 1);
 function textAnim(st, lt, dur) {
-  const eo = (f) => 1 - (1 - f) ** 3; const r = { sc: 1, dy: 0, op: 1, blur: 0 };
-  const ai = st.animIn; const pi = IN_S[ai] ? eo(Math.min(1, Math.max(0, lt) / IN_S[ai])) : 1;
-  if (ai === 'pop') r.sc *= 0.6 + 0.4 * pi; if (ai === 'slide') r.dy += 70 * (1 - pi); if (ai === 'drop') r.dy -= 70 * (1 - pi);
-  if (ai === 'zoom') { r.sc *= 1.6 - 0.6 * pi; r.op *= pi; } if (ai === 'blur') { r.blur += 18 * (1 - pi); r.op *= pi; }
-  const ao = st.animOut; if (ao && ao !== 'none' && ao !== 'untype' && dur) {
-    const po = Math.min(1, Math.max(0, (lt - (dur - OUT_S)) / OUT_S)); const e = po * po;
-    if (ao === 'popout') r.sc *= 1 - 0.7 * e; if (ao === 'zoomout') r.sc *= 1 + 0.7 * e; if (ao === 'slideout') r.dy += 70 * e; if (ao === 'blurout') r.blur += 18 * e;
+  const eo = (f) => 1 - (1 - f) ** 3; const r = { sc: 1, dy: 0, op: 1, blur: 0 }; const [li, lo] = animLens(st, dur); const dist = animDist(st), amt = animAmt(st);
+  const ai = st.animIn; const pi = li ? eo(Math.min(1, Math.max(0, lt) / li)) : 1;
+  if (ai === 'pop') r.sc *= Math.max(0.02, 1 - 0.4 * amt) + Math.min(0.98, 0.4 * amt) * pi; if (ai === 'slide') r.dy += dist * (1 - pi); if (ai === 'drop') r.dy -= dist * (1 - pi);
+  if (ai === 'zoom') { r.sc *= 1 + 0.6 * amt * (1 - pi); r.op *= pi; } if (ai === 'blur') { r.blur += 18 * amt * (1 - pi); r.op *= pi; }
+  const ao = st.animOut; if (lo && dur) {
+    const po = Math.min(1, Math.max(0, (lt - (dur - lo)) / lo)); const e = po * po;
+    if (ao === 'popout') r.sc *= 1 - Math.min(0.98, 0.7 * amt) * e; if (ao === 'zoomout') r.sc *= 1 + 0.7 * amt * e; if (ao === 'slideout') r.dy += dist * e; if (ao === 'blurout') r.blur += 18 * amt * e;
     r.op *= 1 - po;
   }
   return r;
 }
-/** The same as ASS tags for a whole subtitle piece (first piece: entrance; last piece: exit; L = piece length in ms). */
-function animTags(st, first, last, L, px, py, sc) {
-  let place = null, tags = '', fi = 0, fo = 0;
-  if (first) {
-    if (st.animIn === 'slide') place = `\\move(${px},${py + Math.round(70 * sc)},${px},${py},0,350)`;
-    if (st.animIn === 'drop') place = `\\move(${px},${py - Math.round(70 * sc)},${px},${py},0,350)`;
-    if (st.animIn === 'pop') tags += '\\fscx60\\fscy60\\t(0,250,\\fscx100\\fscy100)';
-    if (st.animIn === 'zoom') { tags += '\\fscx160\\fscy160\\t(0,300,\\fscx100\\fscy100)'; fi = 0.3; }
-    if (st.animIn === 'blur') { tags += '\\blur18\\t(0,350,\\blur0)'; fi = 0.35; }
+/** The same as ASS tags for a whole subtitle piece (first piece: entrance; last piece: exit; L = piece length in ms; dur = the title's length). */
+function animTags(st, first, last, L, px, py, sc, dur) {
+  let place = null, tags = '', fi = 0, fo = 0; const [li, lo] = animLens(st, dur); const dist = Math.round(animDist(st) * sc), amt = animAmt(st);
+  const I = Math.round(li * 1000), pct = (v) => Math.max(1, Math.round(v * 100));
+  if (first && li) {
+    if (st.animIn === 'slide') place = `\\move(${px},${py + dist},${px},${py},0,${I})`;
+    if (st.animIn === 'drop') place = `\\move(${px},${py - dist},${px},${py},0,${I})`;
+    if (st.animIn === 'pop') { const v = pct(Math.max(0.02, 1 - 0.4 * amt)); tags += `\\fscx${v}\\fscy${v}\\t(0,${I},\\fscx100\\fscy100)`; }
+    if (st.animIn === 'zoom') { const v = pct(1 + 0.6 * amt); tags += `\\fscx${v}\\fscy${v}\\t(0,${I},\\fscx100\\fscy100)`; fi = li; }
+    if (st.animIn === 'blur') { tags += `\\blur${Math.round(18 * amt)}\\t(0,${I},\\blur0)`; fi = li; }
   }
-  if (last && st.animOut && st.animOut !== 'none' && st.animOut !== 'untype') {
-    const a = Math.max(0, L - 300); fo = 0.3;
-    if (st.animOut === 'popout') tags += `\\t(${a},${L},\\fscx30\\fscy30)`;
-    if (st.animOut === 'zoomout') tags += `\\t(${a},${L},\\fscx170\\fscy170)`;
-    if (st.animOut === 'blurout') tags += `\\t(${a},${L},\\blur18)`;
-    if (st.animOut === 'slideout' && !place) place = `\\move(${px},${py},${px},${py + Math.round(70 * sc)},${a},${L})`;
+  if (last && lo) {
+    const O = Math.round(lo * 1000); const a = Math.max(0, L - O); fo = lo;
+    if (st.animOut === 'popout') { const v = pct(1 - Math.min(0.98, 0.7 * amt)); tags += `\\t(${a},${L},\\fscx${v}\\fscy${v})`; }
+    if (st.animOut === 'zoomout') { const v = pct(1 + 0.7 * amt); tags += `\\t(${a},${L},\\fscx${v}\\fscy${v})`; }
+    if (st.animOut === 'blurout') tags += `\\t(${a},${L},\\blur${Math.round(18 * amt)})`;
+    if (st.animOut === 'slideout' && !place) place = `\\move(${px},${py},${px},${py + dist},${a},${L})`;
   }
   return { place, tags, fi, fo };
 }
@@ -291,7 +306,7 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       // Transitions: B's In at a cut (pin) plays over A, which carries on for `tail.ext` (its Out then isn't used).
       const pin = pairs.inOf.get(c.id), tail = pairs.tailOf.get(c.id);
       const tin = pin || (c.transIn?.type ? c.transIn : null), tout = tail ? null : (c.transOut?.type ? c.transOut : null);
-      const dIn = tin ? Math.min(transDur(tin), c.duration) : 0, dOut = tout ? Math.min(transDur(tout), c.duration) : 0;
+      const [dIn, dOut] = fitTrans(tin ? transDur(tin) : 0, tout ? transDur(tout) : 0, c.duration, !!pin);
       const ext = tail ? tail.ext : 0; const total = c.duration + ext; // how long this clip is on screen
       const still = c.type === 2 || m.kind === 2 || m.kind === 3;
       if (still) args.push('-loop', '1', '-t', num(total), '-i', m.path);
@@ -379,7 +394,8 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       const shad = st.shadow ? argb(st.shadowColor, 'b3000000') : null;
       const raw = (st.uppercase ? String(st.text || '').toUpperCase() : String(st.text || '')).replace(/[{}\\]/g, '');
       const shIn = shaped(c.transIn?.type) ? c.transIn : null, shOut = shaped(c.transOut?.type) ? c.transOut : null;
-      const fadeIn = shIn ? 0 : transDur(c.transIn), fadeOut = shOut ? 0 : transDur(c.transOut); // types 1-4 fade a title
+      const [tIn, tOut] = fitTrans(transDur(c.transIn), transDur(c.transOut), c.duration); // fitted inside the title
+      const fadeIn = shIn ? 0 : tIn, fadeOut = shOut ? 0 : tOut; // types 1-4 fade a title
       let frame = null; // a title with its own layer: { w, h, ox, oy } (ox/oy move its positions onto that canvas)
       if (shIn || shOut) {
         if (keyed) frame = { w: W, h: H, ox: 0, oy: 0, full: true };
@@ -393,7 +409,7 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
         }
       }
       const out = frame ? [] : lines; const shift = frame ? c.start : 0; const OX = frame ? frame.ox : 0, OY = frame ? frame.oy : 0;
-      if (frame) own.push({ c, frame, events: out, shIn, shOut, rot: frame.full ? 0 : base(c.rotation, 0) });
+      if (frame) own.push({ c, frame, events: out, shIn, shOut, tIn, tOut, rot: frame.full ? 0 : base(c.rotation, 0) });
       // Highlight: the word being said ('word', timed by st.words) or chosen keywords, in the highlight colour.
       const mode = ['word', 'keywords'].includes(st.hlMode) ? st.hlMode : null; const hl = argb(st.hlColor, 'fff2c14e');
       const flat = raw.split(/\s+/).filter(Boolean); const times = hlTimes(st, flat, c.duration);
@@ -461,11 +477,11 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
         const typeCuts = typing ? Array.from({ length: nChars }, (_, k) => [st.animIn === 'type' ? (k + 1) / cps : -1, st.animOut === 'untype' ? c.duration - (k + 1) / cps : -1]).flat() : [];
         const cutsAt = [...new Set([...(mode === 'word' ? times.map((x) => Math.max(0, Math.min(c.duration, x.s))) : []), ...typeCuts].map((x) => Math.round(x * 1000) / 1000))].filter((x) => x > 0.01 && x < c.duration - 0.01).sort((a, b) => a - b);
         // An exit gets its own last piece (its last 0.3 s), so it plays at the end even when the words highlight before it.
-        const outCut = st.animOut && !['none', 'untype'].includes(st.animOut) && c.duration > OUT_S + 0.05 ? [Math.round((c.duration - OUT_S) * 1000) / 1000] : [];
+        const outLen = animLens(st, c.duration)[1]; const outCut = outLen && c.duration > outLen + 0.05 ? [Math.round((c.duration - outLen) * 1000) / 1000] : [];
         const edges = [0, ...[...new Set([...cutsAt, ...outCut])].sort((a, b) => a - b), c.duration];
         for (let k = 0; k < edges.length - 1; k++) {
           const first = k === 0, last = k === edges.length - 2;
-          const an = animTags(st, first, last, Math.round((edges[k + 1] - edges[k]) * 1000), px, py, sc);
+          const an = animTags(st, first, last, Math.round((edges[k + 1] - edges[k]) * 1000), px, py, sc, c.duration);
           const fi = first ? Math.max(fadeIn, an.fi) : 0, fo = last ? Math.max(fadeOut, an.fo) : 0;
           event({ from: c.start + edges[k], to: c.start + edges[k + 1], px, py, sc, op: base(c.opacity, 1), rot: frame ? 0 : base(c.rotation, 0),
             place: an.place, pop: an.tags,
@@ -485,13 +501,13 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       }
     }
     const rel = (file) => path.relative(paths.root, file).split(path.sep).join('/');
-    own.forEach(({ c, frame, events: ev, shIn, shOut, rot }, n) => {
+    own.forEach(({ c, frame, events: ev, shIn, shOut, tIn, tOut, rot }, n) => {
       const file = scratchFile(`title${n}.ass`);
       fs.writeFileSync(file, [...header(frame.w, frame.h), ...ev].join('\n') + '\n');
       let s = `tt${n}`;
       f.push(`color=c=black@0.0:s=${frame.w}x${frame.h}:r=${fps}:d=${num(c.duration)},format=yuva420p,subtitles=filename='${rel(file)}':fontsdir='fonts':alpha=1,settb=AVTB[${s}]`);
-      if (shIn) s = xfadeEdge(s, shIn.type, Math.min(transDur(shIn), c.duration), c.duration, false, `t${n}a`);
-      if (shOut) s = xfadeEdge(s, shOut.type, Math.min(transDur(shOut), c.duration), c.duration, true, `t${n}b`);
+      if (shIn) s = xfadeEdge(s, shIn.type, tIn, c.duration, false, `t${n}a`);
+      if (shOut) s = xfadeEdge(s, shOut.type, tOut, c.duration, true, `t${n}b`);
       const r = (rot * Math.PI) / 180; const ch = [];
       if (Math.abs(rot) > 0.01) ch.push(`rotate=${num(r)}:c=none:ow=rotw(${num(r)}):oh=roth(${num(r)})`);
       ch.push(`trim=duration=${num(c.duration)}`, `setpts=PTS+${num(c.start)}/TB`);
@@ -520,7 +536,7 @@ async function exportProject(project, outPath, { signal, onProgress } = {}) {
       if (hasKeys(track.volume)) warnings.add('Track volume keyframes are exported at their base value');
       const gainDb = (c.effects || []).filter((e) => e.effectId === 'gain' && e.enabled !== false).reduce((s, e) => s + base(e.params?.gain ?? e.params?.db, 0), 0);
       const chain = ['aresample=48000', 'aformat=channel_layouts=stereo', ...atempoChain(speed), (hasKeys(c.volume) ? `volume=volume='${kexpr(c.volume, 1, 't', { mul: base(track.volume, 1) * 10 ** (gainDb / 20) })}':eval=frame` : `volume=${num(base(c.volume, 1) * base(track.volume, 1) * 10 ** (gainDb / 20))}`), `atrim=duration=${num(c.duration)}`];
-      const ti_ = transDur(c.transIn), to = transDur(c.transOut);
+      const [ti_, to] = fitTrans(transDur(c.transIn), transDur(c.transOut), c.duration);
       if (ti_) chain.push(`afade=t=in:st=0:d=${num(ti_)}`);
       if (to) chain.push(`afade=t=out:st=${num(Math.max(0, c.duration - to))}:d=${num(to)}`);
       const ms = Math.round(c.start * 1000);
