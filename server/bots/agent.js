@@ -99,6 +99,18 @@ function needsWeb(q) {
 }
 const wantsGoogle = (q) => /\bgoogle\b|deep(er)? (search|dive|research|inquiry)|full (inquiry|search|research)|thorough(ly)? (search|research)/i.test(String(q || ''));
 const recentOf = (q) => (/\b(today|tonight|yesterday|last night|this morning|breaking|just now)\b/i.test(q) ? 'day' : /\b(this week|latest|recent(ly)?|news|days ago|said|says|announced)\b/i.test(q) ? 'week' : null);
+// "I will search...", "let me look that up", "give me a moment": a plan, not an answer.
+const PROMISE = /\b(i will|i'll|let me|i am going to|i'm going to|i can)\s+(now\s+|first\s+|also\s+)?(try (to|again)|re-?scan|search|look|use (duckduckgo|google)|check|find|dig|browse|run|scan|query)\b|\bgive me a (moment|minute|second)\b|\bplease (wait|hold)\b|\bone moment\b|\bbear with me\b|\bstand by\b|\bcontinue my search\b/i;
+/** An answer written in code from a research step's own result (titles, the passages it read, links). */
+function fromResults(step) {
+  const text = String(step.result || '').trim();
+  const links = (step.links || []).slice(0, 5).map((l) => (typeof l === 'string' ? l : l.url)).filter(Boolean);
+  const body = text.split('\n')
+    .filter((l) => l.trim() && !/only trust|give the link for|answer from these results|offer to dig deeper/i.test(l))
+    .map((l) => l.replace(/^(WEB SEARCH|INSTANT ANSWER|PAGES READ|FROM THE PAGES)\b[^:]*:?\s*$/i, (m, h) => `${h[0]}${h.slice(1).toLowerCase()}:`).replace(/\s+\u2014\s+/g, ': ').replace(/\u2014/g, ','))
+    .slice(0, 18).join('\n').slice(0, 2200);
+  return `Here's what the search found:\n${body}${links.length && !links.some((u) => body.includes(u)) ? `\n\nSources:\n${links.map((u) => `- ${u}`).join('\n')}` : ''}`;
+}
 const NO_WEB = /real[- ]time|training data|knowledge cut-?off|cut-?off date|don'?t have (access|the ability)|do not have (access|the ability)|can(no|')t (browse|access the internet|search the web)|as of my last update|not able to browse|up-to-date information|check reputable news/i;
 
 // ------------------------------------------------------------------ "what can you do?"
@@ -169,7 +181,15 @@ function typer(runId) {
   return (p) => { if (!p || (p.answer == null && !p.say)) return; pending = p; if (timer) return; const wait = Math.max(0, 300 - (Date.now() - last)); timer = setTimeout(flush, wait); };
 }
 const TALK_WORDS = new Set('hi hii hey heyy hello helloo yo sup hiya howdy good morning afternoon evening night thanks thank you u ty thx ok okay k cool nice great awesome got it test testing tested 1 2 3 123 are there how what whats up doing corbin juno scout bot again'.split(' '));
-const SMALL_TALK = { test: (q) => { const w = String(q || '').toLowerCase().replace(/[^a-z0-9' ]/g, ' ').replace(/'/g, '').split(/\s+/).filter(Boolean); return w.length > 0 && w.length <= 6 && w.every((x) => TALK_WORDS.has(x)); } };
+const GREETS = new Set('hi hii hey heyy hello helloo yo sup hiya howdy morning thanks thank ty thx ok okay test testing'.split(' '));
+const TASKY = /\b(find|search|look|get|make|write|draft|build|list|send|check|tell|show|give|research|scout|call|email|what|who|when|where|why|how much|weather|news|price|summar|plan|schedule|remind|add|update|fix)\b/;
+const SMALL_TALK = { test: (q) => {
+  const raw = String(q || '').toLowerCase(); const w = raw.replace(/[^a-z0-9' ]/g, ' ').replace(/'/g, '').split(/\s+/).filter(Boolean);
+  if (!w.length) return false;
+  if (w.length <= 6 && w.every((x) => TALK_WORDS.has(x))) return true;
+  // A greeting with a name or a word or two on it ("hello retard", "yo corbin you there"), but no task in it.
+  return w.length <= 5 && GREETS.has(w[0]) && !TASKY.test(raw);
+} };
 
 const publish = (run) => events.publish('bots', { botId: run.botId, runId: run.id }, { coalesceKey: `bots:${run.id}` });
 function save(run, patch) { const r = ctx.store.update(RUNS, run.id, patch); Object.assign(run, r || patch); publish(run); return run; }
@@ -204,7 +224,9 @@ async function drive(runId) {
       const r = await ai.ask({ role: roleOf(), maxTokens: 120, ...(bot.brain && bot.brain !== 'auto' ? { provider: bot.brain } : {}), onToken: (t) => onPartial({ answer: t }),
         system: `You are ${bot.name}, an AI bot at Euclidean Media (a short-form video agency). ${bot.role ? `Your job: ${bot.role}` : ''} Reply to this greeting in one short, friendly sentence and say in a few words what you can do. Plain text, no em dashes.`,
         messages: [{ role: 'user', content: run.question }] });
-      const answer = String(r.text || '').trim() || `Hi, I'm ${bot.name}. What do you need?`;
+      const said = String(r.text || '').trim(); let reply = said;
+      try { const j = parse(said); if (j && j.answer != null) reply = String(j.answer); } catch { /* plain text */ }
+      const answer = reply.trim() || `Hi, I'm ${bot.name}. What do you need?`;
       save(run, { status: 'done', answer, endedAt: now(), note: null, typing: null, provider: r.provider, model: r.model });
       ctx.store.insert('botMessages', { botId: bot.id, role: 'bot', text: answer, runId: run.id, at: now(), by: r.provider });
       events.publish('bots', { botId: bot.id, runId: run.id });
@@ -234,9 +256,34 @@ async function drive(runId) {
       afterRun(bot.id);
       return ctx.store.get(RUNS, runId);
     }
+    // Weather: straight from a free weather service (no key, no AI writing it), in seconds.
+    if (!(run.steps || []).length && list.some((t) => t.name === 'weather')) {
+      const wq = require('../integrations/weather').ask(asked);
+      if (wq && wq.place) {
+        const s = { id: 's1', say: 'Checking the weather (Open-Meteo, free)', tool: 'weather', args: wq, at: now(), auto: true, running: true };
+        save(run, { steps: [s], note: s.say });
+        let res; try { res = await useTool(bot, run, s, list); } catch (e) { res = { text: e.message, failed: true }; }
+        run = ctx.store.get(RUNS, runId);
+        save(run, { steps: run.steps.map((x) => (x.id === s.id ? { ...x, running: false, result: String(res.text).slice(0, 4000), forModel: String(res.text), failed: !!res.failed } : x)) });
+        if (!res.failed) {
+          save(run, { status: 'done', answer: res.text, endedAt: now(), note: null, typing: null, provider: 'Open-Meteo' });
+          ctx.store.insert('botMessages', { botId: bot.id, role: 'bot', text: res.text, runId: run.id, at: now(), by: 'Open-Meteo' });
+          events.publish('bots', { botId: bot.id, runId: run.id });
+          afterRun(bot.id);
+          return ctx.store.get(RUNS, runId);
+        }
+      } else if (wq && !wq.place) {
+        const answer = 'Where? Tell me the town or area, like "weather in Hauppauge" or "weather on Long Island tomorrow".';
+        save(run, { status: 'done', answer, endedAt: now(), note: null, typing: null });
+        ctx.store.insert('botMessages', { botId: bot.id, role: 'bot', text: answer, runId: run.id, at: now(), by: 'Euclidean' });
+        events.publish('bots', { botId: bot.id, runId: run.id });
+        afterRun(bot.id);
+        return ctx.store.get(RUNS, runId);
+      }
+    }
     // Anything about the world right now: search first (DuckDuckGo, or Google when asked), so the answer is live.
     if (!(run.steps || []).length && list.some((t) => t.name === 'research') && needsWeb(asked)) await webStep(bot, run, list, asked);
-    let webRetry = false;
+    let webRetry = false; let acted = false;
     for (;;) {
       run = ctx.store.get(RUNS, runId);
       if (run.cancel) { save(run, { status: 'stopped', endedAt: now(), note: 'Stopped' }); break; }
@@ -260,10 +307,24 @@ async function drive(runId) {
       const msgs = messagesFor(bot, run);
       if (last) msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: `${msgs[msgs.length - 1].content}\n\nYou are out of steps. Reply now with {"answer": ...} using what you found.` };
       save(run, { note: used ? 'Thinking about what it found' : 'Thinking' });
-      const r = await think(bot, system, msgs, { onPartial });
+      // After a search, a small local model can take minutes to write it up: past the limit, answer from the results.
+      const searched = (run.steps || []).filter((x) => /^(research|web_search|news|google_search)$/.test(x.tool || '') && !x.failed && x.result).pop();
+      let r;
+      try { r = await (searched ? withTimeout(think(bot, system, msgs, { onPartial }), Number(ctx.setting('bots.thinkTimeoutSec', 120)) * 1000, 'Writing the answer') : think(bot, system, msgs, { onPartial })); }
+      catch (e) {
+        if (!searched || !/took too long/.test(e.message)) throw e;
+        r = { text: JSON.stringify({ answer: fromResults(searched) }), provider: 'the search results' };
+      }
       run = ctx.store.get(RUNS, runId);
       if (run.cancel) continue;
       const step = parse(r.text);
+      // Said it WILL search ("I will use DuckDuckGo...", "give me a moment") instead of doing it: do it now, once;
+      // if it still only promises after that, answer from what the search found.
+      if (step.answer != null && !last && PROMISE.test(String(step.answer)) && list.some((t) => t.name === 'research')) {
+        if (!acted) { acted = true; webRetry = true; save(run, { note: 'Searching now instead of saying it will' }); await webStep(bot, run, list, asked); continue; }
+        const got = (ctx.store.get(RUNS, runId).steps || []).filter((x) => x.tool === 'research' && x.result).pop();
+        if (got) step.answer = fromResults(got);
+      }
       if (!run.provider) save(run, { provider: r.provider, model: r.model });
       // Said it can't see the live web without having looked: search, then answer again (once).
       if (step.answer != null && !last && !webRetry && NO_WEB.test(String(step.answer)) && list.some((t) => t.name === 'research') && !(run.steps || []).some((x) => /research|web_search|news|google_search/.test(x.tool || ''))) {
@@ -323,7 +384,11 @@ async function webStep(bot, run, list, question) {
 async function searchQuery(text) {
   const deep = require('./deep');
   const web = require('../integrations/websearch');
-  let q = web.queryOf(deep.cleanTask(text));
+  let q = web.queryOf(deep.cleanTask(text))
+    .replace(/^(?:(?:can|could|would) you |please |hey |yo )*(?:find|get|look up|search(?: for)?|tell|show|give|pull up|check)\s+(?:me\s+|us\s+)?(?:the\s+|a\s+|some\s+)?/i, '')
+    .replace(/\b(?:from|for|on|as of)\s+(today|tonight|yesterday|tomorrow)\b/gi, '$1')
+    .replace(/\b(?:from |for |on )?\d{1,2}\/\d{1,2}\/\d{2,4}\b/g, '')
+    .replace(/\s+/g, ' ').trim();
   if (q.split(/\s+/).length > 10) {
     try {
       const r = await require('../integrations/ai').ask({ role: roleOf(), json: true, maxTokens: 80, system: 'Reply with JSON only.', prompt: `Write the best web search for this request: 3 to 8 words, no quotes.\nREQUEST: ${deep.cleanTask(text).slice(0, 600)}\nJSON: {"query": "..."}` });
@@ -381,4 +446,4 @@ async function runInline(bot, task, { depth = 1, parent = null } = {}) {
   return 'No answer.';
 }
 
-module.exports = { deepSteps, searchQuery, needsWeb, wantsGoogle, readable, abilitiesAnswer, ABILITIES, compactInstructions, partialOf, SMALL_TALK, drive, runInline, parse, systemFor, messagesFor, brainLabel, RUNS };
+module.exports = { PROMISE, fromResults, deepSteps, searchQuery, needsWeb, wantsGoogle, readable, abilitiesAnswer, ABILITIES, compactInstructions, partialOf, SMALL_TALK, drive, runInline, parse, systemFor, messagesFor, brainLabel, RUNS };

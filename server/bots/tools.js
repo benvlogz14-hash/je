@@ -154,6 +154,15 @@ const TOOLS = [
     },
   },
   {
+    name: 'weather', kinds: ['web'], args: '{"place": "town or area", "when": "today | tomorrow | week"}',
+    about: 'The weather for a place, live and free (no key): right now, today and tomorrow, or the week. Use this for any weather question instead of searching the web.',
+    async run(a) {
+      const w = require('../integrations/weather');
+      const f = await w.forecast(String(a.place || '').trim(), ['today', 'tomorrow', 'week'].includes(a.when) ? a.when : 'today');
+      return { text: w.format(f) };
+    },
+  },
+  {
     name: 'refresh_analytics', kinds: ['app'], args: '{}',
     about: 'Refresh the posted shorts\' views, likes and comments on the Analytics page from their public pages (free, no keys). It runs in the background; say it started and what the last refresh found.',
     async run() {
