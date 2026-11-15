@@ -503,6 +503,7 @@ function Editor({ id }) {
       isLinked ? { label: 'Unlink audio and video', icon: 'link', onClick: () => unlink(ids) } : kinds.has(0) && kinds.has(1) ? { label: 'Link audio and video', icon: 'link', onClick: () => link(ids) } : null,
       grp.some((x) => x.type === 1) ? { label: audioMuted ? 'Unmute audio' : 'Mute audio', icon: audioMuted ? 'volume' : 'mute', onClick: () => muteAudio(ids, !audioMuted) } : null,
       c.type === 0 && m?.hasAudio ? { label: 'Extract audio to new file', icon: 'volume', onClick: () => extractAudio(c) } : null,
+      grp.some((x) => (x.type === 0 || x.type === 1) && media[x.mediaId]?.path) ? { label: 'Add captions for this', icon: 'type', onClick: () => window.dispatchEvent(new CustomEvent('studio-captions', { detail: ids })) } : null,
       'sep',
       c.type !== 3 && c.type !== FX_LAYER ? { label: 'Speed / Duration…', icon: 'clock', hint: 'Ctrl+R', onClick: () => speedDialog(ids) } : null,
       visual ? { label: 'Scale to fill frame', icon: 'zoomIn', onClick: () => fitClip(ids, 'fill') } : null,
@@ -801,6 +802,8 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
   const setOpen = (v) => { setOpenRaw(v); try { localStorage.setItem('eu.capOpen', v ? '1' : '0'); } catch { /* ignore */ } };
   const [showWords, setShowWords] = useState(false);
   const [look, setLook] = useState('signature'); const [titleLook, setTitleLook] = useState(''); const [busy, setBusy] = useState('');
+  const fromEvent = useRef(null);
+  useEffect(() => { const f = (e) => fromEvent.current?.(e.detail || []); window.addEventListener('studio-captions', f); return () => window.removeEventListener('studio-captions', f); }, []);
   if (!seq) return null;
   const all = [...seq.videoTracks].flatMap((tr) => tr.clips.filter(isCaption));
   const lookV = (LOOKS.find((l) => l.id === look) || LOOKS[0]).v;
@@ -812,8 +815,14 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
     const pick = (tracks, type) => tracks.filter((tr) => !tr.muted).flatMap((tr) => tr.clips.filter((c) => !isMusic(tr, c))).filter((c) => c.type === type && c.enabled !== false && media[c.mediaId]?.path);
     const a = pick(seq.audioTracks, 1); return (a.length ? a : pick(seq.videoTracks.filter((tr) => tr.name !== 'B-roll'), 0)).map((c) => ({ path: media[c.mediaId].path, in: c.in || 0, duration: c.duration, start: c.start, speed: c.speed || 1 }));
   };
-  const insert = (caps) => edit((d, s) => {
-    for (const tr of s.videoTracks) tr.clips = tr.clips.filter((c) => !isCaption(c));
+  // The video / sound clips picked on the timeline (B-roll included): "Add captions" can make captions for just these.
+  const pickedOf = (ids) => ids.map((id) => findClip(seq, id)?.c).filter((c) => c && (c.type === 0 || c.type === 1) && c.enabled !== false && media[c.mediaId]?.path);
+  const picked = pickedOf(sel);
+  const asSrc = (c) => ({ path: media[c.mediaId].path, in: c.in || 0, duration: c.duration, start: c.start, speed: c.speed || 1 });
+  // spans: only the captions over those stretches are replaced (all of them when it's the whole edit).
+  const insert = (caps, spans) => edit((d, s) => {
+    const over = (c) => !spans || spans.some(([a, b]) => c.start < b - 1e-3 && c.start + c.duration > a + 1e-3);
+    for (const tr of s.videoTracks) tr.clips = tr.clips.filter((c) => !(isCaption(c) && over(c)));
     let tr = s.videoTracks.find((x) => x.name === 'Captions');
     if (!tr) { tr = { type: 0, name: 'Captions', muted: false, locked: false, volume: { base: 1 }, clips: [] }; const hi = s.videoTracks.findIndex((x) => x.name === 'Hook'); s.videoTracks.splice(hi >= 0 ? hi : s.videoTracks.length, 0, tr); }
     const a = (v) => ({ base: v }); const posY = Math.round(s.height * 0.28);
@@ -821,9 +830,13 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
       text: { text: k.text, ...lookText(lookV, false), hlMode: 'word', words: k.words, keywords: [] }, isCaption: true });
     tr.clips.sort((x, y) => x.start - y.start);
   });
-  const addCaptions = async () => {
-    const src = sources(); if (!src.length) return toast('Put a video or audio clip on the timeline first.', { kind: 'warn' });
-    if (all.length && !(await confirmDialog({ title: 'Make the captions again?', text: 'The captions on the timeline are replaced with new ones from the transcript. Undo (Ctrl+Z) brings the old ones back.', confirm: 'Make captions' }))) return;
+  const addCaptions = async (only) => {
+    // only: clips picked on the timeline (any video or sound clip, B-roll too); captions for just those, from what's said in them.
+    const mine = only?.length ? only : null;
+    const src = mine ? mine.map(asSrc) : sources(); if (!src.length) return toast('Put a video or audio clip on the timeline first.', { kind: 'warn' });
+    const spans = mine ? mine.map((c) => [c.start, c.start + c.duration]) : null;
+    const replacing = spans ? all.filter((c) => spans.some(([a, b]) => c.start < b - 1e-3 && c.start + c.duration > a + 1e-3)).length : all.length;
+    if (replacing && !(await confirmDialog({ title: mine ? 'Replace the captions there?' : 'Make the captions again?', text: mine ? `${replacing} caption${replacing === 1 ? '' : 's'} already over ${mine.length === 1 ? 'this clip' : 'these clips'} will be replaced with captions of what's said in ${mine.length === 1 ? 'it' : 'them'}. The rest stay. Undo (Ctrl+Z) brings the old ones back.` : 'The captions on the timeline are replaced with new ones from the transcript. Undo (Ctrl+Z) brings the old ones back.', confirm: 'Make captions' }))) return;
     const req = { clips: src, wordsPerLine: lookV.wordsPerLine || 3, uppercase: lookV.uppercase !== false };
     try {
       setBusy('Getting the words…');
@@ -840,10 +853,11 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
         }
         if (r.missing.length) throw new Error('Transcribing is taking a long time. Check Production → jobs, then press Add captions again.');
       }
-      if (!r.captions.length) throw new Error('No speech was found in these clips.');
-      insert(r.captions); sfx('success'); toast(`${r.captions.length} captions added with the spoken word highlighted. Change the look or highlight below.`, { kind: 'success' });
+      if (!r.captions.length) throw new Error(mine ? `No speech was found in ${mine.length === 1 ? 'that clip' : 'those clips'}.` : 'No speech was found in these clips.');
+      insert(r.captions, spans); sfx('success'); toast(`${r.captions.length} captions added${mine ? ` for ${mine.length === 1 ? 'the selected clip' : `the ${mine.length} selected clips`}` : ''} with the spoken word highlighted. Change the look or highlight below.`, { kind: 'success' });
     } catch (e) { sfx('error'); toast(e.message, { kind: 'error' }); } finally { setBusy(''); }
   };
+  fromEvent.current = (ids) => { const cs = pickedOf(ids); if (!cs.length) return toast('Pick a video or sound clip first.', { kind: 'warn' }); if (!busy) { if (!open) setOpen(true); addCaptions(cs); } };
   // Captions and the opening title have their own looks (e.g. a TikTok title over Signature captions).
   const applyLook = (id, which) => {
     const v = (LOOKS.find((l) => l.id === id) || LOOKS[0]).v; if (which === 'title') setTitleLook(id); else setLook(id);
@@ -856,7 +870,8 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
   const hasHook = seq.videoTracks.some((tr) => tr.clips.some(isHook));
   const top = html`<div class="row wrap" style="gap:8px;padding:6px 12px;border-top:1px solid var(--line);background:var(--surface-2);font-size:var(--fs-sm)">
     <button type="button" class="chip" style="font-weight:700" title=${open ? 'Hide the caption tools (more room for the timeline)' : 'Show the caption tools'} aria-expanded=${open} onClick=${() => setOpen(!open)}>${open ? '▾' : '▸'} Captions</button>
-    <${Button} size="sm" kind=${all.length ? 'ghost' : 'primary'} icon="type" disabled=${!!busy} onClick=${addCaptions}>${all.length ? 'Make captions again' : 'Add captions'}</${Button}>
+    <${Button} size="sm" kind=${all.length || picked.length ? 'ghost' : 'primary'} icon="type" disabled=${!!busy} onClick=${() => addCaptions()} title="Captions for the whole edit">${all.length ? 'Make captions again' : 'Add captions'}</${Button}>
+    ${picked.length ? html`<${Button} size="sm" kind="primary" icon="type" disabled=${!!busy} onClick=${() => addCaptions(picked)} title="Captions of what's said in the selected clip(s) only; the other captions stay">Add captions for ${picked.length === 1 ? 'the selected clip' : `${picked.length} selected clips`}</${Button}>` : null}
     <span class="faint">Captions look</span>
     <select class="select sm" style="width:auto" value=${look} onChange=${(e) => applyLook(e.target.value, 'captions')} aria-label="Caption look" title="Applies to every caption">${LOOKS.map((l) => html`<option value=${l.id}>${l.label}</option>`)}</select>
     ${hasHook ? html`<span class="faint">Title look</span>
@@ -1943,6 +1958,7 @@ function EffectControls({ selected, sel = [], findClip, seq, edit, media, t, set
         <div class="row" style="gap:8px;font-size:var(--fs-sm)"><${Toggle} on=${c.text?.typeSound !== false} label="Typing sound" onChange=${(on) => { setRaw((x) => { x.text.typeSound = on; }); if (on) typeClick(false, c.text?.typeVol ?? 0.7); }} /><span>${c.text?.typeSound !== false ? 'On' : 'Off'}</span></div>
         ${c.text?.typeSound !== false ? html`<${ParamField} label="Typing volume" p=${Math.round((c.text?.typeVol ?? 0.7) * 100)} animatable=${false} min=${0} max=${200} smin=${0} smax=${150} unit="%" dflt=${70}
           onLive=${(v) => liveSet(c.text, 'typeVol', Math.max(0, v.base) / 100, c.id + 'tvol')} onCommit=${(v) => { setRaw((x) => { x.text.typeVol = Math.max(0, v.base) / 100; }); typeClick(false, Math.max(0, v.base) / 100); }} />` : null}` : null}</div>` : null}
+    ${(c.type === 0 || c.type === 1) && media[c.mediaId]?.path ? html`<${Button} size="sm" kind="soft" icon="type" style="margin:0 0 10px" title="Captions of what's said in this clip (and any other selected clips); other captions stay" onClick=${() => window.dispatchEvent(new CustomEvent('studio-captions', { detail: sel.includes(c.id) ? sel : [c.id] }))}>Add captions for ${sel.length > 1 && sel.includes(c.id) ? `the ${sel.length} selected` : 'this clip'}</${Button}>` : null}
     ${c.type === FX_LAYER ? html`<div class="faint" style="font-size:var(--fs-xs);margin:2px 0 8px">Everything on the tracks below this layer gets its effects while it's on the timeline. Stretch it over the part you want, add effects from Effects on the left, and use Opacity for how strong the whole layer is.</div>
       ${F('opacity', { label: 'Opacity', d: 1, mult: 100, min: 0, max: 100, smin: 0, smax: 100, unit: '%', dflt: 100 })}
       ${!(c.effects || []).length ? html`<div class="empty" style="padding:14px 6px"><p style="font-size:var(--fs-sm)">No effects yet. Pick one in Effects on the left (VHS, blur, colour…) and it goes on this layer.</p></div>` : null}` : null}
