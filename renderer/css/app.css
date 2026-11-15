@@ -741,10 +741,14 @@ html[data-night] .hal-msg.hal.claude .hal-bubble { background: #b57b06; color: #
 
 /* ---------------------------------------------------------------- Quick cut (renderer/js/modules/clipper.js)
    Built on the theme's own colours, so it's white/pastel in light mode and dark in Night mode like everything else. */
-.qc-home .qc-h3 { margin: 24px 0 10px; font-size: var(--fs-md, 15px); }
-.qc-drop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 280px; border: 2px dashed var(--line-strong); border-radius: 24px; background: linear-gradient(180deg, var(--surface), var(--surface-2)); text-align: center; padding: 28px; transition: background var(--t-med) var(--ease), border-color var(--t-med) var(--ease), transform var(--t-med) var(--ease); }
+.qc-home .qc-h3 { margin: 26px 0 12px; font-size: var(--fs-md, 15px); }
+.qc-hero { display: flex; gap: 20px; align-items: stretch; flex-wrap: wrap; }
+.qc-hero > .grow { min-width: 260px; flex: 1 1 320px; display: flex; flex-direction: column; justify-content: center; } .qc-hero h1 { margin: 0 0 6px; }
+.qc-drop { flex: 1 1 520px; display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap; min-height: 120px; border: 2px dashed var(--line-strong); border-radius: 22px; background: var(--surface); padding: 18px 22px; transition: background var(--t-med) var(--ease), border-color var(--t-med) var(--ease), transform var(--t-med) var(--ease); }
 .qc-drop.on { background: var(--sky-soft); border-color: var(--sky); transform: scale(1.01); }
-.qc-drop-ico { width: 64px; height: 64px; border-radius: 20px; display: grid; place-items: center; background: var(--gold-soft, #fff3c4); color: var(--ink); }
+.qc-drop-ico { width: 52px; height: 52px; flex: none; border-radius: 16px; display: grid; place-items: center; background: var(--gold-soft, #fff3c4); color: var(--ink); }
+.qc-search { display: flex; align-items: center; gap: 8px; margin-top: 20px; max-width: 420px; height: 40px; padding: 0 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); color: var(--ink-3); }
+.qc-search input { border: 0; outline: none; background: transparent; color: var(--ink); font: inherit; min-width: 0; }
 .qc-up { position: relative; display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .qc-split { display: flex; align-items: stretch; }
 .qc-split .btn { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }
@@ -753,10 +757,15 @@ html[data-night] .hal-msg.hal.claude .hal-bubble { background: #b57b06; color: #
 .qc-link { width: min(520px, 86vw); display: flex; flex-direction: column; gap: 8px; text-align: left; padding: 14px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-2); animation: qc-pop var(--t-med) var(--ease); }
 .qc-prog { height: 6px; border-radius: 4px; background: var(--surface-3); overflow: hidden; } .qc-prog i { display: block; height: 100%; background: var(--sky); border-radius: 4px; transition: width .3s var(--ease); }
 @keyframes qc-pop { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: none; } }
-.qc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
-.qc-card { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 8px; border-radius: 16px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; transition: transform var(--t-med) var(--ease), box-shadow var(--t-med) var(--ease); }
-.qc-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-2); } .qc-card:active { transform: scale(.98); }
-.qc-th { aspect-ratio: 16/9; border-radius: 11px; background: var(--surface-3) center/cover no-repeat; }
+.qc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.qc-card { min-width: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px 8px 10px; border-radius: 18px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); cursor: pointer; transition: transform var(--t-med) var(--ease), box-shadow var(--t-med) var(--ease); }
+.qc-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-2); } .qc-card:active { transform: scale(.98); } .qc-card:focus-visible { outline: 2px solid var(--sky); }
+.qc-th { position: relative; width: 100%; aspect-ratio: 16/9; border-radius: 12px; overflow: hidden; background: linear-gradient(135deg, var(--surface-3), var(--surface-2)); }
+.qc-th img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
+.qc-th-ico { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-3); }
+.qc-dur { position: absolute; right: 6px; bottom: 6px; z-index: 2; padding: 2px 6px; border-radius: 6px; background: rgba(0,0,0,.72); color: #fff; font-size: 11px; font-weight: 600; }
+.qc-ready { position: absolute; left: 6px; top: 6px; z-index: 2; padding: 2px 7px; border-radius: 6px; background: rgba(255,214,10,.95); color: #111; font-size: 10px; font-weight: 700; }
+.qc-name { font-size: var(--fs-sm); font-weight: 500; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; padding: 0 4px; }
 
 .qc { position: absolute; inset: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--bg); color: var(--ink); }
 .qc-top { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--surface); min-height: 54px; }

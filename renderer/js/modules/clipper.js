@@ -54,24 +54,35 @@ function Home() {
     const i = document.createElement('input'); i.type = 'file'; i.accept = 'video/*'; i.onchange = () => i.files[0] && upload(i.files[0]); i.click();
   };
   const recent = data?.files || [];
-  const card = (key, name, dur, thumbPath, onClick, extra) => html`<button key=${key} type="button" class="qc-card" onClick=${onClick}>
-    <div class="qc-th" style=${{ backgroundImage: `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(thumbPath)}&t=${Math.min(5, (dur || 10) / 3).toFixed(1)}`)})` }} />
-    <div class="ellipsis" style="font-size:var(--fs-sm)">${name}</div><div class="faint tnum" style="font-size:var(--fs-xs)">${short(dur || 0)}${extra || ''}</div></button>`;
+  const [q, setQ] = useState(''); const [more, setMore] = useState(false);
+  // Footage, once per file (the same video imported twice showed twice), newest first, filtered by the search box.
+  const seen = new Set(recent.map((x) => x.path));
+  const foot = (assets || []).filter((a) => a.info?.hasVideo !== false && a.path && !seen.has(a.path) && !seen.has('n:' + a.name) && (seen.add(a.path), seen.add('n:' + a.name), true));
+  const match = (n) => !q.trim() || String(n).toLowerCase().includes(q.trim().toLowerCase());
+  const shown = foot.filter((a) => match(a.name)); const rec = recent.filter((x) => match(x.name));
+  const nice = (n) => String(n || '').replace(/\.[^.]+$/, '').replace(/_/g, "'");
+  const card = (key, name, dur, thumbPath, onClick, ready) => html`<div key=${key} role="button" tabindex="0" class="qc-card" onClick=${onClick} onKeyDown=${(ev) => ev.key === 'Enter' && onClick()} title=${name}>
+    <div class="qc-th"><img loading="lazy" alt="" src=${api.url(`/api/media/thumb?path=${encodeURIComponent(thumbPath)}&t=${Math.min(20, (dur || 10) / 4).toFixed(1)}`)} onError=${(ev) => { ev.target.style.display = 'none'; }} />
+      <span class="qc-th-ico"><${Icon} name="film" size=${22} /></span><span class="qc-dur tnum">${short(dur || 0)}</span>${ready ? html`<span class="qc-ready">Transcript ready</span>` : null}</div>
+    <div class="qc-name">${nice(name)}</div></div>`;
   return html`<div class="page qc-home">
-    <div class="page-head"><div class="grow"><h1>Quick cut</h1><div class="sub">Drop in a long video or a YouTube link. It writes down everything that's said, so you can search it, then drag the handles, crop and export.</div></div></div>
-    <div class=${'qc-drop' + (drag ? ' on' : '')} onDragOver=${(e) => { e.preventDefault(); setDrag(true); }} onDragLeave=${() => setDrag(false)}
-      onDrop=${(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (!f) return;
-        // Desktop app: open the file where it is (instant, even for a huge video). The old file.path is gone in this
-        // Electron, so every drop uploaded a whole copy first (minutes for a long video, looked stuck).
-        const local = (window.euclidean?.pathForFile && window.euclidean.pathForFile(f)) || f.path || '';
-        if (local && data?.desktop) openPath({ path: local }); else upload(f); }}>
-      <div class="qc-drop-ico"><${Icon} name="scissors" size=${30} /></div>
-      <b style="font-size:18px">Drop a video here</b>
-      <span class="faint">Any length: a two-and-a-half-hour debate is fine.</span>
-      <${UploadButton} onPick=${choose} desktop=${data?.desktop} busy=${up != null ? `Bringing it in… ${Math.round(up * 100)}%` : ''} />
+    <div class="qc-hero">
+      <div class="grow"><h1>Quick cut</h1><div class="sub">Open a long video or a YouTube link. Everything said is written down so you can search it, then drag the handles, crop and export.</div></div>
+      <div class=${'qc-drop' + (drag ? ' on' : '')} onDragOver=${(e) => { e.preventDefault(); setDrag(true); }} onDragLeave=${() => setDrag(false)}
+        onDrop=${(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (!f) return;
+          // Desktop app: open the file where it is (instant, even for a huge video) instead of uploading a copy.
+          const local = (window.euclidean?.pathForFile && window.euclidean.pathForFile(f)) || f.path || '';
+          if (local && data?.desktop) openPath({ path: local }); else upload(f); }}>
+        <div class="qc-drop-ico"><${Icon} name="scissors" size=${24} /></div>
+        <div class="col" style="gap:2px;align-items:flex-start;text-align:left"><b>Drop a video here</b><span class="faint" style="font-size:var(--fs-sm)">Any length: a two-and-a-half-hour debate is fine.</span></div>
+        <${UploadButton} onPick=${choose} desktop=${data?.desktop} busy=${up != null ? `Bringing it in… ${Math.round(up * 100)}%` : ''} />
+      </div>
     </div>
-    ${recent.length ? html`<h3 class="qc-h3">Opened recently</h3><div class="qc-grid" data-animate>${recent.map((x) => card(x.id, x.name, x.info?.duration, x.path, () => navigate(`/clipper?f=${x.id}`), x.tx?.status === 'ready' ? ' · transcript ready' : ''))}</div>` : null}
-    ${(assets || []).length ? html`<h3 class="qc-h3">From your footage</h3><div class="qc-grid">${(assets || []).filter((a) => a.info?.hasVideo !== false && a.path).slice(0, 24).map((a) => card(a.id, a.name, a.info?.duration, a.path, () => openPath({ assetId: a.id })))}</div>` : null}
+    ${recent.length + foot.length > 6 ? html`<div class="qc-search"><${Icon} name="search" size=${15} /><input class="grow" placeholder="Find a video by name" value=${q} onInput=${(e) => setQ(e.target.value)} /></div>` : null}
+    ${rec.length ? html`<h3 class="qc-h3">Opened recently</h3><div class="qc-grid">${rec.map((x) => card(x.id, x.name, x.info?.duration, x.path, () => navigate(`/clipper?f=${x.id}`), x.tx?.status === 'ready'))}</div>` : null}
+    ${shown.length ? html`<h3 class="qc-h3">From your footage <span class="faint" style="font-weight:400">· ${shown.length}</span></h3><div class="qc-grid">${shown.slice(0, more || q ? 200 : 18).map((a) => card(a.id, a.name, a.info?.duration, a.path, () => openPath({ assetId: a.id })))}</div>
+      ${!more && !q && shown.length > 18 ? html`<div style="text-align:center;margin-top:12px"><${Button} kind="ghost" onClick=${() => setMore(true)}>Show all ${shown.length}</${Button}></div>` : null}` : null}
+    ${q && !rec.length && !shown.length ? html`<div class="faint" style="margin-top:20px">No video called "${q}".</div>` : null}
   </div>`;
 }
 
