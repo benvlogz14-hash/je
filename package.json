@@ -14,6 +14,7 @@
     "selftest": "node scripts/selftest.js",
     "demo-media": "node scripts/make-demo-media.js",
     "build-demo": "node scripts/build-demo.js",
+    "build:visual": "cargo build --release --target wasm32-unknown-unknown --manifest-path native/visual/Cargo.toml && node -e \"require('fs').copyFileSync('native/visual/target/wasm32-unknown-unknown/release/euclidean_visual.wasm','renderer/vendor/visual.wasm')\"",
     "dist": "electron-builder --win nsis portable",
     "dist:mac": "electron-builder --mac dmg",
     "dist:linux": "electron-builder --linux AppImage"

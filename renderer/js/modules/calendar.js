@@ -12,12 +12,15 @@ export function Calendar() {
   // Calls and meetings HAL put on the calendar ("add a call with Judy Griffin Thursday at 2"), in the same grid.
   const { data: ops, reload: reOps } = useApi('/api/hal/calendar', ['hal']);
   const hourOf = (t) => { const m = /^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i.exec(String(t || '').trim()); if (!m) return 9; let h = Number(m[1]) % 24; if (/pm/i.test(m[3] || '') && h < 12) h += 12; if (/am/i.test(m[3] || '') && h === 12) h = 0; if (!m[3] && h > 0 && h < 7) h += 12; return Math.max(6, Math.min(22, h)); };
-  const opsIn = (d, h) => (ops || []).filter((e) => { const [y, mo, da] = String(e.date).split('-').map(Number); return y && new Date(y, mo - 1, da).toDateString() === d.toDateString() && hourOf(e.time) === h; });
+  const opCells = new Map(); for (const e of ops || []) { const [y, mo, da] = String(e.date).split('-').map(Number); if (!y) continue; const k = `${new Date(y, mo - 1, da).toDateString()}|${hourOf(e.time)}`; const a = opCells.get(k); if (a) a.push(e); else opCells.set(k, [e]); }
+  const opsIn = (d, h) => opCells.get(`${d.toDateString()}|${h}`) || [];
   const dropOp = async (e) => { if (await confirmDialog({ title: `Remove "${e.title}"?`, text: `${e.date}${e.time ? ` at ${e.time}` : ''}, put on the calendar by HAL.`, confirm: 'Remove' })) act(() => api.del(`/api/hal/calendar/${e.id}`), { ok: 'Removed', sound: 'tap' }).then(reOps); };
   const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - ((start.getDay() + 6) % 7) + offset * 7);
   const days = Array.from({ length: 7 }, (_, i) => new Date(start.getTime() + i * 864e5));
   const hours = Array.from({ length: 17 }, (_, i) => i + 6);
-  const inCell = (d, h) => (posts || []).filter((p) => { const t = new Date(p.scheduledAt); return t.toDateString() === d.toDateString() && t.getHours() === h; });
+  // Posts sorted into their hour boxes once per draw (each of the 119 boxes used to read every post's date).
+  const cells = new Map(); for (const p of posts || []) { const t = new Date(p.scheduledAt); const k = `${t.toDateString()}|${t.getHours()}`; const a = cells.get(k); if (a) a.push(p); else cells.set(k, [p]); }
+  const inCell = (d, h) => cells.get(`${d.toDateString()}|${h}`) || [];
   const weekPosts = (posts || []).filter((p) => { const t = new Date(p.scheduledAt); return t >= days[0] && t < new Date(days[6].getTime() + 864e5); });
   const todayStr = new Date().toDateString();
   return html`<div class="page">

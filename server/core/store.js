@@ -47,11 +47,33 @@ class Store {
 
   all(col, pred) { const a = this.data[col] || []; return pred ? a.filter(pred) : a.slice(); }
   find(col, pred) { return (this.data[col] || []).find(pred) || null; }
-  get(col, id) { return (this.data[col] || []).find((d) => d.id === id) || null; }
+  /**
+   * By id, through a position index (it used to scan the whole list on every lookup: every job progress update, every
+   * message...). The list stays the truth: an index that may be out of date (the list was replaced, grew or shrank, or
+   * the record isn't where it says) is rebuilt, and anything not found is looked for the old way.
+   */
+  get(col, id) {
+    const a = this.data[col]; if (!a) return null;
+    let ix = this.ix && this.ix[col];
+    if (!ix || ix.arr !== a || ix.len !== a.length) ix = this.reindex(col);
+    const i = ix.map.get(id);
+    if (i !== undefined && a[i] && a[i].id === id) return a[i];
+    const d = a.find((x) => x.id === id) || null;
+    if (d) this.reindex(col);
+    return d;
+  }
+  reindex(col) {
+    const a = this.data[col]; const map = new Map();
+    for (let i = 0; i < a.length; i++) { const id = a[i] && a[i].id; if (id !== undefined && !map.has(id)) map.set(id, i); }
+    if (!this.ix) this.ix = {};
+    return (this.ix[col] = { arr: a, len: a.length, map });
+  }
 
   insert(col, doc) {
     const d = { id: doc.id || makeId(col.slice(0, 2) + '_'), createdAt: now(), updatedAt: now(), ...doc };
-    this.data[col].push(d);
+    const a = this.data[col]; a.push(d);
+    const ix = this.ix && this.ix[col];
+    if (ix && ix.arr === a && ix.len === a.length - 1) { if (!ix.map.has(d.id)) ix.map.set(d.id, a.length - 1); ix.len = a.length; }
     this.touch(); this.emit(col, 'insert', d);
     return d;
   }

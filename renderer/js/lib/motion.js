@@ -38,9 +38,19 @@ export function springIn(el, { from = 'up' } = {}) {
 /** Lists marked data-animate glide when items are added, removed or reordered (watched across the whole app). */
 export function watchLists(root = document.body) {
   const done = new WeakSet();
-  const hook = (el) => { if (done.has(el)) return; done.add(el); if (!reduced()) { try { autoAnimate(el, { duration: 220, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' }); } catch { /* ignore */ } } };
+  // Long lists (Production's clip board with 100+ cards) don't glide: measuring every item on each change cost ~40 ms
+  // a time there. A list turns its glide back on when it's 40 items or fewer.
+  const ctl = new WeakMap(); const LONG = 40;
+  const size = (el) => { const c = ctl.get(el); if (!c) return; try { if (el.childElementCount > LONG) c.disable(); else c.enable(); } catch { /* ignore */ } };
+  const waiting = new WeakSet(); // long lists not hooked yet (hooking measures every item)
+  const hook = (el) => {
+    if (done.has(el)) return;
+    if (el.childElementCount > LONG) { waiting.add(el); return; }
+    done.add(el); waiting.delete(el);
+    if (!reduced()) { try { ctl.set(el, autoAnimate(el, { duration: 220, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' })); size(el); } catch { /* ignore */ } }
+  };
   root.querySelectorAll('[data-animate]').forEach(hook);
-  new MutationObserver((muts) => { for (const m of muts) for (const n of m.addedNodes) { if (n.nodeType !== 1) continue; if (n.hasAttribute?.('data-animate')) hook(n); n.querySelectorAll?.('[data-animate]').forEach(hook); } }).observe(root, { childList: true, subtree: true });
+  new MutationObserver((muts) => { for (const m of muts) { if (ctl.has(m.target)) size(m.target); else if (waiting.has(m.target)) hook(m.target); } for (const m of muts) for (const n of m.addedNodes) { if (n.nodeType !== 1) continue; if (n.hasAttribute?.('data-animate')) hook(n); n.querySelectorAll?.('[data-animate]').forEach(hook); } }).observe(root, { childList: true, subtree: true });
 }
 
 export function initMotion() {

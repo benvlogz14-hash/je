@@ -71,6 +71,28 @@ function grayTo(s) {
   }
   return `url(#${id})`;
 }
+// The soft masks are drawn by Euclidean's Rust module (native/visual, compiled to renderer/vendor/visual.wasm: 9-70x
+// faster on soft wipes, splits, slats, irises and the dither); the formulas above stay as the fallback, used until it
+// has loaded or if it can't (the masks come out the same, the dither's speckles in another random pattern).
+const MASK_KIND = { dissolve: 1, smoothleft: 2, smoothright: 3, smoothup: 4, smoothdown: 5, diagtl: 6, diagtr: 7, diagbl: 8, diagbr: 9, radial: 10, hlslice: 11, hrslice: 12, vuslice: 13, vdslice: 14, circleopen: 15, circleclose: 16, horzopen: 17, horzclose: 18, vertopen: 19, vertclose: 20 };
+let V = null; let vBuf = { ptr: 0, cap: 0 };
+export const visualReady = (async () => {
+  try {
+    if (typeof WebAssembly === 'undefined' || typeof fetch === 'undefined') return false;
+    const r = await fetch(new URL('../../vendor/visual.wasm', import.meta.url)); if (!r.ok) return false;
+    V = (await WebAssembly.instantiate(await r.arrayBuffer(), {})).instance.exports; return true;
+  } catch { V = null; return false; }
+})();
+/** The mask in Rust: an ImageData (black, alpha = how much shows), or null to use the JavaScript formulas. */
+function rustMask(f, mw, mh) {
+  if (!V || !f.maskKind) return null;
+  try {
+    const n = mw * mh * 4;
+    if (n > vBuf.cap) { if (vBuf.cap) V.dealloc(vBuf.ptr, vBuf.cap); vBuf = { ptr: V.alloc(n), cap: n }; }
+    V.mask(f.maskKind, f.maskP, f.maskOut ? 1 : 0, mw, mh, vBuf.ptr);
+    return new ImageData(new Uint8ClampedArray(V.memory.buffer, vBuf.ptr, n), mw, mh);
+  } catch { V = null; return null; }
+}
 const PUSH = { slideleft: [-1, 0], slideright: [1, 0], slideup: [0, -1], slidedown: [0, 1] };
 const COVER = { coverleft: [-1, 0], coverright: [1, 0], coverup: [0, -1], coverdown: [0, 1] };
 
@@ -106,7 +128,7 @@ export function transitionFx(type, e, w, h, out, pair = false) {
     else fx.clip = x === 'squeezeh' ? not(rect(0, h / 2 - (P * h) / 2, w, P * h)) : not(rect(w / 2 - (P * w) / 2, 0, P * w, h));
     return fx;
   }
-  if (XW[x]) { const f = XW[x]; fx.mask = out ? (a, b, mw, mh) => 1 - f(a, b, mw, mh, P) : (a, b, mw, mh) => f(a, b, mw, mh, P); return fx; }
+  if (XW[x]) { const f = XW[x]; fx.mask = out ? (a, b, mw, mh) => 1 - f(a, b, mw, mh, P) : (a, b, mw, mh) => f(a, b, mw, mh, P); fx.maskKind = MASK_KIND[x]; fx.maskP = P; fx.maskOut = !!out; return fx; }
   // Hard-edged wipes: the incoming region at this moment (the outgoing side keeps the rest).
   let r = null;
   switch (x) {
@@ -190,8 +212,9 @@ export function fxCanvas(fxs, w, h, paint) {
   for (const f of fxs) {
     if (!f.mask) continue;
     const s = Math.min(1, 480 / Math.max(w, h)); const mw = Math.max(2, Math.round(w * s)), mh = Math.max(2, Math.round(h * s));
-    const mc = canvasFor('fx-mask', mw, mh); const mg = mc.getContext('2d'); const img = mg.createImageData(mw, mh); const d = img.data;
-    for (let y = 0, i = 3; y < mh; y++) for (let x = 0; x < mw; x++, i += 4) d[i] = Math.round(255 * Math.max(0, Math.min(1, f.mask(x, y, mw, mh))));
+    const mc = canvasFor('fx-mask', mw, mh); const mg = mc.getContext('2d');
+    let img = rustMask(f, mw, mh);
+    if (!img) { img = mg.createImageData(mw, mh); const d = img.data; for (let y = 0, i = 3; y < mh; y++) for (let x = 0; x < mw; x++, i += 4) d[i] = Math.round(255 * Math.max(0, Math.min(1, f.mask(x, y, mw, mh)))); }
     mg.putImageData(img, 0, 0);
     g.globalCompositeOperation = 'destination-in'; g.drawImage(mc, 0, 0, w, h); g.globalCompositeOperation = 'source-over';
   }

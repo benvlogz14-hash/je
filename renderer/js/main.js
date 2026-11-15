@@ -195,6 +195,15 @@ function FrozenRoute({ on, path, children }) {
   return html`<${RouteContext.Provider} value=${kept.current}>${children}</${RouteContext.Provider}>`;
 }
 
+/**
+ * A hidden screen doesn't re-draw just because you switched tabs (every screen you'd opened used to re-draw on every
+ * switch: the Publishing calendar alone cost ~100 ms each time). It still re-draws on its own when its data changes.
+ */
+class Keep extends Component {
+  shouldComponentUpdate(next) { return next.on || this.props.on; }
+  render({ children }) { return children; }
+}
+
 function TabBar({ tabs, base, close }) {
   if (tabs.length < 2) return null;
   return html`<div class="tabbar" role="tablist">${tabs.map((t) => {
@@ -245,7 +254,7 @@ function App() {
     <${TitleBar} onPalette=${() => { play('open'); setPalette(true); }} />
     <div class="body"><${Rail} /><main class="main tabbed">
       <${TabBar} tabs=${tabsApi.tabs} base=${base} close=${tabsApi.close} />
-      <div class="screens">${tabsApi.tabs.filter((t) => ROUTES[t.base]).map((t) => { const P = ROUTES[t.base]; const on = t.base === base; return html`<div key=${t.base} class=${'screen' + (on ? ' on' : '')} aria-hidden=${!on}><${FrozenRoute} on=${on} path=${t.path}><${PageGuard}><${P} /></${PageGuard}></${FrozenRoute}></div>`; })}
+      <div class="screens">${tabsApi.tabs.filter((t) => ROUTES[t.base]).map((t) => { const P = ROUTES[t.base]; const on = t.base === base; return html`<div key=${t.base} class=${'screen' + (on ? ' on' : '')} aria-hidden=${!on}><${FrozenRoute} on=${on} path=${t.path}><${Keep} on=${on}><${PageGuard}><${P} /></${PageGuard}></${Keep}></${FrozenRoute}></div>`; })}
         ${!tabsApi.tabs.some((t) => t.base === base) ? html`<div class="screen on"><${PageGuard} key=${base}><${Page} /></${PageGuard}></div>` : null}</div>
     </main></div>
     <${MobileNav} />
