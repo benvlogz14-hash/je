@@ -121,6 +121,45 @@ queue.register('transcribe', {
   },
 });
 
+/**
+ * Studio → Isolate voices: a cleaned copy of each picked file's sound (the clip machine's own voice filters: 'isolate'
+ * = 90 Hz-9.5 kHz, strong noise reduction and a soft gate between words; 'clean' = light noise reduction), the filters'
+ * delay trimmed back out so the voice stays on its captions, the audio's start offset kept, so the copy lines up with
+ * the original to the sample. Added to the project's media; the Studio page swaps the voice clips onto them.
+ */
+queue.register('studio.isolate', {
+  title: (p) => `Isolate voices (${(p.mediaIds || []).length} file${(p.mediaIds || []).length === 1 ? '' : 's'})`,
+  priority: 8,
+  async run(job, h) {
+    const mode = job.payload.mode === 'clean' ? 'clean' : 'isolate';
+    const pr = ctx.store.get('projects', job.payload.projectId); if (!pr) throw permanent('That Studio project is gone');
+    const render = require('../video/render'); const chain = render.voiceFilters(mode); const delay = await render.filterDelay(chain);
+    const dir = path.join(pr.clientId ? paths.clientDir(pr.clientId, 'studio-media') : paths.tmp('studio-media'), 'voices'); fs.mkdirSync(dir, { recursive: true });
+    const ids = (job.payload.mediaIds || []).slice(0, 40); const made = [];
+    for (let i = 0; i < ids.length; i++) {
+      const m = (ctx.store.get('projects', pr.id).data.media || []).find((x) => x.id === ids[i]);
+      if (!m || !m.hasAudio || !fs.existsSync(m.path)) { h.log(`Skipped ${m?.name || ids[i]}: no sound to clean`); continue; }
+      const st = fs.statSync(m.path);
+      const key = require('crypto').createHash('sha1').update(`${m.path}|${st.size}|${st.mtimeMs}|${mode}|v1`).digest('hex').slice(0, 12);
+      const out = path.join(dir, `${path.basename(m.path, path.extname(m.path)).slice(0, 60)} (voice ${mode === 'clean' ? 'cleaned' : 'isolated'}) ${key}.m4a`);
+      const info = await ff.probe(m.path);
+      if (!fs.existsSync(out)) {
+        h.progress(i / ids.length, `Cleaning the voice in ${m.name}`);
+        const af = [...chain, ...(delay > 0 ? [`atrim=start=${delay.toFixed(4)}`, 'asetpts=PTS-STARTPTS'] : []), ...(info.audioOffset > 0.005 ? [`adelay=${Math.round(info.audioOffset * 1000)}:all=1`] : [])].join(',');
+        const tmp = out + '.part.m4a';
+        await ff.ffmpegWithProgress(['-i', m.path, '-map', '0:a:0', '-vn', '-af', af, '-c:a', 'aac', '-b:a', '256k', tmp], { totalSec: info.duration, onProgress: (f) => h.progress((i + f) / ids.length, `Cleaning the voice in ${m.name}`), signal: h.signal });
+        fs.renameSync(tmp, out);
+      }
+      const oi = await ff.probe(out);
+      made.push({ from: m.id, item: { id: 'm' + require('crypto').randomBytes(6).toString('hex'), path: out, name: `${m.name} (voice ${mode === 'clean' ? 'cleaned' : 'isolated'})`, kind: 1, duration: oi.duration, hasVideo: false, hasAudio: true, srcIn: 0, srcOut: -1, isolatedFrom: m.id, isolateMode: mode } });
+    }
+    // Into the project's media (re-read: Studio may have saved meanwhile); the page adds them too and swaps the clips.
+    const cur = ctx.store.get('projects', pr.id); const data = cur.data; data.media = [...(data.media || []), ...made.map((x) => x.item)];
+    ctx.store.update('projects', pr.id, { data });
+    return { mode, made };
+  },
+});
+
 queue.register('studio.transcribe', {
   title: (j) => `Transcribe ${path.basename(j.payload.path || '')} for captions`,
   priority: 7,

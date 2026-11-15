@@ -1651,6 +1651,14 @@ r.post('/api/projects/:id/media', async (req, b, p) => {
   ctx.store.update('projects', pr.id, { data });
   return problems.length ? { media: added, problems } : added;
 }, { raw: true });
+/** Studio → Isolate voices: cleaned copies of these files' sound, made in the background (job studio.isolate). */
+r.post('/api/projects/:id/isolate', (req, b, p) => {
+  const pr = must(ctx.store.get('projects', p.id));
+  const ids = [...new Set((b.mediaIds || []).map(String))].filter((x) => (pr.data.media || []).some((m) => m.id === x && m.hasAudio));
+  if (!ids.length) throw new HttpError(400, 'There\'s no voice on the timeline to clean (music, muted and silent clips are left alone).');
+  const mode = b.mode === 'clean' ? 'clean' : 'isolate';
+  return queue.enqueue('studio.isolate', { projectId: pr.id, mediaIds: ids, mode }, { clientId: pr.clientId, actor: actorOf(req), dedupeKey: `studio.isolate:${pr.id}:${mode}:${ids.join(',')}` });
+});
 /** Studio → right-click → Extract Audio: writes the clip's sound to its own file and adds it to the bin. */
 r.post('/api/projects/:id/extract-audio', async (req, b, p) => {
   const pr = must(ctx.store.get('projects', p.id));

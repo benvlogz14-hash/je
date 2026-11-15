@@ -562,6 +562,34 @@ function Editor({ id }) {
   };
   const [titleEdit, setTitleEdit] = useState(null); // null | {} (new) | { clipId } | { clipId, ids } (style for many)
   const [musicOpen, setMusicOpen] = useState(false);
+  // Isolate voices: every voice clip's sound swapped onto a cleaned copy (made in the background), or back to the original.
+  const [voiceOpen, setVoiceOpen] = useState(false); const [voiceBusy, setVoiceBusy] = useState('');
+  const voiceClips = (s) => s.audioTracks.filter((tr) => !tr.muted && !/^music/i.test(tr.name || '')).flatMap((tr) => tr.clips)
+    .filter((c) => c.type === 1 && c.enabled !== false && base(c.volume, 1) > 0 && media[c.mediaId]?.hasAudio !== false && media[c.mediaId] && !/[\\/]music[\\/]/i.test(media[c.mediaId].path || ''));
+  const origOf = (mid) => media[mid]?.isolatedFrom || mid;
+  const isolateVoices = async (mode) => {
+    const clips = voiceClips(seq); if (!clips.length) return toast('There\'s no voice on the timeline to clean (music and muted clips are left alone).', { kind: 'warn' });
+    setVoiceOpen(false); setVoiceBusy('Starting…');
+    try {
+      if (dirty) await save(true);
+      const job = await api.post(`/api/projects/${id}/isolate`, { mediaIds: [...new Set(clips.map((c) => origOf(c.mediaId)))], mode });
+      let j = job; const t0 = Date.now();
+      while (!['done', 'failed', 'cancelled'].includes(j.status) && Date.now() - t0 < 4 * 3600000) {
+        await new Promise((ok) => setTimeout(ok, 1500)); j = await api.get(`/api/jobs/${job.id}`); j = j.job || j;
+        setVoiceBusy(`${Math.round((j.progress || 0) * 100)}%`);
+      }
+      if (j.status !== 'done') throw new Error(j.error || 'Cleaning the voices stopped.');
+      const made = j.result?.made || []; if (!made.length) throw new Error('None of those clips had sound to clean.');
+      const map = new Map(made.map((x) => [x.from, x.item]));
+      let n = 0;
+      edit((d, s) => {
+        for (const x of made) if (!d.media.some((m) => m.id === x.item.id)) d.media.push(x.item);
+        for (const c of voiceClips(s)) { const it = map.get(origOf(c.mediaId)); if (it && c.mediaId !== it.id) { c.mediaId = it.id; n++; } }
+      });
+      sfx('success'); toast(`${n} voice clip${n === 1 ? '' : 's'} now use${n === 1 ? 's' : ''} the ${mode === 'clean' ? 'cleaned' : 'isolated'} voice, in the preview and the export. Undo (Ctrl+Z) or Isolate voices → Original sound puts it back.`, { kind: 'success', ms: 7000 });
+    } catch (e) { sfx('error'); toast(e.message, { kind: 'error' }); } finally { setVoiceBusy(''); }
+  };
+  const originalVoices = () => { let n = 0; edit((d, s) => { for (const tr of s.audioTracks) for (const c of tr.clips) { const o = media[c.mediaId]?.isolatedFrom; if (o && media[o]) { c.mediaId = o; n++; } } }); setVoiceOpen(false); sfx('success'); toast(`${n} clip${n === 1 ? '' : 's'} back on the original sound.`, { kind: 'success' }); };
   // Timeline area height: drag the bar above it (▲ ▼) to give the timeline or the preview more room; remembered.
   const defBottom = () => Math.round(Math.max(260, window.innerHeight * 0.38));
   const [bottomH, setBottomH] = useState(() => { try { return Number(localStorage.getItem('eu.edBottom')) || defBottom(); } catch { return defBottom(); } });
@@ -709,6 +737,7 @@ function Editor({ id }) {
       <${Button} kind="ghost" size="sm" icon="redo" title="Redo (Ctrl+Shift+Z)" disabled=${!redo.current.length} onClick=${doRedo} />
       <div style="width:1px;height:22px;background:var(--line)" />
       <${Button} kind="ghost" size="sm" icon="volume" onClick=${() => setMusicOpen(true)} title="Free music library: listen and add">Music</${Button}>
+      <${Button} kind="ghost" size="sm" icon="mic" disabled=${!!voiceBusy} onClick=${() => setVoiceOpen(true)} title="Clean every voice on the timeline: background noise, wind and room hum taken out (music is left alone)">${voiceBusy ? `Isolating voices ${voiceBusy}` : 'Isolate voices'}</${Button}>
       <${Button} kind="ghost" size="sm" icon="link" disabled=${linkBusy} onClick=${askLink} title="Paste a YouTube link and its audio goes on the timeline at the playhead (or just press Ctrl+V on the timeline)">${linkBusy ? 'Getting audio...' : 'YouTube link'}</${Button}>
       <${Button} kind="ghost" size="sm" icon="external" onClick=${() => act(() => api.post(`/api/projects/${id}/open-velo`), { ok: 'Opening in Velo', sound: 'open' })}>Open in Velo</${Button}>
       <${Button} kind="ghost" size="sm" onClick=${() => save()}>Save</${Button}>
@@ -727,6 +756,15 @@ function Editor({ id }) {
     ${exporting ? html`<${ExportDialog} id=${id} saving=${savingFor.current} onClose=${() => setExporting(false)} />` : null}
     ${sending ? html`<${SendApproved} id=${id} proj=${proj} saving=${savingFor.current} onClose=${() => setSending(false)} />` : null}
     ${musicOpen ? html`<${MusicLibrary} onClose=${() => setMusicOpen(false)} onAdd=${addMusic} />` : null}
+    ${voiceOpen ? (() => { const vc = voiceClips(seq); const onCopy = vc.filter((c) => media[c.mediaId]?.isolatedFrom).length; return html`<${Modal} title="Isolate voices" onClose=${() => setVoiceOpen(false)}>
+      <p class="muted" style="font-size:var(--fs-sm);margin:0 0 12px">Cleans the sound of every voice clip on the timeline (${vc.length} clip${vc.length === 1 ? '' : 's'}${onCopy ? `, ${onCopy} already cleaned` : ''}). Music, muted clips and the Music track are left alone. It runs in the background; the preview and the export both use the cleaned voice, and it stays in sync with the captions.</p>
+      <div class="col" style="gap:8px">
+        <${Button} kind="primary" icon="mic" disabled=${!vc.length} onClick=${() => isolateVoices('isolate')}>Isolate the voices (strong)</${Button}>
+        <div class="faint" style="font-size:var(--fs-xs);margin:-2px 0 4px">Takes out background noise, wind, traffic and room hum and quiets the gaps between words. Best for outdoor and noisy footage.</div>
+        <${Button} kind="soft" disabled=${!vc.length} onClick=${() => isolateVoices('clean')}>Clean them up (light)</${Button}>
+        <div class="faint" style="font-size:var(--fs-xs);margin:-2px 0 4px">Takes off steady hiss and hum only; the voice sounds untouched. Good for footage that's already fairly clean.</div>
+        ${onCopy ? html`<${Button} kind="ghost" onClick=${originalVoices}>Put the original sound back</${Button}>` : null}
+      </div></${Modal}>`; })() : null}
     ${titleEdit ? html`<${TitleDesigner} seq=${seq} clip=${titleEdit.clipId ? findClip(seq, titleEdit.clipId)?.c : null} count=${titleEdit.ids?.length || 1} onClose=${() => setTitleEdit(null)} onSave=${saveTitle} />` : null}
   </div>`;
 }

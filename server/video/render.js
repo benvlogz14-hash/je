@@ -288,4 +288,4 @@ async function renderShort(o) {
   return { outPath: o.outPath, assPath, srtPath, duration: outDur, segments: segs, encoder: enc, cutWords };
 }
 
-module.exports = { cutSegments, renderShort, outFps, cutPauses, keptSegments, remap, ensureFonts, rel, voiceFilters, W, H };
+module.exports = { cutSegments, renderShort, outFps, cutPauses, keptSegments, remap, ensureFonts, rel, voiceFilters, filterDelay, W, H };
