@@ -191,10 +191,13 @@ function addProspect(text, actor) {
   return { text: `${name} added to the board${row.office ? ` (${row.office})` : ''}. Say "email ${name}" when you want the guide to research and draft.` };
 }
 
-function calendar(text, low, actor) {
-  const title = calTitle(text) || 'Event'; const date = iso(parseDate(low)); const time = parseTime(low);
-  ctx.store.insert('opsEvents', { title, date, time, notes: '', color: 'cyan', createdBy: actor });
-  return { text: `On the calendar: ${title} - ${date}${time ? ` at ${time}` : ''}.` };
+/** The title, date and time in a sentence ("call with Judy thursday at 2"); the Calendar page's quick add uses it too. */
+function calendarParse(text) { const low = String(text || '').toLowerCase(); return { title: calTitle(String(text || '')), date: iso(parseDate(low)), time: parseTime(low) }; }
+async function calendar(text, low, actor) {
+  // Through the Calendar page's own maker, so it's on Google Calendar too when that's connected.
+  const e = await require('../automation/calendar').quick(text, actor).catch(() => null);
+  if (!e) { const p = calendarParse(text); ctx.store.insert('opsEvents', { title: p.title || 'Event', date: p.date, time: p.time, notes: '', color: 'cyan', createdBy: actor }); return { text: `On the calendar: ${p.title || 'Event'} - ${p.date}${p.time ? ` at ${p.time}` : ''}.` }; }
+  return { text: `On the calendar: ${e.title} - ${e.date}${e.time ? ` at ${e.time}` : ''}${e.syncError ? ' (not on Google Calendar yet: ' + e.syncError + ')' : ''}.` };
 }
 
 async function generate(kind, p, topic) {
@@ -353,7 +356,7 @@ async function handle(text, { history = [], context = {}, actor = 'user' } = {})
     if (p && /\b(won|lost)\b/.test(low) && /\b(mark|set|they|he|she|just|has|have)\b/.test(low)) { const won = /\bwon\b/.test(low); ctx.store.update('prospects', p.id, { electionResult: won ? 'won' : 'lost' }); return { text: won ? `${p.name} marked as a winner. Their drafts can go out now.` : `${p.name} marked as lost. The guide never sends to them.` }; }
     if (p && /\b(mark|move|set|update|put|add)\b/.test(low) && /\b(pipeline|pipe|stage|status|contacted|replied|booked|client|passed)\b/.test(low)) { const r = stage(p, low, actor); if (r) return r; }
     if (/^\s*(add|create|log|new)\b/.test(low) && /\b(prospect|candidate|to the board|to our board|to the list)\b/.test(low)) { const r = addProspect(t, actor); if (r) return r; }
-    if (/\b(add|schedule|put|book|set up|create|remind)\b/.test(low) && /\b(calendar|cal|event|meeting|reminder|appointment|call with)\b/.test(low)) return calendar(t, low, actor);
+    if (/\b(add|schedule|put|book|set up|create|remind)\b/.test(low) && /\b(calendar|cal|event|meeting|reminder|appointment|call with)\b/.test(low)) return await calendar(t, low, actor);
     if (/content calendar|week of (?:posts|content)|posting (?:plan|schedule)|content plan/.test(low)) return await generate('calendar', p || match(subjectOf(low, t)), '');
     if (/\b(short[- ]?form|scripts?|hooks?|reel ideas?|video ideas?|tiktoks?)\b/.test(low) && !/\b(this|clip)\b/.test(low)) return await generate('short', p, subjectOf(low, t));
     if (/\bfollow[- ]?up\b/.test(low) && p) return { text: 'The guide\'s follow-up: one line, day 4, in the same thread. Then stop.', draft: `${String(p.name).split(/\s+/)[0]}, bumping this once. Even pointing me to the right person helps. Ben` };
@@ -376,4 +379,4 @@ async function watchNow() {
   return { text: `Done: ${r.stories.length} new stor${r.stories.length === 1 ? 'y' : 'ies'}${r.leads.length ? `, ${r.leads.length} possible lead${r.leads.length === 1 ? '' : 's'}` : ''}. Posted above.` };
 }
 
-module.exports = { handle, confirm, mode, contextFacts };
+module.exports = { handle, confirm, mode, contextFacts, calendarParse };

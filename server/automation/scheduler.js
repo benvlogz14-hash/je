@@ -95,6 +95,8 @@ function tick() {
     try { dailyBroll(client); } catch (e) { audit.log('system', 'broll.daily_error', { clientId: client.id, error: e.message }, 'error'); }
   }
   require('../integrations/elevenlabs').pollCalls().catch(() => {});
+  // The Calendar page: Google Calendar read every 5 minutes, calendar links every 15 (only when set up).
+  try { require('./calendar').tick(); } catch { /* calendar */ }
   // Keep the database small (it's saved whole): finished jobs over a week old go, beyond the newest 400; finished jobs
   // over a day old keep only their last few log lines. Months of production used to pile up thousands of job logs.
   if (every('prune', 3600000)) {

@@ -32,7 +32,7 @@ const NAV = [
   { path: '/approvals', tone: 'moss', icon: 'approvals', label: 'Approvals', key: '3', badge: 'approvals' },
   { path: '/studio', tone: 'sky', icon: 'studio', label: 'Studio', key: '4' },
   { path: '/clients', tone: 'gold', icon: 'clients', label: 'Clients', key: '5' },
-  { path: '/calendar', tone: 'moss', icon: 'calendar', label: 'Publishing', key: '6' },
+  { path: '/calendar', tone: 'moss', icon: 'calendar', label: 'Calendar', hint: 'Your events, Google Calendar and scheduled posts', key: '6' },
   { path: '/politics', tone: 'rose', icon: 'target', label: 'Politics', hint: 'Find candidates, make their ads, email them, autopilot' },
   { path: '/growth', tone: 'sky', icon: 'growth', label: 'Outreach', hint: 'Creator outreach, lead pipeline and table', key: '7' },
   { path: '/clipper', tone: 'gold', icon: 'scissors', label: 'Quick cut', hint: 'Open a video, drag the handles, crop, export' },

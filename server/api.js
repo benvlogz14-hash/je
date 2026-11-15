@@ -181,7 +181,31 @@ r.post('/api/hal/listen', async (req) => {
   } finally { for (const x of [f.path, wav]) { try { fs.unlinkSync(x); } catch { /* temp */ } } }
 });
 r.get('/api/hal/calendar', () => ctx.store.all('opsEvents').sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)));
-r.del('/api/hal/calendar/:id', (req, b, p) => { ctx.store.remove('opsEvents', p.id); return { ok: true }; });
+r.del('/api/hal/calendar/:id', (req, b, p) => require('./automation/calendar').remove(p.id, actorOf(req)));
+// The Calendar page (server/automation/calendar.js): our events, Google Calendar both ways, read-only calendar links.
+// Events between two dates (Google is read again in the background when the last read is over a minute old).
+r.get('/api/calendar/events', (req) => {
+  const cal = require('./automation/calendar'); cal.sync().catch(() => {}); cal.readFeeds().catch(() => {});
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || '') ? req.query.from : '0000-01-01', to = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || '') ? req.query.to : '9999-12-31';
+  return cal.list(from, to);
+});
+// Add an event: { title, date, time ('' = all day), end, endDate, notes, location, color }.
+r.post('/api/calendar/events', (req, b) => require('./automation/calendar').create(b, actorOf(req)));
+// Change an event (move, resize, rename...).
+r.patch('/api/calendar/events/:id', (req, b, p) => require('./automation/calendar').update(p.id, b, actorOf(req)));
+// Delete an event (from Google Calendar too). Returns it as it was, for Undo.
+r.del('/api/calendar/events/:id', (req, b, p) => require('./automation/calendar').remove(p.id, actorOf(req)));
+// Add from a typed line: "Lunch with Ben Friday 1pm for 30 min".
+r.post('/api/calendar/quick', (req, b) => require('./automation/calendar').quick(String(b.text || ''), actorOf(req)));
+// Google Calendar: status, connect (opens Google's sign-in page), disconnect, which calendars to show and save to, sync now.
+r.get('/api/calendar/google', () => require('./automation/calendar').status());
+r.post('/api/calendar/google/connect', async () => { const url = await require('./automation/calendar').connect(); if (ctx.openExternal) ctx.openExternal(url); return { url }; }, { roles: OWNER });
+r.post('/api/calendar/google/disconnect', () => require('./automation/calendar').disconnect(), { roles: OWNER });
+r.post('/api/calendar/google/settings', (req, b) => require('./automation/calendar').setGoogle(b), { roles: OWNER });
+r.post('/api/calendar/sync', async () => { const cal = require('./automation/calendar'); const r0 = await cal.sync({ force: true }); await cal.readFeeds(true); return { ...r0, ...cal.status() }; });
+// Read-only calendar links (iCal addresses): add / remove.
+r.post('/api/calendar/feeds', (req, b) => require('./automation/calendar').addFeed(b.url, b.name), { roles: OWNER });
+r.del('/api/calendar/feeds/:i', (req, b, p) => require('./automation/calendar').removeFeed(p.i), { roles: OWNER });
 // HAL's watch (live news and leads through the day) and the outreach guide's kits.
 // HAL's Puzzle Vault (Arcade): he gets the puzzle (never the answer), thinks it through with his own brain and answers.
 r.post('/api/hal/puzzle', async (req, b) => {

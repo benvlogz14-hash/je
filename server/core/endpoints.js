@@ -19,6 +19,7 @@ const OUTWARD = [
   /\/credentials$/, /\/youtube\/connect$/, /\/phone\/(un)?link$/, /\/voice\/(clone|callbacks)$/, /\/agentnet\/agents\/[^/]+\/(key|token|login)$/,
   /\/agentnet\/approvals\/[^/]+\/decide$/, /\/agentnet\/pause$/, /\/bots\/computer\/install$/, /\/bots\/[^/]+\/screen$/, /\/bots\/[^/]+\/computer\/run$/,
   /\/publishing\/hold$/, /\/posts\/[^/]+\/publish-now$/, /\/send-to-approved$/,
+  /\/calendar\/google\/(connect|disconnect|settings)$/, /\/calendar\/(events(\/[^/]+)?|quick|feeds)$/,
 ];
 function kindOf(method, pattern) {
   if (method === 'GET') return 'read';
