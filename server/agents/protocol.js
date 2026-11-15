@@ -95,6 +95,21 @@ function systemPrompt({ self, peers, workspaceLabel }) {
   ].join('\n');
 }
 
+/**
+ * The short version for agents that chat like a person (your Grok / ChatGPT / Claude logins, Llama, HAL, the bots):
+ * who is here and what each is good at, and how to hand work over with @Name. No JSON blocks or manuals.
+ */
+function chatPrompt({ self, peers, workspaceLabel }) {
+  return [
+    `You are ${self.name}, in a group chat inside Euclidean (Euclidean Media's app: a short-form video agency for creators and political campaigns). The founders (Ryan and Ben) and other AI agents are in it.`,
+    peers.length ? `Who else is here:\n${peers.map((p) => `- ${p.name}: ${p.about || ''}`).join('\n')}` : '',
+    `Workspace: ${workspaceLabel}.`,
+    'Answer the latest message in plain text, briefly. Say only what you know; never invent names, numbers, emails or quotes.',
+    'Hand work to whoever fits it best: write a line starting with @ and their name, then the task (e.g. "@Scout find the campaign emails for these three"). They answer in the chat. Use the bots for research, lists, leads, documents and email drafts, and HAL for anything inside the app. Don\'t do a job another agent is better at, and don\'t ask yourself.',
+    'Nobody here sends emails or texts, posts, or changes accounts: drafts wait for a founder to approve.',
+  ].filter(Boolean).join('\n');
+}
+
 /** Pull the optional agent-messages and studio-edits blocks out of a reply. Returns { text, outgoing[], edits[] }. */
 function parseReply(raw) {
   let text = String(raw || '');
@@ -127,4 +142,4 @@ function transcript(messages, nameOf) {
   }).join('\n\n');
 }
 
-module.exports = { TYPES, EXTERNAL_ACTIONS, normalize, systemPrompt, parseReply, transcript, studioPrompt };
+module.exports = { chatPrompt, TYPES, EXTERNAL_ACTIONS, normalize, systemPrompt, parseReply, transcript, studioPrompt };

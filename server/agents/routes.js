@@ -154,6 +154,7 @@ module.exports = function mount(r) {
   r.get('/api/agentnet/threads/:id/messages', (req, b, p) => broker.messages(p.id), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/messages', (req, b, p) => broker.send({ ...b, threadId: p.id, from: human(req) }, { actor: human(req) }), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/join', (req, b, p) => broker.join(p.id, b.agentId, human(req)), { roles: STAFF });
+  r.post('/api/agentnet/threads/:id/leave', (req, b, p) => broker.leave(p.id, b.agentId, human(req)), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/pause', (req, b, p) => broker.setPaused(p.id, !!b.paused, human(req)), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/archive', (req, b, p) => { ctx.store.update('agentThreads', p.id, { status: b.archived === false ? 'active' : 'archived' }); audit.log(actorOf(req), 'agentnet.thread_archived', { threadId: p.id }); return { ok: true }; }, { roles: STAFF });
   /** Attach files: they're copied into the conversation's own workspace folder, never shared across workspaces. */

@@ -258,10 +258,10 @@ class BotAdapter extends AgentAdapter {
   bot() { return ctx.store.get('bots', this.def.botId); }
   async detect() { const b = this.bot(); return b ? { installed: true, ready: true, note: `${b.name} answers with its own tools` } : { installed: false, note: 'This bot was deleted.' }; }
   async test() { return this.bot() ? { ok: true, message: `${this.def.name} is ready.` } : { ok: false, error: 'This bot was deleted.' }; }
-  async deliver({ prompt, thread, message }) {
+  async deliver({ system, prompt, thread, message }) {
     const b = this.bot(); if (!b) throw new Error('This bot was deleted.');
-    // The bot keeps its own instructions and tools; it gets the conversation and how to talk to the others.
-    const q = `(Agent conversation "${thread?.title || ''}" in Euclidean. Other agents and the founders are in it.)\n\n${prompt}\n\nAnswer in plain text, using your tools when the question needs facts. To ask another agent in this conversation something, start a line with @ and their name, like "@Llama what do you think?".`;
+    // The bot keeps its own instructions and tools; it gets who's in the chat, the conversation, and how to hand work on.
+    const q = `${system || `(Agent conversation "${thread?.title || ''}" in Euclidean.)`}\n\n${prompt}\n\nAnswer in plain text, using your tools when the question needs facts. To hand part of the work to someone better suited, write a line starting with @ and their name, like "@Scout find their campaign emails".`;
     const latest = String(message?.body || '').slice(0, 4000);
     const r = await require('../bots').ask(b.id, q, `agentnet:${thread?.id || ''}`, { focus: latest, shown: `From the agent conversation "${thread?.title || ''}" (${registry().name(message?.from)}): ${latest}` });
     if (r.waiting) return `(${b.name} is waiting for your OK on an Allow card in its own chat on the Bots page before it carries on.)`;

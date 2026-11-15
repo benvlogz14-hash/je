@@ -178,10 +178,29 @@ function findId(word) {
   return (ds.find((d) => d.id === w) || ds.find((d) => d.name.toLowerCase() === w) || ds.find((d) => d.name.toLowerCase().split(/[\s/]+/)[0] === w) || ds.find((d) => d.id === `bot-${w}`))?.id || null;
 }
 
+/** false when the last check found an agent that runs on this PC isn't installed (null = not checked yet). */
+function setUp(id) { const c = detectCache.get(String(id).toLowerCase()); return c ? !!c.v.installed : null; }
+
+/** One line on what an agent is good at, for the others in a conversation (so they hand work to the right one). */
+const ABOUT = {
+  hal: 'runs the Euclidean app: leads and their stages, the calendar, his news watch, app commands and what the notebook knows. Ask him for anything inside the app.',
+  llama: 'quick thinking, brainstorming and short drafts (the free AI on this PC, no tools).',
+  claude: 'careful writing, critique, plans and judgement calls. Through the Claude app it has the Euclidean connector (the app\'s tools).',
+  grok: 'live news, trends and what people are saying online right now.',
+  codex: 'analysis, structured thinking and drafting.',
+  cursor: 'code changes.', opencode: 'code changes.',
+};
+function aboutOf(id) {
+  const d = def(id); if (!d) return '';
+  if (d.bot) { const b = ctx.store.get('bots', d.botId); const tools = ['live web research', 'the Data tab', b?.tools?.leads !== false ? 'leads' : '', 'documents', 'email drafts'].filter(Boolean).join(', '); const role = String(b?.role || 'One of the Euclidean bots.').replace(/\s+/g, ' ').trim(); const first = role.split(/(?<=[.!?])\s+/)[0]; const cut = first.length <= 220 ? first : `${first.slice(0, 220).replace(/[\s,;:(]+\S*$/, '')}...`; return `${cut.replace(/[^.!?)]$/, '$&.')} Has tools: ${tools}.`; }
+  if (d.id === 'grok' && connectionOf('grok') === 'grokbot') return 'deep research by email (slow: answers in minutes, limited each week). Only for hard questions.';
+  return ABOUT[d.id] || d.blurb || '';
+}
+
 /** May this agent see this workspace? ('all' or a list of workspace ids) */
 function allowedIn(id, workspaceId) {
   const w = conf(id).workspaces || 'all';
   return w === 'all' || (Array.isArray(w) && w.includes(workspaceId));
 }
 
-module.exports = { findId, connectionOf, botDefs, BUILT_IN, definitions, def, conf, setConf, adapter, addCustom, removeCustom, detect, invalidate, list, name, allowedIn };
+module.exports = { setUp, aboutOf, findId, connectionOf, botDefs, BUILT_IN, definitions, def, conf, setConf, adapter, addCustom, removeCustom, detect, invalidate, list, name, allowedIn };

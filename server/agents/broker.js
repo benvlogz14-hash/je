@@ -28,7 +28,8 @@ const { HttpError, now } = require('../core/util');
 const protocol = require('./protocol');
 const registry = require('./registry');
 
-const LATE = new Set(['connector', 'grokbot']); // answer later, from outside the app
+const LATE = new Set(['connector', 'grokbot']);
+const CHATTY = new Set(['account', 'connector', 'grokbot', 'ollama', 'hal', 'bot']); // get the short chat prompt // answer later, from outside the app
 const RESPOND_TYPES = new Set(['message', 'question', 'critique_request', 'task_request', 'context']);
 const queues = new Map();   // agentId -> [messageId]
 const running = new Set();  // agentIds currently answering
@@ -73,6 +74,18 @@ function join(threadId, agentId, actor) {
   if (!registry.allowedIn(a, t.workspaceId)) throw new HttpError(403, `${registry.name(a)} isn't allowed in ${workspaceLabel(t.workspaceId)}.`);
   ctx.store.update('agentThreads', t.id, (x) => ({ participants: [...x.participants, a] }));
   record({ threadId: t.id, workspaceId: t.workspaceId, from: 'system', to: ['*'], type: 'join', body: `${registry.name(a)} joined the conversation${actor && actor !== a ? ` (added by ${registry.name(actor)})` : ''}.` });
+  return ctx.store.get('agentThreads', t.id);
+}
+
+/** Take an agent out of a conversation (its messages stay). Anything still waiting for it there is dropped. */
+function leave(threadId, agentId, actor) {
+  const t = thread(threadId); const a = registry.findId(agentId) || String(agentId).toLowerCase();
+  if (!t.participants.includes(a)) return t;
+  ctx.store.update('agentThreads', t.id, (x) => ({ participants: x.participants.filter((y) => y !== a) }));
+  for (const m of ctx.store.all('agentMessages', (x) => x.threadId === t.id && ['queued', 'next', 'held', 'waiting', 'failed'].includes(x.deliveries?.[a]?.status))) setDelivery(m.id, a, { status: 'left' });
+  const q = queues.get(a); if (q) queues.set(a, q.filter((id) => ctx.store.get('agentMessages', id)?.threadId !== t.id));
+  record({ threadId: t.id, workspaceId: t.workspaceId, from: 'system', to: ['*'], type: 'join', body: `${registry.name(a)} left the conversation${actor ? ` (removed by ${registry.name(actor)})` : ''}.` });
+  for (const m of ctx.store.all('agentMessages', (x) => x.threadId === t.id && Object.values(x.deliveries || {}).some((d) => d.status === 'next'))) nextTurn(m.id);
   return ctx.store.get('agentThreads', t.id);
 }
 
@@ -156,6 +169,8 @@ function send(raw, { actor } = {}) {
     const conf = registry.conf(a);
     const willRespond = RESPOND_TYPES.has(m.type) && conf.autoReply !== false && conf.enabled !== false && !(conf.connection === 'local' && conf.mailbox && !conf.url);
     deliveries[a] = { status: willRespond ? 'queued' : 'delivered', at: now() };
+    // A programming tool that isn't installed on this PC (opencode, Cursor...) is skipped instead of failing every time.
+    if (willRespond && ['cli', 'herdr'].includes(registry.connectionOf(a)) && registry.setUp(a) === false) { deliveries[a] = { status: 'skipped', note: `${registry.name(a)} isn't set up on this computer`, at: now() }; continue; }
     // Claude and GrokBots read their answers later: a reply to them is flagged so it shows in their inbox.
     if (!willRespond && !m.to.includes('*') && LATE.has(registry.connectionOf(a))) deliveries[a].unseen = true;
     if (willRespond) responders.push(a);
@@ -245,7 +260,7 @@ async function answer(agentId, m, t, signal) {
   const def = registry.def(agentId);
   if (!registry.allowedIn(agentId, t.workspaceId)) throw new Error(`${def.name} isn't allowed in this workspace.`);
   const adapter = registry.adapter(agentId);
-  const peers = t.participants.filter((a) => a !== agentId).map((a) => ({ id: a, name: registry.name(a) }));
+  const peers = t.participants.filter((a) => a !== agentId && registry.setUp(a) !== false).map((a) => ({ id: a, name: registry.name(a) }));
   // The conversation so far, including answers given since this message (in take-turns threads, the earlier turns).
   const history = ctx.store.all('agentMessages', (x) => x.threadId === t.id && x.type !== 'join').slice(-30);
   const turn = m.deliveries?.[agentId]?.turn;
@@ -254,9 +269,15 @@ async function answer(agentId, m, t, signal) {
   const wsProjects = ctx.store.all('projects', (pr) => (t.workspaceId === 'internal' ? !pr.clientId : pr.clientId === t.workspaceId)).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 12);
   const said = history.map((x) => x.body).join(' ').toLowerCase();
   const projInfo = wsProjects.map((pr) => ({ id: pr.id, name: pr.name, summary: wsProjects.length === 1 || said.includes(String(pr.name || '').toLowerCase()) || said.includes(pr.id) ? editOps.summarize(pr) : null }));
-  const system = [protocol.systemPrompt({ self: { id: agentId, name: def.name }, peers, workspaceLabel: workspaceLabel(t.workspaceId) }), registry.conf(agentId).note || '',
-    t.workspaceId !== 'internal' ? require('../integrations/ai').clientContext(t.workspaceId) : '', protocol.studioPrompt(projInfo, editOps.OPS_DOC)].filter(Boolean).join('\n\n');
-  const prompt = `Conversation "${t.title}" so far:\n\n${protocol.transcript(history, registry.name)}\n\n---\nRespond to ${m.id === history[history.length - 1]?.id ? 'the latest message' : `this message`} from ${registry.name(m.from)} (${protocol.TYPES[m.type]}): "${String(m.body || '').slice(0, 600)}"${turn > 1 ? `\n\nThe agents are taking turns and ${turn - 1} answered before you (above). Build on what they said: agree, disagree or add what's missing. Don't repeat them.` : ''}`;
+  // Agents that chat like a person (logins, Llama, HAL, the bots) get the short version: who's here, what each is
+  // good at, and @Name to hand work over. API and command-line agents keep the full protocol (JSON blocks, Studio edits).
+  const chatty = CHATTY.has(registry.connectionOf(agentId));
+  const system = chatty
+    ? [protocol.chatPrompt({ self: { id: agentId, name: def.name }, peers: peers.map((p) => ({ ...p, about: registry.aboutOf(p.id) })), workspaceLabel: workspaceLabel(t.workspaceId) }), registry.conf(agentId).note || ''].filter(Boolean).join('\n\n')
+    : [protocol.systemPrompt({ self: { id: agentId, name: def.name }, peers, workspaceLabel: workspaceLabel(t.workspaceId) }), registry.conf(agentId).note || '',
+      t.workspaceId !== 'internal' ? require('../integrations/ai').clientContext(t.workspaceId) : '', protocol.studioPrompt(projInfo, editOps.OPS_DOC)].filter(Boolean).join('\n\n');
+  const shown = chatty ? history.slice(-10).map((x) => ({ ...x, body: String(x.body || '').slice(0, 1500), context: [] })) : history;
+  const prompt = `Conversation "${t.title}" so far:\n\n${protocol.transcript(shown, registry.name)}\n\n---\nRespond to ${m.id === history[history.length - 1]?.id ? 'the latest message' : `this message`} from ${registry.name(m.from)} (${protocol.TYPES[m.type]}): "${String(m.body || '').slice(0, 600)}"${turn > 1 ? `\n\nThe agents are taking turns and ${turn - 1} answered before you (above). Build on what they said: agree, disagree or add what's missing. Don't repeat them.` : ''}`;
   const raw = await adapter.deliver({ system, prompt, history, message: m, thread: { id: t.id, title: t.title, workspaceId: t.workspaceId }, clientId: t.workspaceId === 'internal' ? null : t.workspaceId, signal });
   if (raw == null) {
     // Mailbox agents fetch the message themselves; the Claude app and GrokBots answer later.
@@ -417,4 +438,4 @@ async function summarize(threadId, { save = false, actor = 'system' } = {}) {
   return { text, id: msg.id, saved: !!noteId };
 }
 
-module.exports = { answersFor, setMode, summarize, lateReply, waitingFor, createThread, join, send, setPaused, setGlobalPause, retry, cancel, decide, threads, messages, inbox, outbox, failed, approvals, status, start, workspaceLabel, workspaceDir };
+module.exports = { leave, answersFor, setMode, summarize, lateReply, waitingFor, createThread, join, send, setPaused, setGlobalPause, retry, cancel, decide, threads, messages, inbox, outbox, failed, approvals, status, start, workspaceLabel, workspaceDir };
