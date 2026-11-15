@@ -39,6 +39,19 @@ export function HalDock() {
   // The button can be dragged anywhere (some pages have their own buttons in the corner); it remembers the spot.
   const [pos, setPos] = useState(() => PREF('eu.halPos', { right: 18, bottom: 92 }));
   const drag = useRef(null);
+  // Pages can mark controls HAL must never cover (data-hal-avoid: Quick cut's trim bar, where the end handle sat under
+  // this button). While one is showing under the button, it's lifted just above it; it goes back when that page closes.
+  const [lift, setLift] = useState(0);
+  useEffect(() => {
+    const chk = () => {
+      const W = window.innerWidth, H = window.innerHeight, sz = 46; const f = { l: W - pos.right - sz, r: W - pos.right, t: H - pos.bottom - sz, b: H - pos.bottom };
+      let need = 0;
+      for (const el of document.querySelectorAll('.screen.on [data-hal-avoid]')) { const r = el.getBoundingClientRect(); if (r.width && r.height && r.left < f.r && r.right > f.l && r.top < f.b + 4 && r.bottom > f.t - 4) need = Math.max(need, H - r.top + 10 - pos.bottom); }
+      setLift((x) => (x === need ? x : need));
+    };
+    chk(); const t = setInterval(chk, 600); window.addEventListener('resize', chk);
+    return () => { clearInterval(t); window.removeEventListener('resize', chk); };
+  }, [pos.right, pos.bottom]);
   const down = (e) => { drag.current = { x: e.clientX, y: e.clientY, right: pos.right, bottom: pos.bottom, moved: false }; e.currentTarget.setPointerCapture(e.pointerId); };
   const move = (e) => {
     const d = drag.current; if (!d) return; const dx = e.clientX - d.x, dy = e.clientY - d.y;
@@ -102,7 +115,7 @@ export function HalDock() {
 
   const offline = status && ((status.brain === 'local' && !status.local) || (status.brain === 'grok' && !status.grok));
   return html`
-    <button type="button" class=${'hal-fab' + (open ? ' on' : '') + (busy ? ' busy' : '')} style=${{ right: `${pos.right}px`, bottom: `${pos.bottom}px` }} title="HAL (Ctrl+Shift+H). Drag to move." aria-label="Open HAL" onPointerDown=${down} onPointerMove=${move} onPointerUp=${up} onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } }}><span class="hal-eye" /></button>
+    <button type="button" class=${'hal-fab' + (open ? ' on' : '') + (busy ? ' busy' : '')} style=${{ right: `${pos.right}px`, bottom: `${pos.bottom + lift}px` }} title="HAL (Ctrl+Shift+H). Drag to move." aria-label="Open HAL" onPointerDown=${down} onPointerMove=${move} onPointerUp=${up} onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } }}><span class="hal-eye" /></button>
     ${open ? html`<section class="hal-panel" role="dialog" aria-label="HAL" style=${{ right: `${Math.min(pos.right, Math.max(6, window.innerWidth - 440))}px`, bottom: `${Math.min(pos.bottom + 54, Math.max(10, window.innerHeight - 640))}px` }}>
       <header class="hal-head"><span class="hal-eye sm" /><b class="grow">HAL</b>
         <button type="button" class=${'hal-ico' + (notes ? ' on' : '')} title="HAL's notebook: what Euclidean has learned" onClick=${() => setNotes(!notes)}><${Icon} name="book" size=${15} /></button>

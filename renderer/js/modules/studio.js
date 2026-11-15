@@ -25,6 +25,26 @@ const EFFECTS = [
 ];
 // Transitions. Types 1–3 are Velo's own; the rest render with FFmpeg's xfade filter on export
 // (server/video/studio.js) and are drawn the same way in the program monitor below.
+/** The frame shapes offered above the program monitor. */
+const FRAMES = [['9:16', 1080, 1920], ['16:9', 1920, 1080], ['1:1', 1080, 1080], ['4:5', 1080, 1350]];
+/**
+ * Change the edit's frame shape: video and pictures that filled (or fit) the old frame fill (or fit) the new one,
+ * everything else keeps its size, and positions keep their place relative to the frame.
+ */
+function reframe(s, W, H, mediaList) {
+  const W0 = s.width, H0 = s.height; if (W0 === W && H0 === H) return;
+  const mm = Object.fromEntries((mediaList || []).map((m) => [m.id, m]));
+  const scaleAnim = (p, k) => (p && typeof p === 'object' ? { ...p, base: (p.base ?? 1) * k, keys: (p.keys || []).map(([t, v]) => [t, v * k]) } : p);
+  for (const tr of s.videoTracks) for (const c of tr.clips) {
+    c.posX = scaleAnim(c.posX, W / W0); c.posY = scaleAnim(c.posY, H / H0);
+    const m = mm[c.mediaId]; if (!m || !m.width || !m.height || c.type === 3) continue;
+    const sx = c.scaleX?.base ?? 1; const fill0 = Math.max(W0 / m.width, H0 / m.height), fit0 = Math.min(W0 / m.width, H0 / m.height);
+    const near = (a, b) => Math.abs(a - b) / b < 0.02;
+    const k = near(sx, fill0) ? Math.max(W / m.width, H / m.height) / fill0 : near(sx, fit0) ? Math.min(W / m.width, H / m.height) / fit0 : 1;
+    if (k !== 1) { c.scaleX = scaleAnim(c.scaleX, k); c.scaleY = scaleAnim(c.scaleY, k); }
+  }
+  s.width = W; s.height = H;
+}
 const PRESETS = [{ label: 'Shorts / Reels / TikTok', w: 1080, h: 1920 }, { label: 'YouTube 1080p', w: 1920, h: 1080 }, { label: 'Instagram square', w: 1080, h: 1080 }, { label: 'YouTube 4K', w: 3840, h: 2160 }];
 
 const base = (p, d = 0) => (p && typeof p === 'object' ? (p.base ?? d) : (p ?? d));
@@ -1601,7 +1621,9 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
   };
 
   return html`<div style="display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden">
-    <div class="row" style="padding:6px 12px;gap:8px"><span class="eyebrow grow">Program</span>
+    <div class="row" style="padding:6px 12px;gap:8px"><span class="eyebrow">Program</span>
+      <div class="btn-group" title="The shape of the video: changes the whole edit (clips that filled or fit the old frame fill or fit the new one; titles keep their place)">${FRAMES.map(([lbl, w, h]) => html`<button class=${seq.width === w && seq.height === h ? 'on' : ''} onClick=${() => edit((d, s) => reframe(s, w, h, d.media))}>${lbl}</button>`)}</div>
+      <span class="grow" />
       <span class="faint" style="font-size:var(--fs-xs)" title="Pinch or Ctrl + scroll to zoom. Drag the grey area to move around. Double-click empty space to fit.">${view.k > 1 ? `${Math.round(view.k * 100)}%` : 'Pinch to zoom'}</span>
       ${view.k > 1 ? html`<${Button} size="sm" kind="ghost" onClick=${() => setView({ k: 1, x: 0, y: 0 })}>Fit</${Button}>` : null}
       <select class="select sm" style="width:90px" value=${qualitySel} onChange=${(e) => setQuality(Number(e.target.value))} aria-label="Preview quality"><option value="1">Full</option><option value="0.5">1/2</option><option value="0.25">1/4</option></select></div>

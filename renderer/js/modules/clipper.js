@@ -1,6 +1,6 @@
 // Quick cut: open a long video (or paste a YouTube link), read and search its whole transcript, drag two handles to
 // pick a stretch, crop, export. No timeline, no tracks. Follows the app's light / Night theme.
-import { html, useState, useEffect, useRef, useApi, useEvent, useRoute, navigate, Button, Seg, act, toast } from '../lib/ui.js';
+import { html, useState, useEffect, useRef, useApi, useEvent, useRoute, navigate, Button, Seg, Modal, act, toast } from '../lib/ui.js';
 import { Component } from '../../vendor/preact.mjs';
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
@@ -121,7 +121,10 @@ class Transcript extends Component {
     if (!inside) { if (this.state.sel && (!s || s.isCollapsed)) this.setState({ sel: null }); return; }
     const wordOf = (node) => (node?.nodeType === 3 ? node.parentElement : node)?.closest?.('[data-t]');
     const r = s.getRangeAt(0); let a = wordOf(r.startContainer), b = wordOf(r.endContainer);
-    if (!a) a = r.startContainer.nodeType === 1 ? r.startContainer.querySelector?.('[data-t]') : null;
+    // A selection can start or end on a paragraph rather than inside a word (triple-click, a drag past the end of a
+    // line): take the first word at the start and the last word before the end.
+    if (!a && r.startContainer.nodeType === 1) { const n = r.startContainer.childNodes[r.startOffset] || r.startContainer; a = n.matches?.('[data-t]') ? n : n.querySelector?.('[data-t]') || r.startContainer.querySelector?.('[data-t]'); }
+    if (!b && r.endContainer.nodeType === 1) { const n = r.endContainer.childNodes[Math.max(0, r.endOffset - 1)] || r.endContainer; const ws = n.matches?.('[data-t]') ? [n] : [...(n.querySelectorAll?.('[data-t]') || [])]; b = ws[ws.length - 1] || null; }
     if (!a || !b) return;
     const all = this.allWords || (this.allWords = [...this.box.querySelectorAll('[data-t]')]);
     const ia = all.indexOf(a), ib = all.indexOf(b); if (ia < 0 || ib < 0) return;
@@ -178,7 +181,7 @@ function Editor({ id }) {
   const [aspect, setAspect] = useState('none'); const [crop, setCrop] = useState({ x: 0, y: 0, w: 1, h: 1 });
   const [size, setSize] = useState('original'); const [name, setName] = useState(''); const [clientId, setClientId] = useState('');
   const [folder, setFolder] = useState(''); const [job, setJob] = useState(null); const [done, setDone] = useState(null); const [proxyPct, setProxyPct] = useState(null); const [txPct, setTxPct] = useState(null); const [txNote, setTxNote] = useState('');
-  const [rw, setRw] = useState(800); const [box, setBox] = useState(null); const [tab, setTab] = useState('text'); const [dragging, setDragging] = useState(null);
+  const [rw, setRw] = useState(800); const [box, setBox] = useState(null); const [dragging, setDragging] = useState(null); const [exportOpen, setExportOpen] = useState(false);
   const st = useRef({}); st.current = { inP, outP, view, loop, D, fps, rw };
   const anim = useRef(null);
   // Loop / stop at the end only applies to playback that's inside the cut: playing (or clicking a word) anywhere else in
@@ -230,7 +233,9 @@ function Editor({ id }) {
     const c = canvas.current; const peaks = wv?.peaks || []; if (!c || !D) return;
     const dpr = window.devicePixelRatio || 1; c.width = rw * dpr; c.height = 34 * dpr; const g = c.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, rw, 34);
     if (!peaks.length) return; g.fillStyle = getComputedStyle(c).color || 'rgba(255,255,255,.6)';
-    for (let px = 0; px < rw; px += 2) { const t = view[0] + (px / rw) * (view[1] - view[0]); const v = peaks[Math.min(peaks.length - 1, Math.floor((t / D) * peaks.length))] || 0; const h = Math.max(1, v * 30); g.fillRect(px, 17 - h / 2, 1.4, h); }
+    // Scaled to the loudest moment, so quiet recordings still show where the talking is.
+    const top = Math.max(0.02, ...peaks.slice(0, 5000));
+    for (let px = 0; px < rw; px += 2) { const t = view[0] + (px / rw) * (view[1] - view[0]); const v = peaks[Math.min(peaks.length - 1, Math.floor((t / D) * peaks.length))] || 0; const h = Math.max(1, Math.min(1, v / top) * 30); g.fillRect(px, 17 - h / 2, 1.4, h); }
   }, [wv, view, rw, D]);
 
   const seek = (t, fast = false) => { const v = vid.current; if (!v) return; t = Math.max(0, Math.min(st.current.D || D, t)); markInside(t); if (fast && v.fastSeek) v.fastSeek(t); else v.currentTime = t; };
@@ -373,66 +378,76 @@ function Editor({ id }) {
   const xi = x(inP), xo = x(outP);
   const exporting = job && !['done', 'failed', 'canceled'].includes(job.status);
   const txStatus = tx?.status === 'ready' ? 'ready' : e.tx?.status === 'working' || txPct != null ? 'working' : e.tx?.status || tx?.status || 'queued';
+  const len = Math.max(0, outP - inP);
+  const exportBtn = html`<${Button} kind="primary" icon="download" busy=${exporting} disabled=${exporting} onClick=${() => setExportOpen(true)} title="Choose a name, size and folder, then export">${exporting ? `Exporting ${Math.round((job.progress || 0) * 100)}%` : `Export ${short(len)}${aspect !== 'none' ? ` · ${aspect === 'free' ? 'cropped' : aspect}` : ''}`}</${Button}>`;
   return html`<div class="qc" ref=${root}>
     <div class="qc-top">
       <${Button} kind="ghost" size="sm" icon="chevronLeft" onClick=${() => navigate('/clipper')}>Videos</${Button}>
-      <b class="ellipsis" style="max-width:420px">${e.name}</b><span class="faint tnum" style="font-size:var(--fs-sm)">${e.info.width}×${e.info.height} · ${short(D)}</span>
+      <div class="qc-title"><b class="ellipsis">${e.name}</b><span class="faint tnum">${e.info.width}×${e.info.height} · ${short(D)}</span></div>
       <span class="grow" />
-      ${txStatus === 'working' ? html`<span class="badge sky">Transcript ${txPct != null ? `${Math.round(txPct * 100)}%` : '…'}</span>` : null}
+      ${txStatus === 'working' ? html`<span class="badge sky">Writing the transcript ${txPct != null ? `${Math.round(txPct * 100)}%` : '…'}</span>` : null}
       ${e.proxyPending && srcPath ? html`<span class="badge gold" title="A light copy for smoother scrubbing; you can keep working meanwhile">Smoothing playback${proxyPct != null ? ` ${Math.round(proxyPct * 100)}%` : '…'}</span>` : null}
+      ${done && !exporting ? html`<button type="button" class="badge moss" style="border:0;cursor:pointer" title=${`${done}${meta?.desktop ? ' · click to show it in its folder' : ''}`} onClick=${() => meta?.desktop ? act(() => api.post('/api/system/open', { path: done, reveal: true })) : toast(done, { title: 'Saved to' })}>Saved ✓ ${meta?.desktop ? 'Show file' : ''}</button>` : null}
+      ${job?.status === 'failed' ? html`<span class="badge coral" title=${job.error || ''}>Export failed</span>` : null}
+      ${exportBtn}
     </div>
     <div class="qc-main">
-      <div class="qc-stage" ref=${stage} onClick=${() => play()}>
-        ${!srcPath ? html`<div class="qc-wait"><span class="spinner" /> This video needs a preview copy before it can play here${proxyPct != null ? ` (${Math.round(proxyPct * 100)}%)` : ''}. You can already search the transcript and set the start and end.</div>` : null}
-        <video ref=${vid} src=${src} preload="auto" playsinline onPlay=${() => setPlaying(true)} onPause=${() => setPlaying(false)} style=${box ? { position: 'absolute', left: box.x + 'px', top: box.y + 'px', width: box.w + 'px', height: box.h + 'px' } : { width: '100%', height: '100%' }} />
-        ${box && aspect !== 'none' ? html`<div class="qc-crop" style=${{ left: box.x + crop.x * box.w + 'px', top: box.y + crop.y * box.h + 'px', width: crop.w * box.w + 'px', height: crop.h * box.h + 'px' }} onPointerDown=${(ev) => cropDown(ev, null)} onClick=${(ev) => ev.stopPropagation()}>
-          ${['tl', 'tr', 'bl', 'br'].map((c) => html`<i class=${'qc-cr ' + c} onPointerDown=${(ev) => cropDown(ev, c)} />`)}<span class="qc-crop-grid" /></div>` : null}
+      <div class="qc-left">
+        <div class="qc-stage" ref=${stage} onClick=${() => play()}>
+          ${!srcPath ? html`<div class="qc-wait"><span class="spinner" /> This video needs a preview copy before it can play here${proxyPct != null ? ` (${Math.round(proxyPct * 100)}%)` : ''}. You can already search the transcript and set the start and end.</div>` : null}
+          <video ref=${vid} src=${src} preload="auto" playsinline onPlay=${() => setPlaying(true)} onPause=${() => setPlaying(false)} style=${box ? { position: 'absolute', left: box.x + 'px', top: box.y + 'px', width: box.w + 'px', height: box.h + 'px' } : { width: '100%', height: '100%' }} />
+          ${box && aspect !== 'none' ? html`<div class="qc-crop" style=${{ left: box.x + crop.x * box.w + 'px', top: box.y + crop.y * box.h + 'px', width: crop.w * box.w + 'px', height: crop.h * box.h + 'px' }} onPointerDown=${(ev) => cropDown(ev, null)} onClick=${(ev) => ev.stopPropagation()}>
+            ${['tl', 'tr', 'bl', 'br'].map((c) => html`<i class=${'qc-cr ' + c} onPointerDown=${(ev) => cropDown(ev, c)} />`)}<span class="qc-crop-grid" /></div>` : null}
+          ${srcPath && !playing ? html`<div class="qc-bigplay" aria-hidden="true"><${Icon} name="play" size=${26} /></div>` : null}
+        </div>
+        <div class="qc-croprow"><span class="qc-lbl">Shape</span><${Seg} value=${aspect} onChange=${setAsp} options=${ASPECTS} /><span class="faint qc-crophint">${aspect === 'none' ? 'The whole picture' : 'Drag the box to move it, its corners to resize'}</span></div>
       </div>
       <div class="qc-side">
-        <div class="qc-tabs"><${Seg} value=${tab} onChange=${setTab} options=${[{ value: 'text', label: 'Transcript' }, { value: 'cut', label: 'Crop & export' }]} /></div>
-        <div style=${{ display: tab === 'text' ? 'flex' : 'none', flex: 1, minHeight: 0 }}>
-          <${Transcript} ref=${txRef} data=${tx} status=${txStatus} pct=${txPct} note=${txNote} onSeek=${seekFromText} onCut=${cutFromText} onRetry=${() => act(() => api.post(`/api/clipper/${id}/transcript`, {}), { ok: 'Writing the transcript again' }).then(() => { reload(); reloadTx(); })} />
-        </div>
-        <div class="qc-cutpanel" style=${{ display: tab === 'cut' ? 'flex' : 'none' }}>
-          <div class="qc-card2"><b>Crop</b><${Seg} value=${aspect} onChange=${setAsp} options=${ASPECTS} /><span class="faint" style="font-size:var(--fs-xs)">${aspect === 'none' ? 'The whole frame.' : 'Drag the box to move it, the corners to resize.'}</span></div>
-          <div class="qc-card2"><b>Export</b>
-            <input class="input" placeholder=${`${e.name.replace(/\.[^.]+$/, '')} (name, optional)`} value=${name} onInput=${(ev) => setName(ev.target.value)} />
-            <div class="row" style="gap:6px;align-items:center"><span class="faint" style="font-size:var(--fs-xs);width:44px">Size</span><${Seg} value=${size} onChange=${setSize} options=${[{ value: 'original', label: 'Original' }, { value: '1080', label: '1080' }, { value: '720', label: '720' }]} /></div>
-            <div class="row" style="gap:6px;align-items:center"><span class="faint ellipsis grow" style="font-size:var(--fs-xs)" title=${folder}>Saves to ${folder}</span>${meta?.desktop ? html`<${Button} size="sm" kind="ghost" onClick=${chooseFolder}>Change</${Button}>` : null}</div>
-            <select class="input" value=${clientId} onChange=${(ev) => setClientId(ev.target.value)}><option value="">Don't add to Production</option>${(meta?.clients || []).map((c) => html`<option value=${c.id}>Also add to Production: ${c.name}</option>`)}</select>
-          </div>
-        </div>
-        <div class="qc-export">
-          <${Button} kind="primary" icon="download" busy=${exporting} disabled=${exporting} onClick=${doExport}>${exporting ? `Exporting ${Math.round((job.progress || 0) * 100)}%` : `Export ${fmt(outP - inP)}${aspect !== 'none' ? ` · ${aspect}` : ''}`}</${Button}>
-          ${job?.status === 'failed' ? html`<span style="color:var(--coral);font-size:var(--fs-xs)">${job.error || 'The export failed.'}</span>` : null}
-          ${done ? html`<span class="faint selectable ellipsis" style="font-size:var(--fs-xs)" title=${done}>Saved: ${done}</span>` : null}
-        </div>
+        <${Transcript} ref=${txRef} data=${tx} status=${txStatus} pct=${txPct} note=${txNote} onSeek=${seekFromText} onCut=${cutFromText} onRetry=${() => act(() => api.post(`/api/clipper/${id}/transcript`, {}), { ok: 'Writing the transcript again' }).then(() => { reload(); reloadTx(); })} />
       </div>
     </div>
-    <div class="qc-bar">
-      <button type="button" class="qc-play" title="Play / pause (Space)" onClick=${() => play()}><${Icon} name=${playing ? 'pause' : 'play'} size=${18} /></button>
-      <button type="button" class="qc-ib" title="Back one frame (←)" onClick=${() => { vid.current?.pause(); seek((vid.current?.currentTime || 0) - frame); }}><${Icon} name="chevronLeft" size=${16} /></button>
-      <button type="button" class="qc-ib" title="Forward one frame (→)" onClick=${() => { vid.current?.pause(); seek((vid.current?.currentTime || 0) + frame); }}><${Icon} name="chevronRight" size=${16} /></button>
-      <span id="qc-time" class="tnum qc-tc">0:00.00</span>
-      <div class="qc-times">
-        <label>Start<input class="input tnum" value=${fmt(inP)} onChange=${(ev) => { const v = parse(ev.target.value); if (v != null) setIn(Math.max(0, Math.min(outP - 0.1, v))); }} /></label>
-        <label>End<input class="input tnum" value=${fmt(outP)} onChange=${(ev) => { const v = parse(ev.target.value); if (v != null) setOut(Math.min(D, Math.max(inP + 0.1, v))); }} /></label>
-        <label>Length<input class="input tnum" value=${fmt(outP - inP)} onChange=${(ev) => { const v = parse(ev.target.value); if (v != null && v > 0.1) setOut(Math.min(D, inP + v)); }} /></label>
+    <div class="qc-dock" data-hal-avoid>
+      <div class="qc-bar">
+        <div class="qc-transport">
+          <button type="button" class="qc-ib" title="Go to the start of the cut (Home)" onClick=${() => seek(inP)}><${Icon} name="skipBack" size=${16} /></button>
+          <button type="button" class="qc-ib" title="Back one frame (←, Shift+← one second)" onClick=${() => { vid.current?.pause(); seek((vid.current?.currentTime || 0) - frame); }}><${Icon} name="chevronLeft" size=${17} /></button>
+          <button type="button" class="qc-play" title="Play / pause (Space)" onClick=${() => play()}><${Icon} name=${playing ? 'pause' : 'play'} size=${18} /></button>
+          <button type="button" class="qc-ib" title="Forward one frame (→, Shift+→ one second)" onClick=${() => { vid.current?.pause(); seek((vid.current?.currentTime || 0) + frame); }}><${Icon} name="chevronRight" size=${17} /></button>
+          <button type="button" class="qc-ib" title="Go to the end of the cut (End)" onClick=${() => seek(outP)}><${Icon} name="skipFwd" size=${16} /></button>
+          <span class="qc-tc tnum"><span id="qc-time">0:00.00</span><span class="faint"> / ${short(D)}</span></span>
+        </div>
+        <div class="qc-times">
+          <div class="qc-tf"><span>Start</span><input class="tnum" value=${fmt(inP)} onChange=${(ev) => { const v = parse(ev.target.value); if (v != null) setIn(Math.max(0, Math.min(outP - 0.1, v))); }} /><button type="button" title="Start the cut at the playhead (I)" onClick=${() => setIn(Math.min(vid.current?.currentTime || 0, outP - 0.1))}>Set · I</button></div>
+          <div class="qc-tf"><span>End</span><input class="tnum" value=${fmt(outP)} onChange=${(ev) => { const v = parse(ev.target.value); if (v != null) setOut(Math.min(D, Math.max(inP + 0.1, v))); }} /><button type="button" title="End the cut at the playhead (O)" onClick=${() => setOut(Math.max(vid.current?.currentTime || 0, inP + 0.1))}>Set · O</button></div>
+          <div class="qc-tf len"><span>Length</span><input class="tnum" value=${fmt(len)} onChange=${(ev) => { const v = parse(ev.target.value); if (v != null && v > 0.1) setOut(Math.min(D, inP + v)); }} /></div>
+          <button type="button" class=${'qc-pill' + (loop ? ' on' : '')} title="Play the cut over and over (L)" onClick=${() => setLoop(!loop)}>Loop</button>
+        </div>
+        <div class="qc-zoom">
+          <button type="button" class="qc-ib" title="Zoom out" onClick=${() => zoomBy(1.6)}><${Icon} name="zoomOut" size=${16} /></button>
+          <button type="button" class="qc-ib" title="Zoom in (or pinch / Ctrl+scroll on the bar)" onClick=${() => zoomBy(1 / 1.6)}><${Icon} name="zoomIn" size=${16} /></button>
+          <button type="button" class="qc-pill" onClick=${fitSel}>Fit the cut</button><button type="button" class="qc-pill" onClick=${() => glideTo(0, D)}>Whole video</button>
+        </div>
       </div>
-      <${Button} size="sm" kind="ghost" onClick=${() => setIn(Math.min(vid.current?.currentTime || 0, outP - 0.1))}>Start here</${Button}><${Button} size="sm" kind="ghost" onClick=${() => setOut(Math.max(vid.current?.currentTime || 0, inP + 0.1))}>End here</${Button}>
-      <button type="button" class=${'chip' + (loop ? ' on' : '')} title="Loop the selection (L)" onClick=${() => setLoop(!loop)}>Loop</button>
-      <span class="grow" />
-      <${Button} size="sm" kind="ghost" onClick=${() => zoomBy(1.6)}>−</${Button}><${Button} size="sm" kind="ghost" onClick=${() => zoomBy(1 / 1.6)}>+</${Button}>
-      <${Button} size="sm" kind="ghost" onClick=${fitSel}>Zoom to cut</${Button}><${Button} size="sm" kind="ghost" onClick=${() => glideTo(0, D)}>Whole video</${Button}>
+      <div class=${'qc-ruler' + (dragging ? ` dragging-${dragging}` : '')} ref=${ruler} onPointerDown=${down}>
+        <div class="qc-ticks">${ticks.map((t) => html`<span style=${{ left: x(t) + 'px' }}>${step < 1 ? `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}` : short(t)}</span>`)}</div>
+        <div class="qc-lanes">
+          <div class="qc-strip" style=${{ backgroundImage: `url(${api.url(`/api/clipper/${id}/strip`)})`, backgroundSize: `${stripW}px 100%`, backgroundPositionX: `${stripX}px` }} />
+          <canvas ref=${canvas} class="qc-wave" style=${{ width: rw + 'px' }} />
+          <div class="qc-shade" style=${{ left: 0, width: Math.max(0, xi) + 'px' }} /><div class="qc-shade" style=${{ left: Math.min(rw, xo) + 'px', right: 0 }} />
+          <div class="qc-sel" style=${{ left: xi + 'px', width: Math.max(0, xo - xi) + 'px' }}><div class="qc-sel-bar" /><i class="qc-h l" /><i class="qc-h r" /></div>
+          <div class="qc-head" ref=${head}><i /></div>
+        </div>
+      </div>
+      <div class="qc-hint faint">Drag the yellow handles or the top of the frame · click anywhere on the bar to jump · pinch or Ctrl+scroll to zoom · Space play · ← → one frame · I / O set start and end · Ctrl+F search</div>
     </div>
-    <div class=${'qc-ruler' + (dragging ? ` dragging-${dragging}` : '')} ref=${ruler} onPointerDown=${down}>
-      <div class="qc-ticks">${ticks.map((t) => html`<span style=${{ left: x(t) + 'px' }}>${step < 1 ? `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}` : short(t)}</span>`)}</div>
-      <div class="qc-strip" style=${{ backgroundImage: `url(${api.url(`/api/clipper/${id}/strip`)})`, backgroundSize: `${stripW}px 100%`, backgroundPositionX: `${stripX}px` }} />
-      <canvas ref=${canvas} class="qc-wave" style=${{ width: rw + 'px' }} />
-      <div class="qc-shade" style=${{ left: 0, width: Math.max(0, xi) + 'px' }} /><div class="qc-shade" style=${{ left: Math.min(rw, xo) + 'px', right: 0 }} />
-      <div class="qc-sel" style=${{ left: xi + 'px', width: Math.max(0, xo - xi) + 'px' }}><div class="qc-sel-bar" /><i class="qc-h l" /><i class="qc-h r" /></div>
-      <div class="qc-head" ref=${head}><i /></div>
-    </div>
-    <div class="qc-hint faint">Drag the yellow handles · drag the top of the frame to move it · pinch or Ctrl+scroll to zoom · Space play · ← → one frame · Ctrl+F search what they say</div>
+    ${exportOpen ? html`<${Modal} title="Export this cut" onClose=${() => setExportOpen(false)} footer=${html`<${Button} kind="ghost" onClick=${() => setExportOpen(false)}>Cancel</${Button}><${Button} kind="primary" icon="download" onClick=${() => { setExportOpen(false); doExport(); }}>Export ${short(len)}</${Button}>`}>
+      <div class="col" style="gap:12px">
+        <div class="qc-sum"><span><b class="tnum">${fmt(inP)} → ${fmt(outP)}</b> · ${short(len)} long</span><span class="faint">${aspect === 'none' ? 'Whole picture' : aspect === 'free' ? 'Cropped (free)' : `Cropped to ${aspect}`}</span></div>
+        <label class="field"><span class="label">Name</span><input class="input" placeholder=${`${e.name.replace(/\.[^.]+$/, '')} ${short(inP)}-${short(outP)}`} value=${name} onInput=${(ev) => setName(ev.target.value)} /></label>
+        <div class="field"><span class="label">Size</span><${Seg} value=${size} onChange=${setSize} options=${[{ value: 'original', label: 'Original' }, { value: '1080', label: '1080p' }, { value: '720', label: '720p' }]} /></div>
+        <div class="field"><span class="label">Save in</span><div class="row" style="gap:6px"><span class="faint ellipsis grow selectable" style="font-size:var(--fs-sm)" title=${folder}>${folder}</span>${meta?.desktop ? html`<${Button} size="sm" kind="ghost" onClick=${chooseFolder}>Change</${Button}>` : null}</div></div>
+        <label class="field"><span class="label">Production</span><select class="select" value=${clientId} onChange=${(ev) => setClientId(ev.target.value)}><option value="">Don't add it to Production</option>${(meta?.clients || []).map((c) => html`<option value=${c.id}>Also add it to ${c.name}'s footage</option>`)}</select></label>
+        ${done ? html`<span class="faint selectable" style="font-size:var(--fs-xs)">Last export: ${done}</span>` : null}
+      </div></${Modal}>` : null}
   </div>`;
 }
