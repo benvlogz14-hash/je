@@ -26,7 +26,7 @@ export function Bridge() {
   useEffect(() => { if (route.query.q && st?.available) { send(); navigate(`/bridge?site=${site}`); } }, [st?.available]);
   const setUse = (use) => act(() => api.patch('/api/settings', { ai: { bridge: { use, site } } }), { ok: use === 'off' ? 'Euclidean will use its own AI only' : `Euclidean's AI work can now go through your ${label} account` }).then((s) => { const b = store.get().boot; if (b && s) store.set({ boot: { ...b, settings: s } }); reload(); });
   return html`<div class="page">
-    <div class="page-head"><div class="grow"><h1>Your AI apps</h1><div class="sub">Talk to Grok, Claude and ChatGPT with your own logins and subscriptions. No API keys, no extra cost.</div></div>
+    <div class="page-head"><div class="grow"><h1>Connections</h1><div class="sub">Talk to Grok, Claude and ChatGPT with your own logins and subscriptions. No API keys, no extra cost.</div></div>
       <${Seg} value=${site} onChange=${setSite} options=${SITES} /></div>
     ${st && !st.available ? html`<div class="notice gold">This works in the Euclidean desktop app (it opens ${label} in its own window).</div>` : null}
     <div class="panel pad row wrap" style="gap:10px">

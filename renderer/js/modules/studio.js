@@ -9,6 +9,7 @@ import { FONT_GROUPS, HEAVY } from '../lib/fonts.js';
 import { FormatFields, useFormats } from './compress.js';
 import { LOOKS } from './clip.js';
 import { RETRO_EFFECTS, RETRO_IDS, retroLook, retroOverlay } from '../lib/retro.js';
+import { TRANSITIONS, transitionFx, cutPairs, titleFrame, fxCanvas, needsOffscreen, shaped, isPush, DIPS, transDur } from '../lib/transitions.js';
 
 // ------------------------------------------------------------ Velo effect registry (mirrors src/effects/Effects.cpp)
 const EFFECTS = [
@@ -24,82 +25,6 @@ const EFFECTS = [
 ];
 // Transitions. Types 1–3 are Velo's own; the rest render with FFmpeg's xfade filter on export
 // (server/video/studio.js) and are drawn the same way in the program monitor below.
-const TRANSITIONS = [
-  { type: 1, name: 'Cross Dissolve', cat: 'Dissolve', x: 'fade' }, { type: 2, name: 'Fade', cat: 'Dissolve', x: 'fade' }, { type: 3, name: 'Dip to Black', cat: 'Dissolve', x: 'fadeblack' },
-  { type: 4, name: 'Dip to White', cat: 'Dissolve', x: 'fadewhite' }, { type: 5, name: 'Dither Dissolve', cat: 'Dissolve', x: 'dissolve' }, { type: 6, name: 'Fade Through Gray', cat: 'Dissolve', x: 'fadegrays' },
-  { type: 7, name: 'Blur Dissolve', cat: 'Dissolve', x: 'hblur' }, { type: 8, name: 'Pixelate', cat: 'Dissolve', x: 'pixelize' },
-  { type: 10, name: 'Wipe Left', cat: 'Wipe', x: 'wipeleft' }, { type: 11, name: 'Wipe Right', cat: 'Wipe', x: 'wiperight' }, { type: 12, name: 'Wipe Up', cat: 'Wipe', x: 'wipeup' }, { type: 13, name: 'Wipe Down', cat: 'Wipe', x: 'wipedown' },
-  { type: 14, name: 'Soft Wipe Left', cat: 'Wipe', x: 'smoothleft' }, { type: 15, name: 'Soft Wipe Right', cat: 'Wipe', x: 'smoothright' }, { type: 16, name: 'Soft Wipe Up', cat: 'Wipe', x: 'smoothup' }, { type: 17, name: 'Soft Wipe Down', cat: 'Wipe', x: 'smoothdown' },
-  { type: 18, name: 'Corner Wipe ↘', cat: 'Wipe', x: 'wipetl' }, { type: 19, name: 'Corner Wipe ↙', cat: 'Wipe', x: 'wipetr' }, { type: 20, name: 'Corner Wipe ↗', cat: 'Wipe', x: 'wipebl' }, { type: 21, name: 'Corner Wipe ↖', cat: 'Wipe', x: 'wipebr' },
-  { type: 22, name: 'Diagonal ↖', cat: 'Wipe', x: 'diagtl' }, { type: 23, name: 'Diagonal ↗', cat: 'Wipe', x: 'diagtr' }, { type: 24, name: 'Diagonal ↙', cat: 'Wipe', x: 'diagbl' }, { type: 25, name: 'Diagonal ↘', cat: 'Wipe', x: 'diagbr' },
-  { type: 26, name: 'Clock Wipe', cat: 'Wipe', x: 'radial' }, { type: 27, name: 'Slats Left', cat: 'Wipe', x: 'hlslice' }, { type: 28, name: 'Slats Right', cat: 'Wipe', x: 'hrslice' }, { type: 29, name: 'Slats Up', cat: 'Wipe', x: 'vuslice' }, { type: 30, name: 'Slats Down', cat: 'Wipe', x: 'vdslice' },
-  { type: 31, name: 'Iris Round', cat: 'Iris', x: 'circleopen' }, { type: 32, name: 'Iris Round Close', cat: 'Iris', x: 'circleclose' }, { type: 33, name: 'Split Open', cat: 'Iris', x: 'horzopen' }, { type: 34, name: 'Split Close', cat: 'Iris', x: 'horzclose' },
-  { type: 35, name: 'Barn Doors Open', cat: 'Iris', x: 'vertopen' }, { type: 36, name: 'Barn Doors Close', cat: 'Iris', x: 'vertclose' },
-  { type: 40, name: 'Push Left', cat: 'Slide', x: 'slideleft' }, { type: 41, name: 'Push Right', cat: 'Slide', x: 'slideright' }, { type: 42, name: 'Push Up', cat: 'Slide', x: 'slideup' }, { type: 43, name: 'Push Down', cat: 'Slide', x: 'slidedown' },
-  { type: 44, name: 'Slide Left', cat: 'Slide', x: 'coverleft' }, { type: 45, name: 'Slide Right', cat: 'Slide', x: 'coverright' }, { type: 46, name: 'Slide Up', cat: 'Slide', x: 'coverup' }, { type: 47, name: 'Slide Down', cat: 'Slide', x: 'coverdown' },
-  { type: 48, name: 'Squeeze Horizontal', cat: 'Slide', x: 'squeezeh' }, { type: 49, name: 'Squeeze Vertical', cat: 'Slide', x: 'squeezev' },
-];
-const TRANS_BY_TYPE = Object.fromEntries(TRANSITIONS.map((t) => [t.type, t]));
-
-/**
- * What a transition does to a clip at progress p (0→1) in the clip's own frame (w×h, origin top-left).
- * Mirrors FFmpeg xfade: the clip is the incoming side on an In edge and the outgoing side on an Out edge.
- * Returns { alpha, dx, dy, clip: Path2D|null, evenodd, filter, dip: {color, a}, pixel }.
- */
-function transitionFx(type, p, w, h, out) {
-  const x = TRANS_BY_TYPE[type]?.x || 'fade';
-  const fx = { alpha: 1, dx: 0, dy: 0, clip: null, evenodd: true, filter: '', dip: null, pixel: 0 };
-  const rect = (a, b, c, d) => { const q = new Path2D(); q.rect(a, b, c, d); return q; };
-  const not = (inner) => { const q = new Path2D(); q.rect(0, 0, w, h); q.addPath(inner); return q; };
-  // incoming region at progress p, as sampled from xfade
-  const R = Math.hypot(w / 2, h / 2);
-  const region = () => {
-    switch (x) {
-      case 'wipeleft': case 'smoothleft': case 'hlslice': case 'coverleft': return rect(w * (1 - p), 0, w * p, h);
-      case 'wiperight': case 'smoothright': case 'hrslice': case 'coverright': return rect(0, 0, w * p, h);
-      case 'wipeup': case 'smoothup': case 'vuslice': case 'coverup': return rect(0, h * (1 - p), w, h * p);
-      case 'wipedown': case 'smoothdown': case 'vdslice': case 'coverdown': return rect(0, 0, w, h * p);
-      case 'wipetl': return not(rect(0, 0, w * (1 - p), h * (1 - p)));
-      case 'wipetr': return not(rect(w * p, 0, w * (1 - p), h * (1 - p)));
-      case 'wipebl': return not(rect(0, h * p, w * (1 - p), h * (1 - p)));
-      case 'wipebr': return not(rect(w * p, h * p, w * (1 - p), h * (1 - p)));
-      case 'diagtl': case 'diagtr': case 'diagbl': case 'diagbr': {
-        // grows from the opposite corner along the diagonal
-        const k = 2 * p; const q = new Path2D();
-        const pts = { diagtl: [[w, h], [w - w * k, h], [w, h - h * k]], diagtr: [[0, h], [w * k, h], [0, h - h * k]], diagbl: [[w, 0], [w - w * k, 0], [w, h * k]], diagbr: [[0, 0], [w * k, 0], [0, h * k]] }[x];
-        q.moveTo(...pts[0]); q.lineTo(...pts[1]); q.lineTo(...pts[2]); q.closePath(); return q;
-      }
-      case 'radial': { const q = new Path2D(); q.moveTo(w / 2, h / 2); q.arc(w / 2, h / 2, R + 2, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); q.closePath(); return q; }
-      case 'circleopen': { const q = new Path2D(); q.arc(w / 2, h / 2, p * R, 0, Math.PI * 2); return q; }
-      case 'circleclose': { const q = new Path2D(); q.arc(w / 2, h / 2, (1 - p) * R, 0, Math.PI * 2); return not(q); }
-      case 'horzopen': return rect(0, h / 2 - (p * h) / 2, w, p * h);
-      case 'horzclose': case 'squeezeh': return not(rect(0, h / 2 - ((1 - p) * h) / 2, w, (1 - p) * h));
-      case 'vertopen': return rect(w / 2 - (p * w) / 2, 0, p * w, h);
-      case 'vertclose': case 'squeezev': return not(rect(w / 2 - ((1 - p) * w) / 2, 0, (1 - p) * w, h));
-      default: return null;
-    }
-  };
-  if (['fade', 'dissolve'].includes(x)) { fx.alpha = out ? 1 - p : p; return fx; }
-  if (x === 'fadegrays') { fx.alpha = out ? 1 - p : p; fx.filter = `grayscale(${out ? p : 1 - p})`; return fx; }
-  if (x === 'hblur') { fx.alpha = out ? 1 - p : p; fx.filter = `blur(${Math.round((1 - Math.abs(2 * p - 1)) * 12)}px)`; return fx; }
-  if (x === 'pixelize') { fx.alpha = out ? 1 - p : p; fx.pixel = Math.round((1 - Math.abs(2 * p - 1)) * 48); return fx; }
-  if (x === 'fadeblack' || x === 'fadewhite') {
-    const color = x === 'fadeblack' ? '#000' : '#fff';
-    const show = out ? p < 0.5 : p >= 0.5; // the clip is visible on its own half; the colour peaks in the middle
-    fx.alpha = show ? 1 : 0; fx.dip = { color, a: show ? (out ? 2 * p : 2 * (1 - p)) : (out ? 2 * (1 - p) : 2 * p) }; return fx;
-  }
-  const dir = { slideleft: [1, 0], slideright: [-1, 0], slideup: [0, 1], slidedown: [0, -1] }[x];
-  if (dir) { // push: both clips move
-    if (out) { fx.dx = -dir[0] * w * p; fx.dy = -dir[1] * h * p; } else { fx.dx = dir[0] * w * (1 - p); fx.dy = dir[1] * h * (1 - p); }
-    return fx;
-  }
-  const cover = { coverleft: [1, 0], coverright: [-1, 0], coverup: [0, 1], coverdown: [0, -1] }[x];
-  if (cover && !out) { fx.dx = cover[0] * w * (1 - p); fx.dy = cover[1] * h * (1 - p); return fx; }
-  const r = region();
-  // even-odd filling: the frame plus a region is that region's complement, which is what the outgoing side keeps
-  if (r) { if (out) { const q = new Path2D(); q.rect(0, 0, w, h); q.addPath(r); fx.clip = q; } else fx.clip = r; fx.evenodd = true; }
-  return fx;
-}
 const PRESETS = [{ label: 'Shorts / Reels / TikTok', w: 1080, h: 1920 }, { label: 'YouTube 1080p', w: 1920, h: 1080 }, { label: 'Instagram square', w: 1080, h: 1080 }, { label: 'YouTube 4K', w: 3840, h: 2160 }];
 
 const base = (p, d = 0) => (p && typeof p === 'object' ? (p.base ?? d) : (p ?? d));
@@ -1216,6 +1141,10 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
   const onBoxMove = (e) => { const p = pan.current; if (!p) return; setView({ ...p.v, x: p.v.x + e.clientX - p.x0, y: p.v.y + e.clientY - p.y0 }); };
   const onBoxUp = () => { pan.current = null; };
 
+  // Cuts with a transition: B's transition plays over A, which carries on under it (its tail) for that long.
+  const pairs = useMemo(() => cutPairs(seq), [seq]);
+  /** Where a clip's player should be at this time (a tail past the end of its footage holds the last frame). */
+  const wantAt = (c, time, el) => { const w = (c.in || 0) + (time - c.start) * (c.speed || 1); return el instanceof HTMLMediaElement && isFinite(el.duration) && el.duration > 0 && time > c.start + c.duration ? Math.min(w, el.duration - 0.04) : w; };
   const getEl = (c) => {
     let el = els.current.get(c.id); const m = media[c.mediaId]; if (!m) return null;
     const still = c.type === 2 || m.kind === 2 || m.kind === 3; const src = playUrl(m, still);
@@ -1229,7 +1158,12 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
   };
   const activeAt = (time) => {
     const v = []; const a = [];
-    seq.videoTracks.forEach((tr, i) => { if (tr.muted) return; for (const c of tr.clips) if (c.enabled !== false && time >= c.start && time < c.start + c.duration) v.push({ c, i }); });
+    seq.videoTracks.forEach((tr, i) => {
+      if (tr.muted) return;
+      // A clip carrying on past a cut (under the next clip's transition) goes first, so it's drawn underneath.
+      for (const c of tr.clips) { const tl = pairs.tailOf.get(c.id); if (tl && c.enabled !== false && time >= c.start + c.duration && time < c.start + c.duration + tl.ext) v.push({ c, i, tail: tl }); }
+      for (const c of tr.clips) if (c.enabled !== false && time >= c.start && time < c.start + c.duration) v.push({ c, i });
+    });
     seq.audioTracks.forEach((tr) => { if (tr.muted) return; for (const c of tr.clips) if (c.enabled !== false && time >= c.start && time < c.start + c.duration) a.push({ c, tr }); });
     return { v, a };
   };
@@ -1246,10 +1180,10 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       if (c.type === 3) continue;
       const el = getEl(c); if (!el || !(el instanceof HTMLMediaElement)) { if (el) live.add(c.id); continue; }
       live.add(c.id);
-      const want = (c.in || 0) + (time - c.start) * (c.speed || 1);
+      const want = wantAt(c, time, el); const held = want < (c.in || 0) + (time - c.start) * (c.speed || 1) - 0.01; // footage ran out in a tail
       if (c.type === 1) { const tr = a.find((x) => x.c.id === c.id)?.tr; el.volume = Math.max(0, Math.min(1, valAt(c.volume, time - c.start, 1) * base(tr?.volume, 1))); }
       const rate = Math.min(4, Math.max(0.25, c.speed || 1));
-      if (isPlaying) {
+      if (isPlaying && !held) {
         const drift = want - el.currentTime;
         if (c.id === masterId) {
           // The clock follows this one: it plays at its own speed and is only moved when it's really off (after a seek).
@@ -1286,7 +1220,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     const waiting = v.some(({ c }) => {
       if (c.type === 3 || c.type === FX_LAYER) return false; const el = getEl(c);
       if (el instanceof HTMLImageElement) return !(el.complete && el.naturalWidth);
-      return el instanceof HTMLVideoElement && (el.readyState < 2 || el.seeking || Math.abs(el.currentTime - ((c.in || 0) + (time - c.start) * (c.speed || 1))) > tol);
+      return el instanceof HTMLVideoElement && (el.readyState < 2 || el.seeking || Math.abs(el.currentTime - wantAt(c, time, el)) > tol);
     });
     const now = performance.now();
     if (waiting && hold.current.drawn && cv.width === W && cv.height === H) {
@@ -1296,16 +1230,31 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     hold.current.since = 0; hold.current.drawn = true;
     const g = cv.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
     hits.current = [];
-    for (const { c } of v) {
+    for (const { c, tail: inTail } of v) {
       const local = time - c.start;
       if (c.type === FX_LAYER) { drawFxLayer(g, cv, c, local, W, H); continue; }
-      { const m0 = media[c.mediaId]; const sx0 = valAt(c.scaleX, local, 1), sy0 = c.uniformScale === false ? valAt(c.scaleY, local, 1) : sx0; const tb = c.type === 3 ? titleBox(c.text || {}, sx0 * quality) : null;
+      if (!inTail) { const m0 = media[c.mediaId]; const sx0 = valAt(c.scaleX, local, 1), sy0 = c.uniformScale === false ? valAt(c.scaleY, local, 1) : sx0; const tb = c.type === 3 ? titleBox(c.text || {}, sx0 * quality) : null;
         hits.current.push({ id: c.id, cx: W / 2 + valAt(c.posX, local) * quality, cy: H / 2 + valAt(c.posY, local) * quality, w: tb ? tb.w : (m0?.width || seq.width) * Math.abs(sx0) * quality, h: tb ? tb.h : (m0?.height || seq.height) * Math.abs(sy0) * quality, rot: (valAt(c.rotation, local) * Math.PI) / 180 }); }
       let alpha = valAt(c.opacity, local, 1);
-      const ti = c.transIn?.type ? c.transIn.duration : 0, to = c.transOut?.type ? c.transOut.duration : 0;
-      // Titles only fade (as in export); picture clips get the full transition below.
-      if (c.type === 3) { if (ti && local < ti) alpha *= local / ti; if (to && local > c.duration - to) alpha *= Math.max(0, (c.duration - local) / to); }
+      // Transitions (lib/transitions.js; the export makes the same). At a cut, B's transition plays over A (pairs).
+      const pin = c.type === 3 ? null : pairs.inOf.get(c.id), ptail = c.type === 3 ? null : pairs.tailOf.get(c.id);
+      const tin = pin || (c.transIn?.type ? c.transIn : null), tout = ptail ? null : (c.transOut?.type ? c.transOut : null);
+      const ti = tin ? Math.min(transDur(tin), c.duration) : 0, to = tout ? Math.min(transDur(tout), c.duration) : 0;
+      const e01 = (x) => Math.max(0, Math.min(1, x));
+      // Titles: fades and dips fade them; the rest are made inside the title's box (or the whole picture when it's keyframed).
+      const tfx = [];
+      if (c.type === 3) {
+        if (ti && local < ti) { if (shaped(tin.type)) tfx.push([tin.type, e01(local / ti), false]); else alpha *= local / ti; }
+        if (to && local > c.duration - to) { if (shaped(tout.type)) tfx.push([tout.type, e01((local - (c.duration - to)) / to), true]); else alpha *= Math.max(0, (c.duration - local) / to); }
+      }
       g.save(); g.globalAlpha = Math.max(0, Math.min(1, alpha));
+      const tKeyed = tfx.length > 0 && ['posX', 'posY', 'scaleX', 'rotation', 'opacity'].some((k) => isAnimated(c[k]));
+      if (tKeyed) {
+        const fr = tfx.map(([ty, e, o]) => transitionFx(ty, e, W, H, o)); g.translate(W / 2, H / 2); transGeo(g, fr, W, H);
+        const paintT = (ctx) => { ctx.translate(valAt(c.posX, local) * quality, valAt(c.posY, local) * quality); ctx.rotate((valAt(c.rotation, local) * Math.PI) / 180); drawText(ctx, c.text || {}, valAt(c.scaleX, local, 1) * quality, local, c.duration); };
+        if (needsOffscreen(fr)) { const f0 = g.filter; g.filter = 'none'; g.drawImage(fxCanvas(fr, W, H, paintT), -W / 2, -H / 2); g.filter = f0; } else paintT(g);
+        g.restore(); continue;
+      }
       g.translate(W / 2 + valAt(c.posX, local) * quality, H / 2 + valAt(c.posY, local) * quality);
       g.rotate((valAt(c.rotation, local) * Math.PI) / 180);
       const sx = valAt(c.scaleX, local, 1), sy = c.uniformScale === false ? valAt(c.scaleY, local, 1) : sx;
@@ -1323,7 +1272,12 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       }
       g.filter = filters.join(' ') || 'none';
       if (c.type === 3) {
-        drawText(g, c.text || {}, sx * quality, local, c.duration);
+        if (tfx.length) {
+          const st = c.text || {}; const tb = titleBox(st, sx * quality); const fr = titleFrame(tb.w, tb.h, (st.pixelSize || 96) * sx * quality, sx * quality);
+          const fxt = tfx.map(([ty, e, o]) => transitionFx(ty, e, fr.w, fr.h, o)); transGeo(g, fxt, fr.w, fr.h);
+          if (needsOffscreen(fxt)) { const f0 = g.filter; const off = fxCanvas(fxt, fr.w, fr.h, (ctx) => { ctx.filter = f0; drawText(ctx, st, sx * quality, local, c.duration); }); g.filter = 'none'; g.drawImage(off, -fr.w / 2, -fr.h / 2); g.filter = f0; }
+          else drawText(g, st, sx * quality, local, c.duration);
+        } else drawText(g, c.text || {}, sx * quality, local, c.duration);
         // Typewriter sound while playing: a click for each new letter (softer when typing away).
         const stt = c.text || {};
         if ((stt.animIn === 'type' || stt.animOut === 'untype') && stt.typeSound !== false) {
@@ -1335,22 +1289,22 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       else {
         const el = getEl(c); const m = media[c.mediaId];
         // A player still on the wrong spot (catching up after a jump) is skipped, so the layer underneath shows instead of a wrong or black frame.
-        const onSpot = !(el instanceof HTMLVideoElement) || Math.abs(el.currentTime - ((c.in || 0) + local * (c.speed || 1))) < tol;
+        const onSpot = !(el instanceof HTMLVideoElement) || Math.abs(el.currentTime - wantAt(c, time, el)) < tol;
         if (el && onSpot && ((el instanceof HTMLVideoElement && el.readyState >= 2) || (el instanceof HTMLImageElement && el.complete && el.naturalWidth))) {
           const nw = (m.width || el.videoWidth || el.naturalWidth) * sx * quality, nh = (m.height || el.videoHeight || el.naturalHeight) * sy * quality;
           const iw = el.videoWidth || el.naturalWidth, ih = el.videoHeight || el.naturalHeight;
           let sxp = 0, syp = 0, sw = iw, sh = ih, dx = -nw / 2, dy = -nh / 2, dw = nw, dh = nh;
           if (crop) { sxp = iw * crop.left / 100; syp = ih * crop.top / 100; sw = iw * (1 - (crop.left + crop.right) / 100); sh = ih * (1 - (crop.top + crop.bottom) / 100); dx += nw * crop.left / 100; dy += nh * crop.top / 100; dw = nw * sw / iw; dh = nh * sh / ih; }
           const fxs = [];
-          if (ti && local < ti) fxs.push(transitionFx(c.transIn.type, Math.max(0, local / ti), nw, nh, false));
-          if (to && local > c.duration - to) fxs.push(transitionFx(c.transOut.type, Math.min(1, (local - (c.duration - to)) / to), nw, nh, true));
-          const a0 = g.globalAlpha; let pixel = 0; const dips = [];
-          for (const f of fxs) {
-            g.globalAlpha *= f.alpha;
-            if (f.filter) g.filter = (g.filter === 'none' ? '' : g.filter + ' ') + f.filter;
-            if (f.clip || f.dx || f.dy) { g.translate(-nw / 2, -nh / 2); if (f.clip) g.clip(f.clip, 'evenodd'); else g.clip(new Path2D(`M0 0H${nw}V${nh}H0Z`)); g.translate(nw / 2 + f.dx, nh / 2 + f.dy); }
-            pixel = Math.max(pixel, f.pixel); if (f.dip) dips.push(f.dip);
-          }
+          if (ti && local < ti) fxs.push(transitionFx(tin.type, e01(local / ti), nw, nh, false, !!pin));
+          if (to && local > c.duration - to) fxs.push(transitionFx(tout.type, e01((local - (c.duration - to)) / to), nw, nh, true));
+          // Carrying on past a cut: a push moves it out, a dip takes it to the colour; otherwise it just sits under the next clip.
+          if (ptail && local >= c.duration && (isPush(ptail.type) || DIPS[ptail.type])) fxs.push(transitionFx(ptail.type, e01((local - c.duration) / ptail.duration), nw, nh, true, true));
+          const a0 = g.globalAlpha;
+          // Flips turn the transition with the picture, as in the export (xfade runs before the effects there).
+          g.scale(flipH, flipV);
+          const dips = transGeo(g, fxs, nw, nh); let pixel = Math.max(0, ...fxs.map((f) => f.pixel || 0));
+          const masked = fxs.filter((f) => f.mask || f.hblur > 1).map((f) => ({ mask: f.mask, hblur: f.hblur }));
           // Retro looks: their colour filters go on the picture, their grain/lines/stamps are drawn on top below.
           // The on-screen part of the picture (a wide video filling a tall frame has its sides off screen): stamps go there.
           const left = W / 2 + valAt(c.posX, local) * quality - nw / 2, top = H / 2 + valAt(c.posY, local) * quality - nh / 2;
@@ -1359,19 +1313,21 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
           // Below 100% intensity the untouched picture is drawn first and the look is laid over it at that strength.
           const plainFilter = g.filter; const lookMix = looks.length ? Math.max(...looks.map((L) => L.mix)) : 1;
           for (const L of looks) { if (L.css.length) g.filter = (g.filter === 'none' ? '' : g.filter + ' ') + L.css.join(' '); if (L.pixel) pixel = Math.max(pixel, L.pixel * quality); }
-          g.scale(flipH, flipV);
           if (sw > 0 && sh > 0 && g.globalAlpha > 0) {
-            const aBefore = g.globalAlpha;
-            if (pixel > 1) {
-              if (lookMix < 0.995) { const lf = g.filter; g.filter = plainFilter; g.drawImage(el, sxp, syp, sw, sh, dx, dy, dw, dh); g.filter = lf; g.globalAlpha = aBefore * lookMix; }
-              const off = document.createElement('canvas'); off.width = Math.max(1, Math.round(dw / pixel)); off.height = Math.max(1, Math.round(dh / pixel));
-              off.getContext('2d').drawImage(el, sxp, syp, sw, sh, 0, 0, off.width, off.height);
-              g.imageSmoothingEnabled = false; g.drawImage(off, dx, dy, dw, dh); g.imageSmoothingEnabled = true;
-            } else {
-              if (lookMix < 0.995) { const lf = g.filter; g.filter = plainFilter; g.drawImage(el, sxp, syp, sw, sh, dx, dy, dw, dh); g.filter = lf; g.globalAlpha = aBefore * lookMix; }
-              g.drawImage(el, sxp, syp, sw, sh, dx, dy, dw, dh);
-            }
-            g.globalAlpha = aBefore;
+            const lookFilter = g.filter;
+            const paint = (ctx) => {
+              const aBefore = ctx.globalAlpha; ctx.filter = lookFilter;
+              if (lookMix < 0.995) { ctx.filter = plainFilter; ctx.drawImage(el, sxp, syp, sw, sh, dx, dy, dw, dh); ctx.filter = lookFilter; ctx.globalAlpha = aBefore * lookMix; }
+              if (pixel > 1) {
+                const off = document.createElement('canvas'); off.width = Math.max(1, Math.round(dw / pixel)); off.height = Math.max(1, Math.round(dh / pixel));
+                off.getContext('2d').drawImage(el, sxp, syp, sw, sh, 0, 0, off.width, off.height);
+                ctx.imageSmoothingEnabled = false; ctx.drawImage(off, dx, dy, dw, dh); ctx.imageSmoothingEnabled = true;
+              } else ctx.drawImage(el, sxp, syp, sw, sh, dx, dy, dw, dh);
+              ctx.globalAlpha = aBefore;
+            };
+            // Soft wipes, irises, slats, dissolves and the blur go through a mask drawn offscreen.
+            if (masked.length) { g.filter = 'none'; g.drawImage(fxCanvas(masked, nw, nh, paint), -nw / 2, -nh / 2, nw, nh); g.filter = lookFilter; }
+            else paint(g);
           }
           for (const d of dips) { g.filter = 'none'; g.globalAlpha = a0 * Math.max(0, Math.min(1, d.a)); g.fillStyle = d.color; g.fillRect(-nw / 2, -nh / 2, nw, nh); }
           if (vig) { g.filter = 'none'; const rg = g.createRadialGradient(0, 0, Math.min(nw, nh) * 0.25, 0, 0, Math.max(nw, nh) * 0.6); rg.addColorStop(0, 'rgba(0,0,0,0)'); rg.addColorStop(1, `rgba(0,0,0,${vig * 0.85})`); g.fillStyle = rg; g.fillRect(-nw / 2, -nh / 2, nw, nh); }
@@ -1546,6 +1502,21 @@ const easeOut = (f) => 1 - (1 - f) ** 3;
 const rgbaOf = (s, d) => { const h = String(s || d).replace('#', ''); if (h.length === 8) return `rgba(${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${parseInt(h.slice(6, 8), 16)},${parseInt(h.slice(0, 2), 16) / 255})`; return '#' + h; };
 /** Size of a title's box in canvas pixels (for selecting and dragging it on the monitor). */
 let measureCtx = null;
+/**
+ * A transition's clip paths, moves, squashes, see-through-ness and colour filters, for a w×h frame centred on the
+ * current origin. Returns the dips (colour washes) to draw over the picture afterwards.
+ */
+function transGeo(g, fxs, w, h) {
+  const dips = [];
+  for (const f of fxs) {
+    g.globalAlpha *= f.alpha;
+    if (f.filter) g.filter = (g.filter === 'none' ? '' : g.filter + ' ') + f.filter;
+    if (f.clip || f.dx || f.dy) { g.translate(-w / 2, -h / 2); g.clip(f.clip || new Path2D(`M0 0H${w}V${h}H0Z`), 'evenodd'); g.translate(w / 2 + f.dx, h / 2 + f.dy); }
+    if (f.sx !== 1 || f.sy !== 1) g.scale(f.sx, f.sy);
+    if (f.dip) dips.push(f.dip);
+  }
+  return dips;
+}
 function titleBox(st, scale) {
   measureCtx = measureCtx || document.createElement('canvas').getContext('2d');
   const size = (st.pixelSize || 96) * scale; const g = measureCtx;
@@ -1864,6 +1835,7 @@ function EffectControls({ selected, sel = [], findClip, seq, edit, media, t, set
       ${(def?.params || []).map(([k, label, mn, mx, dflt, stp]) => html`<${ParamField} label=${label} p=${e.params?.[k]} d=${dflt} lt=${lt} inClip=${inClip} onJump=${jump} min=${mn} max=${mx} step=${stp || (mx - mn > 50 ? 1 : 0.05)} digits=${stp && stp < 1 ? 2 : 0} dflt=${dflt}
         onLive=${(v) => liveSet(e.params, k, v, c.id + 'fx' + i + k)} onCommit=${(v) => setRaw((x) => { x.effects[i].params[k] = v; })} />`)}`; })}
     ${c.type === FX_LAYER ? null : html`<div class="divider" /><div class="eyebrow">Transitions</div>
+    ${(() => { if (c.type === 3) return html`<div class="faint" style="font-size:var(--fs-xs);margin:2px 0 4px">On a title, wipes, slides and irises play inside its own box; fades and dips fade it.</div>`; const pr = cutPairs(seq); const pin = pr.inOf.get(c.id), tl = pr.tailOf.get(c.id); return pin || tl ? html`<div class="faint" style="font-size:var(--fs-xs);margin:2px 0 4px">${pin ? 'This clip starts at a cut: its In plays over the clip before, which carries on underneath. ' : ''}${tl ? 'The next clip\'s transition plays over the end of this one (this one carries on under it), so its Out isn\'t used.' : ''}</div>` : null; })()}
     ${['transIn', 'transOut'].map((edge) => html`<div class="row" style="padding:4px 0"><span class="muted" style="width:34px;font-size:var(--fs-sm)">${edge === 'transIn' ? 'In' : 'Out'}</span>
       <select class="select sm" style="flex:1" value=${c[edge]?.type || 0} onChange=${(e) => setRaw((x) => { x[edge] = { type: Number(e.target.value), duration: x[edge]?.duration || 0.5 }; })} aria-label=${edge}><option value="0">None</option>${['Dissolve', 'Wipe', 'Iris', 'Slide'].map((cat) => html`<optgroup label=${cat}>${TRANSITIONS.filter((tt) => tt.cat === cat).map((tt) => html`<option value=${tt.type}>${tt.name}</option>`)}</optgroup>`)}</select>
       <input class="input sm tnum" style="width:62px" inputmode="decimal" value=${c[edge]?.duration || 0.5} onChange=${(e) => { const v = Number(e.target.value); if (v > 0) setRaw((x) => { x[edge] = { ...(x[edge] || { type: 0 }), duration: Math.max(0.04, v) }; }); }} aria-label="Duration" /><span class="faint" style="font-size:var(--fs-xs)">s</span></div>`)}`}
@@ -2051,7 +2023,7 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
   };
 
   const cb = useRef(null); cb.current = { toggleTrack, onDropMedia, startBox, onClipMenu, onEditTitle, onClipDown };
-  const lanesV = useMemo(() => html`<${TimelineLanes} lanes=${lanes} media=${media} sel=${sel} tool=${tool} zoom=${zoom} drag=${drag} view=${view} cb=${cb} />`, [seq, media, sel, tool, zoom, drag, redrawN]);
+  const lanesV = useMemo(() => html`<${TimelineLanes} lanes=${lanes} media=${media} sel=${sel} tool=${tool} zoom=${zoom} drag=${drag} view=${view} cb=${cb} pairs=${cutPairs(seq)} />`, [seq, media, sel, tool, zoom, drag, redrawN]);
   return html`<div style="flex:1;display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--ed-panel);border-top:1px solid var(--line)">
     <div class="row" style="padding:6px 12px;border-bottom:1px solid var(--line);gap:10px">
       <span class="eyebrow">Timeline</span><span ref=${tcEl} class="mono tnum" style="color:var(--teal-ink)">${tc(t, fps)}</span><span class="faint" style="font-size:var(--fs-xs)">${sel.length ? `${sel.length} selected` : ''}</span>${dragHint ? html`<span class="badge ${drag?.ctrl ? 'coral' : drag?.shift ? 'lav' : 'sky'}">${dragHint}</span>` : null}
@@ -2076,7 +2048,7 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
  * playhead (playing, scrubbing, stepping frames) no longer re-draws hundreds of clips. Handlers come through `cb`, so
  * they always see the newest state.
  */
-function TimelineLanes({ lanes, media, sel, tool, zoom, drag, view, cb }) {
+function TimelineLanes({ lanes, media, sel, tool, zoom, drag, view, cb, pairs }) {
   const xOf = (s) => s * zoom; const TH = (type) => TRACK_H[type === 1 ? 1 : 0];
   return html`${lanes.map((lane) => html`<div style=${{ display: 'flex', height: TH(lane.type) + 'px', borderBottom: '1px solid var(--line)' }}>
           <div style=${{ width: HEAD_W + 'px', flex: 'none', position: 'sticky', left: 0, zIndex: 2, background: lane.type === 1 ? 'var(--ed-track-alt)' : 'var(--ed-track)', borderRight: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: '2px', padding: '0 6px' }}>
@@ -2090,8 +2062,8 @@ function TimelineLanes({ lanes, media, sel, tool, zoom, drag, view, cb }) {
                 ${c.type === 0 && media[c.mediaId] && xOf(v.duration) > 50 ? html`<div style=${{ position: 'absolute', inset: 0, backgroundImage: `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(media[c.mediaId].path)}&t=${Math.round(c.in || 0) + 1}`)})`, backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x', opacity: 0.45 }} />` : null}
                 <div class="ellipsis" style="position:relative;font-size:11px;font-weight:600;padding:3px 7px;color:var(--ink)">${clipLabel(c)}${c.effects?.length ? ' ·fx' : ''}${(c.speed || 1) !== 1 ? ` · ${Math.round((c.speed || 1) * 100)}%` : ''}</div>
                 ${keyTimesOf(c).map((kt) => html`<span title=${`Keyframe at ${kt.toFixed(2)}s`} style=${{ position: 'absolute', left: Math.max(0, xOf(kt) - 4) + 'px', bottom: '3px', width: '7px', height: '7px', background: 'var(--gold)', border: '1px solid var(--gold-ink)', transform: 'rotate(45deg)', pointerEvents: 'none' }} />`)}
-                ${c.transIn?.type ? html`<div style=${{ position: 'absolute', left: 0, top: 0, bottom: 0, width: xOf(c.transIn.duration) + 'px', background: 'linear-gradient(90deg, rgba(0,0,0,0.25), transparent)' }} />` : null}
-                ${c.transOut?.type ? html`<div style=${{ position: 'absolute', right: 0, top: 0, bottom: 0, width: xOf(c.transOut.duration) + 'px', background: 'linear-gradient(270deg, rgba(0,0,0,0.25), transparent)' }} />` : null}
+                ${(() => { const pin = pairs?.inOf.get(c.id); const t = pin || (c.transIn?.type ? c.transIn : null); return t ? html`<div title=${pin ? 'Transition from the clip before (it carries on underneath)' : 'Transition in'} style=${{ position: 'absolute', left: 0, top: 0, bottom: 0, width: xOf(Math.min(t.duration || 1, v.duration)) + 'px', background: pin ? 'linear-gradient(90deg, rgba(0,0,0,0.32), rgba(0,0,0,0.08))' : 'linear-gradient(90deg, rgba(0,0,0,0.25), transparent)', borderLeft: pin ? '2px solid rgba(255,255,255,0.7)' : 'none' }} />` : null; })()}
+                ${c.transOut?.type && !pairs?.tailOf.has(c.id) ? html`<div title="Transition out" style=${{ position: 'absolute', right: 0, top: 0, bottom: 0, width: xOf(Math.min(c.transOut.duration || 1, v.duration)) + 'px', background: 'linear-gradient(270deg, rgba(0,0,0,0.25), transparent)' }} />` : null}
               </div>`; })}
           </div></div>`)}`;
 }

@@ -63,8 +63,8 @@ async function readPage(url) {
 
 // ------------------------------------------------------------------ the JEV link: the founders' own AI accounts
 /**
- * Live web through the founders' own Grok login (AI apps page): Grok browses the web itself, so HAL can ask it for
- * today's news and leads without an API key. Only used when Grok is logged in on the AI apps page, and at most
+ * Live web through the founders' own Grok login (Connections page): Grok browses the web itself, so HAL can ask it for
+ * today's news and leads without an API key. Only used when Grok is logged in on the Connections page, and at most
  * `hal.watch.grokPerHour` times an hour (personal-account terms limit automated use). Returns { text, items } where
  * items are the lines Grok gave that carry a real link; anything without a link is dropped.
  */

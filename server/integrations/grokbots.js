@@ -35,7 +35,7 @@ const ready = () => bots().length > 0 && require('./email').configured();
 async function send({ bot, task, title, actor = 'user', context = null }) {
   const email = require('./email');
   const b = bots().find((x) => x.name === bot || x.email === bot) || bots()[0];
-  if (!b) throw new Error('Add a GrokBot first (its email address) on the AI apps page.');
+  if (!b) throw new Error('Add a GrokBot first (its email address) on the Connections page.');
   if (!email.configured()) throw new Error('Connect the outreach email account first (Settings → Connections → Email), so Euclidean can email your GrokBot.');
   if (String(actor).startsWith('bot:') && budget().left <= 0) { const bd = budget(); throw new Error(`This week's GrokBot allowance for the bots is used up (${bd.usedByBots} of ${bd.cap}). It resets ${new Date(bd.resetsAt).toLocaleDateString('en-US', { weekday: 'long' })}; raise it on the Bots page under GrokBots by email.`); }
   const t = ctx.store.insert('botTasks', { bot: b.name, email: b.email, title: String(title || task).slice(0, 80), task: String(task).slice(0, 20000), context, status: 'sending', answer: null, sentAt: null, answeredAt: null, actor });
