@@ -1219,7 +1219,27 @@ r.get('/api/timelogs', (req) => ctx.store.all('timelogs', (t) => !req.query.mont
 r.patch('/api/timelogs/:id', (req, b, p) => { must(ctx.store.get('timelogs', p.id)); const patch = {}; if (b.minutes !== undefined) patch.minutes = Number(b.minutes) || 0; for (const k of ['note', 'date', 'clientId']) if (b[k] !== undefined) patch[k] = b[k]; return ctx.store.update('timelogs', p.id, patch); }, { roles: OWNER });
 r.del('/api/timelogs/:id', (req, b, p) => ({ ok: ctx.store.remove('timelogs', p.id) }), { roles: OWNER });
 r.post('/api/timelogs', (req, b) => ctx.store.insert('timelogs', { userId: actorOf(req), clientId: b.clientId || null, minutes: Number(b.minutes) || 0, note: b.note || '', date: b.date || now().slice(0, 10) }));
-r.post('/api/analytics/sync', () => queue.enqueue('analytics.sync', {}, { dedupeKey: `analytics:manual:${Math.floor(Date.now() / 60000)}` }));
+r.post('/api/analytics/sync', () => {
+  // The free public refresh runs too (it covers shorts that have no connected channel or Ayrshare).
+  queue.enqueue('analytics.public', { force: true }, { dedupeKey: `analytics-public:manual:${Math.floor(Date.now() / 60000)}` });
+  return queue.enqueue('analytics.sync', {}, { dedupeKey: `analytics:manual:${Math.floor(Date.now() / 60000)}` });
+});
+// Data Bot's free refresh from the public pages: status, switch and how often, refresh now, paste a short's link.
+r.get('/api/analytics/public', () => require('./automation/publicstats').status());
+r.post('/api/analytics/public', (req, b) => {
+  const cur = ctx.setting('analytics', {}) || {};
+  const next = { ...cur };
+  if (b.on !== undefined) next.publicStats = !!b.on;
+  if (b.everyMin !== undefined) next.publicEveryMin = Math.max(30, Math.min(24 * 60, Number(b.everyMin) || 120));
+  ctx.store.setSettings({ analytics: next });
+  if (b.run) queue.enqueue('analytics.public', { force: true }, { dedupeKey: `analytics-public:manual:${Math.floor(Date.now() / 60000)}` });
+  return require('./automation/publicstats').status();
+}, { roles: STAFF });
+r.post('/api/posts/:id/public-link', (req, b, p) => {
+  const out = require('./automation/publicstats').setLink(p.id, b.url);
+  queue.enqueue('analytics.public', { force: true }, { dedupeKey: `analytics-public:link:${p.id}:${Math.floor(Date.now() / 60000)}` });
+  return out;
+}, { roles: STAFF });
 // ------------------------------------------------------------ tracked creators (Analytics → Creators)
 const creatorsSvc = require('./integrations/creators');
 const PLATFORMS_C = ['youtube', 'tiktok', 'instagram', 'x', 'facebook', 'twitch', 'other'];
