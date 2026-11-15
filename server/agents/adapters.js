@@ -295,14 +295,50 @@ class AccountAdapter extends AgentAdapter {
  * it with the connector's agent_inbox and answers with agent_reply. When your Claude login is open on the Connections
  * page, it answers at once through that instead.
  */
+let codeNoLoginAt = 0; // Claude Code said it isn't signed in (asked again after 10 minutes, or right after "Sign in")
+function claudeCodeSignedIn() { codeNoLoginAt = 0; }
 class ConnectorAdapter extends AgentAdapter {
   get kind() { return 'connector'; }
+  /** Claude Code on this PC (Anthropic's command-line Claude, signed in with your Claude account: no API key). */
+  code() { return tools.findExecutable(['claude']); }
+  codeState() {
+    if (!this.code()) return 'missing';
+    return codeNoLoginAt && Date.now() - codeNoLoginAt < 10 * 60000 ? 'nologin' : 'ready';
+  }
   async detect() {
     let viaLogin = false; try { viaLogin = require('../integrations/bridge').siteReady('claude'); } catch { /* none */ }
-    return { installed: true, ready: true, note: viaLogin ? 'Answers through your Claude login' : 'Answers from the Claude app (Euclidean connector)' };
+    const code = this.codeState();
+    const note = code === 'ready' ? 'Answers here through Claude Code on this PC, with Euclidean\'s tools'
+      : viaLogin ? 'Answers through your Claude login'
+      : code === 'nologin' ? 'Claude Code needs signing in once; until then messages wait for the Claude app'
+      : 'Answers from the Claude app (Euclidean connector). Install Claude Code to have it answer here at once';
+    return { installed: true, ready: true, note, code, viaLogin };
   }
-  async test() { return { ok: true, message: 'Messages to Claude wait for the Claude app, which answers through the Euclidean connector.' }; }
-  async deliver({ system, prompt }) {
+  async test() { const d = await this.detect(); return { ok: true, message: d.note }; }
+  /** Run Claude Code once with Euclidean's tools connected; anything that sends or posts stays off. */
+  async askCode({ system, prompt, timeoutMs, signal }) {
+    const b = this.code();
+    const work = tools.toolsDir('cli-work');
+    const cfg = path.join(work, 'euclidean-mcp.json');
+    const e = require('../setup/claude-connect').entry();
+    fs.writeFileSync(cfg, JSON.stringify({ mcpServers: { euclidean: { command: e.command, args: e.args, env: { ...(e.env || {}), EUCLIDEAN_DATA: require('../core/paths').root } } } }));
+    const full = `${system}\n\nYou have Euclidean's own tools (mcp__euclidean__*): use them when the message needs real data from the app or work done in it (leads, clients, clips, jobs, the Data tab, the notebook, documents, drafts, the bots, HAL). Sending, approving, posting and deleting are switched off here: draft instead and say a founder needs to approve. Then answer in plain text.\n\n${prompt}`;
+    const args = ['-p', '--output-format', 'text', '--mcp-config', cfg, '--allowedTools', 'mcp__euclidean', '--disallowedTools', 'mcp__euclidean__send_or_publish'];
+    if (this.conf.model) args.push('--model', this.conf.model);
+    const r = await tools.exec(b, args, { input: full, timeoutMs: timeoutMs || ctx.setting('agentNet.replyTimeoutSec', 300) * 1000, cwd: work, signal });
+    const out = stripAnsi(r.out).trim();
+    if (!out || LOGIN_HINT.test(out.slice(0, 300))) throw Object.assign(new Error(out || stripAnsi(r.err).trim() || 'Claude Code gave no answer.'), { login: LOGIN_HINT.test(out + r.err) });
+    return out;
+  }
+  async deliver({ system, prompt, timeoutMs, signal }) {
+    if (this.codeState() === 'ready') {
+      try { return await this.askCode({ system, prompt, timeoutMs, signal }); }
+      catch (e) {
+        if (signal?.aborted) throw e;
+        if (e.login || LOGIN_HINT.test(e.message)) codeNoLoginAt = Date.now();
+        else throw new Error(`Claude Code: ${String(e.message).slice(0, 300)}`);
+      }
+    }
     let br = null; try { br = require('../integrations/bridge'); } catch { /* none */ }
     if (br && br.siteReady('claude')) { const r = await br.ask('claude', `${system}\n\n${prompt}`.slice(0, 30000), { newChat: true, record: false, actor: 'agentnet', quiet: true }); return r.text; }
     return null; // waits for the Claude app
@@ -358,4 +394,4 @@ function create(def, conf) {
   return new C(def, conf);
 }
 
-module.exports = { HalAdapter, OllamaAdapter, BotAdapter, AccountAdapter, ConnectorAdapter, GrokBotAdapter, AgentAdapter, ApiAdapter, CliAdapter, HerdrAdapter, LocalAdapter, create, customKeyName, stripAnsi };
+module.exports = { claudeCodeSignedIn, HalAdapter, OllamaAdapter, BotAdapter, AccountAdapter, ConnectorAdapter, GrokBotAdapter, AgentAdapter, ApiAdapter, CliAdapter, HerdrAdapter, LocalAdapter, create, customKeyName, stripAnsi };

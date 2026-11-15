@@ -92,11 +92,12 @@ async function ask(site, text, { newChat = false, timeoutMs = 240000, quiet = fa
     const r = await page.executeJavaScript(read).catch(() => ({ text: '' }));
     const cur = String(r.text || '').trim();
     const busy = await page.executeJavaScript(`!![...document.querySelectorAll('button')].find((x) => x.offsetParent !== null && /stop/i.test((x.getAttribute('aria-label') || '') + ' ' + (x.getAttribute('data-testid') || '')))`).catch(() => false);
-    if (cur && cur === last && !busy) { if (++still >= 2) return { text: cur.replace(/\n(Copy|Retry|Edit|Share|Regenerate|Good response|Bad response)\s*$/gi, '').trim(), site }; }
+    const real = cur && !/^[\s.…·•]*$/.test(cur); // "..." is the typing dots, not an answer
+    if (real && cur === last && !busy) { if (++still >= 2) return { text: cur.replace(/\n(Copy|Retry|Edit|Share|Regenerate|Good response|Bad response)\s*$/gi, '').trim(), site }; }
     else still = 0;
     last = cur;
   }
-  if (last) return { text: last, site, partial: true };
+  if (last && !/^[\s.…·•]*$/.test(last)) return { text: last, site, partial: true };
   throw new Error(`${s.label} didn't answer in time. Open its window to check.`);
 }
 

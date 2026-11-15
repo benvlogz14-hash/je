@@ -61,7 +61,7 @@ function ask(site, text, { newChat = false, record = true, actor = 'user', quiet
 function unecho(reply, sent) {
   const norm = (x) => String(x || '').replace(/\s+/g, ' ').trim();
   const r = String(reply || '').trim(); const n = norm(r).toLowerCase(); const m = norm(sent).toLowerCase();
-  if (!n) return '';
+  if (!n || /^[.…·•\s]*$/.test(n)) return ''; // nothing, or only the typing dots
   if (m && (n === m || m.includes(n.replace(/^you\s+/, '')))) return '';
   const tail = m.slice(-80);
   if (tail && n.includes(tail)) { const i = n.lastIndexOf(tail); return norm(r).slice(i + tail.length).trim(); }
