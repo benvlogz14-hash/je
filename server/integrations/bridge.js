@@ -45,6 +45,8 @@ function ask(site, text, { newChat = false, record = true, actor = 'user', quiet
     if (record) remember(site, 'you', text);
     try {
       const r = await B().ask(site, text, { newChat, quiet });
+      r.text = unecho(r.text, text);
+      if (!r.text) throw new Error(`${LABEL[site] || site} didn't answer (only our own message came back). Try again.`);
       setLoggedIn(site, true); sent.push(Date.now());
       if (record) remember(site, 'them', r.text);
       audit.log(actor, 'bridge.ask', { site, chars: text.length });
@@ -53,6 +55,19 @@ function ask(site, text, { newChat = false, record = true, actor = 'user', quiet
   };
   const p = queue.then(run, run); queue = p.catch(() => {});
   return p;
+}
+
+/** If the page handed back our own message (or started with it), keep only what comes after it. */
+function unecho(reply, sent) {
+  const norm = (x) => String(x || '').replace(/\s+/g, ' ').trim();
+  const r = String(reply || '').trim(); const n = norm(r).toLowerCase(); const m = norm(sent).toLowerCase();
+  if (!n || /^[.…·•\s]*$/.test(n)) return ''; // nothing, or only the typing dots
+  if (m && (n === m || m.includes(n.replace(/^you\s+/, '')))) return '';
+  const tail = m.slice(-80);
+  if (tail && n.includes(tail)) { const i = n.lastIndexOf(tail); return norm(r).slice(i + tail.length).trim(); }
+  const headLine = m.slice(0, 80);
+  if (headLine && n.startsWith(headLine)) return '';
+  return r;
 }
 
 /** Is this one account signed in and under the hourly limit (agent conversations use each site directly)? */
@@ -78,4 +93,4 @@ async function complete({ system, prompt, json }) {
   return { text: r.text, model: `${LABEL[site]} (your account)` };
 }
 
-module.exports = { siteReady, siteKnown, SITES, LABEL, available, status, ask, history, usable, complete };
+module.exports = { unecho, siteReady, siteKnown, SITES, LABEL, available, status, ask, history, usable, complete };

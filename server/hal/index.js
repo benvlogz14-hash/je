@@ -339,6 +339,8 @@ async function handle(text, { history = [], context = {}, actor = 'user' } = {})
     const onThis = await onClip(low, t, context, actor); if (onThis) return onThis;
     const mem = notebook(low, t, actor); if (mem) return mem;
     const game = arcade(low); if (game) return game;
+    // Weather: live numbers from a free weather service (no key), not a web search.
+    { const W = require('../integrations/weather'); const wq = W.ask(t); if (wq?.place) { try { return { text: W.format(await W.forecast(wq.place, wq.when)), by: 'Open-Meteo' }; } catch { /* fall through to the usual lookup */ } } }
     const handOff = await toBot(low, t, actor); if (handOff) return handOff;
     if (/\b(you (sent|found|added|gave|surfaced|flagged|mentioned)|the ones you|parse (through|the)|which (ones|prospect|candidate)|list (them|those|the new)|go (back|over)|what (were|was) (the|those))\b/.test(low) && /\b(prospect|candidate|lead|name|one)s?\b/.test(low)) return recall();
     if (/\b(what did you find|anything new|what('?s| is) new(?! with| on| about| for)|check (?:the )?(?:news|internet|web) now|scan (?:the )?(?:news|web|internet)|run (?:your|the) watch|look for (?:new )?leads)\b/.test(low)) return await watchNow();

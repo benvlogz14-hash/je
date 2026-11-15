@@ -24,6 +24,24 @@
 .am-who .am-ini { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; background: var(--teal-soft); color: var(--teal-ink); flex: none; }
 .am-who b { font-size: 15px; }
 
+/* Choosing who it's for */
+.am-start { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.am-startbtn { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; text-align: left; padding: 16px; border-radius: 16px; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; transition: border-color 0.12s, background 0.12s, transform 0.12s; }
+.am-startbtn:hover:not(:disabled) { border-color: var(--teal); background: var(--teal-soft); }
+.am-startbtn:active:not(:disabled) { transform: scale(0.985); }
+.am-startbtn:disabled { opacity: 0.5; cursor: default; }
+.am-startbtn b { font-size: 15px; }
+.am-startbtn span { font-size: var(--fs-xs); color: var(--ink-2); line-height: 1.4; }
+.am-dot { display: inline-grid; place-items: center; width: 20px; height: 20px; margin-left: -6px; border-radius: 50%; background: var(--teal-soft); color: var(--teal-ink); font-size: 9px; font-weight: 700; }
+.am-search { width: 100%; height: 44px; padding: 0 16px; border-radius: 14px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font: inherit; font-size: 15px; outline: none; transition: border-color 0.15s, box-shadow 0.15s; }
+.am-search:focus { border-color: var(--teal); box-shadow: 0 0 0 4px var(--teal-soft); }
+.am-people { display: flex; flex-direction: column; gap: 4px; max-height: 52vh; overflow: auto; padding-right: 2px; }
+.am-person { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 12px; border: 1px solid transparent; background: none; color: var(--ink); cursor: pointer; }
+.am-person:hover { background: var(--surface-2); }
+.am-person.on { border-color: var(--teal); background: var(--teal-soft); }
+.am-person .am-ini { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--teal-soft); color: var(--teal-ink); flex: none; }
+.am-person b { font-size: var(--fs-sm); }
+
 /* Drop zone */
 .am-drop { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 22px 16px; border: 1.5px dashed var(--line-strong); border-radius: 16px; cursor: pointer; text-align: center; transition: background 0.15s, border-color 0.15s; }
 .am-drop:hover, .am-drop.over { background: var(--surface-2); border-color: var(--teal); }

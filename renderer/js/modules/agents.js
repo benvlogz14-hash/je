@@ -10,8 +10,8 @@ import { ago } from '../lib/format.js';
 const CONN_LABEL = { hal: 'Built in', api: 'API key', cli: 'On this computer', herdr: 'Herdr terminal', local: 'Local / network', connector: 'Claude app (no key)', account: 'Your login (no key)', grokbot: 'Your GrokBot (email)', ollama: 'Free on this PC', bot: 'Euclidean bot' };
 const CONN_HINT = {
   hal: 'HAL is part of Euclidean: nothing to set up. What he would do that needs a person waits for a Confirm in his panel.',
-  connector: 'No key needed: messages wait for the Claude app on this computer, which answers through the Euclidean connector. With your Claude login open on the AI apps page, it answers at once instead.',
-  account: 'No key needed: uses your own login from the AI apps page (sign in there once). Limited per hour to protect your account.',
+  connector: 'No key needed. With Claude Code installed and signed in (your Claude account), Claude answers here at once using Euclidean\'s tools; otherwise through your Claude login on the Connections page, or it waits for the Claude app.',
+  account: 'No key needed: uses your own login from the Connections page (sign in there once). Limited per hour to protect your account.',
   grokbot: 'No key needed: emails your GrokBot (Bots page → GrokBots by email) and posts its reply here. Counts against the weekly GrokBot limit.',
   ollama: 'The free AI on this computer. No key, no limits.',
   bot: 'One of your Euclidean bots. It answers with its own tools: the live web, the Data tab, leads and documents.',
@@ -23,10 +23,10 @@ const CONN_HINT = {
 const HEALTH = { connected: ['moss', 'Connected'], not_connected: ['', 'Not connected'], needs_attention: ['gold', 'Needs attention'] };
 const TYPE_LABEL = { message: 'Message', reply: 'Reply', question: 'Question', critique_request: 'Critique request', task_request: 'Task request', context: 'Context / files', join: 'Joined', action_request: 'Needs approval', system: 'Note' };
 const TYPE_TONE = { question: 'sky', critique_request: 'lav', task_request: 'teal', action_request: 'gold', system: 'slate', join: 'slate', context: 'moss' };
-const DELIVERY = { next: ['slate', 'Up next'], waiting: ['gold', 'Will answer soon'], queued: ['slate', 'Waiting'], running: ['teal', 'Thinking'], replied: ['moss', 'Answered'], delivered: ['', 'In inbox'], read: ['', 'Read'], held: ['gold', 'Paused'], failed: ['coral', 'Failed'] };
+const DELIVERY = { skipped: ['', 'Not set up'], left: ['', 'Left'], next: ['slate', 'Up next'], waiting: ['gold', 'Will answer soon'], queued: ['slate', 'Waiting'], running: ['teal', 'Thinking'], replied: ['moss', 'Answered'], delivered: ['', 'In inbox'], read: ['', 'Read'], held: ['gold', 'Paused'], failed: ['coral', 'Failed'] };
 
 // What to do when an agent can't answer yet, by how it's connected.
-const FIX = { account: ['Sign in on AI apps', '/bridge'], grokbot: ['Add your GrokBot', '/bots'], ollama: ['Set up the free AI', '/settings?tab=ai'], bot: ['Open Bots', '/bots'] };
+const FIX = { account: ['Sign in on Connections', '/bridge'], grokbot: ['Add your GrokBot', '/bots'], ollama: ['Set up the free AI', '/settings?tab=ai'], bot: ['Open Bots', '/bots'] };
 function fixFor(a) { return FIX[a.connection] || ['Set it up', '/settings?tab=agents']; }
 
 /** Links clickable, @names highlighted. */
@@ -43,6 +43,20 @@ const TEAMS = [
   { label: 'Second opinion', names: ['Llama', 'Claude', 'Grok', 'GPT / Codex'], mode: 'all', hint: 'The same question to several AIs side by side' },
   { label: 'Ask HAL and the bots', names: ['HAL', 'Corbin', 'Juno', 'Scout', 'Data Bot'], mode: 'all', hint: 'HAL plus the whole bot team' },
 ];
+
+/** Let Claude answer here at once: install Claude Code (your Claude account, no key) and sign in once. */
+function ClaudeCodeSetup({ a, reload, style = '' }) {
+  const [busy, setBusy] = useState('');
+  const code = a?.detect?.code;
+  if (!a || a.connection !== 'connector' || code === 'ready') return null;
+  const run = (name, path) => async () => { setBusy(name); try { await quiet(api.post(path).then((r) => resultToast(r, (x) => x.message))); } finally { setBusy(''); reload && reload(); } };
+  return html`<div class="notice" style=${'align-items:center;padding:8px 10px;' + style}><${Icon} name="info" size=${14} />
+    <span class="grow" style="font-size:var(--fs-sm)">${code === 'nologin'
+      ? html`<b>Claude Code</b> is installed but not signed in. Sign in once with your Claude account and Claude answers here right away, using Euclidean's tools.`
+      : html`<b>Claude</b> is waiting for the Claude app. To have it answer here right away (with Euclidean's tools: leads, the Data tab, documents, the bots), install <b>Claude Code</b> and sign in with your Claude account once. No API key.`}</span>
+    ${code === 'missing' ? html`<${Button} size="sm" kind="primary" icon="download" busy=${busy === 'i'} onClick=${run('i', '/api/agentnet/claude/code/install')}>Install Claude Code</${Button}>` : null}
+    <${Button} size="sm" kind=${code === 'missing' ? 'ghost' : 'primary'} icon="key" busy=${busy === 'l'} onClick=${run('l', '/api/agentnet/claude/code/login')}>Sign in to Claude Code</${Button}></div>`;
+}
 
 function Health({ h }) { const [tone, label] = HEALTH[h?.state] || HEALTH.not_connected; return html`<span class=${'badge ' + tone}><span class="led" style=${{ background: tone ? `var(--${tone})` : 'var(--ink-3)' }} />${label}</span>`; }
 const resultToast = (r, ok) => { if (r && r.ok === false) { toast(r.error || 'That didn\'t work', { kind: 'error', title: 'Not connected yet' }); throw Object.assign(new Error(r.error), { shown: true }); } if (ok) toast(typeof ok === 'function' ? ok(r) : ok, { kind: 'ok' }); return r; };
@@ -108,6 +122,7 @@ function AgentCard({ a, reload }) {
     </div>
     ${a.connections.length > 1 ? html`<div class="col" style="gap:4px"><${Seg} value=${a.connection} onChange=${(v) => patch({ connection: v }, `${a.name} now connects via ${CONN_LABEL[v]}`)} options=${a.connections.map((c) => ({ value: c, label: CONN_LABEL[c] }))} /><div class="faint" style="font-size:var(--fs-xs)">${CONN_HINT[a.connection]}</div></div>` : html`<div class="faint" style="font-size:var(--fs-xs)"><b>${CONN_LABEL[a.connection]}.</b> ${CONN_HINT[a.connection]}</div>`}
     <div class=${'notice' + (a.health.state === 'needs_attention' ? ' gold' : a.health.state === 'connected' ? ' teal' : '')} style="align-items:center"><${Icon} name=${a.health.state === 'connected' ? 'check' : a.health.state === 'needs_attention' ? 'alert' : 'info'} size=${15} /><span class="grow">${a.health.reason}</span></div>
+    ${a.id === 'claude' ? html`<${ClaudeCodeSetup} a=${a} reload=${reload} />` : null}
 
     ${a.needsKey ? html`<div class="row" style="gap:8px"><input class="input grow" type="password" autocomplete="off" placeholder=${a.keySaved ? '•••••••• saved (paste to replace)' : `Paste your ${a.vendor} API key`} value=${key} onInput=${(e) => setKey(e.target.value)} aria-label=${`${a.name} API key`} />
       <${Button} kind="primary" busy=${busy === 'key'} disabled=${!key.trim()} onClick=${saveKey}>Save & test</${Button}></div>` : null}
@@ -228,10 +243,15 @@ export function AgentConversations() {
   </div>`;
 }
 
+// Programming tools (Claude Code, Codex, Cursor, opencode run on this PC) only show once they're installed and working.
+const pickable = (a) => a.config.enabled && (a.health.state === 'connected' || !['cli', 'herdr', 'local'].includes(a.connection));
+// A new conversation starts with the ones that answer for free right away: HAL, Llama, the bots, and Claude.
+const STARTERS = new Set(['hal', 'ollama', 'bot', 'connector']);
+
 function NewThread({ agents, onClose, onDone }) {
   const { data: clients } = useApi('/api/clients');
-  const usable = agents.filter((a) => a.config.enabled);
-  const [f, setF] = useState({ title: '', workspaceId: 'internal', participants: usable.filter((a) => a.health.state === 'connected').map((a) => a.id).slice(0, 3), type: 'message', body: '', mode: 'all' });
+  const usable = agents.filter(pickable);
+  const [f, setF] = useState({ title: '', workspaceId: 'internal', participants: usable.filter((a) => a.health.state === 'connected' && STARTERS.has(a.connection)).map((a) => a.id), type: 'message', body: '', mode: 'all' });
   const idOf = (n) => usable.find((a) => a.name.toLowerCase() === n.toLowerCase())?.id;
   const teams = TEAMS.map((tm) => ({ ...tm, ids: tm.names.map(idOf).filter(Boolean) })).filter((tm) => tm.ids.length >= 2);
   const allowed = (a) => a.config.workspaces === 'all' || (Array.isArray(a.config.workspaces) && a.config.workspaces.includes(f.workspaceId));
@@ -266,11 +286,13 @@ function ThreadView({ t, agents, reload }) {
     return act(() => api.post(`/api/agentnet/threads/${t.id}/messages`, { to: dest, type: ctxFiles.length && !body.trim() ? 'context' : type, body: body.trim() || `Sharing ${ctxFiles.map((c) => c.name).join(', ')}`, context: ctxFiles }), { sound: 'send' }).then(() => { setBody(''); setCtxFiles([]); setType('message'); }); };
   const attach = () => act(() => api.post(`/api/agentnet/threads/${t.id}/attach`, {})).then((files) => setCtxFiles([...ctxFiles, ...files]));
   const intervene = async () => { if (!t.paused) await act(() => api.post(`/api/agentnet/threads/${t.id}/pause`, { paused: true }), { ok: 'Paused: write your instructions, then resume' }); input.current?.focus(); };
-  const others = agents.filter((a) => !t.participants.includes(a.id) && a.config.enabled);
+  const others = agents.filter((a) => !t.participants.includes(a.id) && pickable(a));
   const nameOf = (id) => agents.find((a) => a.id === id)?.name || id;
   const [summing, setSumming] = useState(false);
   const sumUp = async () => { setSumming(true); try { await act(() => api.post(`/api/agentnet/threads/${t.id}/summary`, { save: true }), { ok: (r) => (r.saved ? 'Summed up and kept in the notebook' : 'Summed up') }); } finally { setSumming(false); } };
   const notReady = t.participants.map((id) => agents.find((a) => a.id === id)).filter((a) => a && a.health.state !== 'connected');
+  const remove = (a) => act(() => api.post(`/api/agentnet/threads/${t.id}/leave`, { agentId: a.id }), { ok: `${a.name} left the conversation` }).then(reload);
+  const claude = agents.find((a) => a.id === 'claude' && t.participants.includes('claude') && a.connection === 'connector');
   // "@Na" before the cursor: suggest names; picking one finishes it.
   const at = (/(?:^|\s)@([\w.-]*)$/.exec(body) || [])[1];
   const suggest = at == null ? [] : agents.filter((a) => a.config.enabled && (a.name.toLowerCase().startsWith(at.toLowerCase()) || a.id.startsWith(at.toLowerCase()))).slice(0, 6);
@@ -283,11 +305,12 @@ function ThreadView({ t, agents, reload }) {
       ${t.paused ? html`<${Button} size="sm" kind="moss" icon="play" onClick=${() => act(() => api.post(`/api/agentnet/threads/${t.id}/pause`, { paused: false }), { ok: 'Resumed' })}>Resume</${Button}>` : html`<${Button} size="sm" kind="ghost" icon="pause" onClick=${() => act(() => api.post(`/api/agentnet/threads/${t.id}/pause`, { paused: true }), { ok: 'Paused' })}>Pause</${Button}>`}
       <${Button} size="sm" kind="ghost" icon="archive" title=${t.status === 'archived' ? 'Unarchive' : 'Archive'} onClick=${() => act(() => api.post(`/api/agentnet/threads/${t.id}/archive`, { archived: t.status !== 'archived' })).then(reload)} />
     </div>
-    <div class="row wrap" style="gap:6px;padding:8px 16px;border-bottom:1px solid var(--line);align-items:center">${t.participants.map((id) => { const a = agents.find((x) => x.id === id); return html`<span class="badge" style=${a ? { background: `var(--${a.tone}-soft)`, color: `var(--${a.tone}-ink)` } : {}}>${nameOf(id)}</span>`; })}${t.paused ? html`<span class="badge gold">Paused</span>` : null}
+    <div class="row wrap" style="gap:6px;padding:8px 16px;border-bottom:1px solid var(--line);align-items:center">${t.participants.map((id) => { const a = agents.find((x) => x.id === id); return html`<span class="badge" style=${a ? { background: `var(--${a.tone}-soft)`, color: `var(--${a.tone}-ink)` } : {}}>${nameOf(id)}${a ? html`<span style="cursor:pointer;margin-left:4px;opacity:.6" title=${`Take ${a.name} out of this conversation`} onClick=${() => remove(a)}>×</span>` : null}</span>`; })}${t.paused ? html`<span class="badge gold">Paused</span>` : null}
       <div class="grow" />
       <${Seg} value=${t.mode || 'all'} onChange=${(v) => act(() => api.post(`/api/agentnet/threads/${t.id}/mode`, { mode: v }), { ok: v === 'turns' ? 'They take turns now' : 'They answer all at once now' }).then(reload)} options=${[{ value: 'all', label: 'All at once' }, { value: 'turns', label: 'Take turns' }]} />
       <${Button} size="sm" kind="soft" icon="book" busy=${summing} onClick=${sumUp} title="What was decided, what's open, next steps (kept in the notebook)">Sum up</${Button}></div>
-    ${notReady.length ? html`<div class="col" style="gap:6px;padding:8px 16px;border-bottom:1px solid var(--line)">${notReady.map((a) => { const [label, to] = fixFor(a); return html`<div class="notice gold" style="align-items:center;padding:6px 10px"><${Icon} name="info" size=${14} /><span class="grow" style="font-size:var(--fs-sm)"><b>${a.name}</b> can't answer yet: ${a.health.reason}</span><${Button} size="sm" kind="soft" onClick=${() => navigate(to)}>${label}</${Button}></div>`; })}</div>` : null}
+    ${notReady.length ? html`<div class="col" style="gap:6px;padding:8px 16px;border-bottom:1px solid var(--line)">${notReady.map((a) => { const [label, to] = fixFor(a); return html`<div class="notice gold" style="align-items:center;padding:6px 10px"><${Icon} name="info" size=${14} /><span class="grow" style="font-size:var(--fs-sm)"><b>${a.name}</b> can't answer yet: ${a.health.reason}</span><${Button} size="sm" kind="soft" onClick=${() => navigate(to)}>${label}</${Button}><${Button} size="sm" kind="ghost" onClick=${() => remove(a)}>Remove</${Button}></div>`; })}</div>` : null}
+    ${claude ? html`<${ClaudeCodeSetup} a=${claude} reload=${reload} style="margin:8px 16px 0" />` : null}
     <div ref=${scroller} style="flex:1;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-height:260px;max-height:62vh">
       ${!msgs ? html`<${Loading} rows=${3} />` : !msgs.length ? html`<div class="faint" style="font-size:var(--fs-sm)">No messages yet. Write the first one below.</div>` : msgs.map((m) => html`<${Bubble} key=${m.id} m=${m} agents=${agents} />`)}
     </div>

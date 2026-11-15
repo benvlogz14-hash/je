@@ -136,6 +136,18 @@ module.exports = function mount(r) {
     return t;
   }, { roles: STAFF });
   // Claude through the Euclidean connector (no API key): what's waiting for it, and its answers / new messages.
+  // Claude Code (command-line Claude, your Claude account, no key): lets Claude answer agent chats at once with Euclidean's tools.
+  const claudeCli = () => new (require('./adapters').CliAdapter)(registry.def('claude'), { connection: 'cli' });
+  r.post('/api/agentnet/claude/code/install', async (req) => {
+    audit.log(actorOf(req), 'agentnet.claude_code_install', {});
+    try { const out = await claudeCli().install(); registry.invalidate('claude'); return out.ok === false ? out : { ok: true, message: 'Claude Code installed. Now click "Sign in to Claude Code".' }; }
+    catch (e) { return { ok: false, needsNode: /node|npm/i.test(e.message), error: e.message }; }
+  }, { roles: OWNER });
+  r.post('/api/agentnet/claude/code/login', async () => {
+    const out = await claudeCli().login();
+    require('./adapters').claudeCodeSignedIn(); registry.invalidate('claude');
+    return out.ok ? { ok: true, message: 'A window opened. Type /login, press Enter and sign in with your Claude account, then close the window.' } : out;
+  }, { roles: OWNER });
   r.get('/api/agentnet/claude/inbox', (req) => ({ waiting: broker.waitingFor('claude'), answers: broker.answersFor('claude', { mark: req.query.mark === '1' }) }), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/claude', (req, b, p) => {
     if (!String(b.body || '').trim()) throw new HttpError(400, 'Write the message.');
@@ -154,6 +166,7 @@ module.exports = function mount(r) {
   r.get('/api/agentnet/threads/:id/messages', (req, b, p) => broker.messages(p.id), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/messages', (req, b, p) => broker.send({ ...b, threadId: p.id, from: human(req) }, { actor: human(req) }), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/join', (req, b, p) => broker.join(p.id, b.agentId, human(req)), { roles: STAFF });
+  r.post('/api/agentnet/threads/:id/leave', (req, b, p) => broker.leave(p.id, b.agentId, human(req)), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/pause', (req, b, p) => broker.setPaused(p.id, !!b.paused, human(req)), { roles: STAFF });
   r.post('/api/agentnet/threads/:id/archive', (req, b, p) => { ctx.store.update('agentThreads', p.id, { status: b.archived === false ? 'active' : 'archived' }); audit.log(actorOf(req), 'agentnet.thread_archived', { threadId: p.id }); return { ok: true }; }, { roles: STAFF });
   /** Attach files: they're copied into the conversation's own workspace folder, never shared across workspaces. */

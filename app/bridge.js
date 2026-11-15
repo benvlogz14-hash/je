@@ -69,11 +69,22 @@ async function ask(site, text, { newChat = false, timeoutMs = 240000, quiet = fa
   const sent = await page.executeJavaScript(`(() => { const b = [...document.querySelectorAll('button')].filter((x) => !x.disabled && x.offsetParent !== null && /send|submit/i.test((x.getAttribute('aria-label') || '') + ' ' + (x.getAttribute('data-testid') || '') + ' ' + (x.type || ''))).pop(); if (b) { b.click(); return true; } return false; })()`);
   if (!sent) { page.sendInputEvent({ type: 'keyDown', keyCode: 'Return' }); page.sendInputEvent({ type: 'char', keyCode: '\r' }); page.sendInputEvent({ type: 'keyUp', keyCode: 'Return' }); }
   // Wait for the reply to finish: the text stops changing for a few seconds.
+  // Our own message shows up as a bubble too (Grok uses the same class for both sides): skip any bubble that holds it.
+  const norm = (x) => String(x || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const head = norm(text).slice(0, 60); const tail = norm(text).slice(-60);
   const read = `(() => {
+    const norm = (x) => String(x || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+    const head = ${JSON.stringify(head)}, tail = ${JSON.stringify(tail)};
+    const mine = (t) => { const n = norm(t); return n.length > 0 && (n.includes(head) || n.includes(tail)); };
     const sels = ${JSON.stringify(s.reply)};
-    for (const q of sels) { const all = document.querySelectorAll(q); if (all.length > ${before.n}) return { via: 'bubble', text: all[all.length - 1].innerText }; }
-    const t = (document.querySelector('main') || document.body).innerText; const mine = ${JSON.stringify(text.slice(-120))};
-    const i = t.lastIndexOf(mine); return { via: 'page', text: i >= 0 ? t.slice(i + mine.length) : t.slice(${before.text.length}) };
+    for (const q of sels) {
+      const all = [...document.querySelectorAll(q)].slice(${before.n});
+      const theirs = all.filter((b) => !mine(b.innerText));
+      if (theirs.length) return { via: 'bubble', text: theirs[theirs.length - 1].innerText };
+      if (all.length) return { via: 'bubble', text: '' }; // only ours so far: still waiting for theirs
+    }
+    const t = (document.querySelector('main') || document.body).innerText; const raw = ${JSON.stringify(text.slice(-120))};
+    const i = t.lastIndexOf(raw); return { via: 'page', text: i >= 0 ? t.slice(i + raw.length) : t.slice(${before.text.length}) };
   })()`;
   const start = Date.now(); let last = ''; let still = 0;
   while (Date.now() - start < timeoutMs) {
@@ -81,11 +92,12 @@ async function ask(site, text, { newChat = false, timeoutMs = 240000, quiet = fa
     const r = await page.executeJavaScript(read).catch(() => ({ text: '' }));
     const cur = String(r.text || '').trim();
     const busy = await page.executeJavaScript(`!![...document.querySelectorAll('button')].find((x) => x.offsetParent !== null && /stop/i.test((x.getAttribute('aria-label') || '') + ' ' + (x.getAttribute('data-testid') || '')))`).catch(() => false);
-    if (cur && cur === last && !busy) { if (++still >= 2) return { text: cur.replace(/\n(Copy|Retry|Edit|Share|Regenerate|Good response|Bad response)\s*$/gi, '').trim(), site }; }
+    const real = cur && !/^[\s.…·•]*$/.test(cur); // "..." is the typing dots, not an answer
+    if (real && cur === last && !busy) { if (++still >= 2) return { text: cur.replace(/\n(Copy|Retry|Edit|Share|Regenerate|Good response|Bad response)\s*$/gi, '').trim(), site }; }
     else still = 0;
     last = cur;
   }
-  if (last) return { text: last, site, partial: true };
+  if (last && !/^[\s.…·•]*$/.test(last)) return { text: last, site, partial: true };
   throw new Error(`${s.label} didn't answer in time. Open its window to check.`);
 }
 

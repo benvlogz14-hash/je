@@ -65,7 +65,7 @@ async function ask(question, actor = 'ryan') {
       return { text: null, posted: m.id };
     } catch (e) { /* falls back to the inbox below */ }
   }
-  return { text: `Sent to Claude. ${bridge.available() ? "Your Claude login isn't open on the AI apps page, so" : 'In the browser'} it waits in Claude's inbox: ask the Claude app (with Euclidean connected) to "check HAL's inbox" and the answer lands here.`, by: 'HAL' };
+  return { text: `Sent to Claude. ${bridge.available() ? "Your Claude login isn't open on the Connections page, so" : 'In the browser'} it waits in Claude's inbox: ask the Claude app (with Euclidean connected) to "check HAL's inbox" and the answer lands here.`, by: 'HAL' };
 }
 
 /** What waits for Claude: Ryan's @claude messages not answered yet, with the chat around them. */

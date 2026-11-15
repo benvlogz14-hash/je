@@ -39,7 +39,7 @@ const NAV = [
   { path: '/seo', tone: 'sky', icon: 'search', label: 'SEO lab', hint: 'Your SEO research and stats, and a title and description machine' },
   { path: '/bots', tone: 'teal', icon: 'robot', label: 'Bots', hint: 'Your own team of AI bots: live web, their own browser and computer' },
   { path: '/data', tone: 'gold', icon: 'layers', label: 'Data', hint: 'Lists, sheets, research packs and pages, read into people and tables' },
-  { path: '/bridge', tone: 'lav', icon: 'sparkle', label: 'AI apps', hint: 'Talk to your Grok, Claude and ChatGPT accounts (no API keys)' },
+  { path: '/bridge', tone: 'lav', icon: 'sparkle', label: 'Connections', hint: 'Talk to your Grok, Claude and ChatGPT accounts (no API keys)' },
   'sep',
   { path: '/analytics', tone: 'slate', icon: 'analytics', label: 'Analytics', key: '8' },
   { path: '/finance', tone: 'rose', icon: 'finance', label: 'Finance', key: '9', owner: true },

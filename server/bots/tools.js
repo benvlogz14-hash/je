@@ -154,6 +154,25 @@ const TOOLS = [
     },
   },
   {
+    name: 'weather', kinds: ['web'], args: '{"place": "town or area", "when": "today | tomorrow | week"}',
+    about: 'The weather for a place, live and free (no key): right now, today and tomorrow, or the week. Use this for any weather question instead of searching the web.',
+    async run(a) {
+      const w = require('../integrations/weather');
+      const f = await w.forecast(String(a.place || '').trim(), ['today', 'tomorrow', 'week'].includes(a.when) ? a.when : 'today');
+      return { text: w.format(f) };
+    },
+  },
+  {
+    name: 'refresh_analytics', kinds: ['app'], args: '{}',
+    about: 'Refresh the posted shorts\' views, likes and comments on the Analytics page from their public pages (free, no keys). It runs in the background; say it started and what the last refresh found.',
+    async run() {
+      const ps = require('../automation/publicstats');
+      require('../jobs/queue').enqueue('analytics.public', { force: true }, { dedupeKey: `analytics-public:bot:${Math.floor(Date.now() / 60000)}` });
+      const last = ps.status().last;
+      return { text: `Started refreshing the public numbers.${last ? ` Last time: ${last.read} of ${last.posts} shorts read, ${last.notFound.length} not found yet${last.notFound.length ? ` (${last.notFound.slice(0, 5).map((x) => x.title).join('; ')})` : ''}.` : ''}` };
+    },
+  },
+  {
     name: 'ask_hal', kinds: ['team'], args: '{"message": "what to ask or tell HAL"}',
     about: "Talk to HAL, Euclidean's own assistant, in his chat (the founders see it there): today's news from his watch, the calendar, the outreach guide's kit for a lead, the app's commands and status, what he has noted. Anything he'd do that needs a person comes back as a Confirm button for the founders.",
     async run(a, t) {

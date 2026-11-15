@@ -121,6 +121,9 @@ function tick() {
   if (hour === ctx.setting('schedule.dailyDigestHour', 8) && ctx.store.settings._digestDay !== day) { ctx.store.settings._digestDay = day; ctx.store.touch(); digest(); }
   if (hour === 3 && ctx.store.settings._backupDay !== day) { ctx.store.settings._backupDay = day; ctx.store.touch(); queue.enqueue('backup', {}, { dedupeKey: `backup:${day}` }); }
   if (!lite && every('sources', 30 * 60000) && ctx.store.all('clients', (c) => (c.sources || []).some((s) => s.auto)).length) queue.enqueue('source.check', {}, { dedupeKey: `sources:${Math.floor(Date.now() / 1800000)}` });
+  // Data Bot keeps the posted shorts' numbers fresh from their public pages (free), every couple of hours while open.
+  { const a = ctx.setting('analytics', {}) || {}; const ms = Math.max(30, Number(a.publicEveryMin || 120)) * 60000;
+    if (!lite && a.publicStats !== false && every('analyticsPublic', ms) && ctx.store.all('posts', (p) => p.status === 'published').length) queue.enqueue('analytics.public', {}, { dedupeKey: `analytics-public:${Math.floor(Date.now() / ms)}` }); }
   if (!lite && every('analytics', 6 * 3600000) && ctx.store.all('posts', (p) => p.status === 'published').length) queue.enqueue('analytics.sync', {}, { dedupeKey: `analytics:${Math.floor(Date.now() / 21600000)}` });
   if (every('renewals', 12 * 3600000)) {
     const soon = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10);

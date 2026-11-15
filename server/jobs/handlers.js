@@ -769,6 +769,14 @@ queue.register('publish.post', {
   },
 });
 
+// Free stats from the posts' public pages (no keys, no tokens), read by Data Bot while the app is open.
+queue.register('analytics.public', {
+  title: () => 'Data Bot: refresh the public numbers',
+  async run(job, h) {
+    return require('../automation/publicstats').refresh({ force: !!job.payload.force, progress: (f, t) => h.progress(f, t), isCancelled: () => !!h.signal?.aborted });
+  },
+});
+
 queue.register('analytics.sync', {
   title: () => 'Sync analytics',
   async run(job, h) {

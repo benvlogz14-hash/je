@@ -5,17 +5,40 @@ import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 import { num, ago, PLATFORM_LABEL } from '../lib/format.js';
 
+const agoText = (t) => { const a = ago(t); return /^now$/i.test(a) ? 'just now' : `${a} ago`; };
+
 export function Analytics() {
   const route = useRoute();
-  const { data, loading } = useApi('/api/analytics', ['posts']);
+  const { data, loading } = useApi('/api/analytics', ['posts', 'analytics']);
   const [tab, setTab] = useState(route.query.tab || null);
   if (loading) return html`<div class="page"><${Loading} /></div>`;
   const current = tab || (data?.total ? 'shorts' : 'creators');
   return html`<div class="page">
-    <div class="page-head"><div class="grow"><h1>Analytics</h1><div class="sub">${current === 'creators' ? 'Search any creator and follow their public numbers. Updated every 6 hours.' : data?.lastSync ? `Stats last pulled ${ago(data.lastSync)} ago` : 'Stats sync every 6 hours from Ayrshare and YouTube'}</div></div>
+    <div class="page-head"><div class="grow"><h1>Analytics</h1><div class="sub">${current === 'creators' ? 'Search any creator and follow their public numbers. Updated every 6 hours.' : data?.lastSync ? `Stats last pulled ${agoText(data.lastSync)}` : 'Data Bot reads the numbers off each short\'s public page, free, while Euclidean is open'}</div></div>
       ${current === 'creators' ? html`<${Button} kind="soft" icon="refresh" onClick=${() => act(() => api.post('/api/creators/sync-all'), { ok: 'Updating every tracked creator' })}>Update all</${Button}>` : html`<${Button} kind="soft" icon="refresh" onClick=${() => act(() => api.post('/api/analytics/sync'), { ok: 'Pulling the latest stats' })}>Sync now</${Button}>`}</div>
     <${Tabs} value=${current} onChange=${(t) => { setTab(t); navigate(`/analytics?tab=${t}`); }} tabs=${[{ value: 'shorts', label: 'Your shorts' }, { value: 'creators', label: 'Creators' }]} />
     ${current === 'creators' ? html`<${Creators} />` : html`<${Shorts} data=${data} />`}
+  </div>`;
+}
+
+// Data Bot keeps the numbers fresh from the shorts' public pages: free, no keys, while the app is open.
+function PublicStats() {
+  const { data: st, reload } = useApi('/api/analytics/public', ['analytics', 'job']);
+  const [links, setLinks] = useState({});
+  if (!st) return null;
+  const last = st.last; const set = (b, ok) => act(() => api.post('/api/analytics/public', b), { ok }).then(reload);
+  const paste = (p) => act(() => api.post(`/api/posts/${p.id}/public-link`, { url: links[p.id] || '' }), { ok: 'Saved. Data Bot is reading it now.' }).then(() => { setLinks({ ...links, [p.id]: '' }); reload(); });
+  return html`<div class="panel pad col" style="gap:10px;margin-bottom:14px">
+    <div class="row wrap" style="gap:10px;align-items:center">
+      <span class="avatar" style="background:var(--gold-soft);color:var(--gold-ink)"><${Icon} name="robot" size=${16} /></span>
+      <div class="grow" style="min-width:240px"><b>Data Bot keeps these numbers fresh</b><div class="faint" style="font-size:var(--fs-sm)">Free, no keys: it finds each short (your channel's Shorts list, or a DuckDuckGo search for its title) and reads the views, likes and comments off its public page, every ${st.everyMin >= 60 ? `${st.everyMin / 60} hour${st.everyMin > 60 ? 's' : ''}` : `${st.everyMin} minutes`} while Euclidean is open.${last ? ` Last: ${agoText(last.at)}, ${last.read} of ${last.posts} read.` : ''}</div></div>
+      <${Seg} value=${String(st.everyMin)} onChange=${(v) => set({ everyMin: Number(v) }, 'Saved')} options=${[{ value: '60', label: '1 h' }, { value: '120', label: '2 h' }, { value: '360', label: '6 h' }]} />
+      <${Button} size="sm" kind=${st.on ? 'ghost' : 'soft'} onClick=${() => set({ on: !st.on }, st.on ? 'Paused' : 'On again')}>${st.on ? 'Pause' : 'Turn on'}</${Button}>
+      <${Button} size="sm" kind="soft" icon="refresh" onClick=${() => set({ run: true }, 'Data Bot is refreshing the numbers')}>Refresh now</${Button}>
+    </div>
+    ${!st.ytdlp ? html`<div class="notice gold" style="font-size:var(--fs-sm)"><${Icon} name="info" size=${14} />yt-dlp isn't installed, so only YouTube views can be read. Install it from Production's health check for likes, comments and TikTok / Instagram.</div>` : null}
+    ${last?.notFound?.length ? html`<div class="col" style="gap:6px"><div class="faint" style="font-size:var(--fs-sm)">Couldn't find ${last.notFound.length === 1 ? 'this short' : `these ${last.notFound.length} shorts`} online yet. Paste the link and it's read from then on:</div>
+      ${last.notFound.slice(0, 8).map((p) => html`<div class="row" style="gap:8px"><span class="ellipsis grow" style="font-size:var(--fs-sm);max-width:420px">${p.title}</span><input class="input sm" style="flex:1;min-width:200px" placeholder="https://www.youtube.com/shorts/…" value=${links[p.id] || ''} onInput=${(e) => setLinks({ ...links, [p.id]: e.target.value })} aria-label=${`Link for ${p.title}`} /><${Button} size="sm" kind="soft" disabled=${!links[p.id]} onClick=${() => paste(p)}>Save</${Button}></div>`)}</div>` : null}
   </div>`;
 }
 
@@ -25,6 +48,7 @@ function Shorts({ data }) {
   const totalViews = Object.values(data.byClient).reduce((t, c) => t + c.views, 0);
   const totalLikes = Object.values(data.byClient).reduce((t, c) => t + c.likes, 0);
   return html`<div>
+    ${data.total ? html`<${PublicStats} />` : null}
     ${!data.total ? html`<div class="panel"><${Empty} icon="analytics" title="Nothing published yet">Once shorts go out, views, likes and comments appear here per client and platform. Connect Ayrshare or a client's YouTube channel to pull stats.<div style="margin-top:12px"><${Button} kind="soft" icon="search" onClick=${() => navigate('/analytics?tab=creators')}>Track other creators meanwhile</${Button}></div></${Empty}></div>` : html`
       <div class="grid c4" style="margin-bottom:14px">${[['Published', num(data.total), `${data.tracked} with stats`], ['Views', num(totalViews), 'across all platforms'], ['Likes', num(totalLikes), totalViews ? `${((totalLikes / totalViews) * 100).toFixed(1)}% like rate` : ''], ['Avg views / short', num(Math.round(totalViews / Math.max(1, data.tracked))), 'tracked shorts only']].map(([l, v, d]) => html`<div class="panel kpi"><div class="eyebrow">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`)}</div>
       <div class="grid c2">
