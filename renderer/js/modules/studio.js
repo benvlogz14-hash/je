@@ -859,6 +859,7 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
   const [open, setOpenRaw] = useState(() => { try { return localStorage.getItem('eu.capOpen') !== '0'; } catch { return true; } });
   const setOpen = (v) => { setOpenRaw(v); try { localStorage.setItem('eu.capOpen', v ? '1' : '0'); } catch { /* ignore */ } };
   const [showWords, setShowWords] = useState(false);
+  const [liveSize, setLiveSize] = useState(null); // while the size slider is dragged
   const [look, setLook] = useState('signature'); const [titleLook, setTitleLook] = useState(''); const [busy, setBusy] = useState('');
   const fromEvent = useRef(null);
   useEffect(() => { const f = (e) => fromEvent.current?.(e.detail || []); window.addEventListener('studio-captions', f); return () => window.removeEventListener('studio-captions', f); }, []);
@@ -966,6 +967,9 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
   // Highlight: applies to the selected captions, or to all of them when none are selected.
   const targets = ids.length ? chosen : all;
   const forTargets = (fn) => edit((d, s) => { for (const c0 of targets) { const f = findClip(s, c0.id); if (f && isCaption(f.c)) fn(f.c); } });
+  const tSize = liveSize ?? (targets[0]?.text?.pixelSize || 96);
+  /** One undo step per size change; captions keep their own size until you change it here. */
+  const setSizeAll = (v) => { const n = Math.max(20, Math.min(320, Math.round(v))); setLiveSize(null); forTargets((c) => { c.text.pixelSize = n; }); };
   const hlMode = targets[0]?.text?.hlMode || 'none';
   const hlColor = '#' + String(targets[0]?.text?.hlColor || '#fff2c14e').replace('#', '').slice(-6);
   const keywords = all[0]?.text?.keywords || [];
@@ -991,15 +995,23 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
     <span class="faint" style="font-size:var(--fs-xs)">Click words to highlight:</span>
     ${wordsShown.map((w) => html`<button type="button" class="badge ${kwSet.has(normWord(w)) ? 'gold' : ''}" style="cursor:pointer;border:1px solid var(--line)" onClick=${() => toggleWord(w)}>${w}</button>`)}
   </div>` : null}
+  <div class="row wrap cap-size" style="gap:8px;padding:6px 12px;align-items:center">
+    <b>Text size</b>
+    <button type="button" class="qc-ib" title="Smaller" onClick=${() => setSizeAll(tSize - 4)}>−</button>
+    <input type="range" min="20" max="240" step="1" value=${tSize} style="width:min(260px,30vw)" aria-label="Caption text size"
+      onInput=${(e) => { const v = Number(e.target.value); for (const c of targets) c.text.pixelSize = v; setLiveSize(v); redraw(); }}
+      onChange=${(e) => setSizeAll(Number(e.target.value))} />
+    <button type="button" class="qc-ib" title="Bigger" onClick=${() => setSizeAll(tSize + 4)}>+</button>
+    <input class="input sm tnum" style="width:58px;text-align:center" value=${tSize} aria-label="Caption size in pixels" onKeyDown=${(e) => { e.stopPropagation(); if (e.key === 'Enter') e.target.blur(); }} onChange=${(e) => { const v = Number(e.target.value); if (v > 0) setSizeAll(v); }} />
+    <div class="seg">${[['S', 60], ['M', 84], ['L', 110], ['XL', 140]].map(([l, v]) => html`<button type="button" class=${Math.abs(tSize - v) < 2 ? 'on' : ''} onClick=${() => setSizeAll(v)}>${l}</button>`)}</div>
+    <span class="faint">${ids.length ? `for the ${ids.length} selected` : 'for all captions'}</span>
+  </div>
   <div class="row wrap" style="gap:8px;padding:6px 12px">
     <b>Edit captions</b>
     ${ids.length ? html`<span class="faint">${ids.length} selected</span>` : html`<span class="faint">click a caption to pick it, or Select all captions</span>`}
     <${Button} size="sm" kind="ghost" onClick=${() => setSel(all.map((c) => c.id))}>Select all captions</${Button}>
     ${!ids.length ? html`<${Button} size="sm" kind="soft" onClick=${twoWords} title="Split every caption into 2-word pieces so none run off the screen">2 words per line (all captions)</${Button}>` : null}
     ${ids.length ? html`
-      <span class="faint">Size</span><${Button} size="sm" kind="ghost" onClick=${() => scale(1 / 1.1)}>A−</${Button}>
-      <input class="input sm tnum" type="number" style="width:70px" value=${size} min="20" max="320" onChange=${(e) => { const v = Number(e.target.value); if (v > 0) forAll((c) => { c.text.pixelSize = Math.max(20, Math.min(320, v)); }); }} aria-label="Caption size" />
-      <${Button} size="sm" kind="ghost" onClick=${() => scale(1.1)}>A+</${Button}>
       <select class="select sm" style="width:auto;font-family:'${chosen[0]?.text?.family || 'Montserrat'}'" value=${chosen[0]?.text?.family || 'Montserrat'} onChange=${(e) => forAll((c) => { c.text.family = e.target.value; c.text.bold = HEAVY.has(e.target.value); })} aria-label="Caption font">
         ${FONT_GROUPS.map(([g, list]) => html`<optgroup label=${g}>${list.map((f) => html`<option value=${f} style=${{ fontFamily: `'${f}'` }}>${f}</option>`)}</optgroup>`)}</select>
       <${Button} size="sm" kind="soft" onClick=${twoWords} title="Split every selected caption into 2-word pieces so none run off the screen">2 words per line</${Button}>
@@ -2136,16 +2148,23 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
     const scrollerRect = scroller.current.getBoundingClientRect();
     const pointerS = sOf(e.clientX - scrollerRect.left + scroller.current.scrollLeft - HEAD_W);
     if (tool === 'razor') { setT(Math.round(pointerS * fps) / fps); setSel([c.id]); setTimeout(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 's' })), 0); return; }
-    const edgeL = e.clientX - r.left < 7, edgeR = r.right - e.clientX < 7;
-    const mode = edgeL ? 'trimL' : edgeR ? 'trimR' : 'move';
+    // Edge zones are up to 10 px but never more than a third of the clip each. On a narrow clip (a short caption) the
+    // two edges overlapped and the left one always won, so pulling its right end dragged the start instead: there the
+    // direction you pull decides (right = longer at the end, left = longer at the start, up/down = move it).
+    const zone = Math.min(10, r.width / 3);
+    const narrow = r.width < 26;
+    const edgeL = e.clientX - r.left < zone, edgeR = r.right - e.clientX < zone;
+    const mode = narrow ? 'auto' : edgeL ? 'trimL' : edgeR ? 'trimR' : 'move';
     const additive = e.shiftKey || e.ctrlKey;
     // A click picks that one clip (captions too; "Select all captions" picks them all). Shift/Ctrl-click adds to the
     // selection; clicking a clip that's already selected keeps the selection, so a group drags together.
     const ids = additive ? [...new Set([...sel, c.id])] : sel.includes(c.id) ? sel : [c.id];
     setSel(ids); sfx('tap');
-    const group = mode === 'move' ? [...new Set(ids.flatMap((id) => { const f = findClip(seq, id); return f ? linked(seq, f.c).map((x) => x.id) : []; }))] : [c.id, ...linked(seq, c).filter((x) => x.id !== c.id).map((x) => x.id)];
+    const moveGroup = [...new Set(ids.flatMap((id) => { const f = findClip(seq, id); return f ? linked(seq, f.c).map((x) => x.id) : []; }))];
+    const trimGroup = [c.id, ...linked(seq, c).filter((x) => x.id !== c.id).map((x) => x.id)];
+    const group = mode === 'move' ? moveGroup : mode === 'auto' ? [...new Set([...moveGroup, ...trimGroup])] : trimGroup;
     const orig = Object.fromEntries(group.map((id) => [id, clone(findClip(seq, id).c)]));
-    setDrag({ mode, startX: e.clientX, startY: e.clientY, clipId: c.id, lane, group, orig, dt: 0, dTrack: 0, moved: false });
+    setDrag({ mode, startX: e.clientX, startY: e.clientY, clipId: c.id, lane, group, orig, moveGroup, trimGroup, dt: 0, dTrack: 0, moved: false });
   };
   useEffect(() => {
     if (!drag) return;
@@ -2153,6 +2172,11 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
       // Button already up (a quick click can release before this listener exists): end the drag instead of dragging a loose clip.
       if (!(e.buttons & 1)) { setDrag(null); return; }
       const ds = (e.clientX - drag.startX) / zoom; if (!drag.moved && Math.abs(e.clientX - drag.startX) < 3 && Math.abs(e.clientY - drag.startY) < 4) return;
+      if (drag.mode === 'auto') { // a narrow clip: the first pull decides (see onClipDown)
+        const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
+        const m = Math.abs(dy) > Math.abs(dx) * 1.5 ? 'move' : dx > 0 ? 'trimR' : 'trimL';
+        setDrag({ ...drag, mode: m, group: m === 'move' ? drag.moveGroup : drag.trimGroup }); return;
+      }
       const o = drag.orig[drag.clipId]; let dt = ds;
       if (drag.mode === 'move') { const ns = doSnap(o.start + ds, e.altKey, new Set([o.start, o.start + o.duration])); const ne = doSnap(o.start + o.duration + ds, e.altKey, new Set([o.start, o.start + o.duration])); dt = Math.abs(ns - (o.start + ds)) <= Math.abs(ne - (o.start + o.duration + ds)) ? ns - o.start : ne - o.start - o.duration; dt = Math.max(-Math.min(...Object.values(drag.orig).map((x) => x.start)), dt); }
       const dTrack = drag.mode === 'move' ? Math.round((e.clientY - drag.startY) / TH(drag.lane.type)) : 0;
@@ -2160,7 +2184,7 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
     };
     const up = (ev) => {
       const d = drag; setDrag(null);
-      if (!d.moved) return;
+      if (!d.moved || d.mode === 'auto') return;
       const replace = !!(ev?.ctrlKey || ev?.metaKey) && d.mode === 'move'; const dir = ev?.shiftKey ? 'up' : 'down';
       let pushed = 0; const keep = new Set(d.group);
       edit((dd, s) => {
@@ -2175,9 +2199,13 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
             if (isCaption(c) && !replace && list[ti] === f.tr) { f.tr.clips.push(c); f.tr.clips.sort((a, b) => a.start - b.start); continue; }
             pushed += place(s, c.type === 1 ? 'a' : 'v', ti, c, { replace, keep, dir });
           } else if (d.mode === 'trimL') {
-            const maxIn = (o.in || 0) / (o.speed || 1);
+            // Titles, captions, effect layers and pictures have no footage before them, so their start can move back freely.
+            const mm = media[o.mediaId]; const free = o.type === 3 || o.type === 5 || o.type === 2 || !mm || mm.kind >= 2;
+            const maxIn = free ? Math.max(0, o.start) : (o.in || 0) / (o.speed || 1);
             const ns = doSnap(Math.min(o.start + o.duration - 1 / fps, Math.max(o.start - maxIn, o.start + d.dt)), d.alt);
-            const delta = ns - o.start; c.start = ns; c.duration = o.duration - delta; c.in = Math.max(0, (o.in || 0) + delta * (o.speed || 1)); shiftKeys(c, -delta);
+            const delta = ns - o.start; c.start = ns; c.duration = o.duration - delta; c.in = free ? (o.in || 0) : Math.max(0, (o.in || 0) + delta * (o.speed || 1)); shiftKeys(c, -delta);
+            // A caption's word times count from its own start: keep each word on the same moment of the video.
+            if (c.type === 3 && Array.isArray(c.text?.words)) c.text = { ...c.text, words: c.text.words.map((w) => ({ ...w, s: Math.max(0, w.s - delta), e: Math.max(0, w.e - delta) })) };
           } else {
             const m = media[o.mediaId]; const maxDur = m && m.kind < 2 ? ((m.duration - (o.in || 0)) / (o.speed || 1)) : 3600;
             const ne = doSnap(o.start + Math.max(1 / fps, Math.min(maxDur, o.duration + d.dt)), d.alt);
@@ -2258,7 +2286,7 @@ function TimelineLanes({ lanes, media, sel, tool, zoom, drag, view, cb, pairs })
           </div>
           <div style=${{ position: 'relative', flex: 1, background: lane.tr.locked ? 'repeating-linear-gradient(135deg, transparent 0 6px, var(--surface-3) 6px 7px)' : 'transparent', opacity: lane.tr.muted ? 0.5 : 1 }} onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => cb.current.onDropMedia(e, lane)} onPointerDown=${(e) => cb.current.startBox(e)}>
             ${lane.tr.clips.map((c) => { const v = view(c); const isSel = sel.includes(c.id); const colors = c.type === 1 ? ['--clip-a', '--clip-a-line'] : c.type === 3 ? ['--clip-t', '--clip-t-line'] : c.type === FX_LAYER ? ['--clip-fx', '--clip-fx-line'] : ['--clip-v', '--clip-v-line'];
-              return html`<div key=${c.id} data-clip=${c.id} title=${clipLabel(c)} onContextMenu=${(e) => cb.current.onClipMenu(e, c)} onDblClick=${() => { if (c.type === 3) cb.current.onEditTitle(c.id); }} onPointerDown=${(e) => { if (e.button === 2) return; cb.current.onClipDown(e, c, lane); }} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(4, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
+              return html`<div key=${c.id} data-clip=${c.id} title=${clipLabel(c)} onContextMenu=${(e) => cb.current.onClipMenu(e, c)} onDblClick=${() => { if (c.type === 3) cb.current.onEditTitle(c.id); }} onPointerDown=${(e) => { if (e.button === 2) return; cb.current.onClipDown(e, c, lane); }} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(8, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : xOf(v.duration) < 26 ? 'ew-resize' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
                 ${c.type === 0 && media[c.mediaId] && xOf(v.duration) > 50 ? html`<div style=${{ position: 'absolute', inset: 0, backgroundImage: `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(media[c.mediaId].path)}&t=${Math.round(c.in || 0) + 1}`)})`, backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x', opacity: 0.45 }} />` : null}
                 <div class="ellipsis" style="position:relative;font-size:11px;font-weight:600;padding:3px 7px;color:var(--ink)">${clipLabel(c)}${c.effects?.length ? ' ·fx' : ''}${(c.speed || 1) !== 1 ? ` · ${Math.round((c.speed || 1) * 100)}%` : ''}</div>
                 ${keyTimesOf(c).map((kt) => html`<span title=${`Keyframe at ${kt.toFixed(2)}s`} style=${{ position: 'absolute', left: Math.max(0, xOf(kt) - 4) + 'px', bottom: '3px', width: '7px', height: '7px', background: 'var(--gold)', border: '1px solid var(--gold-ink)', transform: 'rotate(45deg)', pointerEvents: 'none' }} />`)}
