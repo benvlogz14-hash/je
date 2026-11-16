@@ -1241,6 +1241,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
   if (!playing && playedTo.current == null) tRef.current = t;
   const typedSeen = useRef(new Map()); // typewriter titles: letters showing at the last frame (for the key clicks)
   const hold = useRef({ since: 0, drawn: false, retry: 0 });
+  const drawErr = useRef(null); const [drawNote, setDrawNote] = useState(null); // a layer that failed to draw, shown on the preview
   // The clock follows the sound: the player you hear (the "master", the first audible audio clip, else the video) is
   // never pulled back, so sound never repeats; the picture and the other players follow it. Before, the clock was the
   // wall clock and held still whenever a video buffered while the sound played on, then the sound was dragged back
@@ -1379,7 +1380,11 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
     hold.current.drawn = true;
     const g = cv.getContext('2d'); g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
     hits.current = [];
+    const failed = [];
     for (const { c, tail: inTail } of v) {
+      // Each layer on its own: one that fails to draw (a bad frame, a font, an effect) must never take the layers above
+      // it with it (titles and captions vanished from the paused picture when the video under them failed).
+      try {
       const local = time - c.start;
       if (c.type === FX_LAYER) { drawFxLayer(g, cv, c, local, W, H); continue; }
       if (!inTail) { const m0 = media[c.mediaId]; const sx0 = valAt(c.scaleX, local, 1), sy0 = c.uniformScale === false ? valAt(c.scaleY, local, 1) : sx0; const tb = c.type === 3 ? titleBox(c.text || {}, sx0 * quality) : null;
@@ -1488,7 +1493,12 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
         }
       }
       g.restore();
+          } catch (err) {
+        failed.push(`${c.name || 'a clip'}: ${err?.message || err}`);
+        try { g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.filter = 'none'; g.globalCompositeOperation = 'source-over'; g.shadowColor = 'transparent'; g.shadowBlur = 0; g.shadowOffsetX = g.shadowOffsetY = 0; } catch { /* fine */ }
+      }
     }
+    if (failed.length) { if (drawErr.current !== failed[0]) { drawErr.current = failed[0]; console.warn('Studio preview: a layer could not be drawn', failed); setDrawNote(failed[0]); } } else if (drawErr.current) { drawErr.current = null; setDrawNote(null); }
     // selection outline with a resize handle on each corner
     const hs = selected && hits.current.find((x) => x.id === selected.c.id);
     if (hs) {
@@ -1641,6 +1651,7 @@ function Monitor({ seq, media, t, setT, playing, setPlaying, duration, selected,
       <select class="select sm" style="width:90px" value=${qualitySel} onChange=${(e) => setQuality(Number(e.target.value))} aria-label="Preview quality"><option value="1">Full</option><option value="0.5">1/2</option><option value="0.25">1/4</option></select></div>
     <div ref=${box} style=${{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative', overflow: 'hidden', touchAction: 'none', cursor: view.k > 1 ? 'grab' : 'default' }} onPointerDown=${onBoxDown} onPointerMove=${onBoxMove} onPointerUp=${onBoxUp} onDblClick=${(e) => { if (e.target === box.current) setView({ k: 1, x: 0, y: 0 }); }}>
       <canvas ref=${canvas} style=${{ position: 'absolute', left: fit.x + view.x + 'px', top: fit.y + view.y + 'px', width: fit.w * view.k + 'px', height: fit.h * view.k + 'px', background: '#000', borderRadius: '8px', boxShadow: 'var(--shadow-2)', cursor: 'default' }} onPointerDown=${onDown} onPointerMove=${onMove} onPointerUp=${onUp} onDblClick=${onDbl} />
+      ${drawNote ? html`<div title=${drawNote} style="position:absolute;left:8px;bottom:8px;max-width:70%;padding:4px 8px;border-radius:8px;background:rgba(200,40,40,.85);color:#fff;font-size:11px;pointer-events:none" class="ellipsis">A layer couldn't be drawn: ${drawNote}</div>` : null}
     </div>
     <div class="row" style="padding:6px 12px 10px;justify-content:center;gap:6px">
       <span ref=${tcEl} class="mono tnum" style="width:100px;color:var(--teal-ink)">${tc(t, seq.fps)}</span>
