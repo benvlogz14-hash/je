@@ -5,6 +5,8 @@ import { html, useState, useApi, navigate, Button, Toggle, act, toast } from '..
 import { api } from '../lib/api.js';
 import { Icon } from '../lib/icons.js';
 
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
 const when = (t) => {
   if (!t) return 'Not yet';
   const s = (Date.now() - Date.parse(t)) / 1000;
@@ -20,6 +22,7 @@ export function Automations() {
   const on = data.list.filter((x) => x.on && !x.always && !x.safety).length;
   const flip = (x, v) => act(() => api.post(`/api/automations/${x.id}`, { on: v }), { ok: `${x.name} ${v ? 'on' : 'off'}` }).then(reload);
   const run = (x) => { setBusy(x.id); act(() => api.post(x.run.post, {}), { ok: `${x.name}: started` }).then(() => { setBusy(''); reload(); }); };
+  const setWhen = (x, patch) => { const w = { day: x.when.day, at: x.when.at, ...patch }; const [a, b] = x.when.key.split('.'); act(() => api.patch('/api/settings', { [a]: { [b]: w } }), { ok: `${x.name}: ${DAYS[w.day]}s at ${w.at}` }).then(reload); };
   const pause = (v) => act(() => api.post('/api/automations/pause', { paused: v }), { ok: v ? 'Every automation is paused. Jobs already running carry on.' : 'Automations back on.' }).then(reload);
   return html`<div class="auto-page">
     <div class="auto-head">
@@ -34,6 +37,7 @@ export function Automations() {
           <div class="row wrap" style="gap:8px;align-items:baseline"><b>${x.name}</b>${x.outward ? html`<span class="auto-tag">${x.safety ? 'safety switch' : 'sends or posts'}</span>` : null}</div>
           <span class="auto-what">${x.what}</span>
           <span class="auto-meta">${x.detail}${x.hasLast ? ` · Last: ${when(x.last)}` : ''}</span>
+          ${x.when ? html`<div class="row wrap auto-when" style="gap:6px;align-items:center"><span class="faint">Every</span><select value=${x.when.day} onChange=${(e) => setWhen(x, { day: Number(e.target.value) })}>${DAYS.map((d, i) => html`<option value=${i}>${d}</option>`)}</select><span class="faint">at</span><input type="time" value=${x.when.at} onChange=${(e) => e.target.value && setWhen(x, { at: e.target.value })} /></div>` : null}
         </div>
         <div class="auto-acts">
           ${x.run ? html`<${Button} size="sm" kind="ghost" icon="refresh" disabled=${busy === x.id || data.paused} onClick=${() => run(x)}>${x.run.label}</${Button}>` : null}

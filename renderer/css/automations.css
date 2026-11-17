@@ -20,3 +20,5 @@
 .auto-acts { display: flex; align-items: center; gap: 6px; flex: none; }
 .auto-state { min-width: 42px; text-align: right; font-size: var(--fs-xs); font-weight: 600; color: var(--ink-3); }
 @media (max-width: 640px) { .auto-row { flex-wrap: wrap; } .auto-acts { width: 100%; justify-content: flex-end; } }
+.auto-when { font-size: var(--fs-xs); margin-top: 2px; }
+.auto-when select, .auto-when input { font-size: var(--fs-xs); padding: 3px 8px; height: auto; width: auto; }
