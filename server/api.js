@@ -401,6 +401,7 @@ r.post('/api/clients/:id/channel', async (req, b, p) => {
   if (b.url !== undefined) { const u = String(b.url || '').trim(); if (u && !/^https?:\/\/(www\.|m\.)?youtube\.com\/|^https?:\/\/youtube\.com\//i.test(u)) throw new HttpError(400, 'Paste the channel link from YouTube, e.g. https://www.youtube.com/@stringer'); if (u !== prod.channelUrl) { prod.channelUrl = u; delete prod._channel; delete prod._channelSince; delete prod._channelEmpty; } }
   if (b.on !== undefined) prod.channelOn = !!b.on;
   if (b.perDay !== undefined) prod.channelBackfillPerDay = Math.max(0, Math.min(10, Number(b.perDay) || 0));
+  if (b.morning !== undefined) { const m = b.morning || {}; prod.morningPick = { ...(prod.morningPick || {}), ...(m.on !== undefined ? { on: !!m.on } : {}), ...(/^\d{2}:\d{2}$/.test(m.at || '') ? { at: m.at } : {}) }; }
   if (b.minMinutes !== undefined) prod.channelMinMinutes = Math.max(1, Math.min(120, Number(b.minMinutes) || 4));
   ctx.store.update('clients', c.id, { production: prod }); audit.log(actorOf(req), 'channel.set', { clientId: c.id, url: prod.channelUrl || null });
   return require('./automation/channel').status(ctx.store.get('clients', c.id), { refresh: true });
@@ -411,6 +412,8 @@ r.post('/api/clients/:id/channel/pull', async (req, b, p) => {
   if (!v) throw new HttpError(400, 'Every long video on the channel has been pulled already.');
   return { job: ch.pull(c, v, 'pulled by hand').id, title: v.title };
 });
+// Morning pick now (the same choice the scheduler makes each morning).
+r.post('/api/clients/:id/channel/morning', async (req, b, p) => { const c = must(ctx.store.get('clients', p.id)); if (!c.production?.channelUrl) throw new HttpError(400, 'Add their YouTube channel first.'); const v = await require('./automation/channel').morning(c, { force: true }); if (!v) throw new HttpError(400, 'Every long video on their channel has been clipped already.'); return { title: v.title, why: v.why }; });
 r.post('/api/clients/:id/polish', (req, b, p) => { must(ctx.store.get('clients', p.id)); return require('./video/polish').sweep(p.id); });
 r.post('/api/clients/:id/autopilot-now', async (req, b, p) => {
   const c = must(ctx.store.get('clients', p.id));

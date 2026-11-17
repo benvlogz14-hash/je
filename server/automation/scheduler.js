@@ -92,6 +92,10 @@ function tick() {
     // New uploads on their channel are pulled as they come out (listed every few hours; channel.js).
     if (client.production?.channelUrl) require('./channel').tick(client).catch((e) => { if (every(`chanerr:${client.id}`, 6 * 3600000)) audit.log('system', 'channel.error', { clientId: client.id, error: e.message }, 'warn'); });
   }
+  // Morning pick: one standout video from the channel, not clipped before, downloaded with Make clips pressed (channel.js).
+  for (const client of held ? [] : ctx.store.all('clients', (c) => c.status === 'active' && c.production?.morningPick?.on && c.production?.channelUrl)) {
+    require('./channel').morning(client).catch((e) => { if (every(`mornerr:${client.id}`, 6 * 3600000)) audit.log('system', 'channel.error', { clientId: client.id, error: e.message }, 'warn'); });
+  }
   // B-roll edit of the day: clients with "one per day" get a fresh one from their footage (it goes to review like any clip).
   for (const client of held ? [] : ctx.store.all('clients', (c) => c.status === 'active' && c.production?.brollDaily)) {
     try { dailyBroll(client); } catch (e) { audit.log('system', 'broll.daily_error', { clientId: client.id, error: e.message }, 'error'); }
