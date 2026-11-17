@@ -2156,7 +2156,21 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
   };
 
-  const onClipDown = (e, c, lane) => {
+  // A press just outside a clip's edge (on the selection ring, or a few px past it) grabs that edge, so text boxes can be
+  // stretched without hitting a thin strip exactly: grabbing the box itself used to move it (and snap) instead.
+  const nearEdge = (e, lane) => {
+    if (lane.tr.locked || tool === 'razor') return false;
+    const r = scroller.current.getBoundingClientRect(); const s = sOf(e.clientX - r.left + scroller.current.scrollLeft - HEAD_W);
+    let best = null, bd = 9;
+    for (const c of lane.tr.clips) {
+      const dl = (c.start - s) * zoom, dr = (s - c.start - c.duration) * zoom;
+      if (dl >= 0 && dl < bd) { bd = dl; best = [c, 'trimL']; }
+      if (dr >= 0 && dr < bd) { bd = dr; best = [c, 'trimR']; }
+    }
+    if (!best) return false;
+    onClipDown(e, best[0], lane, best[1]); return true;
+  };
+  const onClipDown = (e, c, lane, forced) => {
     e.stopPropagation();
     if (lane.tr.locked) return;
     const r = e.currentTarget.getBoundingClientRect();
@@ -2166,10 +2180,10 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
     // Edge zones are up to 10 px but never more than a third of the clip each. On a narrow clip (a short caption) the
     // two edges overlapped and the left one always won, so pulling its right end dragged the start instead: there the
     // direction you pull decides (right = longer at the end, left = longer at the start, up/down = move it).
-    const zone = Math.min(10, r.width / 3);
+    const zone = Math.min(12, r.width / 3);
     const narrow = r.width < 26;
     const edgeL = e.clientX - r.left < zone, edgeR = r.right - e.clientX < zone;
-    const mode = narrow ? 'auto' : edgeL ? 'trimL' : edgeR ? 'trimR' : 'move';
+    const mode = forced || (narrow ? 'auto' : edgeL ? 'trimL' : edgeR ? 'trimR' : 'move');
     const additive = e.shiftKey || e.ctrlKey;
     // A click picks that one clip (captions too; "Select all captions" picks them all). Shift/Ctrl-click adds to the
     // selection; clicking a clip that's already selected keeps the selection, so a group drags together.
@@ -2193,6 +2207,11 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
         setDrag({ ...drag, mode: m, group: m === 'move' ? drag.moveGroup : drag.trimGroup }); return;
       }
       const o = drag.orig[drag.clipId]; let dt = ds;
+      // Trims snap while dragging (what you see is where it lands), never to the clip's own old edges: a short pull used to
+      // snap straight back to where it started on release, so text boxes couldn't be stretched without zooming way in.
+      const own = new Set([o.start, o.start + o.duration]);
+      if (drag.mode === 'trimL') dt = doSnap(o.start + ds, e.altKey, own) - o.start;
+      if (drag.mode === 'trimR') dt = doSnap(o.start + o.duration + ds, e.altKey, own) - o.start - o.duration;
       if (drag.mode === 'move') { const ns = doSnap(o.start + ds, e.altKey, new Set([o.start, o.start + o.duration])); const ne = doSnap(o.start + o.duration + ds, e.altKey, new Set([o.start, o.start + o.duration])); dt = Math.abs(ns - (o.start + ds)) <= Math.abs(ne - (o.start + o.duration + ds)) ? ns - o.start : ne - o.start - o.duration; dt = Math.max(-Math.min(...Object.values(drag.orig).map((x) => x.start)), dt); }
       const dTrack = drag.mode === 'move' ? Math.round((e.clientY - drag.startY) / TH(drag.lane.type)) : 0;
       setDrag({ ...drag, dt, dTrack, moved: true, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey });
@@ -2217,13 +2236,13 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
             // Titles, captions, effect layers and pictures have no footage before them, so their start can move back freely.
             const mm = media[o.mediaId]; const free = o.type === 3 || o.type === 5 || o.type === 2 || !mm || mm.kind >= 2;
             const maxIn = free ? Math.max(0, o.start) : (o.in || 0) / (o.speed || 1);
-            const ns = doSnap(Math.min(o.start + o.duration - 1 / fps, Math.max(o.start - maxIn, o.start + d.dt)), d.alt);
+            const ns = Math.round(Math.min(o.start + o.duration - 1 / fps, Math.max(o.start - maxIn, o.start + d.dt)) * fps) / fps;
             const delta = ns - o.start; c.start = ns; c.duration = o.duration - delta; c.in = free ? (o.in || 0) : Math.max(0, (o.in || 0) + delta * (o.speed || 1)); shiftKeys(c, -delta);
             // A caption's word times count from its own start: keep each word on the same moment of the video.
             if (c.type === 3 && Array.isArray(c.text?.words)) c.text = { ...c.text, words: c.text.words.map((w) => ({ ...w, s: Math.max(0, w.s - delta), e: Math.max(0, w.e - delta) })) };
           } else {
             const m = media[o.mediaId]; const maxDur = m && m.kind < 2 ? ((m.duration - (o.in || 0)) / (o.speed || 1)) : 3600;
-            const ne = doSnap(o.start + Math.max(1 / fps, Math.min(maxDur, o.duration + d.dt)), d.alt);
+            const ne = Math.round((o.start + Math.max(1 / fps, Math.min(maxDur, o.duration + d.dt))) * fps) / fps;
             c.duration = Math.max(1 / fps, Math.min(maxDur, ne - o.start));
           }
         }
@@ -2239,7 +2258,9 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
     if (!drag || !drag.moved || !drag.group.includes(c.id)) return { start: c.start, duration: c.duration, dy: 0 };
     const o = drag.orig[c.id];
     if (drag.mode === 'move') return { start: Math.max(0, o.start + drag.dt), duration: o.duration, dy: c.id === drag.clipId || sel.includes(c.id) ? drag.dTrack * TH(c.type) : 0 };
-    if (drag.mode === 'trimL') { const ns = Math.min(o.start + o.duration - 0.05, o.start + drag.dt); return { start: ns, duration: o.duration - (ns - o.start), dy: 0 }; }
+    if (drag.mode === 'trimL') {
+      const mm = media[o.mediaId]; const free = o.type === 3 || o.type === 5 || o.type === 2 || !mm || mm.kind >= 2;
+      const ns = Math.min(o.start + o.duration - 0.05, Math.max(o.start - (free ? o.start : (o.in || 0) / (o.speed || 1)), o.start + drag.dt)); return { start: ns, duration: o.duration - (ns - o.start), dy: 0 }; }
     return { start: o.start, duration: Math.max(0.05, o.duration + drag.dt), dy: 0 };
   };
 
@@ -2265,7 +2286,7 @@ function Timeline({ snapBack, onSnapBack, seq, media, t, setT, sel, setSel, tool
     onAdd(media[mid], lane.type === 0 ? lane.i : 0, at, lane.type === 1 ? lane.i : 0, e.ctrlKey || e.metaKey, e.shiftKey ? 'up' : 'down');
   };
 
-  const cb = useRef(null); cb.current = { toggleTrack, onDropMedia, startBox, onClipMenu, onEditTitle, onClipDown };
+  const cb = useRef(null); cb.current = { toggleTrack, onDropMedia, startBox, onClipMenu, onEditTitle, onClipDown, nearEdge };
   const lanesV = useMemo(() => html`<${TimelineLanes} lanes=${lanes} media=${media} sel=${sel} tool=${tool} zoom=${zoom} drag=${drag} view=${view} cb=${cb} pairs=${cutPairs(seq)} />`, [seq, media, sel, tool, zoom, drag, redrawN]);
   return html`<div style="flex:1;display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--ed-panel);border-top:1px solid var(--line)">
     <div class="row" style="padding:6px 12px;border-bottom:1px solid var(--line);gap:10px">
@@ -2299,7 +2320,7 @@ function TimelineLanes({ lanes, media, sel, tool, zoom, drag, view, cb, pairs })
             <button class="btn ghost sm icon" title=${lane.type === 1 ? (lane.tr.muted ? 'Unmute' : 'Mute') : lane.tr.muted ? 'Show track' : 'Hide track'} onClick=${() => { sfx('toggle'); cb.current.toggleTrack(lane, 'muted'); }}><${Icon} name=${lane.type === 1 ? (lane.tr.muted ? 'mute' : 'volume') : lane.tr.muted ? 'eyeOff' : 'eye'} size=${14} /></button>
             <button class="btn ghost sm icon" title=${lane.tr.locked ? 'Unlock' : 'Lock'} onClick=${() => { sfx('toggle'); cb.current.toggleTrack(lane, 'locked'); }}><${Icon} name=${lane.tr.locked ? 'lock' : 'unlock'} size=${14} /></button>
           </div>
-          <div style=${{ position: 'relative', flex: 1, background: lane.tr.locked ? 'repeating-linear-gradient(135deg, transparent 0 6px, var(--surface-3) 6px 7px)' : 'transparent', opacity: lane.tr.muted ? 0.5 : 1 }} onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => cb.current.onDropMedia(e, lane)} onPointerDown=${(e) => cb.current.startBox(e)}>
+          <div style=${{ position: 'relative', flex: 1, background: lane.tr.locked ? 'repeating-linear-gradient(135deg, transparent 0 6px, var(--surface-3) 6px 7px)' : 'transparent', opacity: lane.tr.muted ? 0.5 : 1 }} onDragOver=${(e) => e.preventDefault()} onDrop=${(e) => cb.current.onDropMedia(e, lane)} onPointerDown=${(e) => { if (e.button === 0 && cb.current.nearEdge(e, lane)) return; cb.current.startBox(e); }}>
             ${lane.tr.clips.map((c) => { const v = view(c); const isSel = sel.includes(c.id); const colors = c.type === 1 ? ['--clip-a', '--clip-a-line'] : c.type === 3 ? ['--clip-t', '--clip-t-line'] : c.type === FX_LAYER ? ['--clip-fx', '--clip-fx-line'] : ['--clip-v', '--clip-v-line'];
               return html`<div key=${c.id} data-clip=${c.id} title=${clipLabel(c)} onContextMenu=${(e) => cb.current.onClipMenu(e, c)} onDblClick=${() => { if (c.type === 3) cb.current.onEditTitle(c.id); }} onPointerDown=${(e) => { if (e.button === 2) return; cb.current.onClipDown(e, c, lane); }} style=${{ position: 'absolute', left: xOf(v.start) + 'px', width: Math.max(8, xOf(v.duration) - 1) + 'px', top: 3 + v.dy + 'px', bottom: 3 - v.dy + 'px', borderRadius: '6px', background: `var(${colors[0]})`, border: `1.5px solid ${isSel ? 'var(--ink)' : `var(${colors[1]})`}`, cursor: tool === 'razor' ? 'crosshair' : xOf(v.duration) < 26 ? 'ew-resize' : 'grab', overflow: 'hidden', zIndex: drag?.group?.includes(c.id) ? 5 : 1, boxShadow: isSel ? '0 0 0 2px var(--focus)' : 'none', opacity: c.enabled === false ? 0.45 : 1 }}>
                 ${c.type === 0 && media[c.mediaId] && xOf(v.duration) > 50 ? html`<div style=${{ position: 'absolute', inset: 0, backgroundImage: `url(${api.url(`/api/media/thumb?path=${encodeURIComponent(media[c.mediaId].path)}&t=${Math.round(c.in || 0) + 1}`)})`, backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x', opacity: 0.45 }} />` : null}
@@ -2307,6 +2328,7 @@ function TimelineLanes({ lanes, media, sel, tool, zoom, drag, view, cb, pairs })
                 ${keyTimesOf(c).map((kt) => html`<span title=${`Keyframe at ${kt.toFixed(2)}s`} style=${{ position: 'absolute', left: Math.max(0, xOf(kt) - 4) + 'px', bottom: '3px', width: '7px', height: '7px', background: 'var(--gold)', border: '1px solid var(--gold-ink)', transform: 'rotate(45deg)', pointerEvents: 'none' }} />`)}
                 ${(() => { const pin = pairs?.inOf.get(c.id); const t = pin || (c.transIn?.type ? c.transIn : null); return t ? html`<div title=${pin ? 'Transition from the clip before (it carries on underneath)' : 'Transition in'} style=${{ position: 'absolute', left: 0, top: 0, bottom: 0, width: xOf(Math.min(t.duration || 1, v.duration)) + 'px', background: pin ? 'linear-gradient(90deg, rgba(0,0,0,0.32), rgba(0,0,0,0.08))' : 'linear-gradient(90deg, rgba(0,0,0,0.25), transparent)', borderLeft: pin ? '2px solid rgba(255,255,255,0.7)' : 'none' }} />` : null; })()}
                 ${c.transOut?.type && !pairs?.tailOf.has(c.id) ? html`<div title="Transition out" style=${{ position: 'absolute', right: 0, top: 0, bottom: 0, width: xOf(Math.min(c.transOut.duration || 1, v.duration)) + 'px', background: 'linear-gradient(270deg, rgba(0,0,0,0.25), transparent)' }} />` : null}
+                ${tool !== 'razor' && xOf(v.duration) >= 26 ? ['left', 'right'].map((side) => html`<div class="tl-grip" style=${{ position: 'absolute', [side]: 0, top: 0, bottom: 0, width: Math.min(12, xOf(v.duration) / 3) + 'px', cursor: 'ew-resize' }} />`) : null}
               </div>`; })}
           </div></div>`)}`;
 }

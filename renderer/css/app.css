@@ -942,3 +942,8 @@ button.bot-av { cursor: pointer; }
 .agc-grid { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(260px, 320px); gap: 12px; min-height: 560px; }
 @media (max-width: 1100px) { .agc-grid { grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); } .agc-grid > :nth-child(3) { grid-column: 1 / -1; } }
 @media (max-width: 760px) { .agc-grid { grid-template-columns: minmax(0, 1fr); min-height: 0; } .agc-grid > * { max-height: none; } }
+
+/* Studio timeline: a grip on each clip edge (drag it to make the clip longer or shorter at that end). */
+.tl-grip::after { content: ''; position: absolute; top: 22%; bottom: 22%; left: 50%; width: 3px; margin-left: -1.5px; border-radius: 2px; background: var(--ink); opacity: 0; transition: opacity 0.1s; pointer-events: none; }
+[data-clip]:hover .tl-grip::after { opacity: 0.3; }
+.tl-grip:hover::after { opacity: 0.85; }
