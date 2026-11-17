@@ -85,13 +85,19 @@ function dailyBroll(client) {
 function tick() {
   if (queue.paused) return;
   const lite = ctx.setting('resources.mode', 'full') === 'lite';
-  for (const client of ctx.store.all('clients', (c) => c.status === 'active' && c.schedule?.autopilot)) {
+  // System → Automations → Pause all: nothing starts by itself (jobs already running carry on; backups and the digest still run).
+  const held = ctx.setting('automation.paused', false) === true;
+  for (const client of held ? [] : ctx.store.all('clients', (c) => c.status === 'active' && c.schedule?.autopilot)) {
     try { feedClient(client); } catch (e) { audit.log('system', 'autopilot.error', { clientId: client.id, error: e.message }, 'error'); }
     // New uploads on their channel are pulled as they come out (listed every few hours; channel.js).
     if (client.production?.channelUrl) require('./channel').tick(client).catch((e) => { if (every(`chanerr:${client.id}`, 6 * 3600000)) audit.log('system', 'channel.error', { clientId: client.id, error: e.message }, 'warn'); });
   }
+  // Morning pick: one standout video from the channel, not clipped before, downloaded with Make clips pressed (channel.js).
+  for (const client of held ? [] : ctx.store.all('clients', (c) => c.status === 'active' && c.production?.morningPick?.on && c.production?.channelUrl)) {
+    require('./channel').morning(client).catch((e) => { if (every(`mornerr:${client.id}`, 6 * 3600000)) audit.log('system', 'channel.error', { clientId: client.id, error: e.message }, 'warn'); });
+  }
   // B-roll edit of the day: clients with "one per day" get a fresh one from their footage (it goes to review like any clip).
-  for (const client of ctx.store.all('clients', (c) => c.status === 'active' && c.production?.brollDaily)) {
+  for (const client of held ? [] : ctx.store.all('clients', (c) => c.status === 'active' && c.production?.brollDaily)) {
     try { dailyBroll(client); } catch (e) { audit.log('system', 'broll.daily_error', { clientId: client.id, error: e.message }, 'error'); }
   }
   require('../integrations/elevenlabs').pollCalls().catch(() => {});
@@ -112,20 +118,22 @@ function tick() {
       if (removed || trimmed) audit.log('system', 'store.pruned', { removed, trimmed });
     } catch (e) { audit.log('system', 'store.prune_error', { error: e.message }, 'warn'); }
   }
-  try { require('../hal/watch').tick(); } catch { /* HAL's watch is best-effort */ }
+  if (!held) try { require('../hal/watch').tick(); } catch { /* HAL's watch is best-effort */ }
   try { require('../hal/memory').sweep(); } catch { /* the notebook is best-effort */ }
-  try { require('../bots').routinesTick(); } catch { /* bot routines are best-effort */ }
-  try { require('./inbox').tick(); } catch { /* the Drive inbox is best-effort */ }
-  try { require('../outreach/autopilot').tick(); } catch (e) { audit.log('system', 'outreach.autopilot_error', { error: e.message }, 'error'); }
+  if (!held) try { require('../bots').routinesTick(); } catch { /* bot routines are best-effort */ }
+  if (!held) try { require('./inbox').tick(); } catch { /* the Drive inbox is best-effort */ }
+  if (!held) try { require('./reports').tick(); } catch (e) { audit.log('system', 'report.error', { error: e.message }, 'warn'); }
+  if (!held) try { require('../political/auto').tick(); } catch { /* the Ad machine's autopilot is best-effort */ }
+  if (!held) try { require('../outreach/autopilot').tick(); } catch (e) { audit.log('system', 'outreach.autopilot_error', { error: e.message }, 'error'); }
   const tz = ctx.setting('agency.timezone', 'America/New_York');
   const hour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: tz }).format(new Date()));
   const day = pipeline.localDate(new Date(), tz);
   if (hour === ctx.setting('schedule.dailyDigestHour', 8) && ctx.store.settings._digestDay !== day) { ctx.store.settings._digestDay = day; ctx.store.touch(); digest(); }
   if (hour === 3 && ctx.store.settings._backupDay !== day) { ctx.store.settings._backupDay = day; ctx.store.touch(); queue.enqueue('backup', {}, { dedupeKey: `backup:${day}` }); }
-  if (!lite && every('sources', 30 * 60000) && ctx.store.all('clients', (c) => (c.sources || []).some((s) => s.auto)).length) queue.enqueue('source.check', {}, { dedupeKey: `sources:${Math.floor(Date.now() / 1800000)}` });
+  if (!lite && !held && every('sources', 30 * 60000) && ctx.store.all('clients', (c) => (c.sources || []).some((s) => s.auto)).length) queue.enqueue('source.check', {}, { dedupeKey: `sources:${Math.floor(Date.now() / 1800000)}` });
   // Data Bot keeps the posted shorts' numbers fresh from their public pages (free), every couple of hours while open.
   { const a = ctx.setting('analytics', {}) || {}; const ms = Math.max(30, Number(a.publicEveryMin || 120)) * 60000;
-    if (!lite && a.publicStats !== false && every('analyticsPublic', ms) && ctx.store.all('posts', (p) => p.status === 'published').length) queue.enqueue('analytics.public', {}, { dedupeKey: `analytics-public:${Math.floor(Date.now() / ms)}` }); }
+    if (!lite && !held && a.publicStats !== false && every('analyticsPublic', ms) && ctx.store.all('posts', (p) => p.status === 'published').length) queue.enqueue('analytics.public', {}, { dedupeKey: `analytics-public:${Math.floor(Date.now() / ms)}` }); }
   if (!lite && every('analytics', 6 * 3600000) && ctx.store.all('posts', (p) => p.status === 'published').length) queue.enqueue('analytics.sync', {}, { dedupeKey: `analytics:${Math.floor(Date.now() / 21600000)}` });
   if (every('renewals', 12 * 3600000)) {
     const soon = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10);

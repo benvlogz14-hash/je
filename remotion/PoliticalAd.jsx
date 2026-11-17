@@ -364,7 +364,9 @@ function chunkWords(words, max, chars = 16) {
 
 function Captions({ words, L, look, fps, seg, offset, inCard }) {
   const frame = useCurrentFrame() + offset; const t = frame / fps; // absolute time
-  const { width: W } = useVideoConfig();
+  const { width: W, height: H } = useVideoConfig();
+  // Over a graphic card (poll, tally, checklist, map...) the captions drop to the bottom so they never cover its bars or numbers.
+  const overGfx = !inCard && seg?.card && !['video', 'clip'].includes(seg.card.kind);
   const phrase = look.cap.chunk === 'phrase'; const max = phrase ? 8 : look.cap.scale > 1.05 ? 2 : 3;
   const chunks = useMemo(() => chunkWords(words || [], max, phrase ? 38 : 16), [words, max, phrase]);
   const k = chunks.findIndex((c, i) => t >= c[0].s - 0.04 && t < Math.min(chunks[i + 1] ? chunks[i + 1][0].s - 0.04 : Infinity, c[c.length - 1].e + 0.45));
@@ -377,7 +379,7 @@ function Captions({ words, L, look, fps, seg, offset, inCard }) {
   const size = fitWords(c.map((x) => x.w), look.fonts.cap, L.cap, capW, L.cap * (phrase ? 3.8 : 2.5), { upper: look.cap.case === 'upper', gap: 0.24, lh: 1.12, extra: () => (phrase ? 0 : 0.22), maxLines: phrase ? 3 : 2 });
   const onFootage = inCard || look.layout === 'full';
   const base = onFootage ? ON_FOOTAGE.color : S.text;
-  const pos = inCard ? { position: 'absolute', left: 0, right: 0, bottom: L.card.h * 0.07 } : { position: 'absolute', left: (W - capW) / 2 - 10, width: capW + 20, top: L.capY - size * 0.6 };
+  const pos = inCard ? { position: 'absolute', left: 0, right: 0, bottom: L.card.h * 0.07 } : { position: 'absolute', left: (W - capW) / 2 - 10, width: capW + 20, top: overGfx ? Math.max(L.capY, H * (H > W ? 0.88 : 0.86)) - size * 0.6 : L.capY - size * 0.6 };
   const soft = look.cap.shadow && onFootageOf(look, inCard);
   return (
     <div style={{ ...pos, fontStyle: seg?.voice?.kind === 'voter' ? 'italic' : 'normal', display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: size * 0.22, fontFamily: look.fonts.cap, fontSize: size, lineHeight: 1.12, textTransform: look.cap.case === 'upper' ? 'uppercase' : 'none', textShadow: soft ? '0 3px 14px rgba(0,0,0,0.75), 0 1px 3px rgba(0,0,0,0.8)' : 'none', opacity: phrase && k > 0 ? clamp(s * 2.2, 0, 1) : 1, transform: `scale(${interpolate(s, [0, 1], [phrase ? 0.97 : 0.86, 1])})` }}>

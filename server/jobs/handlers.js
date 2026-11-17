@@ -997,8 +997,11 @@ queue.register('political.batch', {
   heavy: true, maxAttempts: 1,
   async run(job, h) {
     if (!ctx.capabilities.ffmpeg) throw Object.assign(new Error('FFmpeg not found'), { notConnected: true });
-    const { prospectId, text, orders, count, styles, density, wide, prompt, textStyle, purpose, edit, lookPrompt, colors, end, remake } = job.payload;
-    return require('../political/batch').make(prospectId, { text, orders, count, styles, density, wide, prompt, textStyle, purpose, edit, lookPrompt, colors, end, remake, actor: job.createdBy }, h);
+    const { prospectId, text, orders, count, styles, density, wide, prompt, textStyle, purpose, edit, lookPrompt, colors, end, remake, avoidOld, auto } = job.payload;
+    try { return await require('../political/batch').make(prospectId, { text, orders, count, styles, density, wide, prompt, textStyle, purpose, edit, lookPrompt, colors, end, remake, avoidOld, auto, actor: job.createdBy }, h); }
+    catch (e) { // a run that stopped before any video (no footage, nothing readable) still leaves its reason on the politician
+      if (auto && !/^No videos made/.test(e.message)) { try { const p = ctx.store.get('prospects', prospectId); if (p) require('../political/auto').finished(p, { made: 0, skipped: [], auto, error: e.message.split('\n')[0] }); } catch { /* best-effort */ } }
+      throw e; }
   },
 });
 

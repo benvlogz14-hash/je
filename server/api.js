@@ -401,6 +401,7 @@ r.post('/api/clients/:id/channel', async (req, b, p) => {
   if (b.url !== undefined) { const u = String(b.url || '').trim(); if (u && !/^https?:\/\/(www\.|m\.)?youtube\.com\/|^https?:\/\/youtube\.com\//i.test(u)) throw new HttpError(400, 'Paste the channel link from YouTube, e.g. https://www.youtube.com/@stringer'); if (u !== prod.channelUrl) { prod.channelUrl = u; delete prod._channel; delete prod._channelSince; delete prod._channelEmpty; } }
   if (b.on !== undefined) prod.channelOn = !!b.on;
   if (b.perDay !== undefined) prod.channelBackfillPerDay = Math.max(0, Math.min(10, Number(b.perDay) || 0));
+  if (b.morning !== undefined) { const m = b.morning || {}; prod.morningPick = { ...(prod.morningPick || {}), ...(m.on !== undefined ? { on: !!m.on } : {}), ...(/^\d{2}:\d{2}$/.test(m.at || '') ? { at: m.at } : {}) }; }
   if (b.minMinutes !== undefined) prod.channelMinMinutes = Math.max(1, Math.min(120, Number(b.minMinutes) || 4));
   ctx.store.update('clients', c.id, { production: prod }); audit.log(actorOf(req), 'channel.set', { clientId: c.id, url: prod.channelUrl || null });
   return require('./automation/channel').status(ctx.store.get('clients', c.id), { refresh: true });
@@ -411,6 +412,8 @@ r.post('/api/clients/:id/channel/pull', async (req, b, p) => {
   if (!v) throw new HttpError(400, 'Every long video on the channel has been pulled already.');
   return { job: ch.pull(c, v, 'pulled by hand').id, title: v.title };
 });
+// Morning pick now (the same choice the scheduler makes each morning).
+r.post('/api/clients/:id/channel/morning', async (req, b, p) => { const c = must(ctx.store.get('clients', p.id)); if (!c.production?.channelUrl) throw new HttpError(400, 'Add their YouTube channel first.'); const v = await require('./automation/channel').morning(c, { force: true }); if (!v) throw new HttpError(400, 'Every long video on their channel has been clipped already.'); return { title: v.title, why: v.why }; });
 r.post('/api/clients/:id/polish', (req, b, p) => { must(ctx.store.get('clients', p.id)); return require('./video/polish').sweep(p.id); });
 r.post('/api/clients/:id/autopilot-now', async (req, b, p) => {
   const c = must(ctx.store.get('clients', p.id));
@@ -1871,6 +1874,24 @@ const batchOpts = (b) => { const looks = require('./political/looks'); return { 
 r.post('/api/prospects/:id/videos', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); return queue.enqueue('political.batch', { prospectId: pr.id, name: pr.name, ...batchOpts(b) }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}`, title: `Videos for ${pr.name}` }); });
 // The same for several politicians by name or id; a name not on the board is added as a political lead first.
 r.post('/api/political/videos', botErr((req, b) => require('./political/batch').start({ ids: Array.isArray(b.ids) ? b.ids : [], names: Array.isArray(b.names) ? b.names.map(String) : [], actor: actorOf(req), ...batchOpts(b) })));
+// Notifications: everything that chimed, and which kinds make a sound / show a pop-up.
+r.get('/api/notifications', () => require('./automation/notices').list());
+r.post('/api/notifications/read', (req, b) => { const x = require('./automation/notices').markRead(Array.isArray(b.ids) ? b.ids : null); events.publish('notification', {}); return x; });
+r.del('/api/notifications', () => { const x = require('./automation/notices').clear(); events.publish('notification', {}); return x; });
+r.post('/api/notifications/prefs', (req, b) => { const x = require('./automation/notices').setPref(b || {}); events.publish('settings', {}); return x; });
+// Weekly client reports (drafts into Approvals, never sent without Approve): all clients now, one client, or a preview.
+r.post('/api/reports/run', (req) => ({ results: require('./automation/reports').runAll(actorOf(req)) }));
+r.get('/api/clients/:id/report', (req, b, p) => must(require('./automation/reports').preview(p.id)));
+r.post('/api/clients/:id/report', (req, b, p) => require('./automation/reports').draft(p.id, actorOf(req)));
+// System → Automations: everything that runs by itself, with switches for the ones that stay inside the app.
+r.get('/api/automations', () => ({ paused: require('./automation/hub').paused(), list: require('./automation/hub').list() }));
+r.post('/api/automations/pause', (req, b) => require('./automation/hub').pause(!!b.paused, actorOf(req)));
+r.post('/api/automations/:id', (req, b, p) => { try { return require('./automation/hub').toggle(p.id, !!b.on, actorOf(req)); } catch (e) { throw new HttpError(400, e.message); } });
+// Ad machine autopilot for one politician: videos made by themselves when new footage arrives and / or every week.
+r.get('/api/prospects/:id/auto', (req, b, p) => must(require('./political/auto').get(p.id)));
+r.post('/api/prospects/:id/auto', (req, b, p) => { must(ctx.store.get('prospects', p.id)); const looks = require('./political/looks'); const o = b.opts && typeof b.opts === 'object' ? batchOpts(b.opts) : undefined; try { return require('./political/auto').set(p.id, { on: b.on, when: b.when, day: b.day, at: b.at, count: b.count, ...(o ? { opts: o } : {}) }, actorOf(req)); } catch (e) { throw new HttpError(400, e.message); } });
+// Every politician with autopilot on, with what it does and what it last did.
+r.get('/api/political/auto', () => ({ on: ctx.setting('political.autopilot', true) !== false, list: require('./political/auto').list() }));
 // What's in a candidate's footage: topics, the best opening lines (the hook finder), closing lines, what was left out.
 r.get('/api/prospects/:id/insight', (req, b, p) => { must(ctx.store.get('prospects', p.id)); const r = require('./political/batch').insight(p.id); if (r.ready && req.query.topic) r.hooks = require('./political/footage').hooks(JSON.parse(fs.readFileSync(path.join(require('./political/package').dirFor(ctx.store.get('prospects', p.id)), 'footage', 'sentences.json'), 'utf8')).sentences, 12, String(req.query.topic)); return r; });
 // Read their footage now (find, transcribe, look through) without making anything.
