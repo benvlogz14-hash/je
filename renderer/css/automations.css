@@ -1,0 +1,22 @@
+/* System → Automations (renderer/js/modules/automations.js). Theme variables only. */
+.auto-page { max-width: 1080px; margin: 0 auto; padding: 8px 4px 80px; display: flex; flex-direction: column; gap: 22px; }
+.auto-head { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: flex-end; }
+.auto-head h2 { margin: 0; font-size: 30px; letter-spacing: -0.02em; }
+.auto-head p { margin: 6px 0 0; color: var(--ink-2); font-size: var(--fs-sm); max-width: 62ch; line-height: 1.5; }
+.auto-master { display: flex; align-items: center; gap: 14px; padding: 12px 14px 12px 18px; border-radius: 16px; background: var(--moss-soft); border: 1px solid var(--moss-line); }
+.auto-master.held { background: var(--gold-soft); border-color: var(--gold-line); }
+.auto-group h3 { margin: 0 0 8px 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.auto-list { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
+.auto-row { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-top: 1px solid var(--line); }
+.auto-row:first-child { border-top: 0; }
+.auto-row.dim { opacity: 0.55; }
+.auto-row b { font-size: 15px; }
+.auto-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--line-strong); }
+.auto-row.on .auto-dot { background: var(--moss); box-shadow: 0 0 0 4px var(--moss-soft); }
+.auto-row.on .auto-dot.safe { background: var(--sky); box-shadow: 0 0 0 4px var(--sky-soft); }
+.auto-what { font-size: var(--fs-xs); color: var(--ink-2); line-height: 1.45; }
+.auto-meta { font-size: 11px; color: var(--ink-3); }
+.auto-tag { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--gold-soft); color: var(--gold-ink); }
+.auto-acts { display: flex; align-items: center; gap: 6px; flex: none; }
+.auto-state { min-width: 42px; text-align: right; font-size: var(--fs-xs); font-weight: 600; color: var(--ink-3); }
+@media (max-width: 640px) { .auto-row { flex-wrap: wrap; } .auto-acts { width: 100%; justify-content: flex-end; } }

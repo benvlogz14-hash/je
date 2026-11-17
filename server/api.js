@@ -1871,6 +1871,10 @@ const batchOpts = (b) => { const looks = require('./political/looks'); return { 
 r.post('/api/prospects/:id/videos', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); return queue.enqueue('political.batch', { prospectId: pr.id, name: pr.name, ...batchOpts(b) }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}`, title: `Videos for ${pr.name}` }); });
 // The same for several politicians by name or id; a name not on the board is added as a political lead first.
 r.post('/api/political/videos', botErr((req, b) => require('./political/batch').start({ ids: Array.isArray(b.ids) ? b.ids : [], names: Array.isArray(b.names) ? b.names.map(String) : [], actor: actorOf(req), ...batchOpts(b) })));
+// System → Automations: everything that runs by itself, with switches for the ones that stay inside the app.
+r.get('/api/automations', () => ({ paused: require('./automation/hub').paused(), list: require('./automation/hub').list() }));
+r.post('/api/automations/pause', (req, b) => require('./automation/hub').pause(!!b.paused, actorOf(req)));
+r.post('/api/automations/:id', (req, b, p) => { try { return require('./automation/hub').toggle(p.id, !!b.on, actorOf(req)); } catch (e) { throw new HttpError(400, e.message); } });
 // Ad machine autopilot for one politician: videos made by themselves when new footage arrives and / or every week.
 r.get('/api/prospects/:id/auto', (req, b, p) => must(require('./political/auto').get(p.id)));
 r.post('/api/prospects/:id/auto', (req, b, p) => { must(ctx.store.get('prospects', p.id)); const looks = require('./political/looks'); const o = b.opts && typeof b.opts === 'object' ? batchOpts(b.opts) : undefined; try { return require('./political/auto').set(p.id, { on: b.on, when: b.when, day: b.day, at: b.at, count: b.count, ...(o ? { opts: o } : {}) }, actorOf(req)); } catch (e) { throw new HttpError(400, e.message); } });

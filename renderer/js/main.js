@@ -25,6 +25,7 @@ import { Bots } from './modules/bots.js';
 import { DataTab } from './modules/data.js';
 import { Seo } from './modules/seo.js';
 import { Clipper } from './modules/clipper.js';
+import { Automations } from './modules/automations.js';
 
 const NAV = [
   { path: '/messages', tone: 'teal', icon: 'messages', label: 'Messages', key: '1' },
@@ -41,11 +42,12 @@ const NAV = [
   { path: '/data', tone: 'gold', icon: 'layers', label: 'Data', hint: 'Lists, sheets, research packs and pages, read into people and tables' },
   { path: '/bridge', tone: 'lav', icon: 'sparkle', label: 'Connections', hint: 'Talk to your Grok, Claude and ChatGPT accounts (no API keys)' },
   'sep',
+  { path: '/automations', tone: 'moss', icon: 'bolt', label: 'Automations', hint: 'Everything Euclidean does by itself, with on/off switches and Pause all' },
   { path: '/analytics', tone: 'slate', icon: 'analytics', label: 'Analytics', key: '8' },
   { path: '/finance', tone: 'rose', icon: 'finance', label: 'Finance', key: '9', owner: true },
   { path: '/system', tone: 'slate', icon: 'system', label: 'System', key: '0' },
 ];
-const ROUTES = { '/messages': Messages, '/production': Production, '/approvals': Approvals, '/studio': Studio, '/clients': Clients, '/calendar': Calendar, '/growth': Growth, '/politics': Politics, '/bridge': Bridge, '/bots': Bots, '/data': DataTab, '/seo': Seo, '/clipper': Clipper, '/analytics': Analytics, '/finance': Finance, '/system': System, '/settings': Settings, '/lite': Lite };
+const ROUTES = { '/messages': Messages, '/production': Production, '/approvals': Approvals, '/studio': Studio, '/clients': Clients, '/calendar': Calendar, '/growth': Growth, '/politics': Politics, '/bridge': Bridge, '/bots': Bots, '/data': DataTab, '/seo': Seo, '/clipper': Clipper, '/automations': Automations, '/analytics': Analytics, '/finance': Finance, '/system': System, '/settings': Settings, '/lite': Lite };
 
 function useCounts() {
   const [counts, setCounts] = useState({ approvals: 0, unread: 0 });
