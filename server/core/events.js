@@ -24,6 +24,8 @@ let batch = new Map();
 let flushTimer = null;
 /** Coalesce high-frequency events (job progress) into one frame per 150ms. */
 function publish(type, payload, { coalesceKey } = {}) {
+  // Every chime is kept (Notifications page) and carries whether it may make a sound or show a pop-up.
+  if (type === 'notify' || type === 'alert') payload = require('../automation/notices').decorate(type, payload);
   bus.emit(type, payload);
   bus.emit('*', type, payload);
   const key = coalesceKey || `${type}:${Math.random()}`;

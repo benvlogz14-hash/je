@@ -26,6 +26,7 @@ import { DataTab } from './modules/data.js';
 import { Seo } from './modules/seo.js';
 import { Clipper } from './modules/clipper.js';
 import { Automations } from './modules/automations.js';
+import { Notifications } from './modules/notifications.js';
 
 const NAV = [
   { path: '/messages', tone: 'teal', icon: 'messages', label: 'Messages', key: '1' },
@@ -42,22 +43,23 @@ const NAV = [
   { path: '/data', tone: 'gold', icon: 'layers', label: 'Data', hint: 'Lists, sheets, research packs and pages, read into people and tables' },
   { path: '/bridge', tone: 'lav', icon: 'sparkle', label: 'Connections', hint: 'Talk to your Grok, Claude and ChatGPT accounts (no API keys)' },
   'sep',
+  { path: '/notifications', tone: 'gold', icon: 'bell', label: 'Notifications', badge: 'notices', hint: 'Everything that chimed, and which kinds make a sound' },
   { path: '/automations', tone: 'moss', icon: 'bolt', label: 'Automations', hint: 'Everything Euclidean does by itself, with on/off switches and Pause all' },
   { path: '/analytics', tone: 'slate', icon: 'analytics', label: 'Analytics', key: '8' },
   { path: '/finance', tone: 'rose', icon: 'finance', label: 'Finance', key: '9', owner: true },
   { path: '/system', tone: 'slate', icon: 'system', label: 'System', key: '0' },
 ];
-const ROUTES = { '/messages': Messages, '/production': Production, '/approvals': Approvals, '/studio': Studio, '/clients': Clients, '/calendar': Calendar, '/growth': Growth, '/politics': Politics, '/bridge': Bridge, '/bots': Bots, '/data': DataTab, '/seo': Seo, '/clipper': Clipper, '/automations': Automations, '/analytics': Analytics, '/finance': Finance, '/system': System, '/settings': Settings, '/lite': Lite };
+const ROUTES = { '/messages': Messages, '/production': Production, '/approvals': Approvals, '/studio': Studio, '/clients': Clients, '/calendar': Calendar, '/growth': Growth, '/politics': Politics, '/bridge': Bridge, '/bots': Bots, '/data': DataTab, '/seo': Seo, '/clipper': Clipper, '/automations': Automations, '/notifications': Notifications, '/analytics': Analytics, '/finance': Finance, '/system': System, '/settings': Settings, '/lite': Lite };
 
 function useCounts() {
-  const [counts, setCounts] = useState({ approvals: 0, unread: 0 });
+  const [counts, setCounts] = useState({ approvals: 0, unread: 0, notices: 0 });
   const load = async () => {
     try {
-      const [ap, conv] = await Promise.all([api.get('/api/approvals'), api.get('/api/conversations')]);
-      setCounts({ approvals: ap.length, unread: conv.reduce((t, c) => t + (c.kind === 'contact' ? c.unread || 0 : 0), 0) });
+      const [ap, conv, nt] = await Promise.all([api.get('/api/approvals'), api.get('/api/conversations'), api.get('/api/notifications').catch(() => ({ unread: 0 }))]);
+      setCounts({ approvals: ap.length, unread: conv.reduce((t, c) => t + (c.kind === 'contact' ? c.unread || 0 : 0), 0), notices: nt.unread || 0 });
     } catch { /* offline */ }
   };
-  useEffect(() => { load(); const offs = ['approval', 'message', 'conversation', 'clips'].map((t) => api.on(t, () => { clearTimeout(load.t); load.t = setTimeout(load, 300); })); return () => offs.forEach((o) => o()); }, []);
+  useEffect(() => { load(); const offs = ['approval', 'message', 'conversation', 'clips', 'notification'].map((t) => api.on(t, () => { clearTimeout(load.t); load.t = setTimeout(load, 300); })); return () => offs.forEach((o) => o()); }, []);
   return counts;
 }
 
@@ -255,8 +257,9 @@ function App() {
     return () => document.removeEventListener('scroll', fix, true);
   }, []);
   useEvent('connection', (c) => store.set({ online: c.online }));
-  useEvent('alert', (a) => { play(a.level === 'error' ? 'error' : 'receive'); toast(a.text, { kind: a.level === 'error' ? 'error' : a.level === 'warn' ? 'warn' : 'info', title: a.title, ms: 7000 }); });
-  useEvent('notify', (n) => { play('receive'); if (window.euclidean?.notify && document.hidden) window.euclidean.notify(n.title, n.body); else if (n.route) toast(n.body || '', { title: n.title, kind: 'info', ms: 6000 }); });
+  // Sounds and pop-ups follow Notifications → What makes a sound (the engine says per event); everything is listed there.
+  useEvent('alert', (a) => { if (a.sound !== false) play(a.level === 'error' ? 'error' : 'receive'); if (a.popup !== false) toast(a.text, { kind: a.level === 'error' ? 'error' : a.level === 'warn' ? 'warn' : 'info', title: a.title, ms: 7000 }); });
+  useEvent('notify', (n) => { if (n.sound !== false) play('receive'); if (n.popup === false) return; if (window.euclidean?.notify && document.hidden) window.euclidean.notify(n.title, n.body); else toast(n.body || '', { title: n.title, kind: 'info', ms: 6000 }); });
 
   if (!boot) return null;
   if (route.path === '/lite') return html`<${Lite} /><${Toasts} /><${ModalHost} />`;

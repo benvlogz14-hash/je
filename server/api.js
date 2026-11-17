@@ -1871,6 +1871,11 @@ const batchOpts = (b) => { const looks = require('./political/looks'); return { 
 r.post('/api/prospects/:id/videos', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); return queue.enqueue('political.batch', { prospectId: pr.id, name: pr.name, ...batchOpts(b) }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}`, title: `Videos for ${pr.name}` }); });
 // The same for several politicians by name or id; a name not on the board is added as a political lead first.
 r.post('/api/political/videos', botErr((req, b) => require('./political/batch').start({ ids: Array.isArray(b.ids) ? b.ids : [], names: Array.isArray(b.names) ? b.names.map(String) : [], actor: actorOf(req), ...batchOpts(b) })));
+// Notifications: everything that chimed, and which kinds make a sound / show a pop-up.
+r.get('/api/notifications', () => require('./automation/notices').list());
+r.post('/api/notifications/read', (req, b) => { const x = require('./automation/notices').markRead(Array.isArray(b.ids) ? b.ids : null); events.publish('notification', {}); return x; });
+r.del('/api/notifications', () => { const x = require('./automation/notices').clear(); events.publish('notification', {}); return x; });
+r.post('/api/notifications/prefs', (req, b) => { const x = require('./automation/notices').setPref(b || {}); events.publish('settings', {}); return x; });
 // Weekly client reports (drafts into Approvals, never sent without Approve): all clients now, one client, or a preview.
 r.post('/api/reports/run', (req) => ({ results: require('./automation/reports').runAll(actorOf(req)) }));
 r.get('/api/clients/:id/report', (req, b, p) => must(require('./automation/reports').preview(p.id)));
