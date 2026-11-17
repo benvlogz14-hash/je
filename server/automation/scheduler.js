@@ -118,6 +118,7 @@ function tick() {
   try { require('../hal/memory').sweep(); } catch { /* the notebook is best-effort */ }
   if (!held) try { require('../bots').routinesTick(); } catch { /* bot routines are best-effort */ }
   if (!held) try { require('./inbox').tick(); } catch { /* the Drive inbox is best-effort */ }
+  if (!held) try { require('./reports').tick(); } catch (e) { audit.log('system', 'report.error', { error: e.message }, 'warn'); }
   if (!held) try { require('../political/auto').tick(); } catch { /* the Ad machine's autopilot is best-effort */ }
   if (!held) try { require('../outreach/autopilot').tick(); } catch (e) { audit.log('system', 'outreach.autopilot_error', { error: e.message }, 'error'); }
   const tz = ctx.setting('agency.timezone', 'America/New_York');

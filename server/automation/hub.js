@@ -37,6 +37,8 @@ function list() {
       detail: `${cs.filter((c) => c.production?.autoPolish !== false).length} of ${n} clients`, last: lastAudit(/polish/) },
     { id: 'broll', group: 'Making videos', name: 'B-roll edit of the day', route: '/production', what: 'A fresh music-cut B-roll edit each day from the footage with the fewest.', on: cs.some((c) => c.production?.brollDaily),
       detail: `${cs.filter((c) => c.production?.brollDaily).length} of ${n} clients`, last: lastAudit(/^broll\./) },
+    { id: 'reports', group: 'Leads and outreach', name: 'Weekly client reports', route: '/approvals', what: 'Once a week, a short email per client: what was posted, how it did, what\'s next. A draft: it waits in Approvals for you.', on: !!(S('reports.weekly', {}) || {}).on, toggle: true,
+      detail: `${['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'][Number((S('reports.weekly', {}) || {}).day ?? 1)]} at ${(S('reports.weekly', {}) || {}).at || '09:00'} · drafts only`, last: ctx.store.settings._reportLast || null, run: { label: 'Draft now', post: '/api/reports/run' } },
     { id: 'inbox', group: 'Making videos', name: 'Footage inbox (Drive)', route: '/settings', what: 'Takes videos dropped in your synced Drive folder into Production, or into a politician\'s footage.', on: !!String(S('inbox.folder', '') || '').trim(),
       detail: S('inbox.folder', '') ? `Watching ${S('inbox.folder', '')}` : 'No folder set. Settings → Connections → Footage inbox', last: inboxLast?.at || null, run: S('inbox.folder', '') ? { label: 'Check now', post: '/api/inbox/scan' } : null },
     // ---- Finding and talking to people
@@ -68,7 +70,7 @@ function list() {
 
 const SWITCH = {
   ads: (on) => set('political.autopilot', on), watch: (on) => set('hal.watch.on', on), bots: (on) => set('bots.autoRun', on),
-  analytics: (on) => set('analytics.publicStats', on), 'scout-political': (on) => set('outreach.political.scout', on), 'scout-creators': (on) => set('outreach.creators.scout', on),
+  analytics: (on) => set('analytics.publicStats', on), reports: (on) => set('reports.weekly.on', on), 'scout-political': (on) => set('outreach.political.scout', on), 'scout-creators': (on) => set('outreach.creators.scout', on),
 };
 function toggle(id, on, actor = 'user') {
   if (!SWITCH[id]) throw new Error('That one is changed on its own page, where its safety checks are.');
