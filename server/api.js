@@ -1871,6 +1871,11 @@ const batchOpts = (b) => { const looks = require('./political/looks'); return { 
 r.post('/api/prospects/:id/videos', (req, b, p) => { const pr = must(ctx.store.get('prospects', p.id)); return queue.enqueue('political.batch', { prospectId: pr.id, name: pr.name, ...batchOpts(b) }, { actor: actorOf(req), priority: 4, dedupeKey: `polpkg:${pr.id}`, title: `Videos for ${pr.name}` }); });
 // The same for several politicians by name or id; a name not on the board is added as a political lead first.
 r.post('/api/political/videos', botErr((req, b) => require('./political/batch').start({ ids: Array.isArray(b.ids) ? b.ids : [], names: Array.isArray(b.names) ? b.names.map(String) : [], actor: actorOf(req), ...batchOpts(b) })));
+// Ad machine autopilot for one politician: videos made by themselves when new footage arrives and / or every week.
+r.get('/api/prospects/:id/auto', (req, b, p) => must(require('./political/auto').get(p.id)));
+r.post('/api/prospects/:id/auto', (req, b, p) => { must(ctx.store.get('prospects', p.id)); const looks = require('./political/looks'); const o = b.opts && typeof b.opts === 'object' ? batchOpts(b.opts) : undefined; try { return require('./political/auto').set(p.id, { on: b.on, when: b.when, day: b.day, at: b.at, count: b.count, ...(o ? { opts: o } : {}) }, actorOf(req)); } catch (e) { throw new HttpError(400, e.message); } });
+// Every politician with autopilot on, with what it does and what it last did.
+r.get('/api/political/auto', () => ({ on: ctx.setting('political.autopilot', true) !== false, list: require('./political/auto').list() }));
 // What's in a candidate's footage: topics, the best opening lines (the hook finder), closing lines, what was left out.
 r.get('/api/prospects/:id/insight', (req, b, p) => { must(ctx.store.get('prospects', p.id)); const r = require('./political/batch').insight(p.id); if (r.ready && req.query.topic) r.hooks = require('./political/footage').hooks(JSON.parse(fs.readFileSync(path.join(require('./political/package').dirFor(ctx.store.get('prospects', p.id)), 'footage', 'sentences.json'), 'utf8')).sentences, 12, String(req.query.topic)); return r; });
 // Read their footage now (find, transcribe, look through) without making anything.

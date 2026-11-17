@@ -698,6 +698,25 @@ function ModePicker({ mode: m, onChange, presets, curLook, single }) {
   </div>`;
 }
 
+/** Autopilot for one politician: saves the order box and look as they are now, with when to run them. */
+function AutoModal({ p, auto, body, summary, n, onClose, onSaved }) {
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const [when, setWhen] = useState(auto?.when || 'new'); const [day, setDay] = useState(auto?.day ?? 1); const [at, setAt] = useState(auto?.at || '09:00');
+  const first = p.name.split(' ')[0];
+  const save = (on) => act(() => api.post(`/api/prospects/${p.id}/auto`, { on, when, day: Number(day), at, count: n, ...(on ? { opts: body() } : {}) }), { ok: on ? `Autopilot on for ${p.name}. Their videos will wait in the Videos tab; nothing is sent or posted.` : `Autopilot off for ${p.name}.` }).then(onSaved);
+  return html`<${Modal} title=${`Autopilot for ${p.name}`} onClose=${onClose} footer=${html`${auto?.on ? html`<${Button} kind="ghost" onClick=${() => save(false)}>Turn off</${Button}>` : null}<${Button} kind="ghost" onClick=${onClose}>Cancel</${Button}><${Button} kind="primary" icon="sparkle" onClick=${() => save(true)}>${auto?.on ? 'Save' : 'Turn on'}</${Button}>`}>
+    <div class="col" style="gap:14px">
+      <span class="am-help">Euclidean makes ${first}'s videos by itself, with what is set on this page now:</span>
+      <div class="am-auto" style="margin:0"><div class="col" style="gap:2px"><b>${summary}</b><span class="am-help">Never the same lines as a video already made. Change the order box or the look, then open this again and Save, to change what it makes.</span></div></div>
+      <div class="am-sec"><span class="am-label">When</span>
+        <${Seg} value=${when} onChange=${setWhen} options=${[{ value: 'new', label: 'When new footage arrives' }, { value: 'weekly', label: 'Every week' }, { value: 'both', label: 'Both' }]} />
+        <span class="am-help">${when === 'weekly' ? 'A fresh batch from the footage they already have.' : `As soon as new videos of ${first} are added here or put in their folder of the Drive footage inbox (Settings → Connections), and have finished copying.`}</span></div>
+      ${when !== 'new' ? html`<div class="row wrap" style="gap:10px;align-items:center"><span class="am-label">Every</span><select class="input" style="max-width:160px" value=${day} onChange=${(e) => setDay(e.target.value)}>${DAYS.map((d, i) => html`<option value=${i}>${d}</option>`)}</select><span class="am-label">at</span><input class="input" type="time" style="max-width:130px" value=${at} onInput=${(e) => setAt(e.target.value)} /></div>` : null}
+      <span class="am-help">It runs while Euclidean is open. When a batch finishes you get a notification and a note in HAL's chat with what was made and what was skipped.</span>
+    </div>
+  </${Modal}>`;
+}
+
 /**
  * The everyday job: type what you want (one line per video) or tap baselines, see how each line will be read, choose
  * the kind of edit and the look, press Make. Empty box = "plan N for me" from what their footage is about.
@@ -731,6 +750,9 @@ function BatchMaker({ p, list, busy, job, up, looks, curLook, reload }) {
   const edit = () => ({ kind: mb.kind, ...Object.fromEntries(SWITCHES.map(([k]) => [k, isOn(k)])), ...(sounds ? { sounds } : {}), ...(split ? { split: true } : {}), ...(punch ? { punchIns: punch === 'on' } : {}), ...(hard ? { hardCuts: true } : {}) });
   const body = () => ({ text, count: text.trim() ? 0 : count, styles: mb.styles, lookPrompt: mb.lookPrompt || '', colors: mb.colors || null, edit: edit(), wide, prompt: note.trim(), purpose: purpose || null, end: endCta.trim() || endSite.trim() || paidFor.trim() ? { cta: endCta.trim(), site: endSite.trim(), paidFor: paidFor.trim() } : null, textStyle: font || tsize !== 1 || outline ? { font, size: tsize, ...(outline ? { outline: outline === 'on' } : {}) } : null });
   const go = () => act(() => api.post(`/api/prospects/${p.id}/videos`, body()), { ok: `Making ${n} video${n === 1 ? '' : 's'} for ${p.name}. They appear in the Videos tab as each one finishes.` }).then(() => reload());
+  // Autopilot for this politician: the order and look as set now, made by themselves on new footage and / or every week.
+  const { data: auto, reload: reAuto } = useApi(p ? `/api/prospects/${p.id}/auto` : null, ['prospects']);
+  const [autoOpen, setAutoOpen] = useState(false);
   const goMany = () => { const who = names.split(/\r?\n/).map((x) => x.trim()).filter(Boolean); if (!who.length) return; act(() => api.post('/api/political/videos', { names: who, ...body() }), { ok: (r) => `Started for ${r.started.length}${r.skipped.length ? `; left out: ${r.skipped.join(', ')}` : ''}. One politician is made at a time.` }).then(() => { setOthers(false); setNames(''); reload(); }); };
   const styleName = modeName(mode, looks?.presets, curLook); const style = mode.tier === 'full' ? mode.full : 'one';
   const secs = (o) => o.seconds || (opts?.templates || []).find((t) => t.id === o.template)?.seconds || 26;
@@ -742,6 +764,7 @@ function BatchMaker({ p, list, busy, job, up, looks, curLook, reload }) {
   return html`
     <section class="panel am-card">
       <div class="am-step"><span class=${`am-num${text.trim() ? ' done' : ''}`}>4</span><h4>The videos</h4><span class="am-sub">one line each · or leave empty and it plans them</span></div>
+      ${auto?.on ? html`<div class="am-auto"><span class="am-pulse" /><div class="col grow" style="gap:1px;min-width:0"><b>Autopilot: ${auto.describe}</b><span class="am-help">${auto.lastNote || 'Nothing made by autopilot yet.'}${auto.lastRun ? ` · ${new Date(auto.lastRun).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : ''}</span></div><button class="am-link" onClick=${() => setAutoOpen(true)}>Change</button></div>` : null}
       <textarea class="am-orders" id="am-orders" ref=${box} rows="5" placeholder=${ORDER_HINT} value=${text} onInput=${(e) => setText(e.target.value)} />
       <div class="am-sec">
         <div class="row wrap" style="gap:8px;align-items:center"><span class="am-label">Baselines</span><${Seg} value=${String(group)} onChange=${(v) => setGroup(Number(v))} options=${GROUPS.map(([g], i) => ({ value: String(i), label: g }))} /></div>
@@ -798,8 +821,10 @@ function BatchMaker({ p, list, busy, job, up, looks, curLook, reload }) {
       ${job ? html`<div class="col grow" style="gap:4px;min-width:200px"><${Progress} value=${job.progress || 0} /><span class="am-help">${Math.round((job.progress || 0) * 100)}% · ${job.note || (job.status === 'queued' ? 'waiting its turn' : 'working')}</span></div>`
       : html`<span class="sum">${p ? html`<b>${n} video${n === 1 ? '' : 's'} for ${p.name}</b><br />${styleName}${wide ? ' · vertical and horizontal' : ' · vertical'}` : html`<b>Pick who it's for</b>`}</span>`}
       <button type="button" class="am-link" disabled=${!list.length} onClick=${() => setOthers(true)}>Several politicians…</button>
+      <button type="button" class="am-link" disabled=${!p} title="Make these by themselves when new footage comes in, or every week" onClick=${() => setAutoOpen(true)}>${auto?.on ? 'Autopilot on…' : 'Do this automatically…'}</button>
       <${Button} kind="primary" icon="sparkle" disabled=${!p || busy || !!up} title=${!p ? 'Pick or add the candidate first' : busy ? 'Already working on this candidate' : up ? 'Wait for the upload to finish' : ''} onClick=${go}>${busy ? 'Making…' : up ? 'Uploading…' : `Make ${n} video${n === 1 ? '' : 's'}`}</${Button}>
     </div>
+    ${autoOpen && p ? html`<${AutoModal} p=${p} auto=${auto} body=${body} summary=${`${preview.length ? `${preview.length} video${preview.length === 1 ? '' : 's'} as typed` : `${count} videos planned from their footage`} · ${styleName}`} n=${preview.length || count} onClose=${() => setAutoOpen(false)} onSaved=${() => { setAutoOpen(false); reAuto(); }} />` : null}
     ${others ? html`<${Modal} title="Same order for several politicians" onClose=${() => setOthers(false)} footer=${html`<${Button} kind="ghost" onClick=${() => setOthers(false)}>Cancel</${Button}><${Button} kind="primary" disabled=${!names.trim()} onClick=${goMany}>Start</${Button}>`}>
       <div class="col" style="gap:10px"><span style="font-size:var(--fs-sm)">One name per line. Add the office after a comma for anyone new. Each uses the footage uploaded for them, or their public videos when there is none.</span>
         <textarea class="am-orders" rows="7" id="am-names" placeholder=${'Anna Kelles, Assembly AD-125, NY\nLarinda Hooks, Assembly AD-35, NY'} value=${names} onInput=${(e) => setNames(e.target.value)} />

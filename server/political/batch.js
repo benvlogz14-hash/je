@@ -132,7 +132,7 @@ function insight(prospectId) {
 }
 
 /** Make the batch. Returns { made, skipped: [{ ask, why }], seconds }. */
-async function make(prospectId, { text = '', orders = null, count = 0, styles = null, density = null, wide = false, prompt = '', textStyle = null, purpose = null, edit = null, lookPrompt = '', colors = null, end = null, remake = null, actor = 'user' } = {}, h) {
+async function make(prospectId, { text = '', orders = null, count = 0, styles = null, density = null, wide = false, prompt = '', textStyle = null, purpose = null, edit = null, lookPrompt = '', colors = null, end = null, remake = null, avoidOld = false, auto = null, actor = 'user' } = {}, h) {
   const pkgMod = require('./package'); const footage = require('./footage'); const eng = require('./adengine');
   let p = ctx.store.get('prospects', prospectId); if (!p) throw Object.assign(new Error('That candidate is not on the board.'), { permanent: true });
   const t0 = Date.now();
@@ -161,6 +161,8 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
   if (S('musicOn', true) !== false) { try { const m = await require('../video/music').pick('speech'); music = m?.file || null; } catch { /* no music */ } }
   const outDir = path.join(dir, 'videos'); fs.mkdirSync(outDir, { recursive: true });
   const batch = uid(); const avoid = { open: new Set(), close: new Set(), body: new Set() }; const sigs = new Set();
+  // Autopilot never makes a video again: the lines of every earlier video count as used.
+  if (avoidOld) for (const v of p.videos || []) { const c = v.cut || []; if (!c.length) continue; sigs.add(c.map((x) => x.id).join('-')); avoid.open.add(c[0].id); avoid.close.add(c[c.length - 1].id); c.forEach((x) => avoid.body.add(x.id)); }
   const made = []; const skipped = [];
   const slug = String(p.name).replace(/[^\w\- .]+/g, '').trim().slice(0, 40) || 'Candidate';
 
@@ -224,6 +226,7 @@ async function make(prospectId, { text = '', orders = null, count = 0, styles = 
   const run = { at: now(), batch, asked: todo.length, made: made.length, skipped, seconds: Math.round((Date.now() - t0) / 1000) };
   ctx.store.update('prospects', prospectId, () => ({ videoRun: run })); events.publish('prospects', { id: prospectId });
   audit.log(actor, 'political.batch', { prospectId, name: p.name, made: made.length, skipped: skipped.length, seconds: run.seconds });
+  try { require('./auto').finished(p, { made: made.length, skipped, seconds: run.seconds, auto }); } catch { /* the note is best-effort */ }
   if (!made.length) throw Object.assign(new Error(`No videos made for ${p.name}. ${skipped[0]?.why || ''}`.trim()), { permanent: true });
   return { made: made.length, skipped, seconds: run.seconds };
 }
