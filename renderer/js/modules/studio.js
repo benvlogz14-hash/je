@@ -885,8 +885,11 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
     let tr = s.videoTracks.find((x) => x.name === 'Captions');
     if (!tr) { tr = { type: 0, name: 'Captions', muted: false, locked: false, volume: { base: 1 }, clips: [] }; const hi = s.videoTracks.findIndex((x) => x.name === 'Hook'); s.videoTracks.splice(hi >= 0 ? hi : s.videoTracks.length, 0, tr); }
     const a = (v) => ({ base: v }); const posY = Math.round(s.height * 0.28);
+    // Captions added for picked clips look like the captions already there (font, size, capitals...), else the chosen look.
+    const like = spans ? s.videoTracks.flatMap((t) => t.clips).find(isCaption) : null;
+    const look = like ? Object.fromEntries(STYLE_KEYS.filter((k) => like.text?.[k] !== undefined).map((k) => [k, clone(like.text[k])])) : lookText(lookV, false);
     for (const k of caps) tr.clips.push({ id: nextId(d), type: 3, mediaId: '', name: k.text, start: k.start, duration: k.duration, in: 0, speed: 1, preservePitch: false, linkId: '0', enabled: true, posX: a(0), posY: a(posY), scaleX: a(1), scaleY: a(1), rotation: a(0), opacity: a(1), volume: a(1), uniformScale: true, effects: [], transIn: { type: 0, duration: 1 }, transOut: { type: 0, duration: 1 },
-      text: { text: k.text, ...lookText(lookV, false), hlMode: 'word', words: k.words, keywords: [] }, isCaption: true });
+      text: { text: k.text, ...look, hlMode: like?.text?.hlMode || 'word', words: k.words, keywords: [] }, isCaption: true });
     tr.clips.sort((x, y) => x.start - y.start);
   });
   const addCaptions = async (only) => {
@@ -896,7 +899,8 @@ function CaptionsBar({ seq, media, sel, setSel, edit, findClip, nextId }) {
     const spans = mine ? mine.map((c) => [c.start, c.start + c.duration]) : null;
     const replacing = spans ? all.filter((c) => spans.some(([a, b]) => c.start < b - 1e-3 && c.start + c.duration > a + 1e-3)).length : all.length;
     if (replacing && !(await confirmDialog({ title: mine ? 'Replace the captions there?' : 'Make the captions again?', text: mine ? `${replacing} caption${replacing === 1 ? '' : 's'} already over ${mine.length === 1 ? 'this clip' : 'these clips'} will be replaced with captions of what's said in ${mine.length === 1 ? 'it' : 'them'}. The rest stay. Undo (Ctrl+Z) brings the old ones back.` : 'The captions on the timeline are replaced with new ones from the transcript. Undo (Ctrl+Z) brings the old ones back.', confirm: 'Make captions' }))) return;
-    const req = { clips: src, wordsPerLine: lookV.wordsPerLine || 3, uppercase: lookV.uppercase !== false };
+    // The words keep their real case; capitals are only the caption's Capitals switch, so it can always be turned off.
+    const req = { clips: src, wordsPerLine: lookV.wordsPerLine || 3, uppercase: false };
     try {
       setBusy('Getting the words…');
       let r = await api.post('/api/studio/captions', req);
